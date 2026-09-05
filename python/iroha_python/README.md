@@ -191,7 +191,7 @@ Monetary proving, signing, encryption, decryption, and secure-device state
 changes remain native-only. Python exposes no public predecessor/successor
 state links and no software money-crypto fallback.
 
-`DeviceMintStageCommand` and `DeviceMintStageResult` describe operation 21 at
+`DeviceMintStageCommand` and `DeviceMintStageResult` describe operation 16 at
 the host/native boundary. `encode_device_mint_stage_command_shape` and
 `decode_device_mint_stage_command_shape_exact` validate the exact nested
 authorization and mint-credit archives, their derived credit ID, and their

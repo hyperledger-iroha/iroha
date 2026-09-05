@@ -302,6 +302,16 @@ macro_rules! impl_mint_certificate_circuit {
                 unreachable!(concat!($label, " uses authenticated Base parameters"))
             }
 
+            fn synthesize_for_measurement(
+                &self,
+                config: Self::Config,
+                layouter: impl Layouter<$field>,
+            ) -> Result<(), PlonkError> {
+                let result = self.synthesize(config, layouter);
+                self.builder.reset_synthesis_state();
+                result
+            }
+
             fn synthesize(
                 &self,
                 config: Self::Config,

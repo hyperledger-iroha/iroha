@@ -1,5 +1,5 @@
 use crate::{
-    gates::circuit::{CircuitBuilderStage, builder::RangeCircuitBuilder},
+    gates::circuit::{builder::RangeCircuitBuilder, CircuitBuilderStage},
     halo2_proofs::plonk::{keygen_pk, keygen_vk},
     halo2_proofs::{halo2curves::bn256::Fr, poly::kzg::commitment::ParamsKZG},
     safe_types::*,

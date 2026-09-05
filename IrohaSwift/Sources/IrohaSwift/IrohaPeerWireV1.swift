@@ -48,7 +48,7 @@ public extension IrohaPeerWireKindV1 {
     var requiredKagemushaPayloadAlignment: Int {
         switch self {
         case .request: return 16
-        case .payment: return 8
+        case .payment: return 16
         case .acknowledgement: return 2
         }
     }

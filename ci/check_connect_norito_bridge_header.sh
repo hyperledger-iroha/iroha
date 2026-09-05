@@ -80,8 +80,6 @@ def require(pattern: str, text: str, label: str) -> None:
 
 KAGEMUSHA_EXPORTS = {
     "connect_norito_kagemusha_v1_payment_request_validate",
-    "connect_norito_kagemusha_v1_acceptance_intent_validate",
-    "connect_norito_kagemusha_v1_acceptance_ticket_validate",
     "connect_norito_kagemusha_v1_payment_validate",
     "connect_norito_kagemusha_v1_acknowledgement_validate",
     "connect_norito_kagemusha_v1_complete_exchange_validate",
@@ -90,8 +88,6 @@ KAGEMUSHA_EXPORTS = {
     "connect_norito_kagemusha_v1_mint_credit_against_authorization_validate",
     "connect_norito_kagemusha_v1_redemption_voucher_validate",
     "connect_norito_kagemusha_v1_payment_request_text_validate",
-    "connect_norito_kagemusha_v1_acceptance_intent_text_validate",
-    "connect_norito_kagemusha_v1_acceptance_ticket_text_validate",
     "connect_norito_kagemusha_v1_payment_text_validate",
     "connect_norito_kagemusha_v1_acknowledgement_text_validate",
     "connect_norito_kagemusha_v1_complete_exchange_text_validate",
@@ -99,8 +95,13 @@ KAGEMUSHA_EXPORTS = {
     "connect_norito_kagemusha_v1_mint_credit_text_validate",
     "connect_norito_kagemusha_v1_mint_credit_against_authorization_text_validate",
     "connect_norito_kagemusha_v1_redemption_voucher_text_validate",
+    "connect_norito_kagemusha_contract_vector_v1",
+    "connect_norito_kagemusha_core_coordinator_contract_v1",
+    "connect_norito_kagemusha_core_coordinator_open_v1",
+    "connect_norito_kagemusha_core_coordinator_invoke_v1",
     "connect_norito_kagemusha_device_capabilities_v1",
     "connect_norito_kagemusha_device_execute_v1",
+    "connect_norito_kagemusha_device_response_authenticator_v1_verify",
     "connect_norito_kagemusha_device_mint_stage_command_v1_validate",
     "connect_norito_kagemusha_device_mint_stage_result_v1_validate",
 }

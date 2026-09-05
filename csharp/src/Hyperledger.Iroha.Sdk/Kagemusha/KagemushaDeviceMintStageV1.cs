@@ -1,7 +1,7 @@
 namespace Hyperledger.Iroha.Kagemusha;
 
 /// <summary>
-/// Public operation-21 input containing exact independent mint-authorization and finalized-credit
+/// Public operation-16 input containing exact independent mint-authorization and finalized-credit
 /// archives. Shape validation grants no monetary authority and exposes no private device state.
 /// </summary>
 public sealed class KagemushaDeviceMintStageCommandV1
@@ -46,7 +46,7 @@ public sealed class KagemushaDeviceMintStageCommandV1
 }
 
 /// <summary>
-/// Bounded public operation-21 result. The private Guard certificate and authenticated device
+/// Bounded public operation-16 result. The private Guard certificate and authenticated device
 /// response remain mandatory; this value alone is not evidence of a durable hardware stage.
 /// </summary>
 public sealed class KagemushaDeviceMintStageResultV1

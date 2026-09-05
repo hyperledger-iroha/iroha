@@ -24,19 +24,10 @@ public final class KagemushaWireV1 {
       org.hyperledger.iroha.sdk.offline.KagemushaWireV1.MAXIMUM_ASSET_SCALE;
   public static final long REQUEST_MAX_TTL_MS =
       org.hyperledger.iroha.sdk.offline.KagemushaWireV1.REQUEST_MAX_TTL_MS;
-  public static final int PAYMENT_REQUEST_MODE_TRANSCRIPT_BYTES =
-      org.hyperledger.iroha.sdk.offline.KagemushaWireV1.PAYMENT_REQUEST_MODE_TRANSCRIPT_BYTES;
-
   public static final int MAXIMUM_AGGREGATE_STATE_BYTES =
       org.hyperledger.iroha.sdk.offline.KagemushaWireV1.MAXIMUM_AGGREGATE_STATE_BYTES;
   public static final int MAXIMUM_PAYMENT_REQUEST_BYTES =
       org.hyperledger.iroha.sdk.offline.KagemushaWireV1.MAXIMUM_PAYMENT_REQUEST_BYTES;
-  public static final int MAXIMUM_ACCEPTANCE_INTENT_BYTES =
-      org.hyperledger.iroha.sdk.offline.KagemushaWireV1.MAXIMUM_ACCEPTANCE_INTENT_BYTES;
-  public static final int MAXIMUM_ACCEPTANCE_TICKET_BYTES =
-      org.hyperledger.iroha.sdk.offline.KagemushaWireV1.MAXIMUM_ACCEPTANCE_TICKET_BYTES;
-  public static final int MAXIMUM_NO_COMMIT_CLOSURE_BYTES =
-      org.hyperledger.iroha.sdk.offline.KagemushaWireV1.MAXIMUM_NO_COMMIT_CLOSURE_BYTES;
   public static final int MAXIMUM_PAYMENT_BYTES =
       org.hyperledger.iroha.sdk.offline.KagemushaWireV1.MAXIMUM_PAYMENT_BYTES;
   public static final int MAXIMUM_ACKNOWLEDGEMENT_BYTES =
@@ -49,12 +40,6 @@ public final class KagemushaWireV1 {
       org.hyperledger.iroha.sdk.offline.KagemushaWireV1.MAXIMUM_REDEMPTION_VOUCHER_BYTES;
   public static final int MAXIMUM_PAYMENT_REQUEST_TEXT_BYTES =
       org.hyperledger.iroha.sdk.offline.KagemushaWireV1.MAXIMUM_PAYMENT_REQUEST_TEXT_BYTES;
-  public static final int MAXIMUM_ACCEPTANCE_INTENT_TEXT_BYTES =
-      org.hyperledger.iroha.sdk.offline.KagemushaWireV1.MAXIMUM_ACCEPTANCE_INTENT_TEXT_BYTES;
-  public static final int MAXIMUM_ACCEPTANCE_TICKET_TEXT_BYTES =
-      org.hyperledger.iroha.sdk.offline.KagemushaWireV1.MAXIMUM_ACCEPTANCE_TICKET_TEXT_BYTES;
-  public static final int MAXIMUM_NO_COMMIT_CLOSURE_TEXT_BYTES =
-      org.hyperledger.iroha.sdk.offline.KagemushaWireV1.MAXIMUM_NO_COMMIT_CLOSURE_TEXT_BYTES;
   public static final int MAXIMUM_PAYMENT_TEXT_BYTES =
       org.hyperledger.iroha.sdk.offline.KagemushaWireV1.MAXIMUM_PAYMENT_TEXT_BYTES;
   public static final int MAXIMUM_ACKNOWLEDGEMENT_TEXT_BYTES =
@@ -65,10 +50,6 @@ public final class KagemushaWireV1 {
       org.hyperledger.iroha.sdk.offline.KagemushaWireV1.MAXIMUM_MINT_CREDIT_TEXT_BYTES;
   public static final int MAXIMUM_REDEMPTION_VOUCHER_TEXT_BYTES =
       org.hyperledger.iroha.sdk.offline.KagemushaWireV1.MAXIMUM_REDEMPTION_VOUCHER_TEXT_BYTES;
-  public static final int MAXIMUM_PRE_TICKET_EXCHANGE_RAW_BYTES =
-      org.hyperledger.iroha.sdk.offline.KagemushaWireV1.MAXIMUM_PRE_TICKET_EXCHANGE_RAW_BYTES;
-  public static final int MAXIMUM_PRE_TICKET_EXCHANGE_TEXT_BYTES =
-      org.hyperledger.iroha.sdk.offline.KagemushaWireV1.MAXIMUM_PRE_TICKET_EXCHANGE_TEXT_BYTES;
   public static final int MAXIMUM_COMPLETE_EXCHANGE_RAW_BYTES =
       org.hyperledger.iroha.sdk.offline.KagemushaWireV1.MAXIMUM_COMPLETE_EXCHANGE_RAW_BYTES;
   public static final int MAXIMUM_COMPLETE_EXCHANGE_TEXT_BYTES =
@@ -104,10 +85,8 @@ public final class KagemushaWireV1 {
       org.hyperledger.iroha.sdk.offline.KagemushaWireV1.PAYMENT_OUTBOX_MIN_BYTES;
   public static final int REDEMPTION_OUTBOX_MIN_BYTES =
       org.hyperledger.iroha.sdk.offline.KagemushaWireV1.REDEMPTION_OUTBOX_MIN_BYTES;
-  public static final int ACCEPTANCE_TICKET_MIN_RESERVED_INBOX_BYTES =
-      org.hyperledger.iroha.sdk.offline.KagemushaWireV1.ACCEPTANCE_TICKET_MIN_RESERVED_INBOX_BYTES;
-  public static final int RECEIVE_FOLD_BATCH_SIZE =
-      org.hyperledger.iroha.sdk.offline.KagemushaWireV1.RECEIVE_FOLD_BATCH_SIZE;
+  public static final int INBOX_STAGE_MIN_BYTES =
+      org.hyperledger.iroha.sdk.offline.KagemushaWireV1.INBOX_STAGE_MIN_BYTES;
 
   private KagemushaWireV1() {}
 

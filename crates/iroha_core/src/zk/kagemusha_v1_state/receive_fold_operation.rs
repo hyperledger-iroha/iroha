@@ -213,8 +213,8 @@ where
             staged.envelope_digest,
         )?;
         let credit = self.receive_fold_credit(credit_id, &prepared_replay)?;
-        let transcript = ReceiveFoldV1::try_new(credit.transcript_credit())
-            .map_err(receive_fold_error)?;
+        let transcript =
+            ReceiveFoldV1::try_new(credit.transcript_credit()).map_err(receive_fold_error)?;
         let receive_credit_binding_digest = transcript.canonical_transcript_digest();
         if receive_credit_binding_digest == [0; 32] {
             return Err(KagemushaStateErrorV1::InvalidPeerCredit);
@@ -270,10 +270,17 @@ where
                 effect_digest,
             },
         )?;
-        let insert = [(credit_id, staged.envelope_digest)];
         let authenticated_history_transaction = match self
             .authenticated_history
-            .prepare_replay_batch_and_terminal_decision(&insert, decision_id, decision_digest)
+            .prepare_replay_and_terminal_decision(
+                credit_id,
+                staged.envelope_digest,
+                decision_id,
+                decision_digest,
+                transition
+                    .hardware_statement
+                    .normalized_guard_statement_digest,
+            )
             .map_err(map_authenticated_history_error)?
         {
             KagemushaHistoryDualInsertPreparationV1::Prepared {
@@ -331,6 +338,9 @@ where
         preview: &PeerCreditFoldPreviewV1,
     ) -> Result<Vec<u8>, KagemushaStateErrorV1> {
         self.validate_receive_fold_history_preview(preview)?;
+        self.authenticated_history
+            .require_prepared(&preview.authenticated_history_transaction)
+            .map_err(map_authenticated_history_error)?;
         KagemushaHistoryRootSelectionSubjectV1::new(
             &preview.authenticated_history_transaction,
             self.state.hardware_profile_id,
@@ -350,6 +360,9 @@ where
         root_selection_signature: KagemushaDeviceSignatureV1,
     ) -> Result<TransitionAuthorizationV1, KagemushaStateErrorV1> {
         self.validate_receive_fold_history_preview(preview)?;
+        self.authenticated_history
+            .require_prepared(&preview.authenticated_history_transaction)
+            .map_err(map_authenticated_history_error)?;
         if authorization.authenticated_history.is_some()
             || kagemusha_device_key_reference_v1(device_public_key)
                 != self.state.device_policy_binding.device_key_reference
@@ -432,8 +445,7 @@ where
         let expected_fold = ReceiveFoldV1::try_new(expected_credit.transcript_credit())
             .map_err(receive_fold_error)?;
         if expected_credit != preview.credit
-            || expected_fold.canonical_transcript_digest()
-                != preview.receive_credit_binding_digest
+            || expected_fold.canonical_transcript_digest() != preview.receive_credit_binding_digest
         {
             return Err(KagemushaStateErrorV1::InvalidPeerCredit);
         }
@@ -478,7 +490,14 @@ where
                 )
             },
         )?;
-        if expected_transition != preview.transition {
+        if preview
+            .authenticated_history_transaction
+            .attempt_binding_digest()
+            != expected_transition
+                .hardware_statement
+                .normalized_guard_statement_digest
+            || expected_transition != preview.transition
+        {
             return Err(KagemushaStateErrorV1::StateInvariant);
         }
 
@@ -490,10 +509,12 @@ where
             .accepted_payment_receipts
             .get(&credit_id)
             .ok_or(KagemushaStateErrorV1::StateInvariant)?;
-        let next_capacity = self.receiver_inbox_capacity.receiver_snapshot_folded_successor(
-            receiver_sequence_entry_bytes(staged)?,
-            receiver_sequence_entry_bytes(receipt)?,
-        )?;
+        let next_capacity = self
+            .receiver_inbox_capacity
+            .receiver_snapshot_folded_successor(
+                receiver_sequence_entry_bytes(staged)?,
+                receiver_sequence_entry_bytes(receipt)?,
+            )?;
         let mut next_consumed_credits = self.consumed_credits.clone();
         preview
             .prepared_replay
@@ -583,7 +604,14 @@ where
         preview: &PeerCreditFoldPreviewV1,
     ) -> Result<(), KagemushaStateErrorV1> {
         let bridge_request = preview.proof_root_bridge_request;
-        if preview.transition.proof_statement.kind != KagemushaTransitionKindV1::ReceiveFold
+        if preview
+            .authenticated_history_transaction
+            .attempt_binding_digest()
+            != preview
+                .transition
+                .hardware_statement
+                .normalized_guard_statement_digest
+            || preview.transition.proof_statement.kind != KagemushaTransitionKindV1::ReceiveFold
             || preview.transition.proof_statement.predecessor_commitment
                 != self.state.state_commitment
             || preview.transition.proof_statement.journal_revision_before != self.journal_revision

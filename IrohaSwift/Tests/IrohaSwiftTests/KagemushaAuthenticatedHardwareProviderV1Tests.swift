@@ -6,14 +6,16 @@ import XCTest
 final class KagemushaAuthenticatedHardwareProviderV1Tests: XCTestCase {
   func testAuthenticatedResponseRequiresCanonicalReplyAndLowSSignature() throws {
     let signature = lowSSignature()
-    XCTAssertNoThrow(
-      try KagemushaAuthenticatedDeviceResponseV1(
-        operation: 1,
-        status: .success,
-        canonicalReply: Data([1]),
-        authenticator: signature
+    for operation in UInt8(1)...UInt8(22) {
+      XCTAssertNoThrow(
+        try KagemushaAuthenticatedDeviceResponseV1(
+          operation: operation,
+          status: .success,
+          canonicalReply: Data([1]),
+          authenticator: signature
+        )
       )
-    )
+    }
     XCTAssertThrowsError(
       try KagemushaAuthenticatedDeviceResponseV1(
         operation: 1,
@@ -30,14 +32,16 @@ final class KagemushaAuthenticatedHardwareProviderV1Tests: XCTestCase {
         authenticator: Data(repeating: 0xff, count: 64)
       )
     )
-    XCTAssertThrowsError(
-      try KagemushaAuthenticatedDeviceResponseV1(
-        operation: 23,
-        status: .success,
-        canonicalReply: Data([1]),
-        authenticator: signature
+    for operation in [UInt8(0), UInt8(23), UInt8.max] {
+      XCTAssertThrowsError(
+        try KagemushaAuthenticatedDeviceResponseV1(
+          operation: operation,
+          status: .success,
+          canonicalReply: Data([1]),
+          authenticator: signature
+        )
       )
-    )
+    }
   }
 
   func testFailedResponseCannotExposeUnauthenticatedBytes() throws {
@@ -162,6 +166,7 @@ private final class RecordingNativeCore: KagemushaNativeCoreCoordinatorV1 {
   ) throws { throw TestFailure.unused }
 
   func beginSenderTransition(
+    operationID _: Data,
     inputs _: KagemushaDeviceSenderPublicInputsV1,
     qualification _: KagemushaHardwareQualificationV1
   ) throws -> KagemushaNativeSenderPreparationV1 { throw TestFailure.unused }
@@ -190,6 +195,12 @@ private final class RecordingNativeCore: KagemushaNativeCoreCoordinatorV1 {
     qualification _: KagemushaHardwareQualificationV1
   ) throws -> KagemushaNativeSenderRecoveryV1? { throw TestFailure.unused }
 
+  func senderRecoveryByOperationID(
+    kind _: KagemushaNativeSenderKindV1,
+    operationID _: Data,
+    qualification _: KagemushaHardwareQualificationV1
+  ) throws -> KagemushaNativeSenderRecoveryV1? { throw TestFailure.unused }
+
   func recoverTerminalEnvelope(
     recovery _: KagemushaNativeSenderRecoveryV1,
     authenticatedInstalledReply _: Data
@@ -199,6 +210,7 @@ private final class RecordingNativeCore: KagemushaNativeCoreCoordinatorV1 {
     creditID _: Data,
     inputs _: KagemushaDeviceSenderPublicInputsV1,
     canonicalPayment _: Data,
+    terminalReceipt _: KagemushaDeviceSenderTerminalReceiptV1,
     qualification _: KagemushaHardwareQualificationV1
   ) throws -> KagemushaNativeOutboxReleaseV1 { throw TestFailure.unused }
 

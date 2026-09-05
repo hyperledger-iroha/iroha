@@ -15,6 +15,17 @@ import org.junit.Test;
 /** Java-facade checks for the fail-closed KAGEMUSHA V1 device bridge. */
 public final class KagemushaDeviceLifecycleBridgeV1Tests {
   @Test
+  public void nativeContractVectorProbeIsBoundedWhenLinked() {
+    assertEquals(4 * 1024, KagemushaDeviceLifecycleBridgeV1.MAXIMUM_NATIVE_CONTRACT_VECTOR_BYTES);
+    final byte[] vector = KagemushaDeviceLifecycleBridgeV1.nativeContractVector();
+    if (vector != null) {
+      org.junit.Assert.assertTrue(vector.length > 0);
+      org.junit.Assert.assertTrue(
+          vector.length <= KagemushaDeviceLifecycleBridgeV1.MAXIMUM_NATIVE_CONTRACT_VECTOR_BYTES);
+    }
+  }
+
+  @Test
   public void explicitUnsupportedDeviceRemainsOnlineOnly() {
     final KagemushaDeviceLifecycleBridgeV1 bridge =
         KagemushaDeviceLifecycleBridgeV1.onlineOnly();
@@ -26,22 +37,22 @@ public final class KagemushaDeviceLifecycleBridgeV1Tests {
     final byte[] command = new byte[] {1};
     assertThrows(
         IllegalStateException.class,
-        () -> bridge.execute(
+        () -> bridge.executeAuthenticated(
             KagemushaDeviceLifecycleBridgeV1.Operation.PREPARE_EXACT_NEXT_TRANSITION,
             requestId,
-            command));
+            command,
+            null));
     assertArrayEquals(fixed(0x11, 32), requestId);
     assertArrayEquals(new byte[] {1}, command);
   }
 
   /** Real SDK framing and both enum-delegation directions; no native provider is installed. */
   @Test
-  public void acceptanceOperationsRoundTripThroughTheCanonicalKotlinCodec() throws Exception {
+  public void receiverOperationsRoundTripThroughTheCanonicalKotlinCodec() throws Exception {
     final KagemushaDeviceLifecycleBridgeV1.Operation[] operations = {
-      KagemushaDeviceLifecycleBridgeV1.Operation.PREPARE_ACCEPTANCE_INTENT,
-      KagemushaDeviceLifecycleBridgeV1.Operation.RECOVER_ACCEPTANCE_INTENT,
-      KagemushaDeviceLifecycleBridgeV1.Operation
-          .VALIDATE_INTENT_RESERVE_INBOX_AND_ISSUE_ACCEPTANCE_TICKET,
+      KagemushaDeviceLifecycleBridgeV1.Operation.STAGE_INBOUND_PAYMENT,
+      KagemushaDeviceLifecycleBridgeV1.Operation.RECOVER_STAGED_INBOUND_PAYMENT,
+      KagemushaDeviceLifecycleBridgeV1.Operation.RECOVER_INBOUND_INBOX_PAGE,
     };
     final org.hyperledger.iroha.sdk.offline.KagemushaDeviceLifecycleBridgeV1.Codec codec =
         org.hyperledger.iroha.sdk.offline.KagemushaDeviceLifecycleBridgeV1.Codec.INSTANCE;
@@ -83,28 +94,24 @@ public final class KagemushaDeviceLifecycleBridgeV1Tests {
       assertThrows(IllegalArgumentException.class,
           () -> codec.decodeResponse(response, kotlinOperation, fixed(0x12, 32)));
       assertThrows(IllegalStateException.class, () ->
-          KagemushaDeviceLifecycleBridgeV1.onlineOnly().execute(operation, requestId, payload));
+          KagemushaDeviceLifecycleBridgeV1.onlineOnly()
+              .executeAuthenticated(operation, requestId, payload, null));
     }
   }
 
   @Test
   public void javaInventoryExactlyMirrorsTheKotlinContract() {
-    assertEquals(27, KagemushaDeviceLifecycleBridgeV1.Operation.values().length);
+    assertEquals(22, KagemushaDeviceLifecycleBridgeV1.Operation.values().length);
     assertEquals(16, KagemushaDeviceLifecycleBridgeV1.Capability.values().length);
     assertEquals(11, KagemushaDeviceLifecycleBridgeV1.Status.values().length);
     assertArrayEquals(
         new String[] {
           "READ_ACTIVE_HARDWARE_CREDENTIAL",
-          "PREPARE_ACCEPTANCE_INTENT",
-          "RECOVER_ACCEPTANCE_INTENT",
-          "VALIDATE_INTENT_RESERVE_INBOX_AND_ISSUE_ACCEPTANCE_TICKET",
-          "RECOVER_ACCEPTANCE_TICKET",
           "STAGE_INBOUND_PAYMENT",
           "RECOVER_STAGED_INBOUND_PAYMENT",
           "RECOVER_INBOUND_INBOX_PAGE",
           "PREPARE_EXACT_NEXT_TRANSITION",
           "RECOVER_PREPARED_TRANSITION",
-          "ABANDON_UNCOMMITTED_PREPARED_TRANSITION",
           "COMMIT_VERIFIED_CANDIDATE_AND_SIGN_TERMINAL",
           "RECOVER_TERMINAL_OUTCOME",
           "INSTALL_TERMINAL_ENVELOPE",
@@ -115,7 +122,7 @@ public final class KagemushaDeviceLifecycleBridgeV1Tests {
           "PREPARE_MINT_AUTHORIZATION",
           "RECOVER_MINT_AUTHORIZATION",
           "VERIFY_AUTHORIZATION_AND_STAGE_MINT_CREDIT",
-          "FOLD_RECEIVE_BATCH",
+          "FOLD_RECEIVE_CREDIT",
           "READ_PENDING_CREDIT_WATERMARK",
           "ROTATE_HARDWARE_EPOCH",
           "BOOTSTRAP_AGGREGATE_STATE",

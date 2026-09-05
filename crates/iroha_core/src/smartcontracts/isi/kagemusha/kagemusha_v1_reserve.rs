@@ -1974,7 +1974,7 @@ fn next_redemption_pool(
 
 /// Reconstruct the exact public mint statement from the already verified top-up intent.
 ///
-/// Credential/profile and precommit-proof authentication is represented by
+/// Credential/profile and prepared-transition proof authentication is represented by
 /// `VerifiedKagemushaTopUpAuthorizationV1`
 /// before planning. Keeping this field adapter in one place makes schema evolution explicit and
 /// prevents reserve accounting from silently omitting a lifecycle binding.
@@ -2344,7 +2344,7 @@ mod tests {
 
     use crate::zk::kagemusha_v1_recursion::{
         KAGEMUSHA_RECURSION_IPA_K_V1, KagemushaEpAccumulatorV1, KagemushaEqAccumulatorV1,
-        KagemushaMintAuthorityPairBindingV1, KagemushaMintAuthorityStepV1,
+        KagemushaMintAuthorityStepV1,
     };
 
     fn tagged_id(tag: u8, nonce: u64) -> [u8; 32] {
@@ -2889,28 +2889,13 @@ mod tests {
                 0,
                 &roster,
             );
-        let eq_history = KagemushaEqAccumulatorV1::try_from_bytes(&proof.eq_history)
+        let _eq_history = KagemushaEqAccumulatorV1::try_from_bytes(&proof.eq_history)
             .expect("canonical Eq mint-authority history");
-        let ep_history = KagemushaEpAccumulatorV1::try_from_bytes(&proof.ep_history)
+        let _ep_history = KagemushaEpAccumulatorV1::try_from_bytes(&proof.ep_history)
             .expect("canonical Ep mint-authority history");
         let finality_certificate_binding = proof.guard_eq_credential_audit;
         let finality_authority_head = proof.guard_ep_credential_audit;
-        let finality_proof_binding_digest = KagemushaMintAuthorityPairBindingV1 {
-            step: KagemushaMintAuthorityStepV1::FinalizedMint,
-            semantic_digest: statement.canonical_digest().expect("mint statement digest"),
-            amount: statement.amount,
-            certificate_binding: finality_certificate_binding,
-            authority_head: finality_authority_head,
-            release_id: statement.lifecycle.release_id,
-            genesis_roster_id: mint_finality_epoch_id,
-            eq_protocol_digest: proof.eq_protocol_digest,
-            ep_protocol_digest: proof.ep_protocol_digest,
-            eq_deferred_audit: proof.eq_deferred_audit,
-            ep_deferred_audit: proof.ep_deferred_audit,
-            eq_history: eq_history.as_bytes(),
-            ep_history: ep_history.as_bytes(),
-        }
-        .canonical_digest();
+        let finality_proof_binding_digest = tagged_id(0xAE, u64::from(nonce));
         let mint_credit = KagemushaMintCreditV1 {
             version: KAGEMUSHA_WIRE_VERSION_V1,
             statement,
@@ -3603,6 +3588,140 @@ mod tests {
                 .expect("reserve"),
             30
         );
+    }
+
+    #[test]
+    fn concurrent_redemption_plans_cannot_overspend_pooled_reserve() {
+        let mut book = KagemushaReserveBookV1::new();
+        commit_top_up(&mut book, &verified_top_up(1, 1, 100), 1);
+        let first = verified_redemption(2, 2, 60);
+        let second = verified_redemption(3, 3, 60);
+        let first_plan = expect_plan(
+            book.plan_redemption(&first, commit_context(2))
+                .expect("first redemption plan"),
+        );
+        let stale_plan = expect_plan(
+            book.plan_redemption(&second, commit_context(3))
+                .expect("concurrent redemption plan"),
+        );
+
+        book.commit(first_plan).expect("first redemption commit");
+        let after_first = book.clone();
+        assert!(matches!(
+            book.commit(stale_plan),
+            Err(KagemushaReserveErrorV1::StalePlan {
+                expected: Some(_),
+                actual: Some(_),
+            })
+        ));
+        assert_eq!(book, after_first);
+
+        assert_eq!(
+            book.plan_redemption(&second, commit_context(4)),
+            Err(KagemushaReserveErrorV1::ReserveUnderflow {
+                available: 40,
+                requested: 60,
+            })
+        );
+        assert_eq!(book, after_first);
+
+        let pool = book
+            .pool(network(), asset(), asset_incarnation(1))
+            .expect("pool lookup")
+            .expect("funded pool");
+        assert_eq!(pool.total_topups, 100);
+        assert_eq!(pool.total_redemptions, 60);
+        assert_eq!(pool.available().expect("available reserve"), 40);
+        assert_eq!(book.operations.len(), 2);
+        assert_eq!(
+            book.redemption_id_operations
+                .get(&first.request().voucher.statement.redemption_id),
+            Some(&first.operation_id())
+        );
+        assert_eq!(
+            book.terminal_nullifier_operations
+                .get(&first.request().voucher.statement.terminal_nullifier),
+            Some(&first.operation_id())
+        );
+        assert!(
+            book.redemption_id_operations
+                .get(&second.request().voucher.statement.redemption_id)
+                .is_none()
+        );
+        assert!(
+            book.terminal_nullifier_operations
+                .get(&second.request().voucher.statement.terminal_nullifier)
+                .is_none()
+        );
+        book.validate().expect("exact remaining reserve accounting");
+    }
+
+    #[test]
+    fn concurrent_redemption_plans_cannot_reuse_terminal_nullifier() {
+        let mut book = KagemushaReserveBookV1::new();
+        commit_top_up(&mut book, &verified_top_up(1, 1, 100), 1);
+        let first = verified_redemption(2, 9, 40);
+        let mut competing_voucher = first.request().voucher.clone();
+        competing_voucher.statement.amount = 60;
+        competing_voucher.statement.redemption_id = [0; 32];
+        competing_voucher.statement = competing_voucher
+            .statement
+            .seal_redemption_id()
+            .expect("reseal competing voucher");
+        competing_voucher.proof.semantic_digest = competing_voucher
+            .statement
+            .canonical_digest()
+            .expect("competing digest");
+        let competing = after_mock_recursive_verification(KagemushaRedemptionRequestV1 {
+            version: KAGEMUSHA_CHAIN_VERSION_V1,
+            operation_id: tagged_id(0x31, 3),
+            voucher: competing_voucher,
+        });
+        assert_ne!(first.operation_id(), competing.operation_id());
+        assert_ne!(
+            first.request().voucher.statement.redemption_id,
+            competing.request().voucher.statement.redemption_id
+        );
+        assert_eq!(
+            first.request().voucher.statement.terminal_nullifier,
+            competing.request().voucher.statement.terminal_nullifier
+        );
+
+        let first_plan = expect_plan(
+            book.plan_redemption(&first, commit_context(2))
+                .expect("first redemption plan"),
+        );
+        let competing_plan = expect_plan(
+            book.plan_redemption(&competing, commit_context(3))
+                .expect("concurrent competing redemption plan"),
+        );
+        book.commit(first_plan).expect("first redemption commit");
+        let after_first = book.clone();
+        assert_eq!(
+            book.commit(competing_plan),
+            Err(KagemushaReserveErrorV1::TerminalNullifierConflict {
+                terminal_nullifier: first.request().voucher.statement.terminal_nullifier,
+            })
+        );
+        assert_eq!(book, after_first);
+        assert_eq!(
+            book.redemption_id_operations
+                .get(&first.request().voucher.statement.redemption_id),
+            Some(&first.operation_id())
+        );
+        assert!(
+            book.redemption_id_operations
+                .get(&competing.request().voucher.statement.redemption_id)
+                .is_none()
+        );
+        assert_eq!(book.terminal_nullifier_operations.len(), 1);
+        assert_eq!(
+            book.terminal_nullifier_operations
+                .get(&first.request().voucher.statement.terminal_nullifier),
+            Some(&first.operation_id())
+        );
+        book.validate()
+            .expect("failed concurrent replay leaves exact accounting");
     }
 
     #[test]

@@ -1,8 +1,8 @@
 //! Assigned canonical-hash regressions for the mint-authorization relation.
 //!
-//! These tests synthesize the real Base and Table8 SHA paths in the parent circuits. Their dense
-//! job lists are deliberately empty: they do not authenticate a recursive credential, generate a
-//! mint proof, or qualify a complete mint-authorizing circuit.
+//! These tests synthesize the real Base and Table8 SHA paths in a focused local circuit. The
+//! production parent now consumes a recursive typed-SHA claim instead of owning those jobs, while
+//! this harness retains direct constraint-level coverage of its canonical preimage binders.
 
 use core::ops::Range;
 
@@ -23,6 +23,8 @@ use iroha_data_model::{
 };
 use p256::ecdsa::SigningKey;
 
+use crate::zk::pasta_sha256::PastaSha256ConfigV1;
+
 use super::*;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -41,6 +43,68 @@ struct CommitmentFixture {
     opening_field: usize,
     domain: &'static [u8],
     expected_digest: DigestV1,
+}
+
+#[derive(Clone, Debug)]
+struct HashOnlyConfig<F: halo2_base::utils::ScalarField> {
+    base: BaseConfig<F>,
+    sha: PastaSha256ConfigV1,
+}
+
+#[derive(Clone)]
+struct HashOnlyCircuit<F: KagemushaPoseidonFieldV1> {
+    builder: BaseCircuitBuilder<F>,
+    sha_jobs: PastaSha256JobsV1<F>,
+}
+
+impl<F: KagemushaPoseidonFieldV1> Circuit<F> for HashOnlyCircuit<F> {
+    type Config = HashOnlyConfig<F>;
+    type FloorPlanner = V1;
+    type Params = BaseCircuitParams;
+
+    fn params(&self) -> Self::Params {
+        self.builder.config_params.clone()
+    }
+
+    fn without_witnesses(&self) -> Self {
+        Self {
+            builder: self.builder.deep_clone().unknown(true),
+            sha_jobs: self.sha_jobs.unknown(),
+        }
+    }
+
+    fn configure_with_params(meta: &mut ConstraintSystem<F>, params: Self::Params) -> Self::Config {
+        let usable_rows = (1_usize << params.k) - MINIMUM_UNUSABLE_ROWS;
+        let mut base = BaseConfig::configure(meta, params);
+        base.set_usable_rows(usable_rows);
+        HashOnlyConfig {
+            base,
+            sha: PastaSha256ConfigV1::configure(meta),
+        }
+    }
+
+    fn configure(_: &mut ConstraintSystem<F>) -> Self::Config {
+        unreachable!("canonical SHA tests use authenticated Base parameters")
+    }
+
+    fn synthesize(
+        &self,
+        config: Self::Config,
+        mut layouter: impl Layouter<F>,
+    ) -> Result<(), PlonkError> {
+        let usable_rows = (1_usize << self.builder.config_params.k) - MINIMUM_UNUSABLE_ROWS;
+        <BaseCircuitBuilder<F> as Circuit<F>>::synthesize(
+            &self.builder,
+            config.base,
+            layouter.namespace(|| "mint canonical hash Base"),
+        )?;
+        self.sha_jobs.synthesize(
+            &config.sha,
+            &mut layouter,
+            &self.builder.core().copy_manager,
+            usable_rows,
+        )
+    }
 }
 
 fn profile_fixture() -> KagemushaHardwareProfileV1 {
@@ -264,13 +328,12 @@ fn hash_only_case<F: KagemushaPoseidonFieldV1>(mutation: Mutation) -> HashOnlyCa
 }
 
 macro_rules! assert_hash_only_case {
-    ($field:ty, $circuit:ident, $mutation:expr, $expected:expr) => {{
+    ($field:ty, $mutation:expr, $expected:expr) => {{
         let mutation = $mutation;
         let case = hash_only_case::<$field>(mutation);
-        let circuit = $circuit {
+        let circuit = HashOnlyCircuit {
             builder: case.builder,
             sha_jobs: case.sha_jobs,
-            dense_jobs: PastaDenseMsmJobsV1::default(),
         };
         let verified = MockProver::run(KAGEMUSHA_HALO2_K_V1, &circuit, vec![case.public_values])
             .expect("mint canonical Base and actual SHA synthesis")
@@ -286,18 +349,8 @@ macro_rules! assert_hash_only_case {
 
 #[test]
 fn assigned_canonical_mint_hashes_match_model_in_both_parities() {
-    assert_hash_only_case!(
-        Fp,
-        KagemushaMintAuthorizationEqCircuitV1,
-        Mutation::None,
-        true
-    );
-    assert_hash_only_case!(
-        Fq,
-        KagemushaMintAuthorizationEpCircuitV1,
-        Mutation::None,
-        true
-    );
+    assert_hash_only_case!(Fp, Mutation::None, true);
+    assert_hash_only_case!(Fq, Mutation::None, true);
 }
 
 #[test]
@@ -308,7 +361,7 @@ fn assigned_canonical_mint_hashes_reject_substituted_fields_and_ids() {
         Mutation::RecipientOpening,
         Mutation::CreditOpening,
     ] {
-        assert_hash_only_case!(Fp, KagemushaMintAuthorizationEqCircuitV1, mutation, false);
-        assert_hash_only_case!(Fq, KagemushaMintAuthorizationEpCircuitV1, mutation, false);
+        assert_hash_only_case!(Fp, mutation, false);
+        assert_hash_only_case!(Fq, mutation, false);
     }
 }

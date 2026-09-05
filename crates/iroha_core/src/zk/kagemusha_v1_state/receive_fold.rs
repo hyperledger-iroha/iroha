@@ -184,7 +184,10 @@ mod tests {
         let fold = ReceiveFoldV1::try_new(credit()).expect("valid credit");
         assert_eq!(fold.canonical_body_bytes().len(), 208);
         assert_ne!(fold.canonical_transcript_digest(), [0; 32]);
-        assert_eq!(fold.replay_root_update_input().credit_id, CreditIdV1([1; 32]));
+        assert_eq!(
+            fold.replay_root_update_input().credit_id,
+            CreditIdV1([1; 32])
+        );
     }
 
     #[test]

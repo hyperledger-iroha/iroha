@@ -92,21 +92,89 @@ class KagemushaNativeSenderCandidateV1(
     @JvmField val preparation: KagemushaNativeSenderPreparationV1,
     @JvmField val selector: KagemushaDeviceSenderPreparationSelectorV1,
     candidateDigest: ByteArray,
+    hardwareCommitAuthorization: ByteArray,
 ) {
     private val candidateDigestValue = authenticatedDigest(candidateDigest, "candidateDigest")
+    private val commitAuthorization = boundedAuthenticatedBytes(
+        hardwareCommitAuthorization,
+        2 * 1024,
+        "hardwareCommitAuthorization",
+    )
     fun candidateDigest(): ByteArray = candidateDigestValue.copyOf()
+    fun hardwareCommitAuthorization(): ByteArray = commitAuthorization.copyOf()
 }
 
 /** Native-Core lookup state for byte-identical operation-10 recovery. */
 class KagemushaNativeSenderRecoveryV1(
     operationId: ByteArray,
+    terminalId: ByteArray,
     @JvmField val context: KagemushaDeviceSenderWalletContextV1,
     inputsDigest: ByteArray,
 ) {
     private val operationIdValue = authenticatedDigest(operationId, "operationId")
+    private val terminalIdValue = authenticatedDigest(terminalId, "terminalId")
     private val inputsDigestValue = authenticatedDigest(inputsDigest, "inputsDigest")
     fun operationId(): ByteArray = operationIdValue.copyOf()
+    fun terminalId(): ByteArray = terminalIdValue.copyOf()
     fun inputsDigest(): ByteArray = inputsDigestValue.copyOf()
+}
+
+/** Complete immutable hardware-produced mint authorization and encrypted credit. */
+class KagemushaMintConstructionBundleV1(
+    canonicalAuthorization: ByteArray,
+    encryptedCredit: ByteArray,
+) {
+    private val canonicalAuthorizationValue = canonicalAuthorization.copyOf()
+    private val encryptedCreditValue = encryptedCredit.copyOf()
+    @JvmField val authorization =
+        KagemushaNoritoV1.decodeMintAuthorizationShapeExact(canonicalAuthorizationValue)
+
+    init {
+        KagemushaNoritoV1.encryptedCreditAadForMintShape(authorization.statement)
+        KagemushaNoritoV1.decodeEncryptedCreditEnvelopeShapeExact(encryptedCreditValue)
+        require(
+            authorization.statement.ciphertextDigest().contentEquals(
+                KagemushaNoritoV1.ciphertextDigestShape(encryptedCreditValue),
+            ),
+        ) { "mint encrypted credit digest mismatch" }
+    }
+
+    fun canonicalAuthorization(): ByteArray = canonicalAuthorizationValue.copyOf()
+    fun encryptedCredit(): ByteArray = encryptedCreditValue.copyOf()
+
+    /** Build the reserve-facing request without regenerating hardware-owned ciphertext. */
+    fun topUpRequest(hardwareCredential: KagemushaHardwareCredentialV1): KagemushaTopUpRequestV1 {
+        val statement = authorization.statement
+        val context = statement.context
+        require(context.hardwareCredentialId().contentEquals(hardwareCredential.credentialId()))
+        require(context.hardwareProfileId().contentEquals(hardwareCredential.hardwareProfileId()))
+        require(context.suiteId().contentEquals(hardwareCredential.suiteId()))
+        require(context.policyEpoch == hardwareCredential.policyEpoch)
+        return KagemushaTopUpRequestV1(
+            version = 1,
+            operationId = context.operationId(),
+            issuanceCommitment = statement.issuanceCommitment(),
+            creditId = statement.creditId(),
+            releaseId = context.releaseId(),
+            suiteId = context.suiteId(),
+            vkDigest = context.vkDigest(),
+            networkId = context.networkId,
+            asset = context.asset,
+            assetIncarnation = context.assetIncarnation,
+            scale = context.scale,
+            amount = context.amount,
+            liabilityPoolId = context.liabilityPoolId(),
+            payer = context.payer,
+            recipient = context.recipient,
+            hardwareCredential = hardwareCredential,
+            recipientCredentialCommitment = context.recipientCredentialCommitment(),
+            creditCommitment = context.creditCommitment(),
+            recipientOneTimeKey = context.recipientOneTimeKey,
+            encryptedCredit = encryptedCreditValue,
+            artifactManifestDigest = context.artifactManifestDigest(),
+            mintAuthorization = authorization,
+        )
+    }
 }
 
 /** Exact operation-12 release material retained by native Core. */
@@ -117,11 +185,17 @@ class KagemushaNativeOutboxReleaseV1(
     envelopeDigest: ByteArray,
     @JvmField val inputs: KagemushaDeviceSenderPublicInputsV1,
     canonicalEnvelope: ByteArray,
+    hardwareReleaseAuthorization: ByteArray,
 ) {
     private val operationIdValue = authenticatedDigest(operationId, "operationId")
     private val inputsDigestValue = authenticatedDigest(inputsDigest, "inputsDigest")
     private val envelopeDigestValue = authenticatedDigest(envelopeDigest, "envelopeDigest")
     private val envelope = canonicalEnvelope.copyOf()
+    private val releaseAuthorization = boundedAuthenticatedBytes(
+        hardwareReleaseAuthorization,
+        2 * 1024,
+        "hardwareReleaseAuthorization",
+    )
 
     init { require(envelope.isNotEmpty()) { "canonicalEnvelope is empty" } }
 
@@ -129,6 +203,7 @@ class KagemushaNativeOutboxReleaseV1(
     fun inputsDigest(): ByteArray = inputsDigestValue.copyOf()
     fun envelopeDigest(): ByteArray = envelopeDigestValue.copyOf()
     fun canonicalEnvelope(): ByteArray = envelope.copyOf()
+    fun hardwareReleaseAuthorization(): ByteArray = releaseAuthorization.copyOf()
 }
 
 enum class KagemushaNativeSenderKindV1 { PAYMENT, REDEMPTION }
@@ -142,8 +217,8 @@ enum class KagemushaNativeSenderKindV1 { PAYMENT, REDEMPTION }
  * implementation is not installed by the qualified device/runtime package.
  */
 interface KagemushaNativeCoreCoordinatorV1 {
-    /** Persist and return a fresh non-zero ID before the corresponding device mutation. */
-    fun reserveOperationId(operation: Int, publicBinding: ByteArray): ByteArray
+    /** Fsync the caller's already durable action binding and echo its exact non-zero ID. */
+    fun reserveOperationId(operation: Int, operationId: ByteArray, publicBinding: ByteArray): ByteArray
 
     /** Admit the exact signed release member and bind it to the authenticated hardware tuple. */
     fun acceptQualification(
@@ -161,6 +236,7 @@ interface KagemushaNativeCoreCoordinatorV1 {
     )
 
     fun beginSenderTransition(
+        operationId: ByteArray,
         inputs: KagemushaDeviceSenderPublicInputsV1,
         qualification: KagemushaHardwareQualificationV1,
     ): KagemushaNativeSenderPreparationV1
@@ -177,7 +253,7 @@ interface KagemushaNativeCoreCoordinatorV1 {
         authenticatedCommitReply: ByteArray,
     ): ByteArray
 
-    /** Expose a terminal result only after operation 9, operation 10, and operation 21 agree. */
+    /** Expose a terminal result only after operation 9, operation 10, and wallet snapshot operation 21 agree. */
     fun acceptInstalledTerminal(
         candidate: KagemushaNativeSenderCandidateV1,
         canonicalEnvelope: ByteArray,
@@ -192,6 +268,13 @@ interface KagemushaNativeCoreCoordinatorV1 {
         qualification: KagemushaHardwareQualificationV1,
     ): KagemushaNativeSenderRecoveryV1?
 
+    /** Resolve an interrupted sender transition before its terminal identity was exposed. */
+    fun senderRecoveryByOperationId(
+        kind: KagemushaNativeSenderKindV1,
+        operationId: ByteArray,
+        qualification: KagemushaHardwareQualificationV1,
+    ): KagemushaNativeSenderRecoveryV1?
+
     fun recoverTerminalEnvelope(
         recovery: KagemushaNativeSenderRecoveryV1,
         authenticatedInstalledReply: ByteArray,
@@ -201,6 +284,7 @@ interface KagemushaNativeCoreCoordinatorV1 {
         creditId: ByteArray,
         inputs: KagemushaDeviceSenderPublicInputsV1,
         canonicalPayment: ByteArray,
+        terminalReceipt: KagemushaDeviceSenderTerminalReceiptV1,
         qualification: KagemushaHardwareQualificationV1,
     ): KagemushaNativeOutboxReleaseV1
 }
@@ -288,7 +372,6 @@ class KagemushaAuthenticatedDeviceClientV1(
             transport.qualificationReportDigest(),
             "qualificationReportDigest",
         )
-        require(decoded.hardwarePolicyDigest.contentEquals(decoded.profile.hardwareProfileId()))
         require(decoded.hardwarePolicyDigest.contentEquals(capabilityPolicy))
         require(decoded.profile.qualificationReportDigest().contentEquals(capabilityQualification))
         require(decoded.profile.hardwareProfileId().contentEquals(decoded.credential.hardwareProfileId()))
@@ -300,6 +383,8 @@ class KagemushaAuthenticatedDeviceClientV1(
             decoded.profile,
             decoded.credential,
             decoded.releaseId,
+            decoded.hardwarePolicyDigest,
+            decoded.coreAuthorizationKeyReference,
             EnumSet.allOf(KagemushaHardwareCapabilityV1::class.java),
         )
         qualification.requireProductionReady()
@@ -402,15 +487,27 @@ class KagemushaAuthenticatedHardwareProviderV1(
         payloadReader(call, 20).singleVector(768).also(KagemushaNoritoV1::decodeAggregateStateShapeExact)
     }
 
+    override fun reservePaymentRequestOperationId(
+        operationId: ByteArray,
+        recipientAccount: ByteArray,
+        amount: BigInteger,
+        validityWindowMillis: Long,
+    ): ByteArray = lock.withLock {
+        val id = authenticatedDigest(operationId, "operationId")
+        val command = KagemushaDeviceControlCommandV1.CreateSignedPaymentRequest(
+            id, KagemushaAccountIdV1.fromCanonicalPayload(recipientAccount), amount, validityWindowMillis
+        )
+        client.core.reserveOperationId(22, id, KagemushaDeviceOperationCodecV1.encodeControlCommand(command))
+    }
+
     override fun createPaymentRequest(
+        operationId: ByteArray,
         recipientAccount: ByteArray,
         amount: BigInteger,
         validityWindowMillis: Long,
     ): ByteArray = lock.withLock {
         val recipient = KagemushaAccountIdV1.fromCanonicalPayload(recipientAccount)
-        val binding = recipient.canonicalPayload() + unsigned128(amount) + ByteBuffer.allocate(8)
-            .order(ByteOrder.LITTLE_ENDIAN).putLong(validityWindowMillis).array()
-        val id = client.core.reserveOperationId(22, binding)
+        val id = authenticatedDigest(operationId, "operationId")
         val command = KagemushaDeviceControlCommandV1.CreateSignedPaymentRequest(
             id,
             recipient,
@@ -509,50 +606,80 @@ class KagemushaAuthenticatedHardwareProviderV1(
         KagemushaHardwareMintStageV1(disposition, result.creditId())
     }
 
-    override fun pendingCreditWatermark(): BigInteger = lock.withLock {
+    override fun selectPendingCredit(
+        watermark: KagemushaPendingCreditWatermarkV1?,
+        target: KagemushaPendingCreditTargetV1,
+    ): KagemushaPendingCreditSelectionV1 = lock.withLock {
         val reader = payloadReader(
-            control(KagemushaDeviceControlCommandV1.ReadPendingCreditWatermark, freshId(18)),
+            control(
+                KagemushaDeviceControlCommandV1.ReadPendingCreditWatermark(watermark, target),
+                freshId(18),
+            ),
             18,
         )
-        reader.u128Field().also { reader.finish() }
-    }
-
-    override fun nextPendingCreditId(): ByteArray? = lock.withLock {
-        val id = freshId(4)
-        val call = client.receiver(KagemushaDeviceReceiverCommandV1.Page(null, null, 1), id)
-        if (call.status == KagemushaAuthenticatedDeviceStatusV1.MISSING) return@withLock null
-        val reader = payloadReader(requireSuccess(call), 4)
-        reader.u128Field()
-        val records = reader.itemVectorFields(1)
-        reader.optionDigest()
+        val returnedWatermark = decodePendingCreditWatermarkReply(reader.field())
+        val next = reader.optionPendingCreditSelector()
         reader.finish()
-        records.firstOrNull()?.let(::stagedRecordCreditId)
+        watermark?.let {
+            require(it.sameAs(returnedWatermark)) { "pending-credit watermark changed within one pass" }
+        }
+        KagemushaPendingCreditSelectionV1(returnedWatermark, next)
     }
 
     override fun journalRevision(): BigInteger = recover().journalRevision
 
-    override fun foldReceiveCredit(creditId: ByteArray): KagemushaHardwareReceiveFoldV1 = lock.withLock {
-        val credit = authenticatedDigest(creditId, "creditId")
-        val id = client.core.reserveOperationId(17, credit)
+    override fun foldPendingCredit(
+        selector: KagemushaPendingCreditSelectorV1,
+    ): KagemushaHardwareReceiveFoldV1 = lock.withLock {
+        val credit = authenticatedDigest(selector.creditId(), "creditId")
+        val binding = byteArrayOf(selector.kind.ordinal.toByte()) + credit
+        val id = client.core.reserveOperationId(17, binding)
         val call = client.control(
-            KagemushaDeviceControlCommandV1.FoldReceiveCredit(id, credit),
+            KagemushaDeviceControlCommandV1.FoldReceiveCredit(id, selector),
             id,
         )
         val reader = payloadReader(requireSuccess(call), 17)
+        require(reader.pendingCreditKindField() == selector.kind)
         require(reader.digestField().contentEquals(credit))
         val aggregate = reader.vectorField(768)
         reader.finish()
         KagemushaNoritoV1.decodeAggregateStateShapeExact(aggregate)
-        KagemushaHardwareReceiveFoldV1(aggregate, credit)
+        KagemushaHardwareReceiveFoldV1(aggregate, selector)
     }
 
-    override fun commitPayment(canonicalRequest: ByteArray): KagemushaHardwareTerminalResultV1 = lock.withLock {
+    override fun reservePaymentOperationId(operationId: ByteArray, canonicalRequest: ByteArray): ByteArray = lock.withLock {
         KagemushaNoritoV1.decodePaymentRequestShapeExact(canonicalRequest)
-        commitSender(KagemushaDeviceSenderPublicInputsV1.SendSplit(canonicalRequest))
+        client.core.reserveOperationId(5, authenticatedDigest(operationId, "operationId"), canonicalRequest)
+    }
+
+    override fun commitPayment(
+        operationId: ByteArray,
+        canonicalRequest: ByteArray,
+    ): KagemushaHardwareTerminalResultV1 = lock.withLock {
+        KagemushaNoritoV1.decodePaymentRequestShapeExact(canonicalRequest)
+        commitSender(operationId, KagemushaDeviceSenderPublicInputsV1.SendSplit(canonicalRequest))
     }
 
     override fun recoverPayment(creditId: ByteArray): ByteArray? = lock.withLock {
         recoverTerminal(KagemushaNativeSenderKindV1.PAYMENT, creditId)
+    }
+
+    override fun recoverPaymentByOperationId(
+        operationId: ByteArray,
+        canonicalRequest: ByteArray,
+    ): ByteArray? = lock.withLock {
+        val request = KagemushaNoritoV1.decodePaymentRequestShapeExact(canonicalRequest)
+        val recovery = client.core.senderRecoveryByOperationId(
+            KagemushaNativeSenderKindV1.PAYMENT,
+            authenticatedDigest(operationId, "operationId"),
+            qualification(),
+        ) ?: return@withLock null
+        val envelope = recoverTerminal(recovery)
+        val payment = KagemushaNoritoV1.decodePaymentShapeExact(envelope, request)
+        require(payment.output.creditId().contentEquals(recovery.terminalId())) {
+            "recovered payment credit ID mismatch"
+        }
+        envelope
     }
 
     override fun recordAcknowledgement(
@@ -570,12 +697,25 @@ class KagemushaAuthenticatedHardwareProviderV1(
             payment,
         )
         val inputs = KagemushaDeviceSenderPublicInputsV1.SendSplit(canonicalRequest)
+        val terminalReceipt = KagemushaDeviceSenderTerminalReceiptV1.PaymentAcknowledgement(
+            canonicalAcknowledgement,
+        )
+        val qualified = qualification()
         val release = client.core.outboxRelease(
             creditId,
             inputs,
             canonicalPayment,
-            qualification(),
+            terminalReceipt,
+            qualified,
         )
+        require(
+            release.context.devicePolicyBinding.hardwarePolicyId()
+                .contentEquals(qualified.hardwarePolicyDigest()),
+        ) { "outbox release hardware-policy scope mismatch" }
+        require(
+            release.context.coreAuthorizationKeyReference()
+                .contentEquals(qualified.coreAuthorizationKeyReference()),
+        ) { "outbox release Core authorization key mismatch" }
         val command = KagemushaDeviceSenderCommandV1(
             operation = 12,
             operationId = release.operationId(),
@@ -585,22 +725,49 @@ class KagemushaAuthenticatedHardwareProviderV1(
                 release.envelopeDigest(),
                 release.inputs,
                 release.canonicalEnvelope(),
-                canonicalAcknowledgement,
+                terminalReceipt,
+                release.hardwareReleaseAuthorization(),
             ),
         )
         requireSuccess(client.sender(command))
         Unit
     }
 
+    override fun reserveRedemptionOperationId(
+        operationId: ByteArray,
+        amount: BigInteger,
+        beneficiaryAccount: ByteArray,
+    ): ByteArray = lock.withLock {
+        client.core.reserveOperationId(5, authenticatedDigest(operationId, "operationId"), unsigned128(amount) + beneficiaryAccount)
+    }
+
     override fun commitRedemption(
+        operationId: ByteArray,
         amount: BigInteger,
         beneficiaryAccount: ByteArray,
     ): KagemushaHardwareTerminalResultV1 = lock.withLock {
-        commitSender(KagemushaDeviceSenderPublicInputsV1.RedeemSplit(amount, beneficiaryAccount))
+        commitSender(
+            operationId,
+            KagemushaDeviceSenderPublicInputsV1.RedeemSplit(amount, beneficiaryAccount),
+        )
     }
 
     override fun recoverRedemption(redemptionId: ByteArray): ByteArray? = lock.withLock {
         recoverTerminal(KagemushaNativeSenderKindV1.REDEMPTION, redemptionId)
+    }
+
+    override fun recoverRedemptionByOperationId(operationId: ByteArray): ByteArray? = lock.withLock {
+        val recovery = client.core.senderRecoveryByOperationId(
+            KagemushaNativeSenderKindV1.REDEMPTION,
+            authenticatedDigest(operationId, "operationId"),
+            qualification(),
+        ) ?: return@withLock null
+        val envelope = recoverTerminal(recovery)
+        val voucher = KagemushaNoritoV1.decodeRedemptionVoucherShapeExact(envelope)
+        require(voucher.statement.redemptionId().contentEquals(recovery.terminalId())) {
+            "recovered redemption ID mismatch"
+        }
+        envelope
     }
 
     override fun rotateHardwareEpoch(): ByteArray = lock.withLock {
@@ -622,40 +789,76 @@ class KagemushaAuthenticatedHardwareProviderV1(
         ).canonicalReply()
     }
 
-    /** Operation 14 prepares one proof-bearing mint authorization. */
-    fun prepareMintAuthorization(
+    override fun reserveMintOperationId(
+        operationId: ByteArray,
         amount: BigInteger,
         payerAccount: ByteArray,
         recipientAccount: ByteArray,
     ): ByteArray = lock.withLock {
         val binding = unsigned128(amount) + payerAccount + recipientAccount
-        val id = client.core.reserveOperationId(14, binding)
+        client.core.reserveOperationId(14, authenticatedDigest(operationId, "operationId"), binding)
+    }
+
+    /** Operation 14 prepares one proof-bearing authorization plus its exact encrypted credit. */
+    override fun prepareMintConstructionBundle(
+        operationId: ByteArray,
+        amount: BigInteger,
+        payerAccount: ByteArray,
+        recipientAccount: ByteArray,
+    ): KagemushaMintConstructionBundleV1 = lock.withLock {
+        val id = authenticatedDigest(operationId, "operationId")
         val command = KagemushaDeviceControlCommandV1.PrepareMintAuthorization(
             id,
             amount,
             payerAccount,
             recipientAccount,
         )
-        payloadReader(control(command, id), 14).singleVector(7_936)
-            .also(KagemushaNoritoV1::decodeMintAuthorizationShapeExact)
+        val reader = payloadReader(control(command, id), 14)
+        val authorization = reader.vectorField(7_936)
+        val encryptedCredit = reader.vectorField(KagemushaWireV1.MAXIMUM_ENCRYPTED_CREDIT_BYTES)
+        reader.finish()
+        val bundle = KagemushaMintConstructionBundleV1(authorization, encryptedCredit)
+        require(bundle.authorization.statement.context.operationId().contentEquals(id))
+        bundle
     }
 
-    /** Recover operation 14 byte-identically through operation 15. */
-    fun recoverMintAuthorization(operationId: ByteArray): ByteArray? = lock.withLock {
+    /** Recover the complete operation-14 bundle byte-identically through operation 15. */
+    override fun recoverMintConstructionBundle(
+        operationId: ByteArray,
+    ): KagemushaMintConstructionBundleV1? = lock.withLock {
+        val id = authenticatedDigest(operationId, "operationId")
         val call = client.control(
-            KagemushaDeviceControlCommandV1.RecoverMintAuthorization(operationId),
-            operationId,
+            KagemushaDeviceControlCommandV1.RecoverMintAuthorization(id),
+            id,
         )
         if (call.status == KagemushaAuthenticatedDeviceStatusV1.MISSING) return@withLock null
-        payloadReader(requireSuccess(call), 15).singleVector(7_936)
-            .also(KagemushaNoritoV1::decodeMintAuthorizationShapeExact)
+        val reader = payloadReader(requireSuccess(call), 15)
+        val authorization = reader.vectorField(7_936)
+        val encryptedCredit = reader.vectorField(KagemushaWireV1.MAXIMUM_ENCRYPTED_CREDIT_BYTES)
+        reader.finish()
+        val bundle = KagemushaMintConstructionBundleV1(authorization, encryptedCredit)
+        require(bundle.authorization.statement.context.operationId().contentEquals(id))
+        bundle
     }
 
     private fun commitSender(
+        operationId: ByteArray,
         inputs: KagemushaDeviceSenderPublicInputsV1,
     ): KagemushaHardwareTerminalResultV1 {
-        val preparation = client.core.beginSenderTransition(inputs, qualification())
-        val operationId = preparation.operationId()
+        val operationId = authenticatedDigest(operationId, "operationId")
+        val qualified = qualification()
+        val preparation = client.core.beginSenderTransition(operationId, inputs, qualified)
+        require(preparation.operationId().contentEquals(operationId)) {
+            "native Core substituted sender operation ID"
+        }
+        require(
+            preparation.context.devicePolicyBinding.hardwarePolicyId()
+                .contentEquals(qualified.hardwarePolicyDigest()),
+        ) { "sender preparation hardware-policy scope mismatch" }
+        require(
+            preparation.context.coreAuthorizationKeyReference()
+                .contentEquals(qualified.coreAuthorizationKeyReference()),
+        ) { "sender preparation Core authorization key mismatch" }
         val preparedCommand = KagemushaDeviceSenderCommandV1(
             operation = 5,
             operationId = operationId,
@@ -690,6 +893,7 @@ class KagemushaAuthenticatedHardwareProviderV1(
                 body = KagemushaDeviceSenderCommandBodyV1.Commit(
                     candidate.selector,
                     candidate.candidateDigest(),
+                    candidate.hardwareCommitAuthorization(),
                 ),
             ),
         )
@@ -748,7 +952,13 @@ class KagemushaAuthenticatedHardwareProviderV1(
     }
 
     private fun recoverTerminal(kind: KagemushaNativeSenderKindV1, id: ByteArray): ByteArray? {
-        val recovery = client.core.senderRecovery(kind, id, qualification()) ?: return null
+        val expected = authenticatedDigest(id, "terminalId")
+        val recovery = client.core.senderRecovery(kind, expected, qualification()) ?: return null
+        require(recovery.terminalId().contentEquals(expected)) { "native Core substituted terminal ID" }
+        return recoverTerminal(recovery)
+    }
+
+    private fun recoverTerminal(recovery: KagemushaNativeSenderRecoveryV1): ByteArray {
         val call = client.sender(
             KagemushaDeviceSenderCommandV1(
                 operation = 10,
@@ -759,7 +969,9 @@ class KagemushaAuthenticatedHardwareProviderV1(
                 ),
             ),
         )
-        if (call.status == KagemushaAuthenticatedDeviceStatusV1.MISSING) return null
+        require(call.status != KagemushaAuthenticatedDeviceStatusV1.MISSING) {
+            "native Core indexed a missing terminal"
+        }
         requireSuccess(call)
         return client.core.recoverTerminalEnvelope(recovery, call.canonicalReply()).also {
             require(it.isNotEmpty()) { "native Core recovered an empty terminal envelope" }
@@ -833,9 +1045,19 @@ private fun decodeInboxReceipt(payload: ByteArray): KagemushaInboxReceiptV1 {
     return receipt
 }
 
+private fun decodePendingCreditWatermarkReply(
+    payload: ByteArray,
+): KagemushaPendingCreditWatermarkV1 {
+    val reader = AuthenticatedReplyReader(payload)
+    return KagemushaPendingCreditWatermarkV1(
+        reader.u128Field(), reader.digestField(), reader.u128Field(),
+    ).also { reader.finish() }
+}
+
 private data class DecodedQualification(
     val releaseId: ByteArray,
     val hardwarePolicyDigest: ByteArray,
+    val coreAuthorizationKeyReference: ByteArray,
     val profile: KagemushaHardwareProfileV1,
     val credential: KagemushaHardwareCredentialV1,
 )
@@ -845,12 +1067,14 @@ private fun decodeQualificationPayload(payload: ByteArray): DecodedQualification
     require(reader.u16Field() == 1 && reader.u8Field() == 1)
     val release = reader.digestField()
     val policy = reader.digestField()
+    val coreAuthorizationKeyReference = reader.digestField()
     val profilePayload = reader.field(512)
     val credentialPayload = reader.field(768)
     reader.finish()
     return DecodedQualification(
         release,
         policy,
+        coreAuthorizationKeyReference,
         KagemushaNoritoV1.decodeHardwareProfileShapeExact(
             nestedModelArchive(HARDWARE_PROFILE_SCHEMA, profilePayload),
         ),
@@ -927,6 +1151,32 @@ private class AuthenticatedReplyReader(private val bytes: ByteArray) {
         return value
     }
 
+    fun pendingCreditKindField(): KagemushaPendingCreditKindV1 {
+        val nested = AuthenticatedReplyReader(field(4))
+        val ordinal = ByteBuffer.wrap(nested.raw(4)).order(ByteOrder.LITTLE_ENDIAN).int
+        nested.finish()
+        require(ordinal in KagemushaPendingCreditKindV1.entries.indices) {
+            "invalid pending-credit kind"
+        }
+        return KagemushaPendingCreditKindV1.entries[ordinal]
+    }
+
+    fun optionPendingCreditSelector(): KagemushaPendingCreditSelectorV1? {
+        val nested = AuthenticatedReplyReader(field(80))
+        val value = when (nested.raw(1)[0].toInt() and 0xff) {
+            0 -> null
+            1 -> {
+                val item = AuthenticatedReplyReader(nested.field(48))
+                KagemushaPendingCreditSelectorV1(
+                    item.pendingCreditKindField(), item.digestField(),
+                ).also { item.finish() }
+            }
+            else -> throw IllegalArgumentException("invalid pending-credit option tag")
+        }
+        nested.finish()
+        return value
+    }
+
     fun itemVectorFields(maximumEntries: Int): List<ByteArray> {
         val nested = AuthenticatedReplyReader(field())
         val count = ByteBuffer.wrap(nested.raw(8)).order(ByteOrder.LITTLE_ENDIAN).long
@@ -974,6 +1224,11 @@ private class AuthenticatedReplyReader(private val bytes: ByteArray) {
 private fun authenticatedDigest(value: ByteArray, field: String): ByteArray = value.copyOf().also {
     require(it.size == 32 && it.any { byte -> byte != 0.toByte() }) { "$field must be a non-zero digest" }
 }
+
+private fun boundedAuthenticatedBytes(value: ByteArray, maximum: Int, field: String): ByteArray =
+    value.copyOf().also {
+        require(it.isNotEmpty() && it.size <= maximum) { "$field must be non-empty and at most $maximum bytes" }
+    }
 
 private fun littleEndian(bytes: ByteArray, expected: Int): Long {
     require(bytes.size == expected)

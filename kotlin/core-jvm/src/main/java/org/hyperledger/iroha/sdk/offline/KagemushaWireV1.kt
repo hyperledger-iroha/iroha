@@ -89,7 +89,6 @@ object KagemushaWireV1 {
     const val REDEMPTION_OUTBOX_MIN_BYTES: Int = 26_112
     const val INBOX_STAGE_MIN_BYTES: Int =
         MAXIMUM_PAYMENT_BYTES + 512 + MAXIMUM_ACKNOWLEDGEMENT_BYTES
-    const val RECEIVE_FOLD_BATCH_SIZE: Int = 16
 
     /** Encode bounded canonical bytes as exact unpadded base64url with the `kgm1:` discriminator. */
     @JvmStatic

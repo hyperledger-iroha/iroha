@@ -152,7 +152,6 @@ allow_tool_prefixes = ["iroha."]
 [torii.kagemusha_v1_commands]
 redemption_private_key_file = "/run/secrets/iroha/taira-kagemusha-v1-redemption-private-key"
 redemption_minimum_xor_balance = "1"
-max_tx_value = "1000000000"
 operation_registry_max_entries = 4096
 operation_registry_max_bytes = 593920
 

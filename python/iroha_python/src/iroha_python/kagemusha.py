@@ -2039,7 +2039,7 @@ def encode_device_mint_stage_command_shape(
     value: object,
     canonical_mint_credit: object | None = None,
 ) -> bytes:
-    """Encode a structural operation-21 body without granting hardware authority."""
+    """Encode a structural operation-16 body without granting hardware authority."""
 
     if canonical_mint_credit is not None:
         value = KagemushaDeviceMintStageCommandV1(
@@ -2058,7 +2058,7 @@ def encode_device_mint_stage_command_shape(
 def decode_device_mint_stage_command_shape_exact(
     raw: object,
 ) -> KagemushaDeviceMintStageCommandV1:
-    """Decode one exact bounded operation-21 body and both nested archives."""
+    """Decode one exact bounded operation-16 body and both nested archives."""
 
     return _decode_top_level(
         _bounded_bytes(raw, _DEVICE_MINT_STAGE_COMMAND_MAX_BYTES, "mint-stage command"),

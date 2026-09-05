@@ -1,6 +1,6 @@
 use super::*;
 use crate::{
-    gates::{GateChip, flex_gate::threads::SinglePhaseCoreManager},
+    gates::{flex_gate::threads::SinglePhaseCoreManager, GateChip},
     halo2_proofs::halo2curves::{bn256::Fr, ff::PrimeField},
 };
 

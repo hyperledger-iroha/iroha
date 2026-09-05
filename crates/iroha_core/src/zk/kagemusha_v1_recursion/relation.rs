@@ -291,9 +291,7 @@ where
                 q.clone()
                     * (outbound.clone() + rotate.clone())
                     * (root_after_lo.clone() - root_before_lo.clone()),
-                q.clone()
-                    * (outbound + rotate)
-                    * (root_after_hi.clone() - root_before_hi.clone()),
+                q.clone() * (outbound + rotate) * (root_after_hi.clone() - root_before_hi.clone()),
                 q.clone() * root_lo_nonzero.clone() * (root_lo_nonzero.clone() - one.clone()),
                 q.clone() * root_hi_nonzero.clone() * (root_hi_nonzero.clone() - one.clone()),
                 q.clone() * (root_lo_delta.clone() * value(ROOT_LO_INV) - root_lo_nonzero.clone()),

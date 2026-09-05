@@ -1,10 +1,9 @@
 // Copyright 2026 Hyperledger Iroha Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-import CryptoKit
 import Foundation
 
-/// Fail-closed errors from the authenticated ABI-23 hardware-provider boundary.
+/// Fail-closed errors from the authenticated KAGEMUSHA V1 hardware-provider boundary.
 public enum KagemushaAuthenticatedHardwareProviderErrorV1: Error, Equatable, Sendable {
   case invalidContract(String)
   case operationFailed(
@@ -13,7 +12,7 @@ public enum KagemushaAuthenticatedHardwareProviderErrorV1: Error, Equatable, Sen
   )
 }
 
-/// Result returned only after the platform transport verifies the complete ABI-23 response.
+/// Result returned only after the platform transport verifies the complete KAGEMUSHA V1 response.
 public struct KagemushaAuthenticatedDeviceResponseV1: Equatable, Sendable {
   public let operation: UInt8
   public let status: KagemushaDeviceLifecycleStatusV1
@@ -46,10 +45,10 @@ public struct KagemushaAuthenticatedDeviceResponseV1: Equatable, Sendable {
   }
 }
 
-/// Platform bridge which verifies a complete ABI-23 response before returning success bytes.
+/// Platform bridge which verifies a complete KAGEMUSHA V1 response before returning success bytes.
 ///
 /// Operation 1 passes no accepted key. Operations 2 through 22 pass the exact 65-byte P-256 key
-/// admitted from operation 1. Implementations must invoke the native ABI-23 response verifier;
+/// admitted from operation 1. Implementations must invoke the native response verifier;
 /// verifying the signature independently in Swift is not an implementation of this boundary.
 public protocol KagemushaNativeAuthenticatedDeviceTransportV1: AnyObject {
   func hardwarePolicyID() throws -> Data
@@ -126,32 +125,104 @@ public struct KagemushaNativeSenderCandidateV1: Equatable, Sendable {
   public let preparation: KagemushaNativeSenderPreparationV1
   public let selector: KagemushaDeviceSenderPreparationSelectorV1
   public let candidateDigest: Data
+  public let hardwareCommitAuthorization: Data
 
   public init(
     preparation: KagemushaNativeSenderPreparationV1,
     selector: KagemushaDeviceSenderPreparationSelectorV1,
-    candidateDigest: Data
+    candidateDigest: Data,
+    hardwareCommitAuthorization: Data
   ) throws {
     self.preparation = preparation
     self.selector = selector
     self.candidateDigest = try authenticatedProviderDigest(candidateDigest, "candidateDigest")
+    guard !hardwareCommitAuthorization.isEmpty, hardwareCommitAuthorization.count <= 2 * 1024 else {
+      throw authenticatedProviderInvalid("hardwareCommitAuthorization is empty or oversized")
+    }
+    self.hardwareCommitAuthorization = Data(hardwareCommitAuthorization)
   }
 }
 
 /// Native-Core lookup state for byte-identical operation-10 recovery.
 public struct KagemushaNativeSenderRecoveryV1: Equatable, Sendable {
   public let operationID: Data
+  public let terminalID: Data
   public let context: KagemushaDeviceSenderWalletContextV1
   public let inputsDigest: Data
 
   public init(
     operationID: Data,
+    terminalID: Data,
     context: KagemushaDeviceSenderWalletContextV1,
     inputsDigest: Data
   ) throws {
     self.operationID = try authenticatedProviderDigest(operationID, "operationID")
+    self.terminalID = try authenticatedProviderDigest(terminalID, "terminalID")
     self.context = context
     self.inputsDigest = try authenticatedProviderDigest(inputsDigest, "inputsDigest")
+  }
+}
+
+/// Complete immutable output of hardware mint preparation or recovery.
+///
+/// The encrypted credit is generated and durably retained by hardware. It is bound to the exact
+/// authorization by the signed ciphertext digest; callers never synthesize or replace it.
+public struct KagemushaMintConstructionBundleV1: Equatable, Sendable {
+  public let authorization: KagemushaMintAuthorizationV1
+  public let canonicalAuthorization: Data
+  public let encryptedCredit: Data
+
+  public init(canonicalAuthorization: Data, encryptedCredit: Data) throws {
+    let authorization = try KagemushaNoritoV1.decodeMintAuthorizationShapeExact(
+      canonicalAuthorization)
+    _ = try KagemushaNoritoV1.encryptedCreditAADForMintShape(authorization.statement)
+    _ = try KagemushaNoritoV1.decodeEncryptedCreditEnvelopeShapeExact(encryptedCredit)
+    guard authorization.statement.ciphertextDigest
+      == KagemushaNoritoV1.ciphertextDigestShape(encryptedCredit)
+    else {
+      throw authenticatedProviderInvalid("mint encrypted credit digest mismatch")
+    }
+    self.authorization = authorization
+    self.canonicalAuthorization = Data(canonicalAuthorization)
+    self.encryptedCredit = Data(encryptedCredit)
+  }
+
+  /// Build the exact reserve-facing request without regenerating hardware-owned ciphertext.
+  public func topUpRequest(
+    hardwareCredential: KagemushaHardwareCredentialV1
+  ) throws -> KagemushaTopUpRequestV1 {
+    let statement = authorization.statement
+    let context = statement.context
+    guard context.hardwareCredentialID == hardwareCredential.credentialID,
+      context.hardwareProfileID == hardwareCredential.hardwareProfileID,
+      context.suiteID == hardwareCredential.suiteID,
+      context.policyEpoch == hardwareCredential.policyEpoch
+    else {
+      throw authenticatedProviderInvalid("mint bundle hardware credential mismatch")
+    }
+    return try KagemushaTopUpRequestV1(
+      operationID: context.operationID,
+      issuanceCommitment: statement.issuanceCommitment,
+      creditID: statement.creditID,
+      releaseID: context.releaseID,
+      suiteID: context.suiteID,
+      vkDigest: context.vkDigest,
+      networkID: context.networkID,
+      asset: context.asset,
+      assetIncarnation: context.assetIncarnation,
+      scale: context.scale,
+      amount: context.amount,
+      liabilityPoolID: context.liabilityPoolID,
+      payer: context.payer,
+      recipient: context.recipient,
+      hardwareCredential: hardwareCredential,
+      recipientCredentialCommitment: context.recipientCredentialCommitment,
+      creditCommitment: context.creditCommitment,
+      recipientOneTimeKey: context.recipientOneTimeKey,
+      encryptedCredit: encryptedCredit,
+      artifactManifestDigest: context.artifactManifestDigest,
+      mintAuthorization: authorization
+    )
   }
 }
 
@@ -163,6 +234,7 @@ public struct KagemushaNativeOutboxReleaseV1: Equatable, Sendable {
   public let envelopeDigest: Data
   public let inputs: KagemushaDeviceSenderPublicInputsV1
   public let canonicalEnvelope: Data
+  public let hardwareReleaseAuthorization: Data
 
   public init(
     operationID: Data,
@@ -170,7 +242,8 @@ public struct KagemushaNativeOutboxReleaseV1: Equatable, Sendable {
     inputsDigest: Data,
     envelopeDigest: Data,
     inputs: KagemushaDeviceSenderPublicInputsV1,
-    canonicalEnvelope: Data
+    canonicalEnvelope: Data,
+    hardwareReleaseAuthorization: Data
   ) throws {
     guard !canonicalEnvelope.isEmpty else {
       throw authenticatedProviderInvalid("canonicalEnvelope is empty")
@@ -181,6 +254,10 @@ public struct KagemushaNativeOutboxReleaseV1: Equatable, Sendable {
     self.envelopeDigest = try authenticatedProviderDigest(envelopeDigest, "envelopeDigest")
     self.inputs = inputs
     self.canonicalEnvelope = Data(canonicalEnvelope)
+    guard !hardwareReleaseAuthorization.isEmpty, hardwareReleaseAuthorization.count <= 2 * 1024 else {
+      throw authenticatedProviderInvalid("hardwareReleaseAuthorization is empty or oversized")
+    }
+    self.hardwareReleaseAuthorization = Data(hardwareReleaseAuthorization)
   }
 }
 
@@ -196,8 +273,9 @@ public enum KagemushaNativeSenderKindV1: Equatable, Sendable {
 /// typestate, and byte-identical terminal recovery. A production factory must fail closed unless
 /// the signed app contains exactly one qualified implementation.
 public protocol KagemushaNativeCoreCoordinatorV1: AnyObject {
-  /// Persist and return a fresh non-zero ID before the corresponding device mutation.
-  func reserveOperationID(operation: UInt8, publicBinding: Data) throws -> Data
+  /// Admit and persist the caller's exact durable intent ID before any device mutation.
+  /// An identical retry returns the same ID; an ID cannot be rebound to another action.
+  func reserveOperationID(operation: UInt8, operationID: Data, publicBinding: Data) throws -> Data
 
   /// Admit the exact signed release member and bind it to the authenticated hardware tuple.
   func acceptQualification(
@@ -215,6 +293,7 @@ public protocol KagemushaNativeCoreCoordinatorV1: AnyObject {
   ) throws
 
   func beginSenderTransition(
+    operationID: Data,
     inputs: KagemushaDeviceSenderPublicInputsV1,
     qualification: KagemushaHardwareQualificationV1
   ) throws -> KagemushaNativeSenderPreparationV1
@@ -246,6 +325,13 @@ public protocol KagemushaNativeCoreCoordinatorV1: AnyObject {
     qualification: KagemushaHardwareQualificationV1
   ) throws -> KagemushaNativeSenderRecoveryV1?
 
+  /// Resolve an interrupted sender transition before its terminal credit ID was exposed.
+  func senderRecoveryByOperationID(
+    kind: KagemushaNativeSenderKindV1,
+    operationID: Data,
+    qualification: KagemushaHardwareQualificationV1
+  ) throws -> KagemushaNativeSenderRecoveryV1?
+
   func recoverTerminalEnvelope(
     recovery: KagemushaNativeSenderRecoveryV1,
     authenticatedInstalledReply: Data
@@ -255,6 +341,7 @@ public protocol KagemushaNativeCoreCoordinatorV1: AnyObject {
     creditID: Data,
     inputs: KagemushaDeviceSenderPublicInputsV1,
     canonicalPayment: Data,
+    terminalReceipt: KagemushaDeviceSenderTerminalReceiptV1,
     qualification: KagemushaHardwareQualificationV1
   ) throws -> KagemushaNativeOutboxReleaseV1
 
@@ -386,12 +473,12 @@ public final class KagemushaAuthenticatedDeviceClientV1: @unchecked Sendable {
       canonicalBytes: command
     )
     let response = try transport.executeAndVerify(
-      operation: rawOperation,
+      operation: operation,
       requestID: requestID,
       canonicalCommand: command,
       acceptedDevicePublicKey: nil
     )
-    guard response.operation == rawOperation else {
+    guard response.operation == operation else {
       throw authenticatedProviderInvalid("device response substituted operation 1")
     }
     guard response.status == .success else {
@@ -416,8 +503,7 @@ public final class KagemushaAuthenticatedDeviceClientV1: @unchecked Sendable {
       transport.qualificationReportDigest(),
       "qualificationReportDigest"
     )
-    guard decoded.hardwarePolicyDigest == decoded.profile.hardwareProfileID,
-      decoded.hardwarePolicyDigest == capabilityPolicy,
+    guard decoded.hardwarePolicyDigest == capabilityPolicy,
       decoded.profile.qualificationReportDigest == capabilityQualification,
       decoded.profile.hardwareProfileID == decoded.credential.hardwareProfileID
     else {
@@ -428,6 +514,7 @@ public final class KagemushaAuthenticatedDeviceClientV1: @unchecked Sendable {
     let qualification = try KagemushaHardwareQualificationV1(
       releaseID: decoded.releaseID,
       hardwarePolicyDigest: decoded.hardwarePolicyDigest,
+      coreAuthorizationKeyReference: decoded.coreAuthorizationKeyReference,
       profile: decoded.profile,
       credential: decoded.credential
     )
@@ -460,12 +547,12 @@ public final class KagemushaAuthenticatedDeviceClientV1: @unchecked Sendable {
     var responseKey = Data(accepted.responseKey)
     defer { responseKey.resetBytes(in: responseKey.startIndex..<responseKey.endIndex) }
     let response = try transport.executeAndVerify(
-      operation: operation,
+      operation: rawOperation,
       requestID: requestID,
       canonicalCommand: command,
       acceptedDevicePublicKey: responseKey
     )
-    guard response.operation == operation else {
+    guard response.operation == rawOperation else {
       throw authenticatedProviderInvalid("device response substituted operation \(rawOperation)")
     }
     guard response.status == .success else {
@@ -540,7 +627,7 @@ private struct AuthenticatedCall {
   let canonicalReply: Data?
 }
 
-/// High-level Offline wallet provider backed only by authenticated hardware and native Core.
+/// High-level KAGEMUSHA wallet provider backed only by authenticated hardware and native Core.
 public final class KagemushaAuthenticatedHardwareProviderV1: KagemushaHardwareProviderV1,
   @unchecked Sendable
 {
@@ -600,23 +687,23 @@ public final class KagemushaAuthenticatedHardwareProviderV1: KagemushaHardwarePr
   }
 
   public func createPaymentRequest(
-    recipientAccount: KagemushaAccountIDV1,
+    recipient: KagemushaAccountIDV1,
     amount: KagemushaUInt128V1,
-    validityWindowMillis: UInt64
+    validityWindowMS: UInt64
   ) throws -> Data {
     try locked {
       guard !amount.isZero,
-        (1...KagemushaWireV1.requestMaximumTTLMS).contains(validityWindowMillis)
+        (1...KagemushaWireV1.requestMaximumTTLMS).contains(validityWindowMS)
       else { throw authenticatedProviderInvalid("invalid payment request amount or lifetime") }
-      var binding = Data(recipientAccount.canonicalPayload)
+      var binding = Data(recipient.canonicalPayload)
       binding.append(amount.littleEndianBytes)
-      binding.append(authenticatedProviderU64LE(validityWindowMillis))
+      binding.append(authenticatedProviderU64LE(validityWindowMS))
       let requestID = try client.core.reserveOperationID(operation: 22, publicBinding: binding)
       let command = KagemushaDeviceControlCommandV1.createSignedPaymentRequest(
         requestID: requestID,
-        recipient: recipientAccount,
+        recipient: recipient,
         amount: amount,
-        validityWindowMS: validityWindowMillis
+        validityWindowMS: validityWindowMS
       )
       var reader = try payloadReader(
         control(command, requestID: requestID),
@@ -627,9 +714,9 @@ public final class KagemushaAuthenticatedHardwareProviderV1: KagemushaHardwarePr
       )
       let request = try KagemushaNoritoV1.decodePaymentRequestShapeExact(canonical)
       guard request.requestID == requestID,
-        request.recipient == recipientAccount,
+        request.recipient == recipient,
         request.amount == amount,
-        request.expiresAtMS - request.issuedAtMS == validityWindowMillis,
+        request.expiresAtMS - request.issuedAtMS == validityWindowMS,
         request.releaseID == (try qualification()).releaseID
       else { throw authenticatedProviderInvalid("signed payment request binding mismatch") }
       return canonical
@@ -711,12 +798,12 @@ public final class KagemushaAuthenticatedHardwareProviderV1: KagemushaHardwarePr
       return try KagemushaHardwarePaymentStageV1(
         disposition: disposition,
         creditID: creditID,
-        acknowledgement: acknowledgement
+        canonicalAcknowledgement: acknowledgement
       )
     }
   }
 
-  public func stageMintCredit(
+  public func verifyAuthorizationAndStageMintCredit(
     canonicalAuthorization: Data,
     canonicalMintCredit: Data
   ) throws -> KagemushaHardwareMintStageV1 {
@@ -747,32 +834,26 @@ public final class KagemushaAuthenticatedHardwareProviderV1: KagemushaHardwarePr
     }
   }
 
-  public func pendingCreditWatermark() throws -> KagemushaUInt128V1 {
+  public func selectPendingCredit(
+    watermark: KagemushaPendingCreditWatermarkV1?,
+    target: KagemushaPendingCreditTargetV1
+  ) throws -> KagemushaPendingCreditSelectionV1 {
     try locked {
       var reader = try payloadReader(
-        control(.readPendingCreditWatermark, requestID: freshID(operation: 18)),
+        control(
+          .readPendingCreditWatermark(watermark: watermark, target: target),
+          requestID: freshID(operation: 18)
+        ),
         operation: 18
       )
-      let watermark = try reader.u128Field()
+      let returnedWatermark = try decodePendingCreditWatermarkReply(reader.field())
+      let next = try reader.optionPendingCreditSelector()
       try reader.finish()
-      return watermark
-    }
-  }
-
-  public func nextPendingCreditID() throws -> Data? {
-    try locked {
-      let call = try client.receiver(
-        .page(snapshotRevision: nil, after: nil, maximumEntries: 1),
-        requestID: freshID(operation: 4)
-      )
-      if call.status == .missing { return nil }
-      var reader = try payloadReader(requireSuccess(call), operation: 4)
-      _ = try reader.u128Field()
-      let records = try reader.itemVectorFields(maximumEntries: 1)
-      _ = try reader.optionDigest()
-      try reader.finish()
-      guard let first = records.first else { return nil }
-      return try stagedRecordCreditID(first)
+      if let watermark, watermark != returnedWatermark {
+        throw authenticatedProviderInvalid("pending-credit watermark changed within one pass")
+      }
+      return KagemushaPendingCreditSelectionV1(
+        watermark: returnedWatermark, nextPending: next)
     }
   }
 
@@ -780,22 +861,26 @@ public final class KagemushaAuthenticatedHardwareProviderV1: KagemushaHardwarePr
     try recover().journalRevision
   }
 
-  public func foldReceiveCredit(
-    creditID: Data
+  public func foldPendingCredit(
+    selector: KagemushaPendingCreditSelectorV1
   ) throws -> KagemushaHardwareReceiveFoldV1 {
     try locked {
-      let credit = try authenticatedProviderDigest(creditID, "creditID")
+      let credit = try authenticatedProviderDigest(selector.creditID, "creditID")
+      var publicBinding = Data([UInt8(selector.kind.rawValue)])
+      publicBinding.append(credit)
       let operationID = try client.core.reserveOperationID(
         operation: 17,
-        publicBinding: credit
+        publicBinding: publicBinding
       )
       let call = try client.control(
-        .foldReceiveCredit(operationID: operationID, creditID: credit),
+        .foldReceiveCredit(operationID: operationID, selector: selector),
         requestID: operationID
       )
       var reader = try payloadReader(requireSuccess(call), operation: 17)
-      guard try reader.digestField() == credit else {
-        throw authenticatedProviderInvalid("receive-fold credit ID mismatch")
+      guard try reader.pendingCreditKindField() == selector.kind,
+        try reader.digestField() == credit
+      else {
+        throw authenticatedProviderInvalid("pending-fold selector mismatch")
       }
       let aggregate = try reader.vectorField(
         maximum: KagemushaWireV1.maximumAggregateStateBytes
@@ -804,22 +889,57 @@ public final class KagemushaAuthenticatedHardwareProviderV1: KagemushaHardwarePr
       _ = try KagemushaNoritoV1.decodeAggregateStateShapeExact(aggregate)
       return try KagemushaHardwareReceiveFoldV1(
         aggregateState: aggregate,
-        creditID: credit
+        selector: selector
       )
     }
   }
 
-  public func commitPayment(
+  /// Reserve the durable operation identity which the caller must persist before committing.
+  public func reservePaymentOperationID(canonicalRequest: Data) throws -> Data {
+    try locked {
+      _ = try KagemushaNoritoV1.decodePaymentRequestShapeExact(canonicalRequest)
+      return try client.core.reserveOperationID(operation: 5, publicBinding: canonicalRequest)
+    }
+  }
+
+  public func prepareProveCommitPayment(
+    operationID: Data,
     canonicalRequest: Data
   ) throws -> KagemushaHardwareTerminalResultV1 {
     try locked {
       _ = try KagemushaNoritoV1.decodePaymentRequestShapeExact(canonicalRequest)
-      return try commitSender(inputs: .sendSplit(canonicalRequest: canonicalRequest))
+      return try commitSender(
+        operationID: operationID,
+        inputs: .sendSplit(canonicalRequest: canonicalRequest)
+      )
     }
   }
 
   public func recoverPayment(creditID: Data) throws -> Data? {
     try locked { try recoverTerminal(kind: .payment, terminalID: creditID) }
+  }
+
+  /// Recover a committed payment when a crash occurred before its credit ID was exposed.
+  public func recoverPaymentByOperationID(
+    operationID: Data,
+    canonicalRequest: Data
+  ) throws -> Data? {
+    try locked { () -> Data? in
+      let request = try KagemushaNoritoV1.decodePaymentRequestShapeExact(canonicalRequest)
+      guard
+        let recovery = try client.core.senderRecoveryByOperationID(
+          kind: .payment,
+          operationID: authenticatedProviderDigest(operationID, "operationID"),
+          qualification: qualification()
+        )
+      else { return nil }
+      let envelope = try recoverTerminal(recovery: recovery)
+      let payment = try KagemushaNoritoV1.decodePaymentShapeExact(envelope, against: request)
+      guard payment.output.creditID == recovery.terminalID else {
+        throw authenticatedProviderInvalid("recovered payment credit ID mismatch")
+      }
+      return envelope
+    }
   }
 
   public func recordAcknowledgement(
@@ -846,12 +966,22 @@ public final class KagemushaAuthenticatedHardwareProviderV1: KagemushaHardwarePr
       let inputs = KagemushaDeviceSenderPublicInputsV1.sendSplit(
         canonicalRequest: canonicalRequest
       )
+      let terminalReceipt = KagemushaDeviceSenderTerminalReceiptV1.paymentAcknowledgement(
+        canonicalAcknowledgement: canonicalAcknowledgement
+      )
+      let qualified = try qualification()
       let release = try client.core.outboxRelease(
         creditID: expectedCreditID,
         inputs: inputs,
         canonicalPayment: canonicalPayment,
-        qualification: qualification()
+        terminalReceipt: terminalReceipt,
+        qualification: qualified
       )
+      guard release.context.devicePolicyBinding.hardwarePolicyID
+        == qualified.hardwarePolicyDigest,
+        release.context.coreAuthorizationKeyReference
+          == qualified.coreAuthorizationKeyReference
+      else { throw authenticatedProviderInvalid("outbox release authorization scope mismatch") }
       let command = try KagemushaDeviceSenderCommandV1(
         operation: 12,
         operationID: release.operationID,
@@ -861,25 +991,60 @@ public final class KagemushaAuthenticatedHardwareProviderV1: KagemushaHardwarePr
           envelopeDigest: release.envelopeDigest,
           inputs: release.inputs,
           canonicalEnvelope: release.canonicalEnvelope,
-          canonicalAcknowledgement: canonicalAcknowledgement
+          terminalReceipt: terminalReceipt,
+          hardwareAuthorization: release.hardwareReleaseAuthorization
         )
       )
       try requireSuccess(client.sender(command))
     }
   }
 
-  public func commitRedemption(
+  public func reserveRedemptionOperationID(
+    amount: KagemushaUInt128V1,
+    beneficiary: KagemushaAccountIDV1
+  ) throws -> Data {
+    try locked {
+      guard !amount.isZero else { throw authenticatedProviderInvalid("redemption amount is zero") }
+      var binding = Data(amount.littleEndianBytes)
+      binding.append(beneficiary.canonicalPayload)
+      return try client.core.reserveOperationID(operation: 5, publicBinding: binding)
+    }
+  }
+
+  public func prepareProveCommitRedemption(
+    operationID: Data,
     amount: KagemushaUInt128V1,
     beneficiary: KagemushaAccountIDV1
   ) throws -> KagemushaHardwareTerminalResultV1 {
     try locked {
       guard !amount.isZero else { throw authenticatedProviderInvalid("redemption amount is zero") }
-      return try commitSender(inputs: .redeemSplit(amount: amount, beneficiary: beneficiary))
+      return try commitSender(
+        operationID: operationID,
+        inputs: .redeemSplit(amount: amount, beneficiary: beneficiary)
+      )
     }
   }
 
   public func recoverRedemption(redemptionID: Data) throws -> Data? {
     try locked { try recoverTerminal(kind: .redemption, terminalID: redemptionID) }
+  }
+
+  public func recoverRedemptionByOperationID(operationID: Data) throws -> Data? {
+    try locked { () -> Data? in
+      guard
+        let recovery = try client.core.senderRecoveryByOperationID(
+          kind: .redemption,
+          operationID: authenticatedProviderDigest(operationID, "operationID"),
+          qualification: qualification()
+        )
+      else { return nil }
+      let envelope = try recoverTerminal(recovery: recovery)
+      let voucher = try KagemushaNoritoV1.decodeRedemptionVoucherShapeExact(envelope)
+      guard voucher.statement.redemptionID == recovery.terminalID else {
+        throw authenticatedProviderInvalid("recovered redemption ID mismatch")
+      }
+      return envelope
+    }
   }
 
   public func rotateHardwareEpoch() throws -> Data {
@@ -912,8 +1077,8 @@ public final class KagemushaAuthenticatedHardwareProviderV1: KagemushaHardwarePr
     }
   }
 
-  /// Prepare a proof-bearing mint authorization through operation 14.
-  public func prepareMintAuthorization(
+  /// Reserve the durable operation identity which must be persisted before operation 14.
+  public func reserveMintOperationID(
     amount: KagemushaUInt128V1,
     payer: KagemushaAccountIDV1,
     recipient: KagemushaAccountIDV1
@@ -923,10 +1088,23 @@ public final class KagemushaAuthenticatedHardwareProviderV1: KagemushaHardwarePr
       var binding = Data(amount.littleEndianBytes)
       binding.append(payer.canonicalPayload)
       binding.append(recipient.canonicalPayload)
-      let operationID = try client.core.reserveOperationID(
-        operation: 14,
-        publicBinding: binding
-      )
+      return try client.core.reserveOperationID(operation: 14, publicBinding: binding)
+    }
+  }
+
+  /// Prepare a proof-bearing mint-construction bundle through operation 14.
+  ///
+  /// The live Wallet contract supplies this ID. The caller and native Core must have made it
+  /// durable before this method crosses the mutating device boundary.
+  public func prepareMintConstructionBundle(
+    operationID: Data,
+    amount: KagemushaUInt128V1,
+    payer: KagemushaAccountIDV1,
+    recipient: KagemushaAccountIDV1
+  ) throws -> KagemushaMintConstructionBundleV1 {
+    try locked {
+      guard !amount.isZero else { throw authenticatedProviderInvalid("mint amount is zero") }
+      let operationID = try authenticatedProviderDigest(operationID, "operationID")
       let command = KagemushaDeviceControlCommandV1.prepareMintAuthorization(
         operationID: operationID,
         amount: amount,
@@ -937,45 +1115,73 @@ public final class KagemushaAuthenticatedHardwareProviderV1: KagemushaHardwarePr
         control(command, requestID: operationID),
         operation: 14
       )
-      let canonical = try reader.singleVector(
+      let canonical = try reader.vectorField(
         maximum: KagemushaWireV1.maximumMintAuthorizationBytes
       )
+      let encryptedCredit = try reader.vectorField(
+        maximum: KagemushaWireV1.maximumEncryptedCreditBytes
+      )
+      try reader.finish()
       let authorization = try KagemushaNoritoV1.decodeMintAuthorizationShapeExact(canonical)
       guard authorization.statement.context.operationID == operationID else {
         throw authenticatedProviderInvalid("mint authorization operation ID mismatch")
       }
-      return canonical
+      return try KagemushaMintConstructionBundleV1(
+        canonicalAuthorization: canonical,
+        encryptedCredit: encryptedCredit
+      )
     }
   }
 
-  /// Recover operation 14 byte-identically through operation 15.
-  public func recoverMintAuthorization(operationID: Data) throws -> Data? {
-    try locked {
+  /// Recover the complete operation-14 bundle byte-identically through operation 15.
+  public func recoverMintConstructionBundle(
+    operationID: Data
+  ) throws -> KagemushaMintConstructionBundleV1? {
+    try locked { () -> KagemushaMintConstructionBundleV1? in
+      let operationID = try authenticatedProviderDigest(operationID, "operationID")
       let call = try client.control(
         .recoverMintAuthorization(operationID: operationID),
         requestID: operationID
       )
       if call.status == .missing { return nil }
       var reader = try payloadReader(requireSuccess(call), operation: 15)
-      let canonical = try reader.singleVector(
+      let canonical = try reader.vectorField(
         maximum: KagemushaWireV1.maximumMintAuthorizationBytes
       )
+      let encryptedCredit = try reader.vectorField(
+        maximum: KagemushaWireV1.maximumEncryptedCreditBytes
+      )
+      try reader.finish()
       let authorization = try KagemushaNoritoV1.decodeMintAuthorizationShapeExact(canonical)
       guard authorization.statement.context.operationID == operationID else {
         throw authenticatedProviderInvalid("recovered mint authorization ID mismatch")
       }
-      return canonical
+      return try KagemushaMintConstructionBundleV1(
+        canonicalAuthorization: canonical,
+        encryptedCredit: encryptedCredit
+      )
     }
   }
 
   private func commitSender(
+    operationID: Data,
     inputs: KagemushaDeviceSenderPublicInputsV1
   ) throws -> KagemushaHardwareTerminalResultV1 {
+    let operationID = try authenticatedProviderDigest(operationID, "operationID")
+    let qualified = try qualification()
     let preparation = try client.core.beginSenderTransition(
+      operationID: operationID,
       inputs: inputs,
-      qualification: qualification()
+      qualification: qualified
     )
-    let operationID = preparation.operationID
+    guard preparation.operationID == operationID,
+      preparation.context.devicePolicyBinding.hardwarePolicyID
+        == qualified.hardwarePolicyDigest,
+      preparation.context.coreAuthorizationKeyReference
+        == qualified.coreAuthorizationKeyReference
+    else {
+      throw authenticatedProviderInvalid("native Core substituted sender operation ID")
+    }
     var prepared = try client.sender(
       KagemushaDeviceSenderCommandV1(
         operation: 5,
@@ -1009,7 +1215,8 @@ public final class KagemushaAuthenticatedHardwareProviderV1: KagemushaHardwarePr
         context: preparation.context,
         body: .commit(
           selector: candidate.selector,
-          candidateDigest: candidate.candidateDigest
+          candidateDigest: candidate.candidateDigest,
+          hardwareAuthorization: candidate.hardwareCommitAuthorization
         )
       )
     )
@@ -1081,13 +1288,23 @@ public final class KagemushaAuthenticatedHardwareProviderV1: KagemushaHardwarePr
     kind: KagemushaNativeSenderKindV1,
     terminalID: Data
   ) throws -> Data? {
+    let expectedTerminalID = try authenticatedProviderDigest(terminalID, "terminalID")
     guard
       let recovery = try client.core.senderRecovery(
         kind: kind,
-        terminalID: terminalID,
+        terminalID: expectedTerminalID,
         qualification: qualification()
       )
     else { return nil }
+    guard recovery.terminalID == expectedTerminalID else {
+      throw authenticatedProviderInvalid("native Core substituted terminal ID")
+    }
+    return try recoverTerminal(recovery: recovery)
+  }
+
+  private func recoverTerminal(
+    recovery: KagemushaNativeSenderRecoveryV1
+  ) throws -> Data {
     let call = try client.sender(
       KagemushaDeviceSenderCommandV1(
         operation: 10,
@@ -1096,7 +1313,9 @@ public final class KagemushaAuthenticatedHardwareProviderV1: KagemushaHardwarePr
         body: .recoverInstalled(selector: .lookup(inputsDigest: recovery.inputsDigest))
       )
     )
-    if call.status == .missing { return nil }
+    if call.status == .missing {
+      throw authenticatedProviderInvalid("native Core indexed a missing terminal")
+    }
     try requireSuccess(call)
     guard let reply = call.canonicalReply else {
       throw authenticatedProviderInvalid("terminal recovery omitted its authenticated reply")
@@ -1206,6 +1425,19 @@ private func decodeInboxReceipt(_ payload: Data) throws -> KagemushaInboxReceipt
   return receipt
 }
 
+private func decodePendingCreditWatermarkReply(
+  _ payload: Data
+) throws -> KagemushaPendingCreditWatermarkV1 {
+  var reader = AuthenticatedReplyReader(payload)
+  let watermark = try KagemushaPendingCreditWatermarkV1(
+    hardwareEpochGeneration: reader.u128Field(),
+    hardwareEpochID: reader.digestField(),
+    inboxRevision: reader.u128Field()
+  )
+  try reader.finish()
+  return watermark
+}
+
 private struct AuthenticatedReplyReader {
   private let bytes: Data
   private var offset = 0
@@ -1248,6 +1480,14 @@ private struct AuthenticatedReplyReader {
     return try KagemushaUInt128V1(littleEndianBytes: value)
   }
 
+  mutating func digestField() throws -> Data {
+    let value = try field(maximum: 32)
+    guard value.count == 32, value.contains(where: { $0 != 0 }) else {
+      throw authenticatedProviderInvalid("zero or malformed reply digest")
+    }
+    return value
+  }
+
   mutating func vectorField(maximum: Int) throws -> Data {
     var nested = AuthenticatedReplyReader(try field(maximum: maximum + 8))
     let countBytes = try nested.raw(count: 8)
@@ -1276,6 +1516,74 @@ private struct AuthenticatedReplyReader {
     return value
   }
 
+  mutating func optionDigest() throws -> Data? {
+    var nested = AuthenticatedReplyReader(try field(maximum: 34))
+    let tag = try nested.raw(count: 1)[0]
+    let value: Data?
+    switch tag {
+    case 0:
+      value = nil
+    case 1:
+      var item = AuthenticatedReplyReader(try nested.field(maximum: 32))
+      value = try item.digestRaw()
+      try item.finish()
+    default:
+      throw authenticatedProviderInvalid("invalid authenticated reply option tag")
+    }
+    try nested.finish()
+    return value
+  }
+
+  mutating func pendingCreditKindField() throws -> KagemushaPendingCreditKindV1 {
+    var nested = AuthenticatedReplyReader(try field(maximum: 4))
+    let raw = try nested.raw(count: 4)
+    try nested.finish()
+    let ordinal = UInt32(raw[0]) | UInt32(raw[1]) << 8 | UInt32(raw[2]) << 16
+      | UInt32(raw[3]) << 24
+    guard let kind = KagemushaPendingCreditKindV1(rawValue: ordinal) else {
+      throw authenticatedProviderInvalid("invalid pending-credit kind")
+    }
+    return kind
+  }
+
+  mutating func optionPendingCreditSelector() throws -> KagemushaPendingCreditSelectorV1? {
+    var nested = AuthenticatedReplyReader(try field(maximum: 80))
+    let tag = try nested.raw(count: 1)[0]
+    let value: KagemushaPendingCreditSelectorV1?
+    switch tag {
+    case 0:
+      value = nil
+    case 1:
+      var item = AuthenticatedReplyReader(try nested.field(maximum: 48))
+      value = try KagemushaPendingCreditSelectorV1(
+        kind: item.pendingCreditKindField(), creditID: item.digestField())
+      try item.finish()
+    default:
+      throw authenticatedProviderInvalid("invalid pending-credit option tag")
+    }
+    try nested.finish()
+    return value
+  }
+
+  mutating func itemVectorFields(maximumEntries: Int) throws -> [Data] {
+    var nested = AuthenticatedReplyReader(try field())
+    let countBytes = try nested.raw(count: 8)
+    var count: UInt64 = 0
+    for index in 0..<8 {
+      count |= UInt64(countBytes[index]) << UInt64(index * 8)
+    }
+    guard count <= UInt64(maximumEntries) else {
+      throw authenticatedProviderInvalid("authenticated reply vector has too many entries")
+    }
+    var values: [Data] = []
+    values.reserveCapacity(Int(count))
+    for _ in 0..<count {
+      values.append(try nested.field())
+    }
+    try nested.finish()
+    return values
+  }
+
   mutating func singleVector(maximum: Int) throws -> Data {
     let value = try vectorField(maximum: maximum)
     try finish()
@@ -1288,6 +1596,14 @@ private struct AuthenticatedReplyReader {
     }
     defer { offset += count }
     return Data(bytes[offset..<(offset + count)])
+  }
+
+  private mutating func digestRaw() throws -> Data {
+    let value = try raw(count: 32)
+    guard value.contains(where: { $0 != 0 }) else {
+      throw authenticatedProviderInvalid("zero reply digest")
+    }
+    return value
   }
 
   func finish() throws {
@@ -1336,23 +1652,6 @@ private func authenticatedProviderInvalid(
   .invalidContract(reason)
 }
 
-private func authenticatedProviderU16LE(_ value: UInt16) -> Data {
-  Data([UInt8(truncatingIfNeeded: value), UInt8(truncatingIfNeeded: value >> 8)])
-}
-
 private func authenticatedProviderU64LE(_ value: UInt64) -> Data {
   Data((0..<8).map { UInt8(truncatingIfNeeded: value >> UInt64($0 * 8)) })
-}
-
-private func authenticatedProviderU64BE(_ value: UInt64) -> Data {
-  Data((0..<8).reversed().map { UInt8(truncatingIfNeeded: value >> UInt64($0 * 8)) })
-}
-
-private func authenticatedProviderPeerEnvelopeDigest(_ canonicalPayment: Data) -> Data {
-  let domain = Data("iroha:kagemusha:v1:peer-credit-envelope\0".utf8)
-  var preimage = authenticatedProviderU64BE(UInt64(domain.count))
-  preimage.append(domain)
-  preimage.append(authenticatedProviderU64BE(UInt64(canonicalPayment.count)))
-  preimage.append(canonicalPayment)
-  return Data(SHA256.hash(data: preimage))
 }

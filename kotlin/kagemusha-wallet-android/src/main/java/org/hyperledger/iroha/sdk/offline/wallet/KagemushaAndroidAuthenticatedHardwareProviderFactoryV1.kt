@@ -35,16 +35,16 @@ class KagemushaAndroidAuthenticatedHardwareProviderFactoryV1 internal constructo
         val coordinatorFactory = loadExactlyOneCoordinatorFactory()
         val coordinator = try {
             checkNotNull(coordinatorFactory.create()) {
-                "Offline native-Core coordinator factory returned no coordinator"
+                "KAGEMUSHA native-Core coordinator factory returned no coordinator"
             }
         } catch (error: RuntimeException) {
             throw IllegalStateException(
-                "Offline native-Core coordinator could not be created",
+                "KAGEMUSHA native-Core coordinator could not be created",
                 error,
             )
         } catch (error: LinkageError) {
             throw IllegalStateException(
-                "Offline native-Core coordinator could not be linked",
+                "KAGEMUSHA native-Core coordinator could not be linked",
                 error,
             )
         }
@@ -55,21 +55,21 @@ class KagemushaAndroidAuthenticatedHardwareProviderFactoryV1 internal constructo
         try {
             val candidates = loadCoordinatorFactories()
             check(candidates.hasNext()) {
-                "Exactly one Offline native-Core coordinator factory is required; none was installed"
+                "Exactly one KAGEMUSHA native-Core coordinator factory is required; none was installed"
             }
             val selected = candidates.next()
             check(!candidates.hasNext()) {
-                "Exactly one Offline native-Core coordinator factory is required; multiple were installed"
+                "Exactly one KAGEMUSHA native-Core coordinator factory is required; multiple were installed"
             }
             return selected
         } catch (error: ServiceConfigurationError) {
             throw IllegalStateException(
-                "Offline native-Core coordinator factory discovery failed",
+                "KAGEMUSHA native-Core coordinator factory discovery failed",
                 error,
             )
         } catch (error: LinkageError) {
             throw IllegalStateException(
-                "Offline native-Core coordinator factory could not be linked",
+                "KAGEMUSHA native-Core coordinator factory could not be linked",
                 error,
             )
         }

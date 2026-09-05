@@ -5,21 +5,32 @@ use std::io::Cursor;
 use halo2_base::gates::circuit::BaseCircuitParams;
 use halo2_proofs::{
     SerdeFormat,
+    arithmetic::best_multiexp,
     halo2curves::{
-        CurveExt as _,
+        CurveAffine, CurveExt as _,
         group::Curve as _,
         pasta::{Ep, EpAffine, Eq, EqAffine, Fp, Fq},
     },
     plonk::VerifyingKey,
-    poly::commitment::{Params as _, ParamsProver as _},
+    poly::commitment::{Blind, Params as _, ParamsProver as _},
 };
 use sha2::{Digest as _, Sha256};
 use snark_verifier::{
     loader::native::NativeLoader,
-    pcs::ipa::{Bgh19, IpaAccumulator, IpaAs, IpaSuccinctVerifyingKey},
+    pcs::{
+        PolynomialCommitmentScheme,
+        ipa::{Bgh19, IpaAccumulator, IpaAs, IpaSuccinctVerifyingKey},
+    },
     system::halo2::{compile, transcript::halo2::PoseidonTranscript},
-    util::arithmetic::{Domain, root_of_unity},
-    verifier::{SnarkVerifier as _, plonk::PlonkSuccinctVerifier},
+    util::{
+        arithmetic::{Domain, root_of_unity},
+        msm::Msm,
+        transcript::{Transcript as _, TranscriptRead as _},
+    },
+    verifier::{
+        SnarkVerifier as _,
+        plonk::{PlonkProof, PlonkProtocol, PlonkSuccinctVerifier},
+    },
 };
 
 use super::{
@@ -34,7 +45,9 @@ use super::{
     KagemushaStateProofVerificationRequestV1, KagemushaTerminalAuthorizationPublicInputsV1,
     composite::{KagemushaRecursiveStateEpCircuitV1, KagemushaRecursiveStateEqCircuitV1},
     decide_kagemusha_ep_accumulator_v1, decide_kagemusha_eq_accumulator_v1,
-    deferred_parent::{accumulator_limb_count, native_parent_protocol_digest_v1},
+    deferred_parent::{
+        accumulator_limb_count, native_parent_protocol_digest_v1, ordinary_ipa_proof_profile_v1,
+    },
     guard_bundle::{
         GUARD_RECURSIVE_PUBLIC_INSTANCE_COUNT_V1, KagemushaGuardBundleEpCircuitV1,
         KagemushaGuardBundleEqCircuitV1,
@@ -46,6 +59,8 @@ use super::{
     mint_authorization::{
         MINT_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1, mint_authorization_public_instances_v1,
     },
+    mint_hash_claim_fold::KAGEMUSHA_MINT_HASH_CLAIM_PUBLIC_INSTANCE_COUNT_V1,
+    mint_hash_shard::KAGEMUSHA_MINT_HASH_SHARD_K_V1,
     mint_helper::KagemushaMintAuthorityStepV1,
     mint_transport_decider::{
         KagemushaMintAuthorityTransportEpCircuitV1, KagemushaMintAuthorityTransportEqCircuitV1,
@@ -79,12 +94,64 @@ const RECURSIVE_PUBLIC_INSTANCE_COUNT_V1: usize = PUBLIC_INSTANCE_COUNT + accumu
 pub(super) fn validate_kagemusha_base_circuit_params_v1(
     params: &BaseCircuitParams,
 ) -> Result<(), &'static str> {
+    validate_kagemusha_base_circuit_params_at_k_v1(params, KAGEMUSHA_HALO2_K_V1)
+}
+
+/// Check the fixed KAGEMUSHA layout of a two-column private hybrid relation.
+///
+/// MintAuthorization uses one compact semantic column and one wide proof-carried
+/// deferred-audit column. All outer and other private circuits continue to use
+/// [`validate_kagemusha_base_circuit_params_v1`] and require exactly one column.
+fn validate_kagemusha_hybrid_base_circuit_params_v1(
+    params: &BaseCircuitParams,
+) -> Result<(), &'static str> {
+    validate_kagemusha_base_circuit_params_with_instance_columns_at_k_v1(
+        params,
+        KAGEMUSHA_HALO2_K_V1,
+        2,
+    )
+}
+
+/// Check the fixed hybrid layout of the private MintAuthorization relation.
+pub(crate) fn validate_kagemusha_inner_mint_authorization_base_circuit_params_v1(
+    params: &BaseCircuitParams,
+) -> Result<(), &'static str> {
+    validate_kagemusha_hybrid_base_circuit_params_v1(params)
+}
+
+/// Check the fixed three-column hybrid layout of the private MintHashClaim relation.
+///
+/// Its semantic column binds proof-supplied commitments for both wide carrier
+/// columns. The two columns retain the Eq-vector and Ep-vector copies used by
+/// the paired claim proof.
+pub(crate) fn validate_kagemusha_mint_hash_claim_base_circuit_params_v1(
+    params: &BaseCircuitParams,
+) -> Result<(), &'static str> {
+    validate_kagemusha_base_circuit_params_with_instance_columns_at_k_v1(
+        params,
+        KAGEMUSHA_HALO2_K_V1,
+        3,
+    )
+}
+
+fn validate_kagemusha_base_circuit_params_at_k_v1(
+    params: &BaseCircuitParams,
+    expected_k: u32,
+) -> Result<(), &'static str> {
+    validate_kagemusha_base_circuit_params_with_instance_columns_at_k_v1(params, expected_k, 1)
+}
+
+fn validate_kagemusha_base_circuit_params_with_instance_columns_at_k_v1(
+    params: &BaseCircuitParams,
+    expected_k: u32,
+    expected_instance_columns: usize,
+) -> Result<(), &'static str> {
     // `halo2-base` allocates columns only in FirstPhase, SecondPhase, and ThirdPhase.
     // Zero-filled tails allocate nothing and remain part of the exact authenticated profile.
     const PHASE_COUNT: usize = 3;
-    if params.k != KAGEMUSHA_HALO2_K_V1 as usize
-        || params.num_instance_columns != 1
-        || params.lookup_bits != Some((KAGEMUSHA_HALO2_K_V1 - 1) as usize)
+    if params.k != expected_k as usize
+        || params.num_instance_columns != expected_instance_columns
+        || params.lookup_bits != Some((expected_k - 1) as usize)
         || params.num_advice_per_phase.is_empty()
         || params.num_lookup_advice_per_phase.is_empty()
         || params.num_advice_per_phase.iter().all(|count| *count == 0)
@@ -220,10 +287,26 @@ pub struct KagemushaRecursiveVerifierProfileV1 {
     pub inner_mint_eq: BaseCircuitParams,
     /// Ep private stable mint-authority relation layout.
     pub inner_mint_ep: BaseCircuitParams,
+    /// Eq one-block mint-certificate SHA-256 shard layout (`k = 12`).
+    pub mint_hash_shard_eq: BaseCircuitParams,
+    /// Ep one-block mint-certificate SHA-256 shard layout (`k = 12`).
+    pub mint_hash_shard_ep: BaseCircuitParams,
+    /// Eq ordered recursive mint-hash claim layout (`k = 16`).
+    pub mint_hash_claim_eq: BaseCircuitParams,
+    /// Ep ordered recursive mint-hash claim layout (`k = 16`).
+    pub mint_hash_claim_ep: BaseCircuitParams,
     /// Actual compiled Eq finalized-mint protocol identity constrained by the state circuit.
     pub mint_eq_protocol_digest: [u8; 32],
     /// Actual compiled Ep finalized-mint protocol identity constrained by the state circuit.
     pub mint_ep_protocol_digest: [u8; 32],
+    /// Actual compiled Eq mint-hash shard protocol identity.
+    pub mint_hash_shard_eq_protocol_digest: [u8; 32],
+    /// Actual compiled Ep mint-hash shard protocol identity.
+    pub mint_hash_shard_ep_protocol_digest: [u8; 32],
+    /// Actual compiled Eq ordered mint-hash claim protocol identity.
+    pub mint_hash_claim_eq_protocol_digest: [u8; 32],
+    /// Actual compiled Ep ordered mint-hash claim protocol identity.
+    pub mint_hash_claim_ep_protocol_digest: [u8; 32],
     /// Release-pinned genesis mint-finality roster identifier.
     pub mint_genesis_roster_id: [u8; 32],
 }
@@ -278,6 +361,24 @@ impl KagemushaRecursiveVerifierProfileV1 {
             bytes.push(tag);
             append_base_params(&mut bytes, params)?;
         }
+        for (tag, params) in [
+            (22_u8, &self.mint_hash_shard_eq),
+            (23, &self.mint_hash_shard_ep),
+            (24, &self.mint_hash_claim_eq),
+            (25, &self.mint_hash_claim_ep),
+        ] {
+            bytes.push(tag);
+            append_base_params(&mut bytes, params)?;
+        }
+        for (tag, digest) in [
+            (26_u8, self.mint_hash_shard_eq_protocol_digest),
+            (27, self.mint_hash_shard_ep_protocol_digest),
+            (28, self.mint_hash_claim_eq_protocol_digest),
+            (29, self.mint_hash_claim_ep_protocol_digest),
+        ] {
+            bytes.push(tag);
+            bytes.extend_from_slice(&digest);
+        }
         Ok(Sha256::digest(bytes).into())
     }
 
@@ -317,6 +418,13 @@ impl KagemushaRecursiveVerifierProfileV1 {
             ("mint authorization Ep", &self.mint_authorization_ep),
             ("mint authority Eq", &self.mint_eq),
             ("mint authority Ep", &self.mint_ep),
+            ("inner mint authority Eq", &self.inner_mint_eq),
+            ("inner mint authority Ep", &self.inner_mint_ep),
+        ] {
+            validate_kagemusha_base_circuit_params_v1(params)
+                .map_err(|reason| format!("invalid Kagemusha {label} circuit profile: {reason}"))?;
+        }
+        for (label, params) in [
             (
                 "inner mint authorization Eq",
                 &self.inner_mint_authorization_eq,
@@ -325,20 +433,49 @@ impl KagemushaRecursiveVerifierProfileV1 {
                 "inner mint authorization Ep",
                 &self.inner_mint_authorization_ep,
             ),
-            ("inner mint authority Eq", &self.inner_mint_eq),
-            ("inner mint authority Ep", &self.inner_mint_ep),
         ] {
-            validate_kagemusha_base_circuit_params_v1(params)
+            validate_kagemusha_hybrid_base_circuit_params_v1(params)
                 .map_err(|reason| format!("invalid Kagemusha {label} circuit profile: {reason}"))?;
         }
-        if self.mint_eq_protocol_digest == [0; 32]
-            || self.mint_ep_protocol_digest == [0; 32]
-            || self.mint_eq_protocol_digest == self.mint_ep_protocol_digest
+        for (label, params) in [
+            ("mint hash claim Eq", &self.mint_hash_claim_eq),
+            ("mint hash claim Ep", &self.mint_hash_claim_ep),
+        ] {
+            validate_kagemusha_mint_hash_claim_base_circuit_params_v1(params)
+                .map_err(|reason| format!("invalid Kagemusha {label} circuit profile: {reason}"))?;
+        }
+        for (label, params) in [
+            ("mint hash shard Eq", &self.mint_hash_shard_eq),
+            ("mint hash shard Ep", &self.mint_hash_shard_ep),
+        ] {
+            validate_kagemusha_base_circuit_params_at_k_v1(params, KAGEMUSHA_MINT_HASH_SHARD_K_V1)
+                .map_err(|reason| format!("invalid Kagemusha {label} circuit profile: {reason}"))?;
+        }
+        let mint_protocols = [
+            self.mint_eq_protocol_digest,
+            self.mint_ep_protocol_digest,
+            self.mint_hash_shard_eq_protocol_digest,
+            self.mint_hash_shard_ep_protocol_digest,
+            self.mint_hash_claim_eq_protocol_digest,
+            self.mint_hash_claim_ep_protocol_digest,
+        ];
+        if mint_protocols.iter().any(|digest| *digest == [0; 32])
+            || mint_protocols
+                .iter()
+                .enumerate()
+                .any(|(index, digest)| mint_protocols[index + 1..].contains(digest))
             || decode::<Fp>(self.mint_eq_protocol_digest).is_none()
             || decode::<Fq>(self.mint_ep_protocol_digest).is_none()
             || self.mint_genesis_roster_id == [0; 32]
         {
             return Err("invalid Kagemusha finalized-mint protocol identities".to_owned());
+        }
+        if decode::<Fp>(self.mint_hash_shard_eq_protocol_digest).is_none()
+            || decode::<Fq>(self.mint_hash_shard_ep_protocol_digest).is_none()
+            || decode::<Fp>(self.mint_hash_claim_eq_protocol_digest).is_none()
+            || decode::<Fq>(self.mint_hash_claim_ep_protocol_digest).is_none()
+        {
+            return Err("invalid Kagemusha mint-hash protocol identities".to_owned());
         }
         Ok(())
     }
@@ -1503,6 +1640,28 @@ mod checked_loader_tests {
         }
     }
 
+    fn shard_base_params() -> BaseCircuitParams {
+        BaseCircuitParams {
+            k: KAGEMUSHA_MINT_HASH_SHARD_K_V1 as usize,
+            lookup_bits: Some((KAGEMUSHA_MINT_HASH_SHARD_K_V1 - 1) as usize),
+            ..base_params()
+        }
+    }
+
+    fn inner_mint_authorization_base_params() -> BaseCircuitParams {
+        BaseCircuitParams {
+            num_instance_columns: 2,
+            ..base_params()
+        }
+    }
+
+    fn mint_hash_claim_base_params() -> BaseCircuitParams {
+        BaseCircuitParams {
+            num_instance_columns: 3,
+            ..base_params()
+        }
+    }
+
     fn profile() -> KagemushaRecursiveVerifierProfileV1 {
         KagemushaRecursiveVerifierProfileV1 {
             inner_state_eq: base_params(),
@@ -1519,12 +1678,28 @@ mod checked_loader_tests {
             mint_authorization_ep: base_params(),
             mint_eq: base_params(),
             mint_ep: base_params(),
-            inner_mint_authorization_eq: base_params(),
-            inner_mint_authorization_ep: base_params(),
+            inner_mint_authorization_eq: inner_mint_authorization_base_params(),
+            inner_mint_authorization_ep: inner_mint_authorization_base_params(),
             inner_mint_eq: base_params(),
             inner_mint_ep: base_params(),
+            mint_hash_shard_eq: shard_base_params(),
+            mint_hash_shard_ep: shard_base_params(),
+            mint_hash_claim_eq: mint_hash_claim_base_params(),
+            mint_hash_claim_ep: mint_hash_claim_base_params(),
             mint_eq_protocol_digest: crate::zk::kagemusha_v1_poseidon::encode(Fp::from(1)),
             mint_ep_protocol_digest: crate::zk::kagemusha_v1_poseidon::encode(Fq::from(2)),
+            mint_hash_shard_eq_protocol_digest: crate::zk::kagemusha_v1_poseidon::encode(Fp::from(
+                4,
+            )),
+            mint_hash_shard_ep_protocol_digest: crate::zk::kagemusha_v1_poseidon::encode(Fq::from(
+                5,
+            )),
+            mint_hash_claim_eq_protocol_digest: crate::zk::kagemusha_v1_poseidon::encode(Fp::from(
+                6,
+            )),
+            mint_hash_claim_ep_protocol_digest: crate::zk::kagemusha_v1_poseidon::encode(Fq::from(
+                7,
+            )),
             mint_genesis_roster_id: [3; 32],
         }
     }
@@ -1561,6 +1736,111 @@ mod checked_loader_tests {
             params.num_advice_per_phase = vec![0, 1];
             assert!(invalid.canonical_digest().is_err());
         }
+    }
+
+    #[test]
+    fn checked_profile_requires_two_authorization_and_three_claim_instance_columns() {
+        let mut wrong_inner = profile();
+        wrong_inner.inner_mint_authorization_eq.num_instance_columns = 1;
+        assert!(wrong_inner.canonical_digest().is_err());
+
+        let mut wrong_claim = profile();
+        wrong_claim.mint_hash_claim_eq.num_instance_columns = 2;
+        assert!(wrong_claim.canonical_digest().is_err());
+
+        let mut wrong_outer = profile();
+        wrong_outer.mint_authorization_eq.num_instance_columns = 2;
+        assert!(wrong_outer.canonical_digest().is_err());
+    }
+
+    #[test]
+    fn hybrid_native_parser_counts_and_orders_proof_supplied_commitments() {
+        assert_eq!(
+            hybrid_proof_supplied_commitment_bytes::<EqAffine>(1, "Eq").expect("one Eq commitment"),
+            32
+        );
+        assert_eq!(
+            hybrid_proof_supplied_commitment_bytes::<EpAffine>(2, "Ep")
+                .expect("two Ep commitments"),
+            64
+        );
+
+        validate_hybrid_commitment_limb_indices(8, &[[2, 3]], "legacy")
+            .expect("one canonical carrier");
+        validate_hybrid_commitment_limb_indices(8, &[[2, 3], [4, 5]], "claim")
+            .expect("two canonical carriers");
+        for malformed in [
+            &[][..],
+            &[[3, 2]][..],
+            &[[4, 5], [2, 3]][..],
+            &[[2, 3], [5, 6]][..],
+            &[[2, 3], [3, 4]][..],
+            &[[2, 3], [7, 8]][..],
+            &[[0, 1], [2, 3], [4, 5]][..],
+        ] {
+            assert!(
+                validate_hybrid_commitment_limb_indices(8, malformed, "test").is_err(),
+                "missing, extra, reversed, swapped, gapped, overlapping, or out-of-range limbs must fail"
+            );
+        }
+    }
+
+    #[test]
+    fn checked_profile_authenticates_hash_layouts_and_protocols() {
+        let baseline = profile();
+        let expected = baseline.canonical_digest().expect("valid full profile");
+        for index in 0..4 {
+            let mut changed = baseline.clone();
+            let params = match index {
+                0 => &mut changed.mint_hash_shard_eq,
+                1 => &mut changed.mint_hash_shard_ep,
+                2 => &mut changed.mint_hash_claim_eq,
+                _ => &mut changed.mint_hash_claim_ep,
+            };
+            params.num_fixed += 1;
+            assert_ne!(
+                changed.canonical_digest().expect("valid changed layout"),
+                expected
+            );
+        }
+        for index in 0..4 {
+            let mut changed = baseline.clone();
+            match index {
+                0 => {
+                    changed.mint_hash_shard_eq_protocol_digest =
+                        crate::zk::kagemusha_v1_poseidon::encode(Fp::from(8));
+                }
+                1 => {
+                    changed.mint_hash_shard_ep_protocol_digest =
+                        crate::zk::kagemusha_v1_poseidon::encode(Fq::from(9));
+                }
+                2 => {
+                    changed.mint_hash_claim_eq_protocol_digest =
+                        crate::zk::kagemusha_v1_poseidon::encode(Fp::from(10));
+                }
+                _ => {
+                    changed.mint_hash_claim_ep_protocol_digest =
+                        crate::zk::kagemusha_v1_poseidon::encode(Fq::from(11));
+                }
+            }
+            assert_ne!(
+                changed
+                    .canonical_digest()
+                    .expect("canonical substituted digest"),
+                expected
+            );
+        }
+        let mut wrong_k = baseline.clone();
+        wrong_k.mint_hash_shard_eq.k = KAGEMUSHA_HALO2_K_V1 as usize;
+        wrong_k.mint_hash_shard_eq.lookup_bits = Some((KAGEMUSHA_HALO2_K_V1 - 1) as usize);
+        assert!(wrong_k.canonical_digest().is_err());
+        let mut aliased = baseline;
+        aliased.mint_hash_claim_eq_protocol_digest = aliased.mint_hash_shard_eq_protocol_digest;
+        assert!(aliased.canonical_digest().is_err());
+        let mut cross_role_alias = profile();
+        cross_role_alias.mint_hash_claim_eq_protocol_digest =
+            cross_role_alias.mint_eq_protocol_digest;
+        assert!(cross_role_alias.canonical_digest().is_err());
     }
 
     #[test]
@@ -2135,7 +2415,7 @@ mod compact_mint_verifier_tests {
             mint_public_instances::<Fp>(&compact_mint_request(&changed), eq_history.as_bytes())
                 .unwrap();
         assert_ne!(&eq[20..22], &projected[20..22]);
-        // Projection preserves claimed public values; only outer proof verification authenticates them.
+        // Projection preserves the claimed inner audit; outer proof verification authenticates it.
         for index in 0..5 {
             let mut malformed = credit.clone();
             match index {
@@ -2319,9 +2599,9 @@ fn mint_public_instances<F: KagemushaPoseidonFieldV1>(
         .map_err(|error| error.to_string())?;
     KagemushaEpAccumulatorV1::try_from_bytes(&request.proof.ep_history)
         .map_err(|error| error.to_string())?;
-    // The compact proof authenticates this INNER commitment in cells20..21. Its inputs are
-    // private inner audits/histories, not the outer fields supplied below. No value is accepted
-    // until the caller verifies both outer proofs and terminally decides both histories.
+    // Cells20..21 preserve the constrained inner Eq audit. It absorbs the inner Ep audit after
+    // both inner parities bind the same semantic/protocol/history transcript. The final proof's
+    // distinct outer audits authenticate this copied cell; the host does not relabel either one.
     mint_public_instances_from_parts::<F>(
         &MintPublicPartsV1 {
             step: KagemushaMintAuthorityStepV1::FinalizedMint,
@@ -2402,12 +2682,31 @@ fn validate_proof_length(parity: &str, proof: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
+/// Native succinct-verifier output plus the final authenticated transcript squeeze.
+pub(super) struct KagemushaNativeVerifiedProofV1<C: CurveAffine> {
+    /// Opening accumulator emitted by the succinct verifier.
+    pub(super) accumulator: IpaAccumulator<C, NativeLoader>,
+    /// Final squeeze after the protocol, instances, and every proof object were absorbed.
+    pub(super) transcript_binding: C::ScalarExt,
+}
+
 pub(super) fn verify_eq_succinct_protocol(
     params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<EqAffine>,
     protocol: &snark_verifier::verifier::plonk::PlonkProtocol<EqAffine>,
     proof: &[u8],
     instances: &[Fp],
 ) -> Result<IpaAccumulator<EqAffine, NativeLoader>, String> {
+    verify_eq_succinct_protocol_with_transcript_binding(params, protocol, proof, instances)
+        .map(|verified| verified.accumulator)
+}
+
+/// Verify one Eq proof and return its final transcript squeeze with its accumulator.
+pub(super) fn verify_eq_succinct_protocol_with_transcript_binding(
+    params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<EqAffine>,
+    protocol: &snark_verifier::verifier::plonk::PlonkProtocol<EqAffine>,
+    proof: &[u8],
+    instances: &[Fp],
+) -> Result<KagemushaNativeVerifiedProofV1<EqAffine>, String> {
     type Scheme = IpaAs<EqAffine, Bgh19>;
     type Transcript<S> = PoseidonTranscript<
         EqAffine,
@@ -2443,6 +2742,7 @@ pub(super) fn verify_eq_succinct_protocol(
     })
     .map_err(|_| "Kagemusha Eq verifier panicked".to_owned())?
     .map_err(|error| format!("Kagemusha Eq proof rejected: {error:?}"))?;
+    let transcript_binding = transcript.squeeze_challenge();
     drop(transcript);
     if cursor.position() != proof.len() as u64 {
         return Err("Kagemusha Eq proof has trailing bytes".to_owned());
@@ -2450,7 +2750,10 @@ pub(super) fn verify_eq_succinct_protocol(
     let [accumulator] = accumulators.try_into().map_err(|values: Vec<_>| {
         format!("Kagemusha Eq proof returned {} accumulators", values.len())
     })?;
-    Ok(accumulator)
+    Ok(KagemushaNativeVerifiedProofV1 {
+        accumulator,
+        transcript_binding,
+    })
 }
 
 pub(super) fn verify_ep_succinct_protocol(
@@ -2459,6 +2762,17 @@ pub(super) fn verify_ep_succinct_protocol(
     proof: &[u8],
     instances: &[Fq],
 ) -> Result<IpaAccumulator<EpAffine, NativeLoader>, String> {
+    verify_ep_succinct_protocol_with_transcript_binding(params, protocol, proof, instances)
+        .map(|verified| verified.accumulator)
+}
+
+/// Verify one Ep proof and return its final transcript squeeze with its accumulator.
+pub(super) fn verify_ep_succinct_protocol_with_transcript_binding(
+    params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<EpAffine>,
+    protocol: &snark_verifier::verifier::plonk::PlonkProtocol<EpAffine>,
+    proof: &[u8],
+    instances: &[Fq],
+) -> Result<KagemushaNativeVerifiedProofV1<EpAffine>, String> {
     type Scheme = IpaAs<EpAffine, Bgh19>;
     type Transcript<S> = PoseidonTranscript<
         EpAffine,
@@ -2494,6 +2808,7 @@ pub(super) fn verify_ep_succinct_protocol(
     })
     .map_err(|_| "Kagemusha Ep verifier panicked".to_owned())?
     .map_err(|error| format!("Kagemusha Ep proof rejected: {error:?}"))?;
+    let transcript_binding = transcript.squeeze_challenge();
     drop(transcript);
     if cursor.position() != proof.len() as u64 {
         return Err("Kagemusha Ep proof has trailing bytes".to_owned());
@@ -2501,5 +2816,488 @@ pub(super) fn verify_ep_succinct_protocol(
     let [accumulator] = accumulators.try_into().map_err(|values: Vec<_>| {
         format!("Kagemusha Ep proof returned {} accumulators", values.len())
     })?;
-    Ok(accumulator)
+    Ok(KagemushaNativeVerifiedProofV1 {
+        accumulator,
+        transcript_binding,
+    })
+}
+
+/// Verify one Eq proof whose second public column is carried by a proof-prefix commitment.
+///
+/// Unlike the recursive reader, native verification has the complete carrier and therefore
+/// recomputes its exact default-blind Lagrange commitment before accepting the proof-read point.
+pub(super) fn verify_eq_hybrid_succinct_protocol(
+    params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<EqAffine>,
+    protocol: &PlonkProtocol<EqAffine>,
+    proof: &[u8],
+    instances: &[Vec<Fp>],
+) -> Result<IpaAccumulator<EqAffine, NativeLoader>, String> {
+    let hash_to_curve = Eq::hash_to_curve("Halo2-Parameters");
+    let svk = IpaSuccinctVerifyingKey::new(
+        Domain::new(params.k() as usize, root_of_unity(params.k() as usize)),
+        params.get_g()[0],
+        hash_to_curve(&[2]).to_affine(),
+        Some(hash_to_curve(&[1]).to_affine()),
+    );
+    verify_hybrid_succinct_protocol(
+        params,
+        &svk,
+        protocol,
+        proof,
+        instances,
+        [[
+            MINT_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1,
+            MINT_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1 + 1,
+        ]],
+        "Eq hybrid",
+    )
+    .map(|verified| verified.accumulator)
+}
+
+/// Verify one Ep proof whose second public column is carried by a proof-prefix commitment.
+///
+/// The proof still opens both queried instance polynomials; only the wide carrier's ICK MSM is
+/// replaced by the authenticated prefix point.
+pub(super) fn verify_ep_hybrid_succinct_protocol(
+    params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<EpAffine>,
+    protocol: &PlonkProtocol<EpAffine>,
+    proof: &[u8],
+    instances: &[Vec<Fq>],
+) -> Result<IpaAccumulator<EpAffine, NativeLoader>, String> {
+    let hash_to_curve = Ep::hash_to_curve("Halo2-Parameters");
+    let svk = IpaSuccinctVerifyingKey::new(
+        Domain::new(params.k() as usize, root_of_unity(params.k() as usize)),
+        params.get_g()[0],
+        hash_to_curve(&[2]).to_affine(),
+        Some(hash_to_curve(&[1]).to_affine()),
+    );
+    verify_hybrid_succinct_protocol(
+        params,
+        &svk,
+        protocol,
+        proof,
+        instances,
+        [[
+            MINT_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1 + 2,
+            MINT_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1 + 3,
+        ]],
+        "Ep hybrid",
+    )
+    .map(|verified| verified.accumulator)
+}
+
+/// Verify an Eq ordered mint-hash claim with its authenticated compact carrier.
+pub(super) fn verify_eq_mint_hash_claim_hybrid_succinct_protocol(
+    params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<EqAffine>,
+    protocol: &PlonkProtocol<EqAffine>,
+    proof: &[u8],
+    instances: &[Vec<Fp>],
+) -> Result<IpaAccumulator<EqAffine, NativeLoader>, String> {
+    verify_eq_mint_hash_claim_hybrid_succinct_protocol_with_transcript_binding(
+        params, protocol, proof, instances,
+    )
+    .map(|verified| verified.accumulator)
+}
+
+/// Verify an Eq ordered mint-hash claim and return its final transcript squeeze.
+pub(super) fn verify_eq_mint_hash_claim_hybrid_succinct_protocol_with_transcript_binding(
+    params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<EqAffine>,
+    protocol: &PlonkProtocol<EqAffine>,
+    proof: &[u8],
+    instances: &[Vec<Fp>],
+) -> Result<KagemushaNativeVerifiedProofV1<EqAffine>, String> {
+    let hash_to_curve = Eq::hash_to_curve("Halo2-Parameters");
+    let svk = IpaSuccinctVerifyingKey::new(
+        Domain::new(params.k() as usize, root_of_unity(params.k() as usize)),
+        params.get_g()[0],
+        hash_to_curve(&[2]).to_affine(),
+        Some(hash_to_curve(&[1]).to_affine()),
+    );
+    verify_hybrid_succinct_protocol(
+        params,
+        &svk,
+        protocol,
+        proof,
+        instances,
+        [
+            [
+                KAGEMUSHA_MINT_HASH_CLAIM_PUBLIC_INSTANCE_COUNT_V1,
+                KAGEMUSHA_MINT_HASH_CLAIM_PUBLIC_INSTANCE_COUNT_V1 + 1,
+            ],
+            [
+                KAGEMUSHA_MINT_HASH_CLAIM_PUBLIC_INSTANCE_COUNT_V1 + 2,
+                KAGEMUSHA_MINT_HASH_CLAIM_PUBLIC_INSTANCE_COUNT_V1 + 3,
+            ],
+        ],
+        "Eq mint-hash claim hybrid",
+    )
+}
+
+/// Verify an Ep ordered mint-hash claim with its authenticated compact carrier.
+pub(super) fn verify_ep_mint_hash_claim_hybrid_succinct_protocol(
+    params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<EpAffine>,
+    protocol: &PlonkProtocol<EpAffine>,
+    proof: &[u8],
+    instances: &[Vec<Fq>],
+) -> Result<IpaAccumulator<EpAffine, NativeLoader>, String> {
+    verify_ep_mint_hash_claim_hybrid_succinct_protocol_with_transcript_binding(
+        params, protocol, proof, instances,
+    )
+    .map(|verified| verified.accumulator)
+}
+
+/// Verify an Ep ordered mint-hash claim and return its final transcript squeeze.
+pub(super) fn verify_ep_mint_hash_claim_hybrid_succinct_protocol_with_transcript_binding(
+    params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<EpAffine>,
+    protocol: &PlonkProtocol<EpAffine>,
+    proof: &[u8],
+    instances: &[Vec<Fq>],
+) -> Result<KagemushaNativeVerifiedProofV1<EpAffine>, String> {
+    let hash_to_curve = Ep::hash_to_curve("Halo2-Parameters");
+    let svk = IpaSuccinctVerifyingKey::new(
+        Domain::new(params.k() as usize, root_of_unity(params.k() as usize)),
+        params.get_g()[0],
+        hash_to_curve(&[2]).to_affine(),
+        Some(hash_to_curve(&[1]).to_affine()),
+    );
+    verify_hybrid_succinct_protocol(
+        params,
+        &svk,
+        protocol,
+        proof,
+        instances,
+        [
+            [
+                KAGEMUSHA_MINT_HASH_CLAIM_PUBLIC_INSTANCE_COUNT_V1 + 4,
+                KAGEMUSHA_MINT_HASH_CLAIM_PUBLIC_INSTANCE_COUNT_V1 + 5,
+            ],
+            [
+                KAGEMUSHA_MINT_HASH_CLAIM_PUBLIC_INSTANCE_COUNT_V1 + 6,
+                KAGEMUSHA_MINT_HASH_CLAIM_PUBLIC_INSTANCE_COUNT_V1 + 7,
+            ],
+        ],
+        "Ep mint-hash claim hybrid",
+    )
+}
+
+fn verify_hybrid_succinct_protocol<C, const N: usize>(
+    params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<C>,
+    svk: &IpaSuccinctVerifyingKey<C>,
+    protocol: &PlonkProtocol<C>,
+    proof: &[u8],
+    instances: &[Vec<C::ScalarExt>],
+    carrier_commitment_limb_indices: [[usize; 2]; N],
+    parity: &str,
+) -> Result<KagemushaNativeVerifiedProofV1<C>, String>
+where
+    C: CurveAffine,
+    C::ScalarExt: ff::FromUniformBytes<64> + ff::WithSmallOrderMulGroup<3>,
+{
+    validate_hybrid_protocol_shape(
+        params,
+        protocol,
+        instances,
+        &carrier_commitment_limb_indices,
+        parity,
+    )?;
+    // The ordinary recursive profile already includes the appended folded-generator point;
+    // hybrid framing adds one proof-supplied point per wide instance column before advice.
+    let expected_proof_len = ordinary_ipa_proof_profile_v1(protocol)
+        .map_err(|error| format!("Kagemusha {parity} proof profile is invalid: {error}"))?
+        .byte_len
+        .checked_add(hybrid_proof_supplied_commitment_bytes::<C>(N, parity)?)
+        .ok_or_else(|| format!("Kagemusha {parity} proof length overflowed"))?;
+    if proof.len() != expected_proof_len {
+        return Err(format!(
+            "Kagemusha {parity} proof has length {}, expected exactly {expected_proof_len}",
+            proof.len()
+        ));
+    }
+    let expected_carrier_commitments = instances[1..]
+        .iter()
+        .map(|carrier| canonical_hybrid_carrier_commitment(params, carrier, parity))
+        .collect::<Result<Vec<_>, _>>()?;
+    for (&carrier_commitment, &limb_indices) in expected_carrier_commitments
+        .iter()
+        .zip(&carrier_commitment_limb_indices)
+    {
+        validate_hybrid_carrier_semantic_binding(
+            &instances[0],
+            carrier_commitment,
+            limb_indices,
+            parity,
+        )?;
+    }
+    let instance_committing_key = protocol
+        .instance_committing_key
+        .as_ref()
+        .expect("validated hybrid protocol has a semantic ICK");
+
+    let mut cursor = Cursor::new(proof);
+    let mut transcript = PoseidonTranscript::<
+        C,
+        NativeLoader,
+        _,
+        PASTA_IPA_POSEIDON_WIDTH_V1,
+        PASTA_IPA_POSEIDON_RATE_V1,
+        PASTA_IPA_POSEIDON_FULL_ROUNDS_V1,
+        PASTA_IPA_POSEIDON_PARTIAL_ROUNDS_V1,
+    >::new::<PASTA_IPA_POSEIDON_SECURE_MDS_V1>(&mut cursor);
+    let parsed = crate::panic_hook::catch_unwind_suppressed(|| {
+        if let Some(transcript_initial_state) = protocol.transcript_initial_state.as_ref() {
+            transcript.common_scalar(transcript_initial_state)?;
+        }
+        let semantic_commitment = instances[0]
+            .iter()
+            .zip(&instance_committing_key.bases)
+            .map(|(scalar, base)| Msm::<C, NativeLoader>::base(base) * scalar)
+            .chain(std::iter::once(Msm::base(
+                instance_committing_key
+                    .constant
+                    .as_ref()
+                    .expect("validated hybrid ICK has its default-blind constant"),
+            )))
+            .sum::<Msm<'_, C, NativeLoader>>()
+            .evaluate(None);
+        transcript.common_ec_point(&semantic_commitment)?;
+        let carrier_commitments = transcript.read_n_ec_points(N)?;
+        if carrier_commitments != expected_carrier_commitments {
+            return Err(snark_verifier::Error::InvalidInstances);
+        }
+
+        let mut witnesses = Vec::new();
+        let mut challenges = Vec::new();
+        for (&witness_count, &challenge_count) in protocol
+            .num_witness
+            .iter()
+            .zip(protocol.num_challenge.iter())
+        {
+            witnesses.extend(transcript.read_n_ec_points(witness_count)?);
+            challenges.extend(transcript.squeeze_n_challenges(challenge_count));
+        }
+        let quotients = transcript.read_n_ec_points(protocol.quotient.num_chunk())?;
+        let z = transcript.squeeze_challenge();
+        let evaluations = transcript.read_n_scalars(protocol.evaluations.len())?;
+        let pcs = <IpaAs<C, Bgh19> as PolynomialCommitmentScheme<C, NativeLoader>>::read_proof(
+            svk,
+            &PlonkProof::<C, NativeLoader, IpaAs<C, Bgh19>>::empty_queries(protocol),
+            &mut transcript,
+        )?;
+        let mut committed_instances = Vec::with_capacity(N + 1);
+        committed_instances.push(semantic_commitment);
+        committed_instances.extend(carrier_commitments);
+        Ok::<_, snark_verifier::Error>(PlonkProof::<C, NativeLoader, IpaAs<C, Bgh19>> {
+            committed_instances: Some(committed_instances),
+            witnesses,
+            challenges,
+            quotients,
+            z,
+            evaluations,
+            pcs,
+            old_accumulators: Vec::new(),
+        })
+    })
+    .map_err(|_| format!("Kagemusha {parity} proof parser panicked"))?
+    .map_err(|error| format!("invalid Kagemusha {parity} proof: {error:?}"))?;
+
+    // With an ICK-bearing protocol, the verifier consumes proof-read evaluations for all
+    // instance polynomials. Empty carrier placeholders prevent accidental wide MSMs while
+    // the authenticated commitments above continue to participate in every quotient/PCS query.
+    let mut verification_instances = Vec::with_capacity(N + 1);
+    verification_instances.push(instances[0].clone());
+    verification_instances.extend((0..N).map(|_| Vec::new()));
+    let accumulators = crate::panic_hook::catch_unwind_suppressed(|| {
+        PlonkSuccinctVerifier::<IpaAs<C, Bgh19>>::verify(
+            svk,
+            protocol,
+            &verification_instances,
+            &parsed,
+        )
+    })
+    .map_err(|_| format!("Kagemusha {parity} verifier panicked"))?
+    .map_err(|error| format!("Kagemusha {parity} proof rejected: {error:?}"))?;
+    let transcript_binding = transcript.squeeze_challenge();
+    drop(transcript);
+    if cursor.position() != proof.len() as u64 {
+        return Err(format!("Kagemusha {parity} proof has trailing bytes"));
+    }
+    let [accumulator] = accumulators.try_into().map_err(|values: Vec<_>| {
+        format!(
+            "Kagemusha {parity} proof returned {} accumulators",
+            values.len()
+        )
+    })?;
+    Ok(KagemushaNativeVerifiedProofV1 {
+        accumulator,
+        transcript_binding,
+    })
+}
+
+fn hybrid_proof_supplied_commitment_bytes<C>(
+    proof_supplied_commitment_count: usize,
+    parity: &str,
+) -> Result<usize, String>
+where
+    C: CurveAffine,
+{
+    let encoded_identity = C::identity().to_bytes();
+    let encoded_point_len = encoded_identity.as_ref().len();
+    if encoded_point_len != 32 {
+        return Err(format!(
+            "Kagemusha {parity} hybrid commitment does not use the canonical 32-byte Pasta encoding"
+        ));
+    }
+    proof_supplied_commitment_count
+        .checked_mul(encoded_point_len)
+        .ok_or_else(|| format!("Kagemusha {parity} hybrid commitment byte length overflowed"))
+}
+
+fn validate_hybrid_commitment_limb_indices(
+    semantic_instance_count: usize,
+    carrier_commitment_limb_indices: &[[usize; 2]],
+    parity: &str,
+) -> Result<(), String> {
+    if !(1..=2).contains(&carrier_commitment_limb_indices.len()) {
+        return Err(format!(
+            "Kagemusha {parity} hybrid proof must bind one or two carrier commitments"
+        ));
+    }
+    let mut expected_next = None;
+    for indices in carrier_commitment_limb_indices {
+        if indices[0].checked_add(1) != Some(indices[1])
+            || indices[1] >= semantic_instance_count
+            || expected_next.is_some_and(|expected| indices[0] != expected)
+        {
+            return Err(format!(
+                "Kagemusha {parity} hybrid commitment limbs are not consecutive and canonical"
+            ));
+        }
+        expected_next = indices[1].checked_add(1);
+    }
+    Ok(())
+}
+
+fn validate_hybrid_protocol_shape<C>(
+    params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<C>,
+    protocol: &PlonkProtocol<C>,
+    instances: &[Vec<C::ScalarExt>],
+    carrier_commitment_limb_indices: &[[usize; 2]],
+    parity: &str,
+) -> Result<(), String>
+where
+    C: CurveAffine,
+{
+    let carrier_count = carrier_commitment_limb_indices.len();
+    let instance_lengths = instances.iter().map(Vec::len).collect::<Vec<_>>();
+    if params.k() as usize != protocol.domain.k
+        || !(1..=2).contains(&carrier_count)
+        || protocol.num_instance.len() != carrier_count + 1
+        || protocol.num_instance.as_slice() != instance_lengths.as_slice()
+        || protocol.num_instance[0] == 0
+        || protocol
+            .num_instance
+            .iter()
+            .skip(1)
+            .any(|count| *count == 0 || *count <= protocol.num_instance[0])
+        || !protocol.accumulator_indices.is_empty()
+    {
+        return Err(format!(
+            "Kagemusha {parity} proof does not have one semantic and {carrier_count} wide carrier column(s)"
+        ));
+    }
+    validate_hybrid_commitment_limb_indices(
+        protocol.num_instance[0],
+        carrier_commitment_limb_indices,
+        parity,
+    )?;
+    let instance_committing_key = protocol
+        .instance_committing_key
+        .as_ref()
+        .ok_or_else(|| format!("Kagemusha {parity} hybrid protocol has no semantic ICK"))?;
+    if instance_committing_key.bases.len() != protocol.num_instance[0]
+        || instance_committing_key.constant.is_none()
+        || protocol
+            .num_instance
+            .iter()
+            .skip(1)
+            .any(|count| *count > params.get_g_lagrange().len())
+    {
+        return Err(format!(
+            "Kagemusha {parity} hybrid instance-commitment parameters have the wrong shape"
+        ));
+    }
+    let instance_offset = protocol.preprocessed.len();
+    let instance_end = instance_offset
+        .checked_add(carrier_count + 1)
+        .ok_or_else(|| format!("Kagemusha {parity} hybrid instance index overflowed"))?;
+    for polynomial in instance_offset..instance_end {
+        if !protocol
+            .evaluations
+            .iter()
+            .any(|query| query.poly == polynomial)
+            || !protocol
+                .queries
+                .iter()
+                .any(|query| query.poly == polynomial)
+        {
+            return Err(format!(
+                "Kagemusha {parity} hybrid instance column is absent from the quotient or IPA opening set"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_hybrid_carrier_semantic_binding<C>(
+    semantic: &[C::ScalarExt],
+    carrier_commitment: C,
+    carrier_commitment_limb_indices: [usize; 2],
+    parity: &str,
+) -> Result<(), String>
+where
+    C: CurveAffine,
+{
+    let encoding = carrier_commitment.to_bytes();
+    let bytes = encoding.as_ref();
+    if bytes.len() != 32 {
+        return Err(format!(
+            "Kagemusha {parity} carrier commitment does not have a Pasta encoding"
+        ));
+    }
+    let expected: [C::ScalarExt; 2] = std::array::from_fn(|half| {
+        from_u128::<C::ScalarExt>(u128::from_le_bytes(
+            bytes[half * 16..(half + 1) * 16]
+                .try_into()
+                .expect("Pasta compressed point half has sixteen bytes"),
+        ))
+    });
+    if carrier_commitment_limb_indices
+        .into_iter()
+        .zip(expected)
+        .any(|(index, expected)| semantic[index] != expected)
+    {
+        return Err(format!(
+            "Kagemusha {parity} semantic column does not bind its carrier commitment"
+        ));
+    }
+    Ok(())
+}
+
+fn canonical_hybrid_carrier_commitment<C>(
+    params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<C>,
+    carrier: &[C::ScalarExt],
+    parity: &str,
+) -> Result<C, String>
+where
+    C: CurveAffine,
+{
+    let bases = params
+        .get_g_lagrange()
+        .get(..carrier.len())
+        .ok_or_else(|| format!("Kagemusha {parity} carrier exceeds the IPA domain"))?;
+    let default_blind = Blind::<C::ScalarExt>::default().0;
+    Ok(
+        (best_multiexp::<C>(carrier, bases) + params.get_blind_base().to_curve() * default_blind)
+            .to_affine(),
+    )
 }

@@ -150,13 +150,11 @@ participant rows, and inconsistent carrier identities.
 ## KAGEMUSHA V1 (Java)
 
 `KagemushaNoritoV1` delegates to the canonical Kotlin KAGEMUSHA wire codec. Both SDKs encode
-the same five-message payment exchange—request, compact acceptance intent,
-acceptance ticket, payment, and acknowledgement—with `kgm1:` as the sole text
-transport. The ticket owns the fresh recipient encryption key; payment carries
-the commit certificate and post-commit paired proof. Mint authorization, mint
-credit, and redemption vouchers are independently framed archives. No usable
-no-commit cancellation API is exposed; ticket expiry never releases reserved
-capacity. QR, NFC, and Nearby consume
+the same three-message payment exchange—direct request, proof-bearing payment, and durable
+acknowledgement—with `kgm1:` as the sole text transport. The request owns the fresh recipient
+encryption key and exact amount; payment carries the commit certificate and post-commit paired
+proof. Mint authorization, mint credit, and redemption vouchers are independently framed archives.
+Exposed credits cannot be cancelled. QR, NFC, and Nearby consume
 `../../fixtures/offline/kagemusha_v1.json`.
 Public wire size and verification work do not grow with balance history.
 
@@ -164,19 +162,19 @@ Public wire size and verification work do not grow with balance history.
 `KagemushaHardwareProviderV1` implementing the complete non-forking journal, exact-next counter,
 trusted-time, recovery, inbox, outbox, and rotation contract. Staging returns a durable ACK, sends
 and redemptions require the native provider to fold only the staged credits needed to cover the
-amount. Unrelated backlog must not delay an already-covered spend. Explicit batch and stable-
+amount. Unrelated backlog must not delay an already-covered spend. Singular-fold and stable-
 snapshot drain APIs impose no cumulative count limit; continuous background scheduling remains
-an integration requirement. A drain releases the lane after each batch for queued foreground work;
+an integration requirement. A drain releases the lane after each credit for queued foreground work;
 concurrent epoch rotation interrupts it and requires a new pass with a fresh watermark.
 Missing ACKs leave only a byte-identical retry record while the sender
 successor stays usable. Stock platform keystores are online-only and
 never trigger a software fallback.
 Staging advances native inbox bookkeeping, not the monetary-state journal. Core's typed mint
-reservation/inbox implementation is under validation; its SDK-to-OEM operation-21 adapter is
+reservation/inbox implementation is under validation; its SDK-to-OEM operation-16 adapter is
 still required. A completed MintFold is a separate proved transition, not a staging result.
 Managed KAGEMUSHA X25519 types enforce only the canonical 32-byte nonzero wire shape. They do
 not perform scalar multiplication or low-order probing; the shared native core authenticates
-canonical X25519 elements during object and complete five-message exchange validation before monetary use.
+canonical X25519 elements during object and complete three-message exchange validation before monetary use.
 Both the logical sequence and hardware journal revision are per epoch. Exact-successor rotation
 carries balance and replay state, replaces the device-policy binding, resets both counters to zero,
 and remains callable with saturated counters and pending receipts. The native provider must

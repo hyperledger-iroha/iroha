@@ -36,19 +36,19 @@ journal/inbox/outbox, trusted-time, atomic recovery, and hardware-epoch rotation
 payments are acknowledged only after durable staging; duplicate delivery returns the provider's
 same durable ACK. Sends and redemptions require the native provider to fold the staged credits
 needed to cover the amount; unrelated backlog must not delay an already-covered spend.
-`foldReceiveBatch()` and `drainPendingCredits()` expose bounded batches and a stable-snapshot
-drain without a cumulative count limit. The drain releases the lane after each batch for queued
-foreground work. Concurrent epoch rotation interrupts the drain; start a new pass for the new
-epoch's watermark. Continuous background scheduling remains an integration
+`foldReceiveCredit()` proves one singular `ReceiveFold`, while `drainPendingCredits()` repeatedly
+folds a stable snapshot without a cumulative count limit. The drain releases the lane after each
+credit for queued foreground work. Concurrent epoch rotation interrupts the drain; start a new
+pass for the new epoch's watermark. Continuous background scheduling remains an integration
 requirement. `KagemushaAndroidWalletV1.openProduction(...)` additionally binds an OEM adapter to
 the native device service. Stock KeyMint and StrongBox remain online-only because signing keys do
 not supply the required non-forking persistence contract; there is no software fallback.
 Staging advances native inbox bookkeeping, not the monetary-state journal. Core's typed mint
-reservation/inbox implementation is under validation; its SDK-to-OEM operation-21 adapter is
+reservation/inbox implementation is under validation; its SDK-to-OEM operation-16 adapter is
 still required. A completed MintFold is a separate proved transition, not a staging result.
 Managed KAGEMUSHA X25519 types enforce only the canonical 32-byte nonzero wire shape. They do
 not perform scalar multiplication or low-order probing; the shared native core authenticates
-canonical X25519 elements during object and complete five-message exchange validation before monetary use.
+canonical X25519 elements during object and complete three-message exchange validation before monetary use.
 Logical sequence and durable journal revision are per hardware epoch. Authenticated rotation carries
 the full balance and replay root into the exact successor epoch, replaces the device-policy binding,
 and resets both counters to zero. `rotateHardwareEpoch()` does not first drain the inbox, so it
@@ -209,11 +209,11 @@ participant rows, and inconsistent carrier identities.
 ### KAGEMUSHA peer transports
 
 `KagemushaNoritoV1` is the canonical KAGEMUSHA wire codec. Kotlin/JVM and Android
-encode the same five-message payment exchange—request, compact acceptance intent,
-fresh-key acceptance ticket, post-commit proof-bearing payment, and acknowledgement.
+encode the same three-message payment exchange—direct request, post-commit proof-bearing
+payment, and durable acknowledgement. Each request binds one exact amount and a fresh
+recipient encryption key; distinct valid payments against a reusable request are accepted.
 Mint authorization, mint credit, and redemption vouchers are separately framed;
-`kgm1:` is the sole text transport. NoCommit cannot release capacity until its
-proof-authenticated relation is implemented; wallet cancellation is unavailable. QR, NFC, and Nearby consume
+`kgm1:` is the sole text transport. Exposed credits cannot be cancelled. QR, NFC, and Nearby consume
 `../fixtures/offline/kagemusha_v1.json`. Public wire
 size and verification work are independent of balance history; no hop, input,
 origin, ancestry, fan-in, or proof-depth limit is encoded.

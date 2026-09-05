@@ -504,7 +504,7 @@ _CORRIDOR_SUMMARY_FIELDS = (
     "log",
     "command",
 )
-_PRODUCTION_TEST_COUNT = 867
+_PRODUCTION_TEST_COUNT = 866
 _G_UNIT_TEST_COUNT = 522
 _G_UNIT_GROUPS = (
     (
@@ -657,7 +657,7 @@ _PRODUCTION_MODULES = (
     (
         "production-data-model-v2-context-identity",
         "block::consensus_v2::tests",
-        2,
+        3,
     ),
     (
         "production-v2-integration-runner",

@@ -4,9 +4,7 @@ import java.util.Arrays;
 import java.util.Objects;
 
 /**
- * Bounded handoff adapter for the frozen five-message KAGEMUSHA V1 IPM1 exchange.
- *
- * <p>No-commit closure is an independently framed recovery value and is never a sixth IPM1 kind.
+ * Bounded handoff adapter for the frozen three-message KAGEMUSHA V1 IPM1 exchange.
  */
 public final class IrohaPeerKagemushaAdapterV1 {
   public static final int ARCHIVE_SCHEMA_VERSION = 1;

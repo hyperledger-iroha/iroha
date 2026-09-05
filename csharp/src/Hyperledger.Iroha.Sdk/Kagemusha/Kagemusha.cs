@@ -23,9 +23,9 @@ public static class Kagemusha
     public const int MaximumAcknowledgementBytes = 256;
     public const int MaximumMintAuthorizationBytes = 7_936;
     public const int MaximumMintCreditBytes = 7_936;
-    /// <summary>Bound for a canonical operation-21 public command body, before any decoding.</summary>
+    /// <summary>Bound for a canonical operation-16 public command body, before any decoding.</summary>
     public const int MaximumDeviceMintStageCommandBytes = 65_536;
-    /// <summary>Bound for a canonical operation-21 public result body, before any decoding.</summary>
+    /// <summary>Bound for a canonical operation-16 public result body, before any decoding.</summary>
     public const int MaximumDeviceMintStageResultBytes = 128;
     public const int MaximumRedemptionVoucherBytes = 7_936;
     public const int MaximumPairedProofBytes = 6_528;
@@ -230,7 +230,7 @@ public static class Kagemusha
             DecodeMintCreditPayload,
             value => EncodeMintCredit(value, authorization));
 
-    /// <summary>Encode a bounded operation-21 command after exact nested public-shape validation.</summary>
+    /// <summary>Encode a bounded operation-16 command after exact nested public-shape validation.</summary>
     public static byte[] EncodeDeviceMintStageCommandShape(KagemushaDeviceMintStageCommandV1 value)
     {
         _ = ValidateDeviceMintStageCommandShape(value);
@@ -239,14 +239,14 @@ public static class Kagemusha
             Vector(value.CanonicalMintCreditSpan)), 8), MaximumDeviceMintStageCommandBytes, nameof(value));
     }
 
-    /// <summary>Construct and encode an operation-21 command from exact bound authorization and credit archives.</summary>
+    /// <summary>Construct and encode an operation-16 command from exact bound authorization and credit archives.</summary>
     public static byte[] EncodeDeviceMintStageCommandShape(
         ReadOnlySpan<byte> canonicalAuthorization,
         ReadOnlySpan<byte> canonicalMintCredit) => EncodeDeviceMintStageCommandShape(
             new KagemushaDeviceMintStageCommandV1(DeviceLifecycleVersion,
                 canonicalAuthorization, canonicalMintCredit));
 
-    /// <summary>Decode one exact bounded canonical operation-21 command; this grants no monetary authority.</summary>
+    /// <summary>Decode one exact bounded canonical operation-16 command; this grants no monetary authority.</summary>
     public static KagemushaDeviceMintStageCommandV1 DecodeDeviceMintStageCommandShapeExact(
         ReadOnlySpan<byte> archive) => DecodeExact(archive, MaximumDeviceMintStageCommandBytes,
             DeviceMintStageCommandSchema, DecodeDeviceMintStageCommandPayload, EncodeDeviceMintStageCommandShape);
@@ -259,7 +259,7 @@ public static class Kagemusha
             value.CreditIdSpan.ToArray()), 2), MaximumDeviceMintStageResultBytes, nameof(value));
     }
 
-    /// <summary>Decode one exact bounded canonical operation-21 result without granting device authority.</summary>
+    /// <summary>Decode one exact bounded canonical operation-16 result without granting device authority.</summary>
     public static KagemushaDeviceMintStageResultV1 DecodeDeviceMintStageResultShapeExact(
         ReadOnlySpan<byte> archive) => DecodeExact(archive, MaximumDeviceMintStageResultBytes,
             DeviceMintStageResultSchema, DecodeDeviceMintStageResultPayload, EncodeDeviceMintStageResultShape);

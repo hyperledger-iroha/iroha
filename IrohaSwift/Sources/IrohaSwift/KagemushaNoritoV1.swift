@@ -47,8 +47,6 @@ public enum KagemushaNoritoV1 {
     "iroha:kagemusha:v1:hardware-terminal-body".utf8)
   private static let outboxReservationCommitmentDomain = Data(
     "iroha:kagemusha:v1:outbox-reservation".utf8)
-  private static let receiveFoldBatchDomain = Data(
-    "iroha:kagemusha:v1:receive-fold-batch\0".utf8)
   private static let liabilityPoolDomain = Data(
     "iroha:kagemusha:v1:liability-pool".utf8)
   private static let deviceKeyReferenceDomain = Data(
@@ -75,10 +73,10 @@ public enum KagemushaNoritoV1 {
   /// Maximum canonical top-up request archive accepted by KAGEMUSHA V1.
   public static let maximumTopUpRequestBytes = 16 * 1024
 
-  /// Maximum canonical bytes in the public body of secure-device operation 21.
+  /// Maximum canonical bytes in the public body of secure-device operation 16.
   public static let maximumDeviceMintStageCommandBytes = 64 * 1024
 
-  /// Maximum canonical bytes in the fixed public result of secure-device operation 21.
+  /// Maximum canonical bytes in the fixed public result of secure-device operation 16.
   public static let maximumDeviceMintStageResultBytes = 128
 
   /// Sole dynamic instruction identifier for a KAGEMUSHA V1 top-up.
@@ -195,15 +193,6 @@ public enum KagemushaNoritoV1 {
   ) throws -> Data {
     try validatePaymentRequestPublicBindings(value)
     return paymentRequestDigest(value)
-  }
-
-  /// Exact fixed-width binding for a 1...16 active receive-fold batch.
-  public static func receiveFoldBatchDigestShape(
-    _ value: KagemushaReceiveFoldBatchV1
-  ) -> Data {
-    var bytes = receiveFoldBatchDomain
-    bytes.append(value.canonicalBody)
-    return Data(SHA256.hash(data: bytes))
   }
 
   public static func pastaStateCommitment(
@@ -498,7 +487,7 @@ public enum KagemushaNoritoV1 {
   ) throws -> Data {
     try validatePaymentPublicBindings(value, requestValue)
     return try bounded(
-      frame("KagemushaPaymentV1", payment(value), 8),
+      frame("KagemushaPaymentV1", payment(value), 16),
       KagemushaWireV1.maximumPaymentBytes)
   }
 
@@ -506,7 +495,7 @@ public enum KagemushaNoritoV1 {
     _ bytes: Data, against requestValue: KagemushaPaymentRequestV1
   ) throws -> KagemushaPaymentV1 {
     try decodeExact(
-      bytes, KagemushaWireV1.maximumPaymentBytes, "KagemushaPaymentV1", 8,
+      bytes, KagemushaWireV1.maximumPaymentBytes, "KagemushaPaymentV1", 16,
       decodePayment
     ) {
       try encodePaymentShape($0, against: requestValue)
@@ -666,7 +655,7 @@ public enum KagemushaNoritoV1 {
     }
   }
 
-  /// Encode an operation-21 body after validating both exact nested public archives.
+  /// Encode an operation-16 body after validating both exact nested public archives.
   public static func encodeDeviceMintStageCommandShape(
     _ value: KagemushaDeviceMintStageCommandV1
   ) throws -> Data {
@@ -682,7 +671,7 @@ public enum KagemushaNoritoV1 {
       maximumDeviceMintStageCommandBytes)
   }
 
-  /// Build and encode an operation-21 body from exact nested public archives.
+  /// Build and encode an operation-16 body from exact nested public archives.
   public static func encodeDeviceMintStageCommandShape(
     canonicalAuthorization: Data,
     canonicalMintCredit: Data
@@ -693,7 +682,7 @@ public enum KagemushaNoritoV1 {
         canonicalMintCredit: canonicalMintCredit))
   }
 
-  /// Decode one exact operation-21 body without granting staging authority.
+  /// Decode one exact operation-16 body without granting staging authority.
   public static func decodeDeviceMintStageCommandShapeExact(
     _ bytes: Data
   ) throws -> KagemushaDeviceMintStageCommandV1 {
@@ -702,7 +691,7 @@ public enum KagemushaNoritoV1 {
       decodeDeviceMintStageCommand, encodeDeviceMintStageCommandShape)
   }
 
-  /// Encode the fixed public operation-21 result.
+  /// Encode the fixed public operation-16 result.
   public static func encodeDeviceMintStageResultShape(
     _ value: KagemushaDeviceMintStageResultV1
   ) throws -> Data {
@@ -714,7 +703,7 @@ public enum KagemushaNoritoV1 {
       maximumDeviceMintStageResultBytes)
   }
 
-  /// Decode one exact public operation-21 result.
+  /// Decode one exact public operation-16 result.
   public static func decodeDeviceMintStageResultShapeExact(
     _ bytes: Data
   ) throws -> KagemushaDeviceMintStageResultV1 {
@@ -723,7 +712,7 @@ public enum KagemushaNoritoV1 {
       decodeDeviceMintStageResult, encodeDeviceMintStageResultShape)
   }
 
-  /// Decode and bind a public operation-21 result to its command credit identity.
+  /// Decode and bind a public operation-16 result to its command credit identity.
   public static func decodeDeviceMintStageResultShapeExact(
     _ bytes: Data,
     against command: KagemushaDeviceMintStageCommandV1

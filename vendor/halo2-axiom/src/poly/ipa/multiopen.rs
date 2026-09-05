@@ -5,7 +5,7 @@
 
 use super::*;
 use crate::{
-    poly::query::{Query, exists_query_collision},
+    poly::query::{exists_query_collision, Query},
     transcript::ChallengeScalar,
 };
 use ff::Field;
@@ -14,8 +14,8 @@ use std::collections::{BTreeMap, BTreeSet};
 mod prover;
 mod verifier;
 
-pub use prover::ProverIPA;
-pub use verifier::VerifierIPA;
+pub use prover::{ProverIPA, ProverIPADirect, ProverIPAHybrid};
+pub use verifier::{VerifierIPA, VerifierIPADirect, VerifierIPAHybrid};
 
 #[derive(Clone, Copy, Debug)]
 struct X1 {}

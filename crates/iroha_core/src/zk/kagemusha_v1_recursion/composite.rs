@@ -42,7 +42,6 @@ use super::{
     canonical_preimage::{
         assemble_bounded_canonical_frame_v1, stream::KagemushaBoundedByteStreamV1,
     },
-    canonical_suite_upgrade_authorization_digest_v1,
     deferred_parent::{
         DeferredLoader, DeferredScalar, KagemushaDeferredParentOutputV1,
         KagemushaDeferredParentWitnessV1, accumulator_limb_count, bind_accumulator_limbs,
@@ -51,7 +50,7 @@ use super::{
         kagemusha_protocol_structure_digest_v1, load_and_constrain_parent_protocol_if_v1,
         load_and_constrain_parent_protocol_v1, load_native_accumulator,
         native_parent_protocol_digest_v1, select_accumulator_v1, verify_fold,
-        verify_ordinary_proof_v1,
+        verify_ordinary_proof_v1, verify_ordinary_proof_with_canonical_bytes_v1,
     },
     guard_bundle::{
         GUARD_RECURSIVE_PUBLIC_INSTANCE_COUNT_V1, KagemushaAssignedGuardBundleV1,
@@ -60,6 +59,10 @@ use super::{
     },
     mint_authority::{
         KAGEMUSHA_MINT_AUTHORITY_PUBLIC_INSTANCE_COUNT_V1, public_instance as mint_public_instance,
+    },
+    mint_authorization::{
+        MINT_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1, mint_authorization_public_instances_v1,
+        public_instance as mint_authorization_public_instance,
     },
     state_relation::{self, public_instance},
     terminal_authorization::{
@@ -81,8 +84,10 @@ use crate::zk::{
 };
 use iroha_data_model::kagemusha::{
     KAGEMUSHA_PASTA_STATE_COMMITMENT_DOMAIN_V1, KAGEMUSHA_PEER_CREDIT_OPENING_COMMITMENT_DOMAIN_V1,
-    KAGEMUSHA_WIRE_VERSION_V1, KagemushaLifecycleBindingV1, KagemushaOperationKindV1,
-    KagemushaPastaStateCommitmentV1, kagemusha_canonical_mint_frame_prefix_v1,
+    KAGEMUSHA_WIRE_VERSION_V1, KagemushaCanonicalMintFrameV1, KagemushaLifecycleBindingV1,
+    KagemushaMintAuthorizationStatementV1, KagemushaMintAuthorizationV1, KagemushaMintCreditV1,
+    KagemushaOperationKindV1, KagemushaPairedProofV1, KagemushaPastaStateCommitmentV1,
+    kagemusha_canonical_mint_frame_prefix_v1,
 };
 
 const MINIMUM_UNUSABLE_ROWS: usize = 9;
@@ -90,99 +95,26 @@ const PARENT_EQUATION_TAG: u32 = 1;
 const INCOMING_CREDIT_EQUATION_TAG: u32 = 2;
 const GUARD_BUNDLE_EQUATION_TAG: u32 = 3;
 const MINT_FINALITY_EQUATION_TAG: u32 = 4;
-const RECEIVE_CREDIT_BINDING_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:receive-fold-batch\0";
+const MINT_AUTHORIZATION_EQUATION_TAG: u32 = 5;
+const RECEIVE_CREDIT_BINDING_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:receive-fold\0";
 // These private data-model domains are repeated next to the circuit relation deliberately. Native
 // parity tests below pin them to the model-owned canonical digest APIs.
 const MINT_FOLD_ASSET_IDENTITY_DIGEST_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:asset-identity";
 const MINT_FOLD_LIFECYCLE_DIGEST_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:lifecycle-binding";
+const MINT_AUTHORIZATION_STATEMENT_DIGEST_DOMAIN_V1: &[u8] =
+    b"iroha:kagemusha:v1:mint-authorization-statement";
+const MINT_AUTHORIZATION_CONTEXT_DIGEST_DOMAIN_V1: &[u8] =
+    b"iroha:kagemusha:v1:mint-authorization-context";
+const MINT_AUTHORIZATION_DIGEST_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:mint-authorization";
+const MINT_STATEMENT_DIGEST_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:mint-statement";
+const MINT_CIPHERTEXT_DIGEST_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:ciphertext";
+const MINT_CREDIT_ENVELOPE_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:mint-credit\0";
+const MINT_ACCOUNT_IDENTITY_DIGEST_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:account-identity";
+const MINT_ASSET_IDENTITY_DIGEST_DOMAIN_EXACT_V1: &[u8] = b"iroha:kagemusha:v1:asset-identity";
 const MINT_FOLD_ASSET_PAYLOAD_BYTES_V1: usize = 32;
 const MINT_FOLD_ASSET_FRAME_BYTES_V1: usize = 72;
 const MINT_FOLD_LIFECYCLE_PAYLOAD_BYTES_V1: usize = 422;
 const MINT_FOLD_LIFECYCLE_FRAME_BYTES_V1: usize = 462;
-
-/// Exact old-to-new recursive verifier bridge authorized for one `SuiteUpgrade`.
-///
-/// The governance proof digest is authenticated by the paired GuardBundle helper. These values
-/// are private candidate witnesses; only their common bridge digest is carried by the recursive
-/// state proof.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct KagemushaSuiteUpgradeBridgeWitnessV1 {
-    pub(crate) old_release_id: DigestV1,
-    pub(crate) new_release_id: DigestV1,
-    pub(crate) old_eq_protocol_digest: DigestV1,
-    pub(crate) old_ep_protocol_digest: DigestV1,
-    pub(crate) old_suite_id: DigestV1,
-    pub(crate) old_vk_digest: DigestV1,
-    pub(crate) new_suite_id: DigestV1,
-    pub(crate) new_vk_digest: DigestV1,
-    pub(crate) governance_authorization_proof_digest: DigestV1,
-}
-
-impl KagemushaSuiteUpgradeBridgeWitnessV1 {
-    /// Canonical inactive padding carried by every non-upgrade transition.
-    pub(crate) const ZERO: Self = Self {
-        old_release_id: [0; 32],
-        new_release_id: [0; 32],
-        old_eq_protocol_digest: [0; 32],
-        old_ep_protocol_digest: [0; 32],
-        old_suite_id: [0; 32],
-        old_vk_digest: [0; 32],
-        new_suite_id: [0; 32],
-        new_vk_digest: [0; 32],
-        governance_authorization_proof_digest: [0; 32],
-    };
-
-    pub(crate) fn canonical_digest(self) -> DigestV1 {
-        canonical_suite_upgrade_authorization_digest_v1(
-            self.old_release_id,
-            self.new_release_id,
-            [self.old_eq_protocol_digest, self.old_ep_protocol_digest],
-            self.old_suite_id,
-            self.old_vk_digest,
-            self.new_suite_id,
-            self.new_vk_digest,
-            self.governance_authorization_proof_digest,
-        )
-    }
-
-    fn validate_against(&self, state: &KagemushaStateRelationWitnessV1) -> Result<(), String> {
-        let is_upgrade = state.operation == KagemushaOperationV1::SuiteUpgrade;
-        if !is_upgrade {
-            return (*self == Self::ZERO).then_some(()).ok_or_else(|| {
-                "suite-upgrade bridge must be canonical zero outside upgrade".to_owned()
-            });
-        }
-        let predecessor = state
-            .predecessor
-            .as_ref()
-            .ok_or_else(|| "suite-upgrade bridge predecessor is absent".to_owned())?;
-        if [
-            self.old_release_id,
-            self.new_release_id,
-            self.old_eq_protocol_digest,
-            self.old_ep_protocol_digest,
-            self.old_suite_id,
-            self.old_vk_digest,
-            self.new_suite_id,
-            self.new_vk_digest,
-            self.governance_authorization_proof_digest,
-        ]
-        .contains(&[0; 32])
-            || self.old_release_id == self.new_release_id
-            || self.old_eq_protocol_digest == self.old_ep_protocol_digest
-            || self.old_release_id != predecessor.release_id
-            || self.new_release_id != state.successor.release_id
-            || self.old_suite_id != predecessor.suite_id
-            || self.old_vk_digest != predecessor.vk_digest
-            || self.new_suite_id != state.successor.suite_id
-            || self.new_vk_digest != state.successor.vk_digest
-            || self.canonical_digest() != state.suite_upgrade_authorization_digest
-        {
-            return Err("suite-upgrade bridge authorization mismatch".to_owned());
-        }
-        Ok(())
-    }
-}
 
 fn mint_fold_padding_lifecycle_v1(
     state: &KagemushaStateRelationWitnessV1,
@@ -341,7 +273,8 @@ where
     C: CurveAffineExt,
 {
     pub(super) mint_fold_opening: Option<KagemushaMintFoldOpeningWitnessV1<'a>>,
-    pub(super) suite_upgrade_bridge: KagemushaSuiteUpgradeBridgeWitnessV1,
+    pub(super) mint_authorization: &'a KagemushaMintAuthorizationV1,
+    pub(super) mint_credit: &'a KagemushaMintCreditV1,
     pub(super) parent_protocol: &'a PlonkProtocol<C>,
     pub(super) parent_instances: &'a [Vec<C::ScalarExt>],
     pub(super) parent_proof: &'a [u8],
@@ -349,13 +282,19 @@ where
     pub(super) parent_fold_proof: &'a [u8],
     pub(super) successor_history: &'a [u8; super::KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1],
     pub(super) incoming_protocol: &'a PlonkProtocol<C>,
-    pub(super) incoming_slots: &'a [KagemushaRecursiveIncomingParityWitnessV1<'a, C>],
+    pub(super) incoming_credits: &'a [KagemushaRecursiveIncomingParityWitnessV1<'a, C>],
     pub(super) guard_protocol: &'a PlonkProtocol<C>,
     pub(super) guard_proof: &'a [u8],
     pub(super) guard_history: &'a IpaAccumulator<C, NativeLoader>,
     pub(super) guard_history_bytes: &'a [u8; super::KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1],
     pub(super) guard_history_fold_proof: &'a [u8],
     pub(super) guard_merge_fold_proof: &'a [u8],
+    pub(super) mint_authorization_protocol: &'a PlonkProtocol<C>,
+    pub(super) mint_authorization_instances: &'a [Vec<C::ScalarExt>],
+    pub(super) mint_authorization_proof: &'a [u8],
+    pub(super) mint_authorization_history: &'a IpaAccumulator<C, NativeLoader>,
+    pub(super) mint_authorization_history_fold_proof: &'a [u8],
+    pub(super) mint_authorization_merge_fold_proof: &'a [u8],
     pub(super) mint_protocol: &'a PlonkProtocol<C>,
     pub(super) mint_instances: &'a [Vec<C::ScalarExt>],
     pub(super) mint_proof: &'a [u8],
@@ -368,8 +307,9 @@ where
 pub(super) struct KagemushaRecursiveStateWitnessV1<'a> {
     pub(super) state: KagemushaStateRelationWitnessV1,
     pub(super) mint_fold_opening: Option<KagemushaMintFoldOpeningWitnessV1<'a>>,
+    pub(super) mint_authorization: &'a KagemushaMintAuthorizationV1,
+    pub(super) mint_credit: &'a KagemushaMintCreditV1,
     pub(super) guard_relation: KagemushaGuardBundleRelationWitnessV1,
-    pub(super) suite_upgrade_bridge: KagemushaSuiteUpgradeBridgeWitnessV1,
     pub(super) eq_parent_protocol: &'a PlonkProtocol<EqAffine>,
     pub(super) ep_parent_protocol: &'a PlonkProtocol<EpAffine>,
     pub(super) eq_parent_instances: &'a [Vec<Fp>],
@@ -382,10 +322,10 @@ pub(super) struct KagemushaRecursiveStateWitnessV1<'a> {
     pub(super) ep_parent_fold_proof: &'a KagemushaEpFoldProofV1,
     pub(super) eq_incoming_protocol: &'a PlonkProtocol<EqAffine>,
     pub(super) ep_incoming_protocol: &'a PlonkProtocol<EpAffine>,
-    pub(super) eq_incoming_slots: &'a [KagemushaRecursiveIncomingEqWitnessV1<'a>;
-            state_relation::KAGEMUSHA_RECEIVE_FOLD_WIDTH_V1],
-    pub(super) ep_incoming_slots: &'a [KagemushaRecursiveIncomingEpWitnessV1<'a>;
-            state_relation::KAGEMUSHA_RECEIVE_FOLD_WIDTH_V1],
+    pub(super) eq_incoming_credits: &'a [KagemushaRecursiveIncomingEqWitnessV1<'a>;
+            state_relation::KAGEMUSHA_RECEIVE_FOLD_ARITY_V1],
+    pub(super) ep_incoming_credits: &'a [KagemushaRecursiveIncomingEpWitnessV1<'a>;
+            state_relation::KAGEMUSHA_RECEIVE_FOLD_ARITY_V1],
     pub(super) eq_successor_history: &'a KagemushaEqAccumulatorV1,
     pub(super) ep_successor_history: &'a KagemushaEpAccumulatorV1,
     pub(super) eq_guard_protocol: &'a PlonkProtocol<EqAffine>,
@@ -398,6 +338,18 @@ pub(super) struct KagemushaRecursiveStateWitnessV1<'a> {
     pub(super) ep_guard_history_fold_proof: &'a KagemushaEpFoldProofV1,
     pub(super) eq_guard_merge_fold_proof: &'a KagemushaEqFoldProofV1,
     pub(super) ep_guard_merge_fold_proof: &'a KagemushaEpFoldProofV1,
+    pub(super) eq_mint_authorization_protocol: &'a PlonkProtocol<EqAffine>,
+    pub(super) ep_mint_authorization_protocol: &'a PlonkProtocol<EpAffine>,
+    pub(super) eq_mint_authorization_instances: &'a [Vec<Fp>],
+    pub(super) ep_mint_authorization_instances: &'a [Vec<Fq>],
+    pub(super) eq_mint_authorization_proof: &'a [u8],
+    pub(super) ep_mint_authorization_proof: &'a [u8],
+    pub(super) eq_mint_authorization_history: &'a KagemushaEqAccumulatorV1,
+    pub(super) ep_mint_authorization_history: &'a KagemushaEpAccumulatorV1,
+    pub(super) eq_mint_authorization_history_fold_proof: &'a KagemushaEqFoldProofV1,
+    pub(super) ep_mint_authorization_history_fold_proof: &'a KagemushaEpFoldProofV1,
+    pub(super) eq_mint_authorization_merge_fold_proof: &'a KagemushaEqFoldProofV1,
+    pub(super) ep_mint_authorization_merge_fold_proof: &'a KagemushaEpFoldProofV1,
     pub(super) eq_mint_protocol: &'a PlonkProtocol<EqAffine>,
     pub(super) ep_mint_protocol: &'a PlonkProtocol<EpAffine>,
     pub(super) eq_mint_instances: &'a [Vec<Fp>],
@@ -473,6 +425,16 @@ macro_rules! impl_recursive_circuit {
                 unreachable!(concat!($label, " uses authenticated Base parameters"))
             }
 
+            fn synthesize_for_measurement(
+                &self,
+                config: Self::Config,
+                layouter: impl Layouter<$field>,
+            ) -> Result<(), PlonkError> {
+                let result = self.synthesize(config, layouter);
+                self.builder.reset_synthesis_state();
+                result
+            }
+
             fn synthesize(
                 &self,
                 config: Self::Config,
@@ -531,10 +493,63 @@ pub(super) fn build_kagemusha_recursive_state_pair_v1(
 > {
     witness.state.validate()?;
     validate_mint_fold_opening_against_state_v1(&witness.state, witness.mint_fold_opening)?;
-    witness.guard_relation.validate()?;
+    let authorization = witness.mint_authorization;
+    authorization
+        .validate_shape()
+        .map_err(|error| format!("invalid MintFold authorization/padding: {error}"))?;
     witness
-        .suite_upgrade_bridge
-        .validate_against(&witness.state)?;
+        .mint_credit
+        .validate_shape_against_authorization(authorization)
+        .map_err(|error| format!("invalid MintFold credit/padding: {error}"))?;
+    if witness
+        .mint_fold_opening
+        .is_some_and(|opening| opening.authorization() != authorization)
+    {
+        return Err("MintFold authorization differs from the staged authorization".to_owned());
+    }
+    if witness
+        .mint_fold_opening
+        .is_some_and(|opening| opening.credit() != witness.mint_credit)
+    {
+        return Err("MintFold credit differs from the staged credit".to_owned());
+    }
+    let proof = &authorization.proof;
+    let eq_authorization_history: &[u8; super::KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1] = proof
+        .eq_history
+        .as_slice()
+        .try_into()
+        .map_err(|_| "MintFold authorization Eq history has wrong width".to_owned())?;
+    let ep_authorization_history: &[u8; super::KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1] = proof
+        .ep_history
+        .as_slice()
+        .try_into()
+        .map_err(|_| "MintFold authorization Ep history has wrong width".to_owned())?;
+    let expected_eq = mint_authorization_public_instances_v1::<Fp>(
+        &authorization.statement,
+        proof.guard_ep_credential_audit,
+        proof.eq_deferred_audit,
+        proof.ep_deferred_audit,
+        eq_authorization_history,
+    )?;
+    let expected_ep = mint_authorization_public_instances_v1::<Fq>(
+        &authorization.statement,
+        proof.guard_ep_credential_audit,
+        proof.eq_deferred_audit,
+        proof.ep_deferred_audit,
+        ep_authorization_history,
+    )?;
+    if witness.eq_mint_authorization_instances != [expected_eq]
+        || witness.ep_mint_authorization_instances != [expected_ep]
+        || witness.eq_mint_authorization_proof != proof.eq_proof
+        || witness.ep_mint_authorization_proof != proof.ep_proof
+        || witness.eq_mint_authorization_history.as_bytes() != eq_authorization_history
+        || witness.ep_mint_authorization_history.as_bytes() != ep_authorization_history
+    {
+        return Err(
+            "MintFold authorization witness is detached from the exact authorization".to_owned(),
+        );
+    }
+    witness.guard_relation.validate()?;
     let eq_history = witness
         .eq_predecessor_history
         .to_native()
@@ -544,12 +559,12 @@ pub(super) fn build_kagemusha_recursive_state_pair_v1(
         .to_native()
         .map_err(|error| error.to_string())?;
     let eq_incoming_histories = witness
-        .eq_incoming_slots
+        .eq_incoming_credits
         .iter()
         .map(|slot| slot.history.to_native().map_err(|error| error.to_string()))
         .collect::<Result<Vec<_>, _>>()?;
     let ep_incoming_histories = witness
-        .ep_incoming_slots
+        .ep_incoming_credits
         .iter()
         .map(|slot| slot.history.to_native().map_err(|error| error.to_string()))
         .collect::<Result<Vec<_>, _>>()?;
@@ -559,6 +574,14 @@ pub(super) fn build_kagemusha_recursive_state_pair_v1(
         .map_err(|error| error.to_string())?;
     let ep_guard_history = witness
         .ep_guard_history
+        .to_native()
+        .map_err(|error| error.to_string())?;
+    let eq_mint_authorization_history = witness
+        .eq_mint_authorization_history
+        .to_native()
+        .map_err(|error| error.to_string())?;
+    let ep_mint_authorization_history = witness
+        .ep_mint_authorization_history
         .to_native()
         .map_err(|error| error.to_string())?;
     let eq_mint_history = witness
@@ -583,8 +606,8 @@ pub(super) fn build_kagemusha_recursive_state_pair_v1(
                 .to_owned(),
         );
     }
-    let eq_incoming_slots = witness
-        .eq_incoming_slots
+    let eq_incoming_credits = witness
+        .eq_incoming_credits
         .iter()
         .zip(&eq_incoming_histories)
         .map(
@@ -597,8 +620,8 @@ pub(super) fn build_kagemusha_recursive_state_pair_v1(
             },
         )
         .collect::<Vec<_>>();
-    let ep_incoming_slots = witness
-        .ep_incoming_slots
+    let ep_incoming_credits = witness
+        .ep_incoming_credits
         .iter()
         .zip(&ep_incoming_histories)
         .map(
@@ -618,7 +641,8 @@ pub(super) fn build_kagemusha_recursive_state_pair_v1(
         KagemushaPastaParityV1::Eq,
         KagemushaRecursiveParityWitnessV1 {
             mint_fold_opening: witness.mint_fold_opening,
-            suite_upgrade_bridge: witness.suite_upgrade_bridge,
+            mint_authorization: witness.mint_authorization,
+            mint_credit: witness.mint_credit,
             parent_protocol: witness.eq_parent_protocol,
             parent_instances: witness.eq_parent_instances,
             parent_proof: witness.eq_parent_proof,
@@ -626,13 +650,23 @@ pub(super) fn build_kagemusha_recursive_state_pair_v1(
             parent_fold_proof: witness.eq_parent_fold_proof.as_bytes(),
             successor_history: witness.eq_successor_history.as_bytes(),
             incoming_protocol: witness.eq_incoming_protocol,
-            incoming_slots: &eq_incoming_slots,
+            incoming_credits: &eq_incoming_credits,
             guard_protocol: witness.eq_guard_protocol,
             guard_proof: witness.eq_guard_proof,
             guard_history: &eq_guard_history,
             guard_history_bytes: witness.eq_guard_history.as_bytes(),
             guard_history_fold_proof: witness.eq_guard_history_fold_proof.as_bytes(),
             guard_merge_fold_proof: witness.eq_guard_merge_fold_proof.as_bytes(),
+            mint_authorization_protocol: witness.eq_mint_authorization_protocol,
+            mint_authorization_instances: witness.eq_mint_authorization_instances,
+            mint_authorization_proof: witness.eq_mint_authorization_proof,
+            mint_authorization_history: &eq_mint_authorization_history,
+            mint_authorization_history_fold_proof: witness
+                .eq_mint_authorization_history_fold_proof
+                .as_bytes(),
+            mint_authorization_merge_fold_proof: witness
+                .eq_mint_authorization_merge_fold_proof
+                .as_bytes(),
             mint_protocol: witness.eq_mint_protocol,
             mint_instances: witness.eq_mint_instances,
             mint_proof: witness.eq_mint_proof,
@@ -648,7 +682,8 @@ pub(super) fn build_kagemusha_recursive_state_pair_v1(
         KagemushaPastaParityV1::Ep,
         KagemushaRecursiveParityWitnessV1 {
             mint_fold_opening: witness.mint_fold_opening,
-            suite_upgrade_bridge: witness.suite_upgrade_bridge,
+            mint_authorization: witness.mint_authorization,
+            mint_credit: witness.mint_credit,
             parent_protocol: witness.ep_parent_protocol,
             parent_instances: witness.ep_parent_instances,
             parent_proof: witness.ep_parent_proof,
@@ -656,13 +691,23 @@ pub(super) fn build_kagemusha_recursive_state_pair_v1(
             parent_fold_proof: witness.ep_parent_fold_proof.as_bytes(),
             successor_history: witness.ep_successor_history.as_bytes(),
             incoming_protocol: witness.ep_incoming_protocol,
-            incoming_slots: &ep_incoming_slots,
+            incoming_credits: &ep_incoming_credits,
             guard_protocol: witness.ep_guard_protocol,
             guard_proof: witness.ep_guard_proof,
             guard_history: &ep_guard_history,
             guard_history_bytes: witness.ep_guard_history.as_bytes(),
             guard_history_fold_proof: witness.ep_guard_history_fold_proof.as_bytes(),
             guard_merge_fold_proof: witness.ep_guard_merge_fold_proof.as_bytes(),
+            mint_authorization_protocol: witness.ep_mint_authorization_protocol,
+            mint_authorization_instances: witness.ep_mint_authorization_instances,
+            mint_authorization_proof: witness.ep_mint_authorization_proof,
+            mint_authorization_history: &ep_mint_authorization_history,
+            mint_authorization_history_fold_proof: witness
+                .ep_mint_authorization_history_fold_proof
+                .as_bytes(),
+            mint_authorization_merge_fold_proof: witness
+                .ep_mint_authorization_merge_fold_proof
+                .as_bytes(),
             mint_protocol: witness.ep_mint_protocol,
             mint_instances: witness.ep_mint_instances,
             mint_proof: witness.ep_mint_proof,
@@ -810,6 +855,22 @@ where
         .ok_or_else(|| "Kagemusha mint protocol public limbs are absent".to_owned())?
         .try_into()
         .map_err(|_| "Kagemusha mint protocol public limbs have wrong shape".to_owned())?;
+    let expected_mint_authorization_protocol: [AssignedValue<C::ScalarExt>; 2] = public
+        .get(match parity {
+            KagemushaPastaParityV1::Eq => {
+                public_instance::MINT_AUTHORIZATION_EQ_PROTOCOL_LO
+                    ..public_instance::MINT_AUTHORIZATION_EQ_PROTOCOL_LO + 2
+            }
+            KagemushaPastaParityV1::Ep => {
+                public_instance::MINT_AUTHORIZATION_EP_PROTOCOL_LO
+                    ..public_instance::MINT_AUTHORIZATION_EP_PROTOCOL_LO + 2
+            }
+        })
+        .ok_or_else(|| "Kagemusha mint-authorization protocol public limbs are absent".to_owned())?
+        .try_into()
+        .map_err(|_| {
+            "Kagemusha mint-authorization protocol public limbs have wrong shape".to_owned()
+        })?;
     let expected_incoming_eq_protocol: [AssignedValue<C::ScalarExt>; 2] = public
         .get(
             public_instance::COMMIT_WRAPPER_EQ_PROTOCOL_LO
@@ -856,11 +917,6 @@ where
         operation,
         halo2_base::QuantumCell::Constant(C::ScalarExt::ONE),
     );
-    let suite_upgrade = range.gate().is_equal(
-        builder.main(0),
-        operation,
-        halo2_base::QuantumCell::Constant(C::ScalarExt::from(5)),
-    );
     let non_bootstrap = range.gate().not(builder.main(0), bootstrap);
     constrain_mint_fold_opening_v1(
         &mut builder,
@@ -872,26 +928,14 @@ where
     )?;
     let native_parent_protocol_digest =
         native_parent_protocol_digest_v1(witness.parent_protocol, parity)?;
-    if state.operation == KagemushaOperationV1::SuiteUpgrade {
-        let authorized = match parity {
-            KagemushaPastaParityV1::Eq => witness.suite_upgrade_bridge.old_eq_protocol_digest,
-            KagemushaPastaParityV1::Ep => witness.suite_upgrade_bridge.old_ep_protocol_digest,
-        };
-        if authorized != native_parent_protocol_digest {
-            return Err(
-                "SuiteUpgrade parent protocol is not the authorized old verifier".to_owned(),
-            );
-        }
+    let expected_native_protocol = match parity {
+        KagemushaPastaParityV1::Eq => state.eq_protocol_digest,
+        KagemushaPastaParityV1::Ep => state.ep_protocol_digest,
+    };
+    if native_parent_protocol_digest != expected_native_protocol {
+        return Err("Kagemusha predecessor protocol differs from the V1 state identity".to_owned());
     }
-    let expected_protocol = constrain_suite_upgrade_bridge_v1(
-        &mut builder,
-        &mut sha_jobs,
-        &assigned_state,
-        witness.suite_upgrade_bridge,
-        parity,
-        current_expected_protocol,
-        suite_upgrade,
-    )?;
+    let expected_protocol = current_expected_protocol;
     let predecessor_components = state
         .predecessor
         .as_ref()
@@ -953,8 +997,8 @@ where
         return Err("Kagemusha predecessor verifier emitted no equations".to_owned());
     }
 
-    if witness.incoming_slots.len() != state_relation::KAGEMUSHA_RECEIVE_FOLD_WIDTH_V1 {
-        return Err("Kagemusha incoming sender batch has wrong fixed width".to_owned());
+    if witness.incoming_credits.len() != state_relation::KAGEMUSHA_RECEIVE_FOLD_ARITY_V1 {
+        return Err("Kagemusha ReceiveFold requires exactly one incoming sender proof".to_owned());
     }
     // Incoming monetary authority is a release-pinned commit-wrapper verifier.
     // Its self-referential preprocessed points are witnesses so the production key graph remains
@@ -976,12 +1020,12 @@ where
     .map_err(|error| format!("failed to bind incoming post-commit payment protocol: {error:?}"))?
     .protocol;
     let mut state_history = base_successor_history;
-    let mut incoming_equation_spans = Vec::with_capacity(witness.incoming_slots.len());
+    let mut incoming_equation_spans = Vec::with_capacity(witness.incoming_credits.len());
     let mut previous_incoming_end = parent_end;
     for (index, (slot, assigned_slot)) in witness
-        .incoming_slots
+        .incoming_credits
         .iter()
-        .zip(&assigned_state.receive_slots)
+        .zip(core::iter::once(&assigned_state.receive_credit))
         .enumerate()
     {
         validate_incoming_authorization_proof_shape_v1(
@@ -1078,7 +1122,7 @@ where
         incoming_equation_spans.push((
             slot_end - previous_incoming_end,
             assigned_slot.active,
-            state.receive_slots.get(index).is_some_and(Option::is_some),
+            index == 0 && state.receive_credit.is_some(),
         ));
         previous_incoming_end = slot_end;
     }
@@ -1086,7 +1130,7 @@ where
     if incoming_end <= parent_end {
         return Err("Kagemusha incoming sender verifier emitted no equations".to_owned());
     }
-    constrain_receive_batch_binding_v1(&loader, &mut sha_jobs, &assigned_state)?;
+    constrain_receive_credit_binding_v1(&loader, &mut sha_jobs, &assigned_state)?;
 
     if witness.guard_protocol.num_instance != [GUARD_RECURSIVE_PUBLIC_INSTANCE_COUNT_V1] {
         return Err("Kagemusha GuardBundle proof has wrong public shape".to_owned());
@@ -1140,6 +1184,94 @@ where
         return Err("Kagemusha GuardBundle verifier emitted no equations".to_owned());
     }
 
+    if witness.mint_authorization_protocol.num_instance
+        != [MINT_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1]
+        || witness.mint_authorization_instances.len() != 1
+        || witness.mint_authorization_instances[0].len()
+            != MINT_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1
+    {
+        return Err("Kagemusha mint-authorization proof has wrong public shape".to_owned());
+    }
+    let authorization_structure =
+        kagemusha_protocol_structure_digest_v1(witness.mint_authorization_protocol, parity)?;
+    let loaded_authorization = load_and_constrain_parent_protocol_v1(
+        &loader,
+        witness.mint_authorization_protocol,
+        parity,
+        authorization_structure,
+        &expected_mint_authorization_protocol,
+    )
+    .map_err(|error| format!("failed to bind mint-authorization protocol: {error:?}"))?;
+    let authorization_instances = witness
+        .mint_authorization_instances
+        .iter()
+        .map(|column| {
+            column
+                .iter()
+                .map(|value| loader.assign_scalar(*value))
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    let authorization_column = authorization_instances
+        .first()
+        .ok_or_else(|| "Kagemusha mint-authorization public column is absent".to_owned())?;
+    constrain_mint_authorization_binding_v1(&loader, authorization_column, &public, mint)?;
+    let authorization_current = verify_ordinary_proof_with_canonical_bytes_v1(
+        &loader,
+        succinct_vk,
+        &loaded_authorization.protocol,
+        &authorization_instances,
+        witness.mint_authorization_proof,
+    )
+    .map_err(|error| format!("failed to verify mint authorization: {error:?}"))?;
+    constrain_mint_authorization_statement_digest_v1(
+        &loader,
+        &mut sha_jobs,
+        authorization_column,
+        &witness.mint_authorization.statement,
+        mint,
+    )?;
+    let authorization_history =
+        load_native_accumulator(&loader, witness.mint_authorization_history)
+            .map_err(|error| format!("failed to load mint-authorization history: {error:?}"))?;
+    let authorization_history_cells = authorization_column
+        .get(mint_authorization_public_instance::HISTORY_START..)
+        .ok_or_else(|| "Kagemusha mint-authorization history is absent".to_owned())?
+        .iter()
+        .map(|value| *value.assigned())
+        .collect::<Vec<_>>();
+    bind_accumulator_limbs(
+        &loader,
+        &authorization_history,
+        &authorization_history_cells,
+    )
+    .map_err(|error| format!("failed to bind mint-authorization history: {error:?}"))?;
+    let complete_authorization = verify_fold(
+        &loader,
+        succinct_vk,
+        &[authorization_current.accumulator, authorization_history],
+        witness.mint_authorization_history_fold_proof,
+    )
+    .map_err(|error| format!("failed to fold mint-authorization history: {error:?}"))?;
+    let history_with_authorization = verify_fold(
+        &loader,
+        succinct_vk,
+        &[history_with_guard.clone(), complete_authorization],
+        witness.mint_authorization_merge_fold_proof,
+    )
+    .map_err(|error| format!("failed to merge mint-authorization history: {error:?}"))?;
+    let history_with_authorization = select_accumulator_v1(
+        &loader,
+        &history_with_authorization,
+        &history_with_guard,
+        mint,
+    )
+    .map_err(|error| format!("failed to select mint-authorization history: {error:?}"))?;
+    let authorization_end = loader.ecc_chip().equation_count();
+    if authorization_end <= guard_end {
+        return Err("Kagemusha mint-authorization verifier emitted no equations".to_owned());
+    }
+
     if witness.mint_protocol.num_instance != [KAGEMUSHA_MINT_AUTHORITY_PUBLIC_INSTANCE_COUNT_V1]
         || witness.mint_instances.len() != 1
         || witness.mint_instances[0].len() != KAGEMUSHA_MINT_AUTHORITY_PUBLIC_INSTANCE_COUNT_V1
@@ -1169,7 +1301,7 @@ where
         .first()
         .ok_or_else(|| "Kagemusha mint public column is absent".to_owned())?;
     constrain_mint_authority_binding_v1(&loader, mint_column, &public, mint)?;
-    let mint_current = verify_ordinary_proof_v1(
+    let mint_current = verify_ordinary_proof_with_canonical_bytes_v1(
         &loader,
         succinct_vk,
         &loaded_mint.protocol,
@@ -1177,6 +1309,20 @@ where
         witness.mint_proof,
     )
     .map_err(|error| format!("failed to verify finalized-mint proof: {error:?}"))?;
+    constrain_exact_mint_envelope_v1(
+        &loader,
+        &mut sha_jobs,
+        &assigned_state,
+        &public,
+        authorization_column,
+        mint_column,
+        &authorization_current.canonical_bytes,
+        &mint_current.canonical_bytes,
+        witness.mint_authorization,
+        witness.mint_credit,
+        parity,
+        mint,
+    )?;
     let mint_history = load_native_accumulator(&loader, witness.mint_history)
         .map_err(|error| format!("failed to load finalized-mint history: {error:?}"))?;
     let mint_history_cells = mint_column
@@ -1190,24 +1336,28 @@ where
     let complete_mint = verify_fold(
         &loader,
         succinct_vk,
-        &[mint_current, mint_history],
+        &[mint_current.accumulator, mint_history],
         witness.mint_history_fold_proof,
     )
     .map_err(|error| format!("failed to fold finalized-mint history: {error:?}"))?;
     let history_with_mint = verify_fold(
         &loader,
         succinct_vk,
-        &[history_with_guard.clone(), complete_mint],
+        &[history_with_authorization.clone(), complete_mint],
         witness.mint_merge_fold_proof,
     )
     .map_err(|error| format!("failed to merge finalized-mint history: {error:?}"))?;
-    let successor_history =
-        select_accumulator_v1(&loader, &history_with_mint, &history_with_guard, mint)
-            .map_err(|error| format!("failed to select finalized-mint history: {error:?}"))?;
+    let successor_history = select_accumulator_v1(
+        &loader,
+        &history_with_mint,
+        &history_with_authorization,
+        mint,
+    )
+    .map_err(|error| format!("failed to select finalized-mint history: {error:?}"))?;
     bind_accumulator_limbs(&loader, &successor_history, &history_limbs)
         .map_err(|error| format!("failed to bind successor history: {error:?}"))?;
     let mint_end = loader.ecc_chip().equation_count();
-    if mint_end <= guard_end {
+    if mint_end <= authorization_end {
         return Err("Kagemusha finalized-mint verifier emitted no equations".to_owned());
     }
 
@@ -1222,8 +1372,12 @@ where
         guard_end - incoming_end,
     ));
     equation_tags.extend(std::iter::repeat_n(
+        MINT_AUTHORIZATION_EQUATION_TAG,
+        authorization_end - guard_end,
+    ));
+    equation_tags.extend(std::iter::repeat_n(
         MINT_FINALITY_EQUATION_TAG,
-        mint_end - guard_end,
+        mint_end - authorization_end,
     ));
     let mut assigned_selectors = Vec::with_capacity(mint_end);
     assigned_selectors.extend(std::iter::repeat_n(non_bootstrap, parent_end));
@@ -1232,13 +1386,21 @@ where
     }
     let guard_enabled = loader.ctx_mut().main().load_constant(C::ScalarExt::ONE);
     assigned_selectors.extend(std::iter::repeat_n(guard_enabled, guard_end - incoming_end));
-    assigned_selectors.extend(std::iter::repeat_n(mint, mint_end - guard_end));
+    assigned_selectors.extend(std::iter::repeat_n(mint, authorization_end - guard_end));
+    assigned_selectors.extend(std::iter::repeat_n(mint, mint_end - authorization_end));
     let mut equation_selectors = vec![parent_enabled; parent_end];
     for (equation_count, _, enabled) in &incoming_equation_spans {
         equation_selectors.extend(std::iter::repeat_n(*enabled, *equation_count));
     }
     equation_selectors.extend(std::iter::repeat_n(true, guard_end - incoming_end));
-    equation_selectors.extend(std::iter::repeat_n(mint_enabled, mint_end - guard_end));
+    equation_selectors.extend(std::iter::repeat_n(
+        mint_enabled,
+        authorization_end - guard_end,
+    ));
+    equation_selectors.extend(std::iter::repeat_n(
+        mint_enabled,
+        mint_end - authorization_end,
+    ));
     let output = finalize_deferred_audit_plan_v1(
         &mut builder,
         loader,
@@ -1273,6 +1435,361 @@ fn assign_history_limbs<F: KagemushaPoseidonFieldV1>(
         return Err("Kagemusha history limb count is not fixed".to_owned());
     }
     Ok(limbs)
+}
+
+fn adaptive_payload_v1<T: norito::codec::Encode>(value: &T) -> Result<Vec<u8>, String> {
+    let mut payload = Vec::new();
+    norito::codec::encode_adaptive_into(value, &mut payload).map_err(|error| error.to_string())?;
+    Ok(payload)
+}
+
+fn changed_range_v1(
+    original: &[u8],
+    mutated: &[u8],
+    expected_len: usize,
+    label: &str,
+) -> Result<core::ops::Range<usize>, String> {
+    if original.len() != mutated.len() {
+        return Err(format!(
+            "canonical {label} mutation changed its payload length"
+        ));
+    }
+    let changed = original
+        .iter()
+        .zip(mutated)
+        .enumerate()
+        .filter_map(|(index, (left, right))| (left != right).then_some(index))
+        .collect::<Vec<_>>();
+    let Some(&start) = changed.first() else {
+        return Err(format!("canonical {label} mutation changed no bytes"));
+    };
+    let end = start
+        .checked_add(expected_len)
+        .ok_or_else(|| format!("canonical {label} range overflow"))?;
+    if changed.len() != expected_len
+        || changed.iter().copied().ne(start..end)
+        || end > original.len()
+    {
+        return Err(format!(
+            "canonical {label} does not occupy one fixed byte range"
+        ));
+    }
+    Ok(start..end)
+}
+
+fn replace_assigned_range_v1<F: KagemushaPoseidonFieldV1>(
+    payload: &mut [PastaSha256ByteV1<F>],
+    range: core::ops::Range<usize>,
+    replacement: &[PastaSha256ByteV1<F>],
+    label: &str,
+) -> Result<(), String> {
+    let destination = payload
+        .get_mut(range)
+        .ok_or_else(|| format!("canonical {label} range is outside the payload"))?;
+    if destination.len() != replacement.len() {
+        return Err(format!("canonical {label} replacement has wrong width"));
+    }
+    destination.copy_from_slice(replacement);
+    Ok(())
+}
+
+fn replace_mutated_field_v1<F, T, M>(
+    payload: &mut [PastaSha256ByteV1<F>],
+    value: &T,
+    replacement: &[PastaSha256ByteV1<F>],
+    label: &str,
+    mutate: M,
+) -> Result<(), String>
+where
+    F: KagemushaPoseidonFieldV1,
+    T: Clone + norito::codec::Encode,
+    M: FnOnce(&mut T),
+{
+    let original = adaptive_payload_v1(value)?;
+    let mut mutated = value.clone();
+    mutate(&mut mutated);
+    let range = changed_range_v1(
+        &original,
+        &adaptive_payload_v1(&mutated)?,
+        replacement.len(),
+        label,
+    )?;
+    replace_assigned_range_v1(payload, range, replacement, label)
+}
+
+fn locate_unique_subslice_v1(
+    haystack: &[u8],
+    needle: &[u8],
+    label: &str,
+) -> Result<core::ops::Range<usize>, String> {
+    if needle.is_empty() || needle.len() > haystack.len() {
+        return Err(format!("canonical {label} nested payload is absent"));
+    }
+    let matches = haystack
+        .windows(needle.len())
+        .enumerate()
+        .filter_map(|(index, candidate)| (candidate == needle).then_some(index))
+        .collect::<Vec<_>>();
+    if matches.len() != 1 {
+        return Err(format!(
+            "canonical {label} nested payload is not uniquely located"
+        ));
+    }
+    Ok(matches[0]..matches[0] + needle.len())
+}
+
+fn locate_subslice_after_v1(
+    haystack: &[u8],
+    needle: &[u8],
+    start: usize,
+    label: &str,
+) -> Result<core::ops::Range<usize>, String> {
+    let suffix = haystack
+        .get(start..)
+        .ok_or_else(|| format!("canonical {label} search starts outside the payload"))?;
+    if needle.is_empty() || needle.len() > suffix.len() {
+        return Err(format!("canonical {label} nested payload is absent"));
+    }
+    let relative = suffix
+        .windows(needle.len())
+        .position(|candidate| candidate == needle)
+        .ok_or_else(|| format!("canonical {label} nested payload is absent"))?;
+    let begin = start + relative;
+    Ok(begin..begin + needle.len())
+}
+
+fn assigned_canonical_frame_v1<F, T>(
+    ctx: &mut halo2_base::Context<F>,
+    range: &halo2_base::gates::RangeChip<F>,
+    value: &T,
+    payload: Vec<PastaSha256ByteV1<F>>,
+) -> Result<Vec<PastaSha256ByteV1<F>>, String>
+where
+    F: KagemushaPoseidonFieldV1,
+    T: KagemushaCanonicalMintFrameV1,
+{
+    let payload_len = ctx
+        .load_constant(F::from(u64::try_from(payload.len()).map_err(|_| {
+            "canonical monetary payload length exceeds u64".to_owned()
+        })?));
+    let stream = KagemushaBoundedByteStreamV1::constrain(ctx, range, payload, payload_len)?;
+    let prefix = kagemusha_canonical_mint_frame_prefix_v1(value)
+        .map_err(|error| format!("invalid canonical monetary frame prefix: {error}"))?;
+    Ok(
+        assemble_bounded_canonical_frame_v1(ctx, range, &prefix, &stream)?
+            .bytes()
+            .to_vec(),
+    )
+}
+
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+fn assigned_paired_proof_payload_v1<F: KagemushaPoseidonFieldV1>(
+    ctx: &mut halo2_base::Context<F>,
+    range: &halo2_base::gates::RangeChip<F>,
+    proof: &KagemushaPairedProofV1,
+    parity: KagemushaPastaParityV1,
+    current_proof: &[PastaSha256ByteV1<F>],
+    eq_protocol: [AssignedValue<F>; 2],
+    ep_protocol: [AssignedValue<F>; 2],
+    semantic: [AssignedValue<F>; 2],
+    guard_eq_audit: [AssignedValue<F>; 2],
+    guard_ep_audit: [AssignedValue<F>; 2],
+    eq_deferred_audit: [AssignedValue<F>; 2],
+    ep_deferred_audit: [AssignedValue<F>; 2],
+    eq_history: &[PastaSha256ByteV1<F>],
+    ep_history: &[PastaSha256ByteV1<F>],
+) -> Result<Vec<PastaSha256ByteV1<F>>, String> {
+    let native = adaptive_payload_v1(proof)?;
+    let mut payload = assign_bytes(ctx, range, &native);
+    let gate = range.gate();
+    let bindings = [
+        (
+            assigned_digest_bytes_v1(ctx, gate, eq_protocol),
+            "paired-proof Eq protocol",
+            0_u8,
+        ),
+        (
+            assigned_digest_bytes_v1(ctx, gate, ep_protocol),
+            "paired-proof Ep protocol",
+            1,
+        ),
+        (
+            assigned_digest_bytes_v1(ctx, gate, semantic),
+            "paired-proof semantic digest",
+            2,
+        ),
+        (
+            assigned_digest_bytes_v1(ctx, gate, guard_eq_audit),
+            "paired-proof Eq guard audit",
+            3,
+        ),
+        (
+            assigned_digest_bytes_v1(ctx, gate, guard_ep_audit),
+            "paired-proof Ep guard audit",
+            4,
+        ),
+        (
+            assigned_digest_bytes_v1(ctx, gate, eq_deferred_audit),
+            "paired-proof Eq deferred audit",
+            5,
+        ),
+        (
+            assigned_digest_bytes_v1(ctx, gate, ep_deferred_audit),
+            "paired-proof Ep deferred audit",
+            6,
+        ),
+    ];
+    for (replacement, label, selector) in bindings {
+        let mut mutated = proof.clone();
+        let target = match selector {
+            0 => &mut mutated.eq_protocol_digest,
+            1 => &mut mutated.ep_protocol_digest,
+            2 => &mut mutated.semantic_digest,
+            3 => &mut mutated.guard_eq_credential_audit,
+            4 => &mut mutated.guard_ep_credential_audit,
+            5 => &mut mutated.eq_deferred_audit,
+            6 => &mut mutated.ep_deferred_audit,
+            _ => unreachable!(),
+        };
+        target.iter_mut().for_each(|byte| *byte = !*byte);
+        let changed = changed_range_v1(&native, &adaptive_payload_v1(&mutated)?, 32, label)?;
+        replace_assigned_range_v1(&mut payload, changed, &replacement, label)?;
+    }
+
+    for (replacement, label, eq) in [
+        (eq_history, "paired-proof Eq history", true),
+        (ep_history, "paired-proof Ep history", false),
+    ] {
+        let mut mutated = proof.clone();
+        let target = if eq {
+            &mut mutated.eq_history
+        } else {
+            &mut mutated.ep_history
+        };
+        target.iter_mut().for_each(|byte| *byte = !*byte);
+        let changed = changed_range_v1(
+            &native,
+            &adaptive_payload_v1(&mutated)?,
+            replacement.len(),
+            label,
+        )?;
+        replace_assigned_range_v1(&mut payload, changed, replacement, label)?;
+    }
+
+    let mut mutated = proof.clone();
+    let target = match parity {
+        KagemushaPastaParityV1::Eq => &mut mutated.eq_proof,
+        KagemushaPastaParityV1::Ep => &mut mutated.ep_proof,
+    };
+    target.iter_mut().for_each(|byte| *byte = !*byte);
+    let label = match parity {
+        KagemushaPastaParityV1::Eq => "paired-proof Eq current proof",
+        KagemushaPastaParityV1::Ep => "paired-proof Ep current proof",
+    };
+    let changed = changed_range_v1(
+        &native,
+        &adaptive_payload_v1(&mutated)?,
+        current_proof.len(),
+        label,
+    )?;
+    replace_assigned_range_v1(&mut payload, changed, current_proof, label)?;
+    Ok(payload)
+}
+
+fn hash_model_frame_v1<F: KagemushaPoseidonFieldV1>(
+    ctx: &mut halo2_base::Context<F>,
+    jobs: &mut PastaSha256JobsV1<F>,
+    domain: &[u8],
+    frame: &[PastaSha256ByteV1<F>],
+) -> Result<[PastaSha256ByteV1<F>; 32], String> {
+    let mut message = constant_bytes(domain);
+    message.push(PastaSha256ByteV1::constant(0));
+    message.extend(constant_bytes(
+        &u64::try_from(frame.len())
+            .map_err(|_| "canonical monetary frame length exceeds u64".to_owned())?
+            .to_le_bytes(),
+    ));
+    message.extend_from_slice(frame);
+    hash(ctx, jobs, message)
+}
+
+fn hash_state_envelope_frame_v1<F: KagemushaPoseidonFieldV1>(
+    ctx: &mut halo2_base::Context<F>,
+    jobs: &mut PastaSha256JobsV1<F>,
+    domain: &[u8],
+    frame: &[PastaSha256ByteV1<F>],
+) -> Result<[PastaSha256ByteV1<F>; 32], String> {
+    let mut message = constant_bytes(
+        &u64::try_from(domain.len())
+            .map_err(|_| "state envelope domain length exceeds u64".to_owned())?
+            .to_be_bytes(),
+    );
+    message.extend(constant_bytes(domain));
+    message.extend(constant_bytes(
+        &u64::try_from(frame.len())
+            .map_err(|_| "state envelope frame length exceeds u64".to_owned())?
+            .to_be_bytes(),
+    ));
+    message.extend_from_slice(frame);
+    hash(ctx, jobs, message)
+}
+
+fn deferred_digest_cells_v1<C>(
+    column: &[DeferredScalar<'_, C>],
+    offset: usize,
+    label: &str,
+) -> Result<[AssignedValue<C::ScalarExt>; 2], String>
+where
+    C: CurveAffineExt,
+    C::Base: BigPrimeField,
+    C::ScalarExt: BigPrimeField,
+{
+    column
+        .get(offset..offset + 2)
+        .ok_or_else(|| format!("{label} digest cells are absent"))?
+        .iter()
+        .map(|value| *value.assigned())
+        .collect::<Vec<_>>()
+        .try_into()
+        .map_err(|_| format!("{label} digest cell width changed"))
+}
+
+fn deferred_history_bytes_v1<C>(
+    ctx: &mut halo2_base::Context<C::ScalarExt>,
+    gate: &halo2_base::gates::GateChip<C::ScalarExt>,
+    column: &[DeferredScalar<'_, C>],
+    offset: usize,
+    label: &str,
+) -> Result<Vec<PastaSha256ByteV1<C::ScalarExt>>, String>
+where
+    C: CurveAffineExt,
+    C::Base: BigPrimeField,
+    C::ScalarExt: KagemushaPoseidonFieldV1,
+{
+    let history = column
+        .get(offset..)
+        .ok_or_else(|| format!("{label} history cells are absent"))?;
+    if history.len() != accumulator_limb_count() {
+        return Err(format!("{label} history cell width changed"));
+    }
+    Ok(history
+        .iter()
+        .flat_map(|value| assigned_uint_bytes_v1(ctx, gate, *value.assigned(), 128))
+        .collect())
+}
+
+fn constrain_digest_bytes_if_v1<F: KagemushaPoseidonFieldV1>(
+    ctx: &mut halo2_base::Context<F>,
+    gate: &halo2_base::gates::GateChip<F>,
+    digest: &[PastaSha256ByteV1<F>; 32],
+    expected: [AssignedValue<F>; 2],
+    enabled: AssignedValue<F>,
+) {
+    for (actual, expected) in digest_limbs_assigned(ctx, digest).into_iter().zip(expected) {
+        let difference = gate.sub(ctx, actual, expected);
+        let selected = gate.mul(ctx, difference, enabled);
+        gate.assert_is_const(ctx, &selected, &F::ZERO);
+    }
 }
 
 fn constrain_byte_bit_pattern_if_v1<F: KagemushaPoseidonFieldV1>(
@@ -1529,171 +2046,9 @@ fn constrain_mint_fold_opening_v1<F: KagemushaPoseidonFieldV1>(
         gate.assert_is_const(ctx, &selected, &F::ZERO);
     }
 
-    // TODO: bind `replay_envelope_digest` to the exact variable-size canonical credit frame when
-    // the bounded proof-byte frame relation is integrated. This tranche binds its exact replay key.
+    // The exact variable-size credit frame and this replay key are joined below after the
+    // MintAuthorization and MintAuthority recursive verifiers expose their assigned proof bytes.
     Ok(())
-}
-
-fn constrain_suite_upgrade_bridge_v1<F: KagemushaPoseidonFieldV1>(
-    builder: &mut BaseCircuitBuilder<F>,
-    jobs: &mut PastaSha256JobsV1<F>,
-    state: &state_relation::KagemushaAssignedStateRelationV1<F>,
-    bridge: KagemushaSuiteUpgradeBridgeWitnessV1,
-    parity: KagemushaPastaParityV1,
-    current_expected_protocol: [AssignedValue<F>; 2],
-    suite_upgrade: AssignedValue<F>,
-) -> Result<[AssignedValue<F>; 2], String> {
-    let range = builder.range_chip();
-    let ctx = builder.main(0);
-    let gate = range.gate();
-    let old_release: [PastaSha256ByteV1<F>; 32] = assign_bytes(ctx, &range, &bridge.old_release_id)
-        .try_into()
-        .expect("SuiteUpgrade old release digest width");
-    let new_release: [PastaSha256ByteV1<F>; 32] = assign_bytes(ctx, &range, &bridge.new_release_id)
-        .try_into()
-        .expect("SuiteUpgrade new release digest width");
-    let old_eq: [PastaSha256ByteV1<F>; 32] =
-        assign_bytes(ctx, &range, &bridge.old_eq_protocol_digest)
-            .try_into()
-            .expect("SuiteUpgrade Eq protocol digest width");
-    let old_ep: [PastaSha256ByteV1<F>; 32] =
-        assign_bytes(ctx, &range, &bridge.old_ep_protocol_digest)
-            .try_into()
-            .expect("SuiteUpgrade Ep protocol digest width");
-    let old_suite: [PastaSha256ByteV1<F>; 32] = assign_bytes(ctx, &range, &bridge.old_suite_id)
-        .try_into()
-        .expect("SuiteUpgrade old suite digest width");
-    let old_vk: [PastaSha256ByteV1<F>; 32] = assign_bytes(ctx, &range, &bridge.old_vk_digest)
-        .try_into()
-        .expect("SuiteUpgrade old VK digest width");
-    let new_suite: [PastaSha256ByteV1<F>; 32] = assign_bytes(ctx, &range, &bridge.new_suite_id)
-        .try_into()
-        .expect("SuiteUpgrade new suite digest width");
-    let new_vk: [PastaSha256ByteV1<F>; 32] = assign_bytes(ctx, &range, &bridge.new_vk_digest)
-        .try_into()
-        .expect("SuiteUpgrade new VK digest width");
-    let governance: [PastaSha256ByteV1<F>; 32] =
-        assign_bytes(ctx, &range, &bridge.governance_authorization_proof_digest)
-            .try_into()
-            .expect("SuiteUpgrade governance digest width");
-
-    let old_release_limbs = digest_limbs_assigned(ctx, &old_release);
-    let new_release_limbs = digest_limbs_assigned(ctx, &new_release);
-    let old_eq_limbs = digest_limbs_assigned(ctx, &old_eq);
-    let old_ep_limbs = digest_limbs_assigned(ctx, &old_ep);
-    let old_suite_limbs = digest_limbs_assigned(ctx, &old_suite);
-    let old_vk_limbs = digest_limbs_assigned(ctx, &old_vk);
-    let new_suite_limbs = digest_limbs_assigned(ctx, &new_suite);
-    let new_vk_limbs = digest_limbs_assigned(ctx, &new_vk);
-    let governance_limbs = digest_limbs_assigned(ctx, &governance);
-    let inactive = gate.not(ctx, suite_upgrade);
-    for limb in old_release_limbs
-        .into_iter()
-        .chain(new_release_limbs)
-        .chain(old_eq_limbs)
-        .chain(old_ep_limbs)
-        .chain(old_suite_limbs)
-        .chain(old_vk_limbs)
-        .chain(new_suite_limbs)
-        .chain(new_vk_limbs)
-        .chain(governance_limbs)
-    {
-        let selected = gate.mul(ctx, limb, inactive);
-        gate.assert_is_const(ctx, &selected, &F::ZERO);
-    }
-
-    let old_release_limbs = digest_limbs_assigned(ctx, &old_release);
-    let new_release_limbs = digest_limbs_assigned(ctx, &new_release);
-    let old_eq_limbs = digest_limbs_assigned(ctx, &old_eq);
-    let old_ep_limbs = digest_limbs_assigned(ctx, &old_ep);
-    let old_suite_limbs = digest_limbs_assigned(ctx, &old_suite);
-    let old_vk_limbs = digest_limbs_assigned(ctx, &old_vk);
-    let new_suite_limbs = digest_limbs_assigned(ctx, &new_suite);
-    let new_vk_limbs = digest_limbs_assigned(ctx, &new_vk);
-    let governance_limbs = digest_limbs_assigned(ctx, &governance);
-    for limbs in [
-        old_release_limbs,
-        new_release_limbs,
-        old_eq_limbs,
-        old_ep_limbs,
-        old_suite_limbs,
-        old_vk_limbs,
-        new_suite_limbs,
-        new_vk_limbs,
-        governance_limbs,
-    ] {
-        let low_zero = gate.is_zero(ctx, limbs[0]);
-        let high_zero = gate.is_zero(ctx, limbs[1]);
-        let both_zero = gate.and(ctx, low_zero, high_zero);
-        let invalid = gate.mul(ctx, suite_upgrade, both_zero);
-        gate.assert_is_const(ctx, &invalid, &F::ZERO);
-    }
-    for (actual, expected) in old_release_limbs
-        .into_iter()
-        .zip(state.predecessor.release_id)
-        .chain(
-            new_release_limbs
-                .into_iter()
-                .zip(state.successor.release_id),
-        )
-        .chain(old_suite_limbs.into_iter().zip(state.predecessor.suite_id))
-        .chain(old_vk_limbs.into_iter().zip(state.predecessor.vk_digest))
-        .chain(new_suite_limbs.into_iter().zip(state.successor.suite_id))
-        .chain(new_vk_limbs.into_iter().zip(state.successor.vk_digest))
-    {
-        let difference = gate.sub(ctx, actual, expected);
-        let selected = gate.mul(ctx, difference, suite_upgrade);
-        gate.assert_is_const(ctx, &selected, &F::ZERO);
-    }
-    let eq_low_equal = gate.is_equal(ctx, old_eq_limbs[0], old_ep_limbs[0]);
-    let eq_high_equal = gate.is_equal(ctx, old_eq_limbs[1], old_ep_limbs[1]);
-    let protocols_equal = gate.and(ctx, eq_low_equal, eq_high_equal);
-    let invalid_equal_protocol = gate.mul(ctx, suite_upgrade, protocols_equal);
-    gate.assert_is_const(ctx, &invalid_equal_protocol, &F::ZERO);
-    let release_low_equal = gate.is_equal(ctx, old_release_limbs[0], new_release_limbs[0]);
-    let release_high_equal = gate.is_equal(ctx, old_release_limbs[1], new_release_limbs[1]);
-    let releases_equal = gate.and(ctx, release_low_equal, release_high_equal);
-    let invalid_equal_release = gate.mul(ctx, suite_upgrade, releases_equal);
-    gate.assert_is_const(ctx, &invalid_equal_release, &F::ZERO);
-
-    let bridge_digest = hash(
-        ctx,
-        jobs,
-        [
-            constant_bytes(super::SUITE_UPGRADE_BRIDGE_DOMAIN_V1),
-            old_release.to_vec(),
-            new_release.to_vec(),
-            old_eq.to_vec(),
-            old_ep.to_vec(),
-            old_suite.to_vec(),
-            old_vk.to_vec(),
-            new_suite.to_vec(),
-            new_vk.to_vec(),
-            governance.to_vec(),
-        ]
-        .concat(),
-    )?;
-    for (actual, expected) in digest_limbs_assigned(ctx, &bridge_digest)
-        .into_iter()
-        .zip(state.suite_upgrade_authorization_digest)
-    {
-        let difference = gate.sub(ctx, actual, expected);
-        let selected = gate.mul(ctx, difference, suite_upgrade);
-        gate.assert_is_const(ctx, &selected, &F::ZERO);
-    }
-
-    let old_protocol = match parity {
-        KagemushaPastaParityV1::Eq => old_eq_limbs,
-        KagemushaPastaParityV1::Ep => old_ep_limbs,
-    };
-    Ok(core::array::from_fn(|index| {
-        gate.select(
-            ctx,
-            old_protocol[index],
-            current_expected_protocol[index],
-            suite_upgrade,
-        )
-    }))
 }
 
 fn constrain_incoming_scalar_if_v1<'chip, C>(
@@ -1701,7 +2056,7 @@ fn constrain_incoming_scalar_if_v1<'chip, C>(
     jobs: &mut PastaSha256JobsV1<C::ScalarExt>,
     incoming: &[DeferredScalar<'chip, C>],
     state: &state_relation::KagemushaAssignedStateRelationV1<C::ScalarExt>,
-    credit: &state_relation::KagemushaAssignedReceiveFoldSlotV1<C::ScalarExt>,
+    credit: &state_relation::KagemushaAssignedReceiveFoldCreditV1<C::ScalarExt>,
     enabled: AssignedValue<C::ScalarExt>,
     incoming_eq_protocol: [AssignedValue<C::ScalarExt>; 2],
     incoming_ep_protocol: [AssignedValue<C::ScalarExt>; 2],
@@ -1812,6 +2167,851 @@ where
     Ok(())
 }
 
+fn constrain_mint_authorization_statement_digest_v1<'chip, C>(
+    loader: &DeferredLoader<'chip, C>,
+    jobs: &mut PastaSha256JobsV1<C::ScalarExt>,
+    authorization: &[DeferredScalar<'chip, C>],
+    statement: &KagemushaMintAuthorizationStatementV1,
+    enabled: AssignedValue<C::ScalarExt>,
+) -> Result<(), String>
+where
+    C: CurveAffineExt,
+    C::Base: BigPrimeField,
+    C::ScalarExt: KagemushaPoseidonFieldV1,
+{
+    let frame = norito::encode_canonical(statement)
+        .map_err(|error| format!("cannot encode canonical MintAuthorization statement: {error}"))?;
+    let chip = loader.ecc_chip();
+    let range = chip.range();
+    let mut loader_ctx = loader.ctx_mut();
+    let ctx = loader_ctx.main();
+    let mut message = constant_bytes(MINT_AUTHORIZATION_STATEMENT_DIGEST_DOMAIN_V1);
+    message.push(PastaSha256ByteV1::constant(0));
+    message.extend(constant_bytes(
+        &u64::try_from(frame.len())
+            .map_err(|_| "MintAuthorization statement length exceeds u64".to_owned())?
+            .to_le_bytes(),
+    ));
+    message.extend(assign_bytes(ctx, range, &frame));
+    let digest = hash(ctx, jobs, message)?;
+    let digest_limbs = digest_limbs_assigned(ctx, &digest);
+    drop(loader_ctx);
+    for (actual, index) in digest_limbs.into_iter().zip(
+        mint_authorization_public_instance::SEMANTIC_LO
+            ..mint_authorization_public_instance::SEMANTIC_LO + 2,
+    ) {
+        constrain_loader_equal_if_v1(loader, actual, *authorization[index].assigned(), enabled);
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+fn constrain_exact_mint_envelope_v1<'chip, C>(
+    loader: &DeferredLoader<'chip, C>,
+    jobs: &mut PastaSha256JobsV1<C::ScalarExt>,
+    state: &state_relation::KagemushaAssignedStateRelationV1<C::ScalarExt>,
+    state_public: &[AssignedValue<C::ScalarExt>],
+    authorization_column: &[DeferredScalar<'chip, C>],
+    mint_column: &[DeferredScalar<'chip, C>],
+    authorization_current_proof: &[PastaSha256ByteV1<C::ScalarExt>],
+    mint_current_proof: &[PastaSha256ByteV1<C::ScalarExt>],
+    authorization: &KagemushaMintAuthorizationV1,
+    credit: &KagemushaMintCreditV1,
+    parity: KagemushaPastaParityV1,
+    enabled: AssignedValue<C::ScalarExt>,
+) -> Result<(), String>
+where
+    C: CurveAffineExt,
+    C::Base: BigPrimeField,
+    C::ScalarExt: KagemushaPoseidonFieldV1,
+{
+    let chip = loader.ecc_chip();
+    let range = chip.range();
+    let gate = range.gate();
+    let mut loader_ctx = loader.ctx_mut();
+    let ctx = loader_ctx.main();
+
+    let auth = |offset| deferred_digest_cells_v1(authorization_column, offset, "authorization");
+    let mint_public = |offset| deferred_digest_cells_v1(mint_column, offset, "mint authority");
+
+    // Reconstruct the authorization context from the same assigned values exposed by the
+    // recursively verified authorization proof. Variable account/asset leaves are hashed from
+    // their exact canonical frames before their nested payloads are copied into the statement.
+    let context = &authorization.statement.context;
+    let context_native = adaptive_payload_v1(context)?;
+    let mut context_payload = assign_bytes(ctx, range, &context_native);
+    let context_digest_bindings = [
+        (
+            auth(mint_authorization_public_instance::OPERATION_LO)?,
+            "operation",
+            0_u8,
+        ),
+        (
+            auth(mint_authorization_public_instance::RELEASE_LO)?,
+            "release",
+            1,
+        ),
+        (
+            auth(mint_authorization_public_instance::SUITE_LO)?,
+            "suite",
+            2,
+        ),
+        (auth(mint_authorization_public_instance::VK_LO)?, "vk", 3),
+        (
+            auth(mint_authorization_public_instance::MANIFEST_LO)?,
+            "manifest",
+            4,
+        ),
+        (
+            auth(mint_authorization_public_instance::INCARNATION_LO)?,
+            "incarnation",
+            5,
+        ),
+        (
+            auth(mint_authorization_public_instance::POOL_LO)?,
+            "pool",
+            6,
+        ),
+        (
+            auth(mint_authorization_public_instance::CREDENTIAL_LO)?,
+            "credential",
+            7,
+        ),
+        (
+            auth(mint_authorization_public_instance::PROFILE_LO)?,
+            "profile",
+            8,
+        ),
+        (
+            auth(mint_authorization_public_instance::RECIPIENT_COMMITMENT_LO)?,
+            "recipient commitment",
+            9,
+        ),
+        (
+            auth(mint_authorization_public_instance::CREDIT_COMMITMENT_LO)?,
+            "credit commitment",
+            10,
+        ),
+        (
+            auth(mint_authorization_public_instance::RECIPIENT_KEY_LO)?,
+            "recipient key",
+            11,
+        ),
+    ];
+    for (cells, label, selector) in context_digest_bindings {
+        let replacement = assigned_digest_bytes_v1(ctx, gate, cells);
+        replace_mutated_field_v1(
+            &mut context_payload,
+            context,
+            &replacement,
+            &format!("mint authorization context {label}"),
+            |mutated| {
+                let target = match selector {
+                    0 => &mut mutated.operation_id,
+                    1 => &mut mutated.release_id,
+                    2 => &mut mutated.suite_id,
+                    3 => &mut mutated.vk_digest,
+                    4 => &mut mutated.artifact_manifest_digest,
+                    5 => {
+                        let mut bytes = *mutated.asset_incarnation.as_bytes();
+                        bytes.iter_mut().for_each(|byte| *byte = !*byte);
+                        // `Hash`-backed incarnation values require the low marker bit.  Keep the
+                        // mutation canonical so the structural range locator never relies on an
+                        // invalid model value.
+                        let last = bytes.len() - 1;
+                        bytes[last] |= 1;
+                        mutated.asset_incarnation =
+                            iroha_data_model::nexus::AxtAssetIncarnationV1::try_from_bytes(bytes)
+                                .expect("inverted non-zero incarnation with marker is canonical");
+                        return;
+                    }
+                    6 => &mut mutated.liability_pool_id,
+                    7 => &mut mutated.hardware_credential_id,
+                    8 => &mut mutated.hardware_profile_id,
+                    9 => &mut mutated.recipient_credential_commitment,
+                    10 => &mut mutated.credit_commitment,
+                    11 => &mut mutated.recipient_one_time_key,
+                    _ => unreachable!(),
+                };
+                target.iter_mut().for_each(|byte| *byte = !*byte);
+            },
+        )?;
+    }
+    let network_replacement = assigned_digest_bytes_v1(
+        ctx,
+        gate,
+        auth(mint_authorization_public_instance::NETWORK_LO)?,
+    );
+    let network_range = locate_unique_subslice_v1(
+        &context_native,
+        context.network_id.as_bytes(),
+        "mint authorization network",
+    )?;
+    replace_assigned_range_v1(
+        &mut context_payload,
+        network_range,
+        &network_replacement,
+        "mint authorization network",
+    )?;
+    for (value, offset, bit_len, label) in [
+        (
+            *authorization_column[mint_authorization_public_instance::SCALE].assigned(),
+            0_u8,
+            32_usize,
+            "scale",
+        ),
+        (
+            *authorization_column[mint_authorization_public_instance::AMOUNT].assigned(),
+            1,
+            128,
+            "amount",
+        ),
+        (
+            *authorization_column[mint_authorization_public_instance::POLICY_EPOCH].assigned(),
+            2,
+            64,
+            "policy epoch",
+        ),
+    ] {
+        let replacement = assigned_uint_bytes_v1(ctx, gate, value, bit_len);
+        replace_mutated_field_v1(
+            &mut context_payload,
+            context,
+            &replacement,
+            &format!("mint authorization context {label}"),
+            |mutated| match offset {
+                0 => mutated.scale = !mutated.scale,
+                1 => mutated.amount = !mutated.amount,
+                2 => mutated.policy_epoch = !mutated.policy_epoch,
+                _ => unreachable!(),
+            },
+        )?;
+    }
+
+    let asset_payload_native = adaptive_payload_v1(&context.asset)?;
+    let asset_payload = assign_bytes(ctx, range, &asset_payload_native);
+    let asset_frame =
+        assigned_canonical_frame_v1(ctx, range, &context.asset, asset_payload.clone())?;
+    let asset_digest = hash_model_frame_v1(
+        ctx,
+        jobs,
+        MINT_ASSET_IDENTITY_DIGEST_DOMAIN_EXACT_V1,
+        &asset_frame,
+    )?;
+    constrain_digest_bytes_if_v1(
+        ctx,
+        gate,
+        &asset_digest,
+        auth(mint_authorization_public_instance::ASSET_LO)?,
+        enabled,
+    );
+    let asset_range = locate_unique_subslice_v1(
+        &context_native,
+        &asset_payload_native,
+        "mint authorization asset",
+    )?;
+    replace_assigned_range_v1(
+        &mut context_payload,
+        asset_range,
+        &asset_payload,
+        "mint authorization asset",
+    )?;
+
+    let mut amount_mutated_context = context.clone();
+    amount_mutated_context.amount = !amount_mutated_context.amount;
+    let mut account_cursor = changed_range_v1(
+        &context_native,
+        &adaptive_payload_v1(&amount_mutated_context)?,
+        16,
+        "mint authorization amount",
+    )?
+    .end;
+    let mut recipient_account_payload = None;
+    for (account, offset, label) in [
+        (
+            &context.payer,
+            mint_authorization_public_instance::PAYER_LO,
+            "payer",
+        ),
+        (
+            &context.recipient,
+            mint_authorization_public_instance::RECIPIENT_LO,
+            "recipient",
+        ),
+    ] {
+        let payload_native = adaptive_payload_v1(account)?;
+        let payload = assign_bytes(ctx, range, &payload_native);
+        let frame = assigned_canonical_frame_v1(ctx, range, account, payload.clone())?;
+        let digest =
+            hash_model_frame_v1(ctx, jobs, MINT_ACCOUNT_IDENTITY_DIGEST_DOMAIN_V1, &frame)?;
+        constrain_digest_bytes_if_v1(ctx, gate, &digest, auth(offset)?, enabled);
+        let account_range = locate_subslice_after_v1(
+            &context_native,
+            &payload_native,
+            account_cursor,
+            &format!("mint authorization {label}"),
+        )?;
+        account_cursor = account_range.end;
+        replace_assigned_range_v1(
+            &mut context_payload,
+            account_range,
+            &payload,
+            &format!("mint authorization {label}"),
+        )?;
+        if label == "recipient" {
+            recipient_account_payload = Some(payload);
+        }
+    }
+
+    let context_frame = assigned_canonical_frame_v1(ctx, range, context, context_payload.clone())?;
+    let context_digest = hash_model_frame_v1(
+        ctx,
+        jobs,
+        MINT_AUTHORIZATION_CONTEXT_DIGEST_DOMAIN_V1,
+        &context_frame,
+    )?;
+
+    let statement = &authorization.statement;
+    let statement_native = adaptive_payload_v1(statement)?;
+    let mut statement_payload = assign_bytes(ctx, range, &statement_native);
+    let context_range = locate_unique_subslice_v1(
+        &statement_native,
+        &context_native,
+        "mint authorization context in statement",
+    )?;
+    replace_assigned_range_v1(
+        &mut statement_payload,
+        context_range,
+        &context_payload,
+        "mint authorization context in statement",
+    )?;
+    for (cells, label, selector) in [
+        (
+            auth(mint_authorization_public_instance::ISSUANCE_LO)?,
+            "issuance",
+            0_u8,
+        ),
+        (
+            auth(mint_authorization_public_instance::CREDIT_ID_LO)?,
+            "credit ID",
+            1,
+        ),
+        (
+            auth(mint_authorization_public_instance::CIPHERTEXT_LO)?,
+            "ciphertext",
+            2,
+        ),
+    ] {
+        let replacement = assigned_digest_bytes_v1(ctx, gate, cells);
+        replace_mutated_field_v1(
+            &mut statement_payload,
+            statement,
+            &replacement,
+            &format!("mint authorization statement {label}"),
+            |mutated| {
+                let target = match selector {
+                    0 => &mut mutated.issuance_commitment,
+                    1 => &mut mutated.credit_id,
+                    2 => &mut mutated.ciphertext_digest,
+                    _ => unreachable!(),
+                };
+                target.iter_mut().for_each(|byte| *byte = !*byte);
+            },
+        )?;
+    }
+    let statement_frame =
+        assigned_canonical_frame_v1(ctx, range, statement, statement_payload.clone())?;
+    let statement_digest = hash_model_frame_v1(
+        ctx,
+        jobs,
+        MINT_AUTHORIZATION_STATEMENT_DIGEST_DOMAIN_V1,
+        &statement_frame,
+    )?;
+    constrain_digest_bytes_if_v1(
+        ctx,
+        gate,
+        &statement_digest,
+        auth(mint_authorization_public_instance::SEMANTIC_LO)?,
+        enabled,
+    );
+
+    let auth_eq_history = if parity == KagemushaPastaParityV1::Eq {
+        deferred_history_bytes_v1::<C>(
+            ctx,
+            gate,
+            authorization_column,
+            mint_authorization_public_instance::HISTORY_START,
+            "Eq mint authorization",
+        )?
+    } else {
+        assign_bytes(ctx, range, &authorization.proof.eq_history)
+    };
+    let auth_ep_history = if parity == KagemushaPastaParityV1::Ep {
+        deferred_history_bytes_v1::<C>(
+            ctx,
+            gate,
+            authorization_column,
+            mint_authorization_public_instance::HISTORY_START,
+            "Ep mint authorization",
+        )?
+    } else {
+        assign_bytes(ctx, range, &authorization.proof.ep_history)
+    };
+    let auth_proof_payload = assigned_paired_proof_payload_v1(
+        ctx,
+        range,
+        &authorization.proof,
+        parity,
+        authorization_current_proof,
+        [
+            state_public[public_instance::MINT_AUTHORIZATION_EQ_PROTOCOL_LO],
+            state_public[public_instance::MINT_AUTHORIZATION_EQ_PROTOCOL_HI],
+        ],
+        [
+            state_public[public_instance::MINT_AUTHORIZATION_EP_PROTOCOL_LO],
+            state_public[public_instance::MINT_AUTHORIZATION_EP_PROTOCOL_HI],
+        ],
+        auth(mint_authorization_public_instance::SEMANTIC_LO)?,
+        auth(mint_authorization_public_instance::RECIPIENT_COMMITMENT_LO)?,
+        auth(mint_authorization_public_instance::HARDWARE_AUTHORIZATION_LO)?,
+        auth(mint_authorization_public_instance::EQ_AUDIT_LO)?,
+        auth(mint_authorization_public_instance::EP_AUDIT_LO)?,
+        &auth_eq_history,
+        &auth_ep_history,
+    )?;
+    let authorization_native = adaptive_payload_v1(authorization)?;
+    let mut authorization_payload = assign_bytes(ctx, range, &authorization_native);
+    let nested_statement = locate_unique_subslice_v1(
+        &authorization_native,
+        &statement_native,
+        "authorization statement",
+    )?;
+    replace_assigned_range_v1(
+        &mut authorization_payload,
+        nested_statement,
+        &statement_payload,
+        "authorization statement",
+    )?;
+    let native_auth_proof = adaptive_payload_v1(&authorization.proof)?;
+    let nested_auth_proof = locate_unique_subslice_v1(
+        &authorization_native,
+        &native_auth_proof,
+        "authorization paired proof",
+    )?;
+    replace_assigned_range_v1(
+        &mut authorization_payload,
+        nested_auth_proof,
+        &auth_proof_payload,
+        "authorization paired proof",
+    )?;
+    let authorization_frame =
+        assigned_canonical_frame_v1(ctx, range, authorization, authorization_payload)?;
+    let authorization_digest = hash_model_frame_v1(
+        ctx,
+        jobs,
+        MINT_AUTHORIZATION_DIGEST_DOMAIN_V1,
+        &authorization_frame,
+    )?;
+
+    let lifecycle = &credit.statement.lifecycle;
+    let lifecycle_native = adaptive_payload_v1(lifecycle)?;
+    let lifecycle_payload = assign_bytes(ctx, range, &lifecycle_native);
+    let lifecycle_frame =
+        assigned_canonical_frame_v1(ctx, range, lifecycle, lifecycle_payload.clone())?;
+    let lifecycle_digest = hash_model_frame_v1(
+        ctx,
+        jobs,
+        MINT_FOLD_LIFECYCLE_DIGEST_DOMAIN_V1,
+        &lifecycle_frame,
+    )?;
+    constrain_digest_bytes_if_v1(
+        ctx,
+        gate,
+        &lifecycle_digest,
+        state.lifecycle_binding_digest,
+        enabled,
+    );
+
+    let credit_statement = &credit.statement;
+    let credit_statement_native = adaptive_payload_v1(credit_statement)?;
+    let mut credit_statement_payload = assign_bytes(ctx, range, &credit_statement_native);
+    let lifecycle_range = locate_unique_subslice_v1(
+        &credit_statement_native,
+        &lifecycle_native,
+        "mint credit lifecycle",
+    )?;
+    replace_assigned_range_v1(
+        &mut credit_statement_payload,
+        lifecycle_range,
+        &lifecycle_payload,
+        "mint credit lifecycle",
+    )?;
+    let credit_statement_bindings = [
+        (
+            auth(mint_authorization_public_instance::RECIPIENT_COMMITMENT_LO)?,
+            "recipient commitment",
+            0_u8,
+        ),
+        (
+            auth(mint_authorization_public_instance::ISSUANCE_LO)?,
+            "issuance commitment",
+            1,
+        ),
+        (
+            auth(mint_authorization_public_instance::CREDIT_COMMITMENT_LO)?,
+            "credit commitment",
+            2,
+        ),
+    ];
+    for (cells, label, selector) in credit_statement_bindings {
+        let replacement = assigned_digest_bytes_v1(ctx, gate, cells);
+        replace_mutated_field_v1(
+            &mut credit_statement_payload,
+            credit_statement,
+            &replacement,
+            &format!("mint credit statement {label}"),
+            |mutated| {
+                let target = match selector {
+                    0 => &mut mutated.recipient_credential_commitment,
+                    1 => &mut mutated.issuance_commitment,
+                    2 => &mut mutated.credit_commitment,
+                    _ => unreachable!(),
+                };
+                target.iter_mut().for_each(|byte| *byte = !*byte);
+            },
+        )?;
+    }
+    replace_mutated_field_v1(
+        &mut credit_statement_payload,
+        credit_statement,
+        &context_digest,
+        "mint credit authorization-context digest",
+        |mutated| {
+            mutated
+                .authorization_context_digest
+                .iter_mut()
+                .for_each(|byte| *byte = !*byte);
+        },
+    )?;
+    replace_mutated_field_v1(
+        &mut credit_statement_payload,
+        credit_statement,
+        &authorization_digest,
+        "mint credit authorization digest",
+        |mutated| {
+            mutated
+                .mint_authorization_digest
+                .iter_mut()
+                .for_each(|byte| *byte = !*byte);
+        },
+    )?;
+    let amount = assigned_uint_bytes_v1(
+        ctx,
+        gate,
+        *authorization_column[mint_authorization_public_instance::AMOUNT].assigned(),
+        128,
+    );
+    replace_mutated_field_v1(
+        &mut credit_statement_payload,
+        credit_statement,
+        &amount,
+        "mint credit amount",
+        |mutated| mutated.amount = !mutated.amount,
+    )?;
+    let mut issuance_mutated_statement = credit_statement.clone();
+    issuance_mutated_statement
+        .issuance_commitment
+        .iter_mut()
+        .for_each(|byte| *byte = !*byte);
+    let credit_statement_cursor = changed_range_v1(
+        &credit_statement_native,
+        &adaptive_payload_v1(&issuance_mutated_statement)?,
+        32,
+        "mint credit issuance commitment",
+    )?
+    .end;
+    let credit_recipient_native = adaptive_payload_v1(&credit_statement.recipient)?;
+    let credit_recipient_range = locate_subslice_after_v1(
+        &credit_statement_native,
+        &credit_recipient_native,
+        credit_statement_cursor,
+        "mint credit recipient",
+    )?;
+    replace_assigned_range_v1(
+        &mut credit_statement_payload,
+        credit_recipient_range,
+        recipient_account_payload
+            .as_ref()
+            .ok_or_else(|| "mint authorization recipient payload is absent".to_owned())?,
+        "mint credit recipient",
+    )?;
+    let credit_statement_frame = assigned_canonical_frame_v1(
+        ctx,
+        range,
+        credit_statement,
+        credit_statement_payload.clone(),
+    )?;
+    let credit_statement_digest = hash_model_frame_v1(
+        ctx,
+        jobs,
+        MINT_STATEMENT_DIGEST_DOMAIN_V1,
+        &credit_statement_frame,
+    )?;
+    constrain_digest_bytes_if_v1(
+        ctx,
+        gate,
+        &credit_statement_digest,
+        mint_public(mint_public_instance::SEMANTIC_LO)?,
+        enabled,
+    );
+
+    let mint_eq_history = if parity == KagemushaPastaParityV1::Eq {
+        deferred_history_bytes_v1::<C>(
+            ctx,
+            gate,
+            mint_column,
+            mint_public_instance::HISTORY_START,
+            "Eq mint authority",
+        )?
+    } else {
+        assign_bytes(ctx, range, &credit.proof.eq_history)
+    };
+    let mint_ep_history = if parity == KagemushaPastaParityV1::Ep {
+        deferred_history_bytes_v1::<C>(
+            ctx,
+            gate,
+            mint_column,
+            mint_public_instance::HISTORY_START,
+            "Ep mint authority",
+        )?
+    } else {
+        assign_bytes(ctx, range, &credit.proof.ep_history)
+    };
+    let mint_proof_payload = assigned_paired_proof_payload_v1(
+        ctx,
+        range,
+        &credit.proof,
+        parity,
+        mint_current_proof,
+        [
+            state_public[public_instance::MINT_EQ_PROTOCOL_LO],
+            state_public[public_instance::MINT_EQ_PROTOCOL_HI],
+        ],
+        [
+            state_public[public_instance::MINT_EP_PROTOCOL_LO],
+            state_public[public_instance::MINT_EP_PROTOCOL_HI],
+        ],
+        mint_public(mint_public_instance::SEMANTIC_LO)?,
+        mint_public(mint_public_instance::CERTIFICATE_LO)?,
+        mint_public(mint_public_instance::AUTHORITY_LO)?,
+        mint_public(mint_public_instance::EQ_AUDIT_LO)?,
+        mint_public(mint_public_instance::EP_AUDIT_LO)?,
+        &mint_eq_history,
+        &mint_ep_history,
+    )?;
+
+    let encrypted_credit = assign_bytes(ctx, range, &credit.encrypted_credit);
+    let ciphertext_digest = hash_model_frame_v1(
+        ctx,
+        jobs,
+        MINT_CIPHERTEXT_DIGEST_DOMAIN_V1,
+        &encrypted_credit,
+    )?;
+    constrain_digest_bytes_if_v1(
+        ctx,
+        gate,
+        &ciphertext_digest,
+        auth(mint_authorization_public_instance::CIPHERTEXT_LO)?,
+        enabled,
+    );
+
+    let credit_native = adaptive_payload_v1(credit)?;
+    let mut credit_payload = assign_bytes(ctx, range, &credit_native);
+    let nested_credit_statement = locate_unique_subslice_v1(
+        &credit_native,
+        &credit_statement_native,
+        "finalized mint statement",
+    )?;
+    replace_assigned_range_v1(
+        &mut credit_payload,
+        nested_credit_statement,
+        &credit_statement_payload,
+        "finalized mint statement",
+    )?;
+    let native_mint_proof = adaptive_payload_v1(&credit.proof)?;
+    let nested_mint_proof = locate_unique_subslice_v1(
+        &credit_native,
+        &native_mint_proof,
+        "finalized mint paired proof",
+    )?;
+    replace_assigned_range_v1(
+        &mut credit_payload,
+        nested_mint_proof,
+        &mint_proof_payload,
+        "finalized mint paired proof",
+    )?;
+    let encrypted_range = locate_unique_subslice_v1(
+        &credit_native,
+        &credit.encrypted_credit,
+        "finalized mint encrypted credit",
+    )?;
+    replace_assigned_range_v1(
+        &mut credit_payload,
+        encrypted_range,
+        &encrypted_credit,
+        "finalized mint encrypted credit",
+    )?;
+    for (cells, label, selector) in [
+        (
+            mint_public(mint_public_instance::CERTIFICATE_LO)?,
+            "certificate",
+            0_u8,
+        ),
+        (
+            mint_public(mint_public_instance::AUTHORITY_LO)?,
+            "authority head",
+            1,
+        ),
+        (
+            mint_public(mint_public_instance::GENESIS_LO)?,
+            "genesis roster",
+            2,
+        ),
+        (
+            mint_public(mint_public_instance::PAIR_BINDING_LO)?,
+            "proof binding",
+            3,
+        ),
+        (
+            auth(mint_authorization_public_instance::MANIFEST_LO)?,
+            "manifest",
+            4,
+        ),
+    ] {
+        let replacement = assigned_digest_bytes_v1(ctx, gate, cells);
+        replace_mutated_field_v1(
+            &mut credit_payload,
+            credit,
+            &replacement,
+            &format!("finalized mint {label}"),
+            |mutated| {
+                let target = match selector {
+                    0 => &mut mutated.finality_certificate_binding,
+                    1 => &mut mutated.finality_authority_head,
+                    2 => &mut mutated.finality_genesis_roster_id,
+                    3 => &mut mutated.finality_proof_binding_digest,
+                    4 => &mut mutated.artifact_manifest_digest,
+                    _ => unreachable!(),
+                };
+                target.iter_mut().for_each(|byte| *byte = !*byte);
+            },
+        )?;
+    }
+    let credit_frame = assigned_canonical_frame_v1(ctx, range, credit, credit_payload)?;
+    let replay_digest =
+        hash_state_envelope_frame_v1(ctx, jobs, MINT_CREDIT_ENVELOPE_DOMAIN_V1, &credit_frame)?;
+    constrain_digest_bytes_if_v1(
+        ctx,
+        gate,
+        &replay_digest,
+        state.replay_envelope_digest,
+        enabled,
+    );
+    Ok(())
+}
+
+fn constrain_mint_authorization_binding_v1<'chip, C>(
+    loader: &DeferredLoader<'chip, C>,
+    authorization: &[DeferredScalar<'chip, C>],
+    state_public: &[AssignedValue<C::ScalarExt>],
+    enabled: AssignedValue<C::ScalarExt>,
+) -> Result<(), String>
+where
+    C: CurveAffineExt,
+    C::Base: BigPrimeField,
+    C::ScalarExt: KagemushaPoseidonFieldV1,
+{
+    if authorization.len() != MINT_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1
+        || state_public.len() < state_relation::PUBLIC_INSTANCE_COUNT
+    {
+        return Err("Kagemusha mint-authorization binding input is truncated".to_owned());
+    }
+    let version = loader.ctx_mut().main().load_constant(C::ScalarExt::ONE);
+    constrain_loader_equal_if_v1(
+        loader,
+        *authorization[mint_authorization_public_instance::VERSION].assigned(),
+        version,
+        enabled,
+    );
+    for (authorization_offset, state_offset, width) in [
+        (
+            mint_authorization_public_instance::RELEASE_LO,
+            public_instance::RELEASE_LO,
+            2,
+        ),
+        (
+            mint_authorization_public_instance::SUITE_LO,
+            public_instance::SUCCESSOR_SUITE_LO,
+            2,
+        ),
+        (
+            mint_authorization_public_instance::VK_LO,
+            public_instance::SUCCESSOR_VK_LO,
+            2,
+        ),
+        (
+            mint_authorization_public_instance::NETWORK_LO,
+            public_instance::NETWORK_LO,
+            2,
+        ),
+        (
+            mint_authorization_public_instance::ASSET_LO,
+            public_instance::ASSET_LO,
+            2,
+        ),
+        (
+            mint_authorization_public_instance::INCARNATION_LO,
+            public_instance::ASSET_INCARNATION_LO,
+            2,
+        ),
+        (
+            mint_authorization_public_instance::SCALE,
+            public_instance::ASSET_SCALE,
+            1,
+        ),
+        (
+            mint_authorization_public_instance::POOL_LO,
+            public_instance::LIABILITY_POOL_LO,
+            2,
+        ),
+        (
+            mint_authorization_public_instance::AMOUNT,
+            public_instance::AMOUNT,
+            1,
+        ),
+        (
+            mint_authorization_public_instance::PROFILE_LO,
+            public_instance::HARDWARE_PROFILE_LO,
+            2,
+        ),
+        (
+            mint_authorization_public_instance::POLICY_EPOCH,
+            public_instance::POLICY_EPOCH,
+            1,
+        ),
+    ] {
+        for offset in 0..width {
+            constrain_loader_equal_if_v1(
+                loader,
+                *authorization[authorization_offset + offset].assigned(),
+                state_public[state_offset + offset],
+                enabled,
+            );
+        }
+    }
+    Ok(())
+}
+
 fn constrain_mint_authority_binding_v1<'chip, C>(
     loader: &DeferredLoader<'chip, C>,
     mint: &[DeferredScalar<'chip, C>],
@@ -1912,7 +3112,7 @@ fn constrain_incoming_common_binding_v1<'chip, C>(
     loader: &DeferredLoader<'chip, C>,
     jobs: &mut PastaSha256JobsV1<C::ScalarExt>,
     incoming: &[DeferredScalar<'chip, C>],
-    slot: &state_relation::KagemushaAssignedReceiveFoldSlotV1<C::ScalarExt>,
+    slot: &state_relation::KagemushaAssignedReceiveFoldCreditV1<C::ScalarExt>,
     enabled: AssignedValue<C::ScalarExt>,
     _incoming_eq_protocol: [AssignedValue<C::ScalarExt>; 2],
     _incoming_ep_protocol: [AssignedValue<C::ScalarExt>; 2],
@@ -2035,7 +3235,7 @@ fn assigned_digest_bytes_v1<F: KagemushaPoseidonFieldV1>(
         .collect()
 }
 
-fn constrain_receive_batch_binding_v1<C>(
+fn constrain_receive_credit_binding_v1<C>(
     loader: &DeferredLoader<'_, C>,
     jobs: &mut PastaSha256JobsV1<C::ScalarExt>,
     state: &state_relation::KagemushaAssignedStateRelationV1<C::ScalarExt>,
@@ -2060,26 +3260,23 @@ where
             }
         }};
     }
-    append_le_bytes!(state.receive_active_count, 8);
-    for slot in &state.receive_slots {
-        append_le_bytes!(slot.amount, 128);
-        for digest in [
-            slot.credit_id,
-            slot.recipient_lane_id,
-            slot.incoming_proof_binding_digest,
-            slot.receiver_binding_digest,
-            slot.payment_output_digest,
-            slot.envelope_digest,
-        ] {
-            for limb in digest {
-                append_le_bytes!(limb, 128);
-            }
+    let credit = &state.receive_credit;
+    append_le_bytes!(credit.amount, 128);
+    for digest in [
+        credit.credit_id,
+        credit.recipient_lane_id,
+        credit.incoming_proof_binding_digest,
+        credit.receiver_binding_digest,
+        credit.payment_output_digest,
+        credit.envelope_digest,
+    ] {
+        for limb in digest {
+            append_le_bytes!(limb, 128);
         }
     }
     let digest = hash(ctx.main(), jobs, message)?;
     let actual = digest_limbs_assigned(ctx.main(), &digest);
-    let count_is_zero = gate.is_zero(ctx.main(), state.receive_active_count);
-    let enabled = gate.not(ctx.main(), count_is_zero);
+    let enabled = credit.active;
     drop(ctx);
     for (actual, expected) in actual.into_iter().zip(state.receive_credit_binding_digest) {
         constrain_loader_equal_if_v1(loader, actual, expected, enabled);
@@ -2099,7 +3296,6 @@ fn constrain_state_guard_binding_v1<F: KagemushaPoseidonFieldV1>(
         (state.amount, guard.amount),
         (state.successor.scale, guard.asset_scale),
         (state.successor.policy_epoch, guard.policy_epoch),
-        (state.receive_active_count, guard.receive_active_count),
         (state.predecessor.sequence, guard.predecessor_sequence),
         (state.successor.sequence, guard.successor_sequence),
         (
@@ -2120,7 +3316,10 @@ fn constrain_state_guard_binding_v1<F: KagemushaPoseidonFieldV1>(
         (state.successor.suite_id, guard.successor_suite_id),
         (state.successor.vk_digest, guard.successor_vk_digest),
         (state.peer_credit_id, guard.peer_credit_id),
-        (state.peer_recipient_lane_id, guard.peer_recipient_lane_id),
+        (
+            state.recipient_encryption_key_binding,
+            guard.recipient_encryption_key_binding,
+        ),
         (
             state.mint_finality_proof_binding_digest,
             guard.mint_finality_proof_binding_digest,
@@ -2151,12 +3350,8 @@ fn constrain_state_guard_binding_v1<F: KagemushaPoseidonFieldV1>(
             guard.lifecycle_binding_digest,
         ),
         (
-            state.precommit_binding_digest,
-            guard.precommit_binding_digest,
-        ),
-        (
-            state.suite_upgrade_authorization_digest,
-            guard.suite_upgrade_authorization_digest,
+            state.prepared_transition_binding_digest,
+            guard.prepared_transition_binding_digest,
         ),
         (
             state.receive_credit_binding_digest,
@@ -2678,12 +3873,12 @@ mod tests {
         use iroha_data_model::kagemusha::kagemusha_prepared_transfer_digest_v1;
         [
             fixture.payment.output.credit_id,
-            fixture.ticket.recipient_one_time_key,
+            fixture.request.recipient_encryption_key,
             fixture.request.hardware_credential.lane_commitment,
             kagemusha_prepared_transfer_digest_v1(
                 &fixture.request,
-                &fixture.intent,
-                &fixture.ticket,
+                fixture.payment.output.sender_before_commitment,
+                fixture.payment.output.sender_after_commitment,
                 fixture.payment.output.transition_nullifier,
                 fixture.payment.output.ciphertext_commitment,
             )
@@ -2691,12 +3886,10 @@ mod tests {
             fixture
                 .payment
                 .output
-                .canonical_digest_against(&fixture.request, &fixture.intent, &fixture.ticket)
+                .canonical_digest_against(&fixture.request)
                 .expect("output digest"),
             super::super::kagemusha_incoming_proof_binding_digest_v1(
                 &fixture.request,
-                &fixture.intent,
-                &fixture.ticket,
                 &fixture.payment,
             )
             .expect("incoming claims"),
@@ -2724,7 +3917,7 @@ mod tests {
     }
 
     #[test]
-    fn incoming_output_binding_constraint_rejects_cross_lane_replay_and_ticket_key_change() {
+    fn incoming_output_binding_constraint_rejects_cross_lane_replay_and_recipient_key_change() {
         // Signed structural fixture, not an actual recursive proof. Only the production binding
         // gadget is qualified here; actual final proofs and history decisions are separate gates.
         let fixture = super::super::tests::incoming_payment_fixture(0x41, 9, 7, 11, 128, 128);
@@ -2732,8 +3925,6 @@ mod tests {
         let values = output_binding_values(&fixture);
         let public = super::super::native_backend::payment_terminal_public_inputs_v1(
             &fixture.request,
-            &fixture.intent,
-            &fixture.ticket,
             &fixture.payment,
             [0xA1; 32],
         )
@@ -2781,7 +3972,8 @@ mod tests {
             }),
             true,
         );
-        // Request, compact intent, signed ticket, output, actual ciphertext, candidate, certificate.
+        // Request, receiver credential, sender-state pair, output, actual ciphertext, candidate,
+        // and certificate.
         // These are only digest-gadget witnesses; no synthetic proof is treated as authority.
         for index in 0..values.len() {
             let mut changed = values;
@@ -2795,19 +3987,13 @@ mod tests {
         let fixture = super::super::tests::incoming_payment_fixture(0x41, 9, 7, 11, 128, 128);
         let values = [
             fixture.request.canonical_digest().expect("request"),
-            fixture
-                .intent
-                .canonical_digest_against(&fixture.request)
-                .expect("intent"),
-            fixture
-                .ticket
-                .canonical_digest_against_intent(&fixture.request, &fixture.intent)
-                .expect("ticket"),
+            fixture.payment.output.sender_before_commitment,
+            fixture.payment.output.sender_after_commitment,
             fixture.payment.output.transition_nullifier,
-            fixture.ticket.recipient_one_time_key,
+            fixture.request.recipient_encryption_key,
             fixture.payment.output.ciphertext_commitment,
         ];
-        let amount = fixture.intent.exact_amount;
+        let amount = fixture.request.amount;
         let expected = output_binding_values(&fixture)[3];
         let circuit = |values, amount: u128| {
             hash_binding_test_circuit::<Fp, 6>(values, expected, 5, |ctx, range, jobs, bytes| {
@@ -2883,36 +4069,19 @@ mod tests {
     }
 
     #[test]
-    fn receive_binding_sha_inventory_keeps_all_inactive_slots() {
-        // Structural queue inventory, not a proof or k=16 placement claim. Disabled slots still
-        // instantiate both production hashes over canonical zero fields; active count cannot
-        // shrink the keygen/prover shape. State semantics separately constrain their zero padding.
-        for active_count in [0, 1, 16] {
-            let mut builder = BaseCircuitBuilder::<Fp>::new(false).use_lookup_bits(16);
-            let range = builder.range_chip();
-            let mut jobs = PastaSha256JobsV1::default();
-            for index in 0..16 {
-                let byte = u8::from(index < active_count);
-                let digest = assign_bytes(builder.main(0), &range, &[byte; 32]);
-                let amount = assign_bytes(builder.main(0), &range, &u128::from(byte).to_le_bytes());
-                hash_receiver_plaintext_opening_v1(
-                    builder.main(0),
-                    &mut jobs,
-                    [&digest; 5],
-                    &amount,
-                )
-                .expect("fixed plaintext-opening hash");
-                hash_terminal_send_output_binding_v1(builder.main(0), &mut jobs, [&digest; 6])
-                    .expect("fixed output-binding hash");
-                let (count, blocks, _) = jobs.capacity_profile().expect("slot geometry");
-                assert_eq!((count, blocks), (2 * (index + 1), 8 * (index + 1)));
-            }
-            let (count, blocks, _) = jobs.capacity_profile().expect("batch geometry");
-            assert_eq!((count, blocks), (32, 128));
-            assert_eq!(jobs.capacity_profile(), jobs.unknown().capacity_profile());
-            // The unchanged nine non-incoming jobs consume 109 blocks in the current carrier.
-            assert_eq!((count + 9, blocks + 109), (41, 237));
-        }
+    fn receive_binding_sha_inventory_is_one_credit() {
+        let mut builder = BaseCircuitBuilder::<Fp>::new(false).use_lookup_bits(16);
+        let range = builder.range_chip();
+        let mut jobs = PastaSha256JobsV1::default();
+        let digest = assign_bytes(builder.main(0), &range, &[1; 32]);
+        let amount = assign_bytes(builder.main(0), &range, &1_u128.to_le_bytes());
+        hash_receiver_plaintext_opening_v1(builder.main(0), &mut jobs, [&digest; 5], &amount)
+            .expect("fixed plaintext-opening hash");
+        hash_terminal_send_output_binding_v1(builder.main(0), &mut jobs, [&digest; 6])
+            .expect("fixed output-binding hash");
+        let (count, blocks, _) = jobs.capacity_profile().expect("single-credit geometry");
+        assert_eq!((count, blocks), (2, 8));
+        assert_eq!(jobs.capacity_profile(), jobs.unknown().capacity_profile());
     }
 
     #[test]
@@ -2967,7 +4136,7 @@ mod tests {
         let fixture = super::super::tests::incoming_payment_fixture(0x41, 9, 7, 11, 128, 128);
         fixture
             .payment
-            .validate_shape_against(&fixture.request, &fixture.intent, &fixture.ticket)
+            .validate_shape_against(&fixture.request)
             .expect("signed payment context");
         let original_payment = fixture.payment.clone();
         let credential = fixture

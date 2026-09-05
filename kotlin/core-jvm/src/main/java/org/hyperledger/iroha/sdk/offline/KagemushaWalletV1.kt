@@ -35,9 +35,16 @@ class KagemushaHardwareQualificationV1(
     @JvmField val profile: KagemushaHardwareProfileV1,
     @JvmField val credential: KagemushaHardwareCredentialV1,
     releaseId: ByteArray,
+    hardwarePolicyDigest: ByteArray,
+    coreAuthorizationKeyReference: ByteArray,
     capabilities: Set<KagemushaHardwareCapabilityV1>,
 ) {
     private val releaseIdValue = fixed32(releaseId, "releaseId")
+    private val hardwarePolicy = fixed32(hardwarePolicyDigest, "hardwarePolicyDigest")
+    private val coreAuthorizationKey = fixed32(
+        coreAuthorizationKeyReference,
+        "coreAuthorizationKeyReference",
+    )
     private val capabilityValues = if (capabilities.isEmpty()) {
         EnumSet.noneOf(KagemushaHardwareCapabilityV1::class.java)
     } else {
@@ -46,6 +53,12 @@ class KagemushaHardwareQualificationV1(
 
     /** Return the authenticated release identity selected by native core. */
     fun releaseId(): ByteArray = releaseIdValue.copyOf()
+
+    /** Return the authenticated policy-registry root independently bound to aggregate state. */
+    fun hardwarePolicyDigest(): ByteArray = hardwarePolicy.copyOf()
+
+    /** Return the governed Core-to-hardware authorization verifier-key reference. */
+    fun coreAuthorizationKeyReference(): ByteArray = coreAuthorizationKey.copyOf()
 
     /** Return a defensive immutable copy of the attested capability set. */
     fun capabilities(): Set<KagemushaHardwareCapabilityV1> =
@@ -130,29 +143,26 @@ class KagemushaHardwareTerminalResultV1(
     fun aggregateState(): ByteArray = aggregateStateValue.copyOf()
 }
 
-/** One exact receive-fold transition and the staged credit it consumes. */
+/** One exact `MintFold` or `ReceiveFold` transition and the staged credit it consumes. */
 class KagemushaHardwareReceiveFoldV1(
     aggregateState: ByteArray,
-    creditId: ByteArray,
+    @JvmField val selector: KagemushaPendingCreditSelectorV1,
 ) {
     private val aggregateStateValue = aggregateState.copyOf()
-    private val creditIdValue = fixed32(creditId, "creditId")
 
     init {
         require(aggregateStateValue.isNotEmpty())
     }
 
     fun aggregateState(): ByteArray = aggregateStateValue.copyOf()
-    fun creditId(): ByteArray = creditIdValue.copyOf()
 }
 
-/** Public result of installing one received credit. */
+/** Public result of installing one authenticated pending credit. */
 class KagemushaReceiveFoldResultV1(
     @JvmField val aggregateState: KagemushaAggregateStateCommitmentV1,
-    creditId: ByteArray,
+    @JvmField val selector: KagemushaPendingCreditSelectorV1,
 ) {
-    private val creditIdValue = fixed32(creditId, "creditId")
-    fun creditId(): ByteArray = creditIdValue.copyOf()
+    fun creditId(): ByteArray = selector.creditId()
 }
 
 /** Result of structurally decoding a durable acknowledgement from native staging. */
@@ -183,8 +193,17 @@ interface KagemushaHardwareProviderV1 {
     /** Establish the hardware-bound zero state, idempotently. */
     fun bootstrapState(): ByteArray
 
-    /** Create and sign one exact-amount request using hardware trusted time. */
+    /** Persist and echo an already caller-persisted exact receiver-request intent. */
+    fun reservePaymentRequestOperationId(
+        operationId: ByteArray,
+        recipientAccount: ByteArray,
+        amount: BigInteger,
+        validityWindowMillis: Long,
+    ): ByteArray
+
+    /** Create and sign the exact caller-persisted request using hardware trusted time. */
     fun createPaymentRequest(
+        operationId: ByteArray,
         recipientAccount: ByteArray,
         amount: BigInteger,
         validityWindowMillis: Long,
@@ -202,28 +221,51 @@ interface KagemushaHardwareProviderV1 {
         canonicalMintCredit: ByteArray,
     ): KagemushaHardwareMintStageV1
 
-    /** Snapshot the current durable inbox high-water mark. */
-    fun pendingCreditWatermark(): BigInteger
-
-    /** Return the next staged credit identity, or `null` when the pending inbox is drained. */
-    fun nextPendingCreditId(): ByteArray?
+    /** Select one deterministic staged credit under an epoch-qualified finite pass. */
+    fun selectPendingCredit(
+        watermark: KagemushaPendingCreditWatermarkV1?,
+        target: KagemushaPendingCreditTargetV1,
+    ): KagemushaPendingCreditSelectionV1
 
     /** Return the monetary-state journal revision, separate from accepted-credit inbox revisions. */
     fun journalRevision(): BigInteger
 
     /** Fold exactly one staged credit selected by its globally unique identity. */
-    fun foldReceiveCredit(creditId: ByteArray): KagemushaHardwareReceiveFoldV1
+    fun foldPendingCredit(selector: KagemushaPendingCreditSelectorV1): KagemushaHardwareReceiveFoldV1
 
-    /**
-     * Fold only the staged credits needed for the requested amount, then prepare, prove, commit,
-     * and install one payment. Background backlog must not delay a covered spend.
-     */
+    /** Persist and echo the identity already saved with the complete caller payment intent. */
+    fun reservePaymentOperationId(operationId: ByteArray, canonicalRequest: ByteArray): ByteArray
+
+    /** Commit one payment under the exact caller-persisted operation identity. */
     fun commitPayment(
+        operationId: ByteArray,
         canonicalRequest: ByteArray,
     ): KagemushaHardwareTerminalResultV1
 
     /** Recover one byte-identical payment from the authenticated durable retry outbox. */
     fun recoverPayment(creditId: ByteArray): ByteArray?
+
+    /** Recover a payment before its terminal credit ID was exposed to the caller. */
+    fun recoverPaymentByOperationId(operationId: ByteArray, canonicalRequest: ByteArray): ByteArray?
+
+    /** Persist and echo the identity already saved with the complete caller mint intent. */
+    fun reserveMintOperationId(
+        operationId: ByteArray,
+        amount: BigInteger,
+        payerAccount: ByteArray,
+        recipientAccount: ByteArray,
+    ): ByteArray
+
+    /** Produce the complete hardware-owned mint authorization and encrypted credit. */
+    fun prepareMintConstructionBundle(
+        operationId: ByteArray,
+        amount: BigInteger,
+        payerAccount: ByteArray,
+        recipientAccount: ByteArray,
+    ): KagemushaMintConstructionBundleV1
+
+    /** Recover the complete mint bundle byte-identically. */
+    fun recoverMintConstructionBundle(operationId: ByteArray): KagemushaMintConstructionBundleV1?
 
     /** Verify and record an acknowledgement before releasing the matching outbox entry. */
     fun recordAcknowledgement(
@@ -233,14 +275,21 @@ interface KagemushaHardwareProviderV1 {
         canonicalAcknowledgement: ByteArray,
     )
 
-    /**
-     * Fold only the staged credits needed for `amount`, then prepare, prove, commit, and install
-     * one terminal redemption. Background backlog must not delay a covered redemption.
-     */
-    fun commitRedemption(amount: BigInteger, beneficiaryAccount: ByteArray): KagemushaHardwareTerminalResultV1
+    /** Persist and echo the identity already saved with the complete caller redemption intent. */
+    fun reserveRedemptionOperationId(operationId: ByteArray, amount: BigInteger, beneficiaryAccount: ByteArray): ByteArray
+
+    /** Commit one redemption under the exact caller-persisted operation identity. */
+    fun commitRedemption(
+        operationId: ByteArray,
+        amount: BigInteger,
+        beneficiaryAccount: ByteArray,
+    ): KagemushaHardwareTerminalResultV1
 
     /** Recover one byte-identical redemption voucher. */
     fun recoverRedemption(redemptionId: ByteArray): ByteArray?
+
+    /** Recover a redemption before its terminal ID was exposed to the caller. */
+    fun recoverRedemptionByOperationId(operationId: ByteArray): ByteArray?
 
     /** Rotate the complete private aggregate state and replay root to a qualified epoch. */
     fun rotateHardwareEpoch(): ByteArray
@@ -323,6 +372,7 @@ class KagemushaWalletV1 private constructor(
 
     /** Create a signed exact-amount receiver request. */
     fun createPaymentRequest(
+        operationId: ByteArray,
         recipient: KagemushaAccountIdV1,
         amount: BigInteger,
         validityWindowMillis: Long,
@@ -330,27 +380,51 @@ class KagemushaWalletV1 private constructor(
         requirePositiveU128(amount, "amount")
         require(validityWindowMillis in 1..KagemushaWireV1.REQUEST_MAX_TTL_MS)
         val request = KagemushaNoritoV1.decodePaymentRequestShapeExact(
-            provider.createPaymentRequest(recipient.canonicalPayload(), amount, validityWindowMillis),
+            provider.createPaymentRequest(fixed32(operationId, "operationId"), recipient.canonicalPayload(), amount, validityWindowMillis),
         )
         require(request.recipient == recipient)
+        require(request.requestId().contentEquals(operationId))
         require(request.amount == amount)
         require(request.expiresAtMs - request.issuedAtMs == validityWindowMillis)
         requireStateRequestBinding(currentAggregateState, request)
         request
     }
 
+    /** Reserve only after the caller has durably saved ID, recipient, amount, and validity. */
+    fun reservePaymentRequestOperationId(
+        operationId: ByteArray,
+        recipient: KagemushaAccountIdV1,
+        amount: BigInteger,
+        validityWindowMillis: Long,
+    ): ByteArray {
+        requirePositiveU128(amount, "amount")
+        require(validityWindowMillis in 1..KagemushaWireV1.REQUEST_MAX_TTL_MS)
+        return provider.reservePaymentRequestOperationId(
+            fixed32(operationId, "operationId"), recipient.canonicalPayload(), amount, validityWindowMillis
+        )
+    }
+
+    /** Persist and echo the identity the caller has already saved before beginning a payment. */
+    fun reservePaymentOperationId(operationId: ByteArray, request: KagemushaPaymentRequestV1): ByteArray =
+        provider.reservePaymentOperationId(fixed32(operationId, "operationId"), KagemushaNoritoV1.encodePaymentRequestShape(request))
+
     /** Prepare, prove, atomically commit, and return a receiver-bound payment. */
     fun send(
         request: KagemushaPaymentRequestV1,
-    ): KagemushaPaymentV1 = transitionLock.withLock {
-        val canonicalRequest = KagemushaNoritoV1.encodePaymentRequestShape(request)
-        val result = provider.commitPayment(canonicalRequest)
-        val payment = KagemushaNoritoV1.decodePaymentShapeExact(
-            result.canonicalEnvelope(),
-            request,
-        )
-        installAuthoritativeState(result.aggregateState())
-        payment
+        operationId: ByteArray,
+    ): KagemushaPaymentV1 {
+        val operationId = fixed32(operationId, "operationId")
+        return transitionLock.withLock {
+            foldRequiredCreditsLocked(request.amount)
+            val canonicalRequest = KagemushaNoritoV1.encodePaymentRequestShape(request)
+            val result = provider.commitPayment(operationId, canonicalRequest)
+            val payment = KagemushaNoritoV1.decodePaymentShapeExact(
+                result.canonicalEnvelope(),
+                request,
+            )
+            installAuthoritativeState(result.aggregateState())
+            payment
+        }
     }
 
     /** Stage a payment and return its durable acknowledgement. */
@@ -380,6 +454,57 @@ class KagemushaWalletV1 private constructor(
         KagemushaStagedPaymentV1(staged.disposition, acknowledgement, canonicalAcknowledgement)
     }
 
+    /** Reserve and return the ID the caller must persist before mint preparation. */
+    fun reserveMintOperationId(
+        operationId: ByteArray,
+        amount: BigInteger,
+        payer: KagemushaAccountIdV1,
+        recipient: KagemushaAccountIdV1,
+    ): ByteArray {
+        requirePositiveU128(amount, "amount")
+        return provider.reserveMintOperationId(
+            fixed32(operationId, "operationId"),
+            amount,
+            payer.canonicalPayload(),
+            recipient.canonicalPayload(),
+        )
+    }
+
+    /** Ask hardware for the proof-bearing authorization and exact encrypted credit. */
+    fun prepareMintConstructionBundle(
+        operationId: ByteArray,
+        amount: BigInteger,
+        payer: KagemushaAccountIdV1,
+        recipient: KagemushaAccountIdV1,
+    ): KagemushaMintConstructionBundleV1 {
+        requirePositiveU128(amount, "amount")
+        return provider.prepareMintConstructionBundle(
+            fixed32(operationId, "operationId"),
+            amount,
+            payer.canonicalPayload(),
+            recipient.canonicalPayload(),
+        )
+    }
+
+    /** Recover the complete hardware-owned mint bundle byte-identically. */
+    fun recoverMintConstructionBundle(
+        operationId: ByteArray,
+    ): KagemushaMintConstructionBundleV1? =
+        provider.recoverMintConstructionBundle(fixed32(operationId, "operationId"))
+
+    /** Build the complete reserve-facing request without host-generated ciphertext. */
+    fun prepareTopUpRequest(
+        operationId: ByteArray,
+        amount: BigInteger,
+        payer: KagemushaAccountIdV1,
+        recipient: KagemushaAccountIdV1,
+    ): KagemushaTopUpRequestV1 = prepareMintConstructionBundle(
+        operationId,
+        amount,
+        payer,
+        recipient,
+    ).topUpRequest(currentQualification.credential)
+
     /** Stage a finalized reserve-backed mint only with its exact pre-debit authorization. */
     fun stageMintCredit(
         authorization: KagemushaMintAuthorizationV1,
@@ -397,9 +522,11 @@ class KagemushaWalletV1 private constructor(
         staged.disposition
     }
 
-    /** Fold one staged credit into the aggregate balance. */
-    fun foldReceiveCredit(creditId: ByteArray): KagemushaReceiveFoldResultV1 = transitionLock.withLock {
-        foldCreditLocked(fixed32(creditId, "creditId"))
+    /** Fold one authenticated mint or peer selector into the aggregate balance. */
+    fun foldPendingCredit(
+        selector: KagemushaPendingCreditSelectorV1,
+    ): KagemushaReceiveFoldResultV1 = transitionLock.withLock {
+        foldCreditLocked(selector)
     }
 
     /**
@@ -416,6 +543,7 @@ class KagemushaWalletV1 private constructor(
             )
         }
         var total = BigInteger.ZERO
+        var watermark: KagemushaPendingCreditWatermarkV1? = null
         while (true) {
             val folded = transitionLock.withLock {
                 val credential = currentQualification.credential
@@ -423,7 +551,17 @@ class KagemushaWalletV1 private constructor(
                     credential.hardwareEpochId().contentEquals(snapshot.first) &&
                         credential.hardwareEpochGeneration == snapshot.second,
                 ) { "hardware epoch changed during inbox drain; start a new drain pass" }
-                provider.nextPendingCreditId()?.let(::foldCreditLocked)
+                val selection = provider.selectPendingCredit(
+                    watermark,
+                    KagemushaPendingCreditTargetV1.DrainAll,
+                )
+                watermark?.let {
+                    require(it.sameAs(selection.watermark)) {
+                        "pending-credit watermark changed during drain"
+                    }
+                }
+                watermark = selection.watermark
+                selection.nextPending?.let(::foldCreditLocked)
             } ?: return total
             check(folded.creditId().isNotEmpty())
             total += BigInteger.ONE
@@ -439,6 +577,23 @@ class KagemushaWalletV1 private constructor(
         val canonical = provider.recoverPayment(expected) ?: return null
         val payment = KagemushaNoritoV1.decodePaymentShapeExact(canonical, request)
         require(payment.output.creditId().contentEquals(expected))
+        return payment
+    }
+
+    /** Recover after a crash which occurred before the payment credit ID reached the caller. */
+    fun recoverPaymentByOperationId(
+        request: KagemushaPaymentRequestV1,
+        operationId: ByteArray,
+    ): KagemushaPaymentV1? {
+        val canonicalRequest = KagemushaNoritoV1.encodePaymentRequestShape(request)
+        val canonical = provider.recoverPaymentByOperationId(
+            fixed32(operationId, "operationId"),
+            canonicalRequest,
+        ) ?: return null
+        val payment = KagemushaNoritoV1.decodePaymentShapeExact(canonical, request)
+        require(
+            KagemushaNoritoV1.encodePaymentShape(payment, request).contentEquals(canonical),
+        ) { "recovered payment envelope is not byte-identical" }
         return payment
     }
 
@@ -469,17 +624,36 @@ class KagemushaWalletV1 private constructor(
         )
     }
 
+    /** Persist and echo the identity the caller has already saved before redemption. */
+    fun reserveRedemptionOperationId(
+        operationId: ByteArray,
+        amount: BigInteger,
+        beneficiary: KagemushaAccountIdV1,
+    ): ByteArray {
+        requirePositiveU128(amount, "amount")
+        return provider.reserveRedemptionOperationId(fixed32(operationId, "operationId"), amount, beneficiary.canonicalPayload())
+    }
+
     /** Prepare, prove, commit, and install one full or partial terminal redemption. */
     fun redeem(
         amount: BigInteger,
         beneficiary: KagemushaAccountIdV1,
-    ): KagemushaRedemptionVoucherV1 = transitionLock.withLock {
+        operationId: ByteArray,
+    ): KagemushaRedemptionVoucherV1 {
         requirePositiveU128(amount, "amount")
-        val result = provider.commitRedemption(amount, beneficiary.canonicalPayload())
-        val voucher = KagemushaNoritoV1.decodeRedemptionVoucherShapeExact(result.canonicalEnvelope())
-        require(voucher.statement.amount == amount && voucher.statement.beneficiary == beneficiary)
-        installAuthoritativeState(result.aggregateState())
-        voucher
+        val operationId = fixed32(operationId, "operationId")
+        return transitionLock.withLock {
+            foldRequiredCreditsLocked(amount)
+            val result = provider.commitRedemption(
+                operationId,
+                amount,
+                beneficiary.canonicalPayload(),
+            )
+            val voucher = KagemushaNoritoV1.decodeRedemptionVoucherShapeExact(result.canonicalEnvelope())
+            require(voucher.statement.amount == amount && voucher.statement.beneficiary == beneficiary)
+            installAuthoritativeState(result.aggregateState())
+            voucher
+        }
     }
 
     /** Recover one byte-identical terminal redemption voucher. */
@@ -489,6 +663,14 @@ class KagemushaWalletV1 private constructor(
         val voucher = KagemushaNoritoV1.decodeRedemptionVoucherShapeExact(canonical)
         require(voucher.statement.redemptionId().contentEquals(expected))
         return voucher
+    }
+
+    /** Recover after a crash which occurred before the redemption ID reached the caller. */
+    fun recoverRedemptionByOperationId(operationId: ByteArray): KagemushaRedemptionVoucherV1? {
+        val canonical = provider.recoverRedemptionByOperationId(
+            fixed32(operationId, "operationId"),
+        ) ?: return null
+        return KagemushaNoritoV1.decodeRedemptionVoucherShapeExact(canonical)
     }
 
     /**
@@ -519,12 +701,14 @@ class KagemushaWalletV1 private constructor(
         state
     }
 
-    private fun foldCreditLocked(creditId: ByteArray): KagemushaReceiveFoldResultV1 {
-        val expectedCreditId = fixed32(creditId, "creditId")
+    private fun foldCreditLocked(
+        selector: KagemushaPendingCreditSelectorV1,
+    ): KagemushaReceiveFoldResultV1 {
         val before = currentJournalRevision
         val previousState = currentAggregateState
-        val hardwareFold = provider.foldReceiveCredit(expectedCreditId)
-        require(hardwareFold.creditId().contentEquals(expectedCreditId))
+        val hardwareFold = provider.foldPendingCredit(selector)
+        require(hardwareFold.selector.kind == selector.kind)
+        require(hardwareFold.selector.creditId().contentEquals(selector.creditId()))
         val successor = KagemushaNoritoV1.decodeAggregateStateShapeExact(hardwareFold.aggregateState())
         requireSameAsset(previousState, successor)
         requireStateQualification(successor, currentQualification)
@@ -539,7 +723,33 @@ class KagemushaWalletV1 private constructor(
             "receive fold did not consume exactly one journal revision"
         }
         currentSnapshot = HostSnapshot(currentQualification, successor, after)
-        return KagemushaReceiveFoldResultV1(successor, expectedCreditId)
+        return KagemushaReceiveFoldResultV1(successor, selector)
+    }
+
+    /** Drain the provider-visible mixed mint/peer inbox without an item-count ceiling. */
+    private fun drainPendingCreditsLocked() {
+        var watermark: KagemushaPendingCreditWatermarkV1? = null
+        while (true) {
+            val selection = provider.selectPendingCredit(
+                watermark,
+                KagemushaPendingCreditTargetV1.DrainAll,
+            )
+            watermark?.let { require(it.sameAs(selection.watermark)) }
+            watermark = selection.watermark
+            val selector = selection.nextPending ?: return
+            foldCreditLocked(selector)
+        }
+    }
+
+    private fun foldRequiredCreditsLocked(requiredBalance: BigInteger) {
+        while (true) {
+            val selection = provider.selectPendingCredit(
+                null,
+                KagemushaPendingCreditTargetV1.RequiredBalance(requiredBalance),
+            )
+            val selector = selection.nextPending ?: return
+            foldCreditLocked(selector)
+        }
     }
 
     private fun installAuthoritativeState(bytes: ByteArray) {
@@ -611,7 +821,7 @@ class KagemushaWalletV1 private constructor(
             require(state.networkId == qualification.credential.networkId)
             require(state.hardwareEpochId().contentEquals(qualification.credential.hardwareEpochId()))
             require(state.keyReference().contentEquals(qualification.credential.deviceKeyReference()))
-            require(state.hardwarePolicyId().contentEquals(qualification.profile.hardwareProfileId()))
+            require(state.hardwarePolicyId().contentEquals(qualification.hardwarePolicyDigest()))
         }
 
         private fun requireStateRequestBinding(

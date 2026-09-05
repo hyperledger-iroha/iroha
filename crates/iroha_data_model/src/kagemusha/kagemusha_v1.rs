@@ -210,11 +210,11 @@ pub const KAGEMUSHA_INBOX_STAGE_MIN_BYTES_V1: u32 = KAGEMUSHA_PAYMENT_MAX_BYTES_
 pub const KAGEMUSHA_SEALED_TRANSITION_INPUTS_MAX_BYTES_V1: u32 = 2_048;
 /// Maximum deterministic recovery-seed material persisted before proving.
 pub const KAGEMUSHA_RECOVERY_SEEDS_MAX_BYTES_V1: u32 = 512;
-/// Maximum paired proof bytes retained inside the verified precommit candidate.
-pub const KAGEMUSHA_PRECOMMIT_PAIRED_PROOF_MAX_BYTES_V1: u32 =
+/// Maximum paired proof bytes retained inside the verified prepared-transition candidate.
+pub const KAGEMUSHA_PREPARED_TRANSITION_PAIRED_PROOF_MAX_BYTES_V1: u32 =
     outbox_budget_component_from_usize(KAGEMUSHA_PAIRED_PROOF_MAX_BYTES_V1);
-/// Maximum canonical precommit candidate metadata excluding its paired proof.
-pub const KAGEMUSHA_PRECOMMIT_CANDIDATE_METADATA_MAX_BYTES_V1: u32 = 1_024;
+/// Maximum canonical prepared-transition candidate metadata excluding its paired proof.
+pub const KAGEMUSHA_PREPARED_TRANSITION_CANDIDATE_METADATA_MAX_BYTES_V1: u32 = 1_024;
 /// Maximum canonical redemption-proof bytes.
 pub const KAGEMUSHA_REDEMPTION_PROOF_MAX_BYTES_V1: u32 =
     outbox_budget_component_from_usize(KAGEMUSHA_PAIRED_PROOF_MAX_BYTES_V1);
@@ -230,8 +230,8 @@ const fn checked_outbox_budget_v1(canonical_envelope_max_bytes: usize) -> u32 {
     let parts = [
         KAGEMUSHA_SEALED_TRANSITION_INPUTS_MAX_BYTES_V1,
         KAGEMUSHA_RECOVERY_SEEDS_MAX_BYTES_V1,
-        KAGEMUSHA_PRECOMMIT_PAIRED_PROOF_MAX_BYTES_V1,
-        KAGEMUSHA_PRECOMMIT_CANDIDATE_METADATA_MAX_BYTES_V1,
+        KAGEMUSHA_PREPARED_TRANSITION_PAIRED_PROOF_MAX_BYTES_V1,
+        KAGEMUSHA_PREPARED_TRANSITION_CANDIDATE_METADATA_MAX_BYTES_V1,
         outbox_budget_component_from_usize(KAGEMUSHA_COMMIT_CERTIFICATE_MAX_BYTES_V1),
         KAGEMUSHA_REDEMPTION_PROOF_MAX_BYTES_V1,
         outbox_budget_component_from_usize(canonical_envelope_max_bytes),
@@ -1599,10 +1599,10 @@ pub struct KagemushaMintAuthorizationStatementV1 {
 /// opening relation described by `statement`. Shape validation of this value does
 /// not establish any of those monetary relations.
 ///
-/// TODO: Close the finalized MintAuthority helper's recursive authorization and
-/// canonical statement-opening relations. Its current signed-root membership of a
-/// host-precomputed statement digest is not that closure. MintFold must also join the
-/// reopened recipient/lifecycle and exact replay key/value to the active state lane.
+/// The monetary `MintFold` relation recursively consumes this proof alongside the finalized
+/// MintAuthority proof, reconstructs the canonical authorization and credit envelopes from their
+/// assigned public/proof cells, and joins the recipient, lifecycle, and replay key to the active
+/// state lane.
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
@@ -1675,11 +1675,11 @@ pub struct KagemushaMintCreditV1 {
     /// Release-pinned genesis finality-roster identifier carried by the authority chain.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub finality_genesis_roster_id: [u8; 32],
-    /// SHA commitment to the inner paired authority metadata, proved by both compact helpers.
+    /// Canonical inner Eq deferred-audit commitment to the paired authority transcript.
     ///
-    /// This preserves the inner audit/history commitment in outer public cells 20..21; it is
-    /// not recomputed from the transported outer audit/history fields. Shape validation alone
-    /// does not authenticate it: both proof parities and complete histories must be verified.
+    /// Both inner parities constrain this audit and its exact semantic, protocol, history, and
+    /// inner Ep-audit tail. The compact proofs preserve it in public cells 20..21 while exposing
+    /// their own distinct outer audits.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub finality_proof_binding_digest: [u8; 32],
     /// Recipient-only encrypted credit opening.

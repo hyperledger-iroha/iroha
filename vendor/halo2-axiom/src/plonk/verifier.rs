@@ -44,6 +44,13 @@ where
             return Err(Error::InvalidInstances);
         }
     }
+    if (!V::QUERY_INSTANCE && V::PROOF_SUPPLIED_INSTANCE_COMMITMENT_MASK != 0)
+        || (vk.cs.num_instance_columns < u64::BITS as usize
+            && V::PROOF_SUPPLIED_INSTANCE_COMMITMENT_MASK >> vk.cs.num_instance_columns != 0)
+        || (V::PROOF_SUPPLIED_INSTANCE_COMMITMENT_MASK != 0 && instances.len() != 1)
+    {
+        return Err(Error::InvalidInstances);
+    }
 
     let instance_commitments = if V::QUERY_INSTANCE {
         instances
@@ -75,9 +82,21 @@ where
 
     if V::QUERY_INSTANCE {
         for instance_commitments in instance_commitments.iter() {
-            // Hash the instance (external) commitments into the transcript
-            for commitment in instance_commitments {
-                transcript.common_point(*commitment)?
+            for (column, commitment) in instance_commitments.iter().enumerate() {
+                if V::proof_supplied_instance_commitment(column) {
+                    // The proof-carried point is used as a stable carrier
+                    // identity by recursive consumers, so require the exact
+                    // canonical default-blind commitment to the caller-supplied
+                    // instance values. An evaluation-only check would admit
+                    // arbitrary IPA blinding terms and make that identity
+                    // non-canonical.
+                    if transcript.read_point()? != *commitment {
+                        return Err(Error::InvalidInstances);
+                    }
+                } else {
+                    // Legacy verifier-computed instance commitment.
+                    transcript.common_point(*commitment)?
+                }
             }
         }
     } else {

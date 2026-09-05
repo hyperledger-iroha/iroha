@@ -380,12 +380,18 @@ pub(crate) fn canonical_stock_command_for_tests(
             .validated_inputs()
             .expect("bound mint-stage fixture");
         (authorization.statement.context.operation_id, payload)
+    } else if matches!(
+        operation,
+        KagemushaDeviceLifecycleOperationV1::StageInboundPayment
+            | KagemushaDeviceLifecycleOperationV1::RecoverStagedInboundPayment
+            | KagemushaDeviceLifecycleOperationV1::RecoverInboundInboxPage
+    ) {
+        receiver_payload::canonical_command_body_for_tests(operation.code())?
     } else {
         let request_id =
             control_payload::canonical_request_id_for_tests(operation.code()).unwrap_or([7; 32]);
         let payload =
             control_payload::canonical_command_body_for_tests(operation.code(), request_id)
-                .or_else(|| receiver_payload::canonical_command_body_for_tests(operation.code()))
                 .or_else(|| sender_payload::canonical_command_body_for_tests(operation.code()))?;
         (request_id, payload)
     };

@@ -4,15 +4,27 @@ import XCTest
 @testable import IrohaSwift
 
 final class KagemushaDeviceLifecycleBridgeV1Tests: XCTestCase {
+  func testNativeContractVectorProbeIsBoundedWhenLinked() {
+    XCTAssertEqual(KagemushaDeviceLifecycleBridgeV1.maximumNativeContractVectorBytes, 4 * 1024)
+    if let vector = KagemushaDeviceLifecycleBridgeV1.nativeContractVector() {
+      XCTAssertFalse(vector.isEmpty)
+      XCTAssertLessThanOrEqual(
+        vector.count,
+        KagemushaDeviceLifecycleBridgeV1.maximumNativeContractVectorBytes
+      )
+    }
+  }
+
   func testUnsupportedDeviceRemainsOnlineOnly() throws {
     let bridge = KagemushaDeviceLifecycleBridgeV1.onlineOnly()
     XCTAssertEqual(bridge.availability, .onlineOnly)
     XCTAssertNil(bridge.acceptedCapabilities)
     XCTAssertThrowsError(
-      try bridge.execute(
+      try bridge.executeAuthenticated(
         operation: .prepareExactNextTransition,
         requestID: fixed(0x11, count: 32),
-        canonicalCommand: Data([1])
+        canonicalCommand: Data([1]),
+        acceptedDevicePublicKey: nil
       )
     ) { error in
       XCTAssertEqual(
@@ -38,22 +50,17 @@ final class KagemushaDeviceLifecycleBridgeV1Tests: XCTestCase {
     )
     XCTAssertEqual(
       KagemushaDeviceLifecycleOperationV1.allCases.map(\.rawValue),
-      (1...27).map(UInt8.init)
+      (1...22).map(UInt8.init)
     )
     XCTAssertEqual(
       KagemushaDeviceLifecycleOperationV1.allCases.map { String(describing: $0) },
       [
         "readActiveHardwareCredential",
-        "prepareAcceptanceIntent",
-        "recoverAcceptanceIntent",
-        "validateIntentReserveInboxAndIssueAcceptanceTicket",
-        "recoverAcceptanceTicket",
         "stageInboundPayment",
         "recoverStagedInboundPayment",
         "recoverInboundInboxPage",
         "prepareExactNextTransition",
         "recoverPreparedTransition",
-        "abandonUncommittedPreparedTransition",
         "commitVerifiedCandidateAndSignTerminal",
         "recoverTerminalOutcome",
         "installTerminalEnvelope",
@@ -64,7 +71,7 @@ final class KagemushaDeviceLifecycleBridgeV1Tests: XCTestCase {
         "prepareMintAuthorization",
         "recoverMintAuthorization",
         "verifyAuthorizationAndStageMintCredit",
-        "foldReceiveBatch",
+        "foldReceiveCredit",
         "readPendingCreditWatermark",
         "rotateHardwareEpoch",
         "bootstrapAggregateState",
@@ -83,8 +90,8 @@ final class KagemushaDeviceLifecycleBridgeV1Tests: XCTestCase {
         "oneUseSuccessorAuthorization",
         "rollbackResistantCounterAndJournal",
         "sealedTransitionRecovery",
-        "oneUseAcceptanceTickets",
-        "durableInboxReservation",
+        "receiverBoundCreditCommit",
+        "rollbackResistantAcceptedCreditInbox",
         "authenticatedInboundStaging",
         "authoritativeReplayRootRecovery",
         "senderOutboxReservation",

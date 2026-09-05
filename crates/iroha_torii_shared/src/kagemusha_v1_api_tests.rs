@@ -12,12 +12,11 @@ use iroha_data_model::{
     kagemusha::{
         KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1, KAGEMUSHA_PARITY_PROOF_MAX_BYTES_V1,
         KAGEMUSHA_WIRE_VERSION_V1, KAGEMUSHA_XCHACHA20POLY1305_NONCE_BYTES_V1,
-        KAGEMUSHA_XCHACHA20POLY1305_TAG_BYTES_V1, KagemushaAcceptanceIntentV1,
-        KagemushaAcceptanceTicketV1, KagemushaDevicePublicKeyV1, KagemushaDeviceSignatureV1,
-        KagemushaEncryptedCreditEnvelopeV1, KagemushaHardwareCredentialV1,
-        KagemushaMintAuthorizationV1, KagemushaPairedProofV1, KagemushaPaymentRequestModeV1,
-        KagemushaSingleExactV1, kagemusha_credit_opening_canonical_len_v1,
-        kagemusha_device_key_reference_v1, kagemusha_liability_pool_id_v1,
+        KAGEMUSHA_XCHACHA20POLY1305_TAG_BYTES_V1, KagemushaDevicePublicKeyV1,
+        KagemushaDeviceSignatureV1, KagemushaEncryptedCreditEnvelopeV1,
+        KagemushaHardwareCredentialV1, KagemushaMintAuthorizationV1, KagemushaPairedProofV1,
+        kagemusha_credit_opening_canonical_len_v1, kagemusha_device_key_reference_v1,
+        kagemusha_liability_pool_id_v1,
     },
     nexus::AxtAssetIncarnationV1,
     testing::kagemusha::KagemushaFixtureSignerV1,
@@ -164,9 +163,8 @@ fn unchecked_payment_request_with_id(request_id: [u8; 32]) -> KagemushaPaymentRe
         liability_pool_id: kagemusha_liability_pool_id_v1(&network_id, &asset, asset_incarnation)
             .expect("liability pool"),
         recipient: account(0x32),
-        request_mode: KagemushaPaymentRequestModeV1::SingleExact(KagemushaSingleExactV1 {
-            amount: 12_345,
-        }),
+        amount: 12_345,
+        recipient_encryption_key: recipient_encryption_key(0x27),
         hardware_credential: hardware_credential(
             network_id,
             recipient_lane_id,
@@ -212,39 +210,19 @@ fn fixture_message_bytes(name: &str) -> Vec<u8> {
 
 fn peer_fixture() -> (
     KagemushaPaymentRequestV1,
-    KagemushaAcceptanceIntentV1,
-    KagemushaAcceptanceTicketV1,
     KagemushaPaymentV1,
     KagemushaAcknowledgementV1,
 ) {
     let request = payment_request();
-    let intent = decode_kagemusha_acceptance_intent_v1(
-        &fixture_message_bytes("acceptance_intent"),
-        &request,
-    )
-    .expect("decode Rust-owned compact acceptance intent");
-    let ticket = decode_kagemusha_acceptance_ticket_v1(
-        &fixture_message_bytes("acceptance_ticket"),
-        &request,
-        &intent,
-    )
-    .expect("decode Rust-owned one-use acceptance ticket");
-    let payment = decode_kagemusha_payment_v1(
-        &fixture_message_bytes("payment"),
-        &request,
-        &intent,
-        &ticket,
-    )
-    .expect("decode Rust-owned committed payment");
+    let payment = decode_kagemusha_payment_v1(&fixture_message_bytes("payment"), &request)
+        .expect("decode Rust-owned committed payment");
     let acknowledgement = decode_kagemusha_acknowledgement_v1(
         &fixture_message_bytes("acknowledgement"),
         &request,
-        &intent,
-        &ticket,
         &payment,
     )
     .expect("decode Rust-owned acknowledgement");
-    (request, intent, ticket, payment, acknowledgement)
+    (request, payment, acknowledgement)
 }
 
 fn top_up_request_for_network(network_id: NetworkId) -> KagemushaTopUpRequestV1 {
@@ -318,24 +296,18 @@ fn trust_anchor() -> KagemushaFinalityTrustAnchorV1 {
 }
 
 #[test]
-fn peer_boundary_roundtrips_only_the_exact_context_bound_five_message_exchange() {
-    let (request, intent, ticket, payment, acknowledgement) = peer_fixture();
+fn peer_boundary_roundtrips_only_the_exact_request_payment_ack_exchange() {
+    let (request, payment, acknowledgement) = peer_fixture();
     let request_bytes = norito::encode_canonical(&request).expect("encode request");
-    let intent_bytes = norito::encode_canonical(&intent).expect("encode intent");
-    let ticket_bytes = norito::encode_canonical(&ticket).expect("encode ticket");
     let payment_bytes = norito::encode_canonical(&payment).expect("encode payment");
     let acknowledgement_bytes =
         norito::encode_canonical(&acknowledgement).expect("encode acknowledgement");
     let other_request = payment_request_with_id([0x31; 32]);
     assert!(request_bytes.len() <= KAGEMUSHA_PAYMENT_REQUEST_MAX_BYTES_V1);
-    assert!(intent_bytes.len() <= KAGEMUSHA_ACCEPTANCE_INTENT_MAX_BYTES_V1);
-    assert!(ticket_bytes.len() <= KAGEMUSHA_ACCEPTANCE_TICKET_MAX_BYTES_V1);
     assert!(payment_bytes.len() <= KAGEMUSHA_PAYMENT_MAX_BYTES_V1);
     assert!(acknowledgement_bytes.len() <= KAGEMUSHA_ACKNOWLEDGEMENT_MAX_BYTES_V1);
     for (name, bytes) in [
         ("payment_request", &request_bytes),
-        ("acceptance_intent", &intent_bytes),
-        ("acceptance_ticket", &ticket_bytes),
         ("payment", &payment_bytes),
         ("acknowledgement", &acknowledgement_bytes),
     ] {
@@ -346,73 +318,32 @@ fn peer_boundary_roundtrips_only_the_exact_context_bound_five_message_exchange()
         );
     }
     assert_eq!(
-        validate_kagemusha_complete_exchange_v1(
-            &request,
-            &intent,
-            &ticket,
-            &payment,
-            &acknowledgement,
-        )
-        .expect("validate complete exchange"),
-        request_bytes.len()
-            + intent_bytes.len()
-            + ticket_bytes.len()
-            + payment_bytes.len()
-            + acknowledgement_bytes.len(),
+        validate_kagemusha_complete_exchange_v1(&request, &payment, &acknowledgement)
+            .expect("validate complete exchange"),
+        request_bytes.len() + payment_bytes.len() + acknowledgement_bytes.len(),
     );
-
-    assert!(decode_kagemusha_acceptance_intent_v1(&intent_bytes, &other_request).is_err());
-    assert!(decode_kagemusha_acceptance_ticket_v1(&ticket_bytes, &other_request, &intent).is_err());
-    assert!(decode_kagemusha_payment_v1(&payment_bytes, &other_request, &intent, &ticket).is_err());
+    assert!(decode_kagemusha_payment_v1(&payment_bytes, &other_request).is_err());
     assert!(
-        decode_kagemusha_acknowledgement_v1(
-            &acknowledgement_bytes,
-            &other_request,
-            &intent,
-            &ticket,
-            &payment,
-        )
-        .is_err()
+        decode_kagemusha_acknowledgement_v1(&acknowledgement_bytes, &other_request, &payment,)
+            .is_err()
     );
 }
 
 #[test]
 fn peer_boundary_pre_caps_every_message_and_rejects_trailing_bytes() {
-    let (request, intent, ticket, payment, _) = peer_fixture();
+    let (request, payment, _) = peer_fixture();
     assert!(matches!(
         decode_kagemusha_payment_request_v1(&vec![0; KAGEMUSHA_PAYMENT_REQUEST_MAX_BYTES_V1 + 1]),
         Err(KagemushaValidationErrorV1::EncodedSizeExceeded { .. })
     ));
     assert!(matches!(
-        decode_kagemusha_acceptance_intent_v1(
-            &vec![0; KAGEMUSHA_ACCEPTANCE_INTENT_MAX_BYTES_V1 + 1],
-            &request,
-        ),
-        Err(KagemushaValidationErrorV1::EncodedSizeExceeded { .. })
-    ));
-    assert!(matches!(
-        decode_kagemusha_acceptance_ticket_v1(
-            &vec![0; KAGEMUSHA_ACCEPTANCE_TICKET_MAX_BYTES_V1 + 1],
-            &request,
-            &intent,
-        ),
-        Err(KagemushaValidationErrorV1::EncodedSizeExceeded { .. })
-    ));
-    assert!(matches!(
-        decode_kagemusha_payment_v1(
-            &vec![0; KAGEMUSHA_PAYMENT_MAX_BYTES_V1 + 1],
-            &request,
-            &intent,
-            &ticket,
-        ),
+        decode_kagemusha_payment_v1(&vec![0; KAGEMUSHA_PAYMENT_MAX_BYTES_V1 + 1], &request,),
         Err(KagemushaValidationErrorV1::EncodedSizeExceeded { .. })
     ));
     assert!(matches!(
         decode_kagemusha_acknowledgement_v1(
             &vec![0; KAGEMUSHA_ACKNOWLEDGEMENT_MAX_BYTES_V1 + 1],
             &request,
-            &intent,
-            &ticket,
             &payment,
         ),
         Err(KagemushaValidationErrorV1::EncodedSizeExceeded { .. })
@@ -421,71 +352,37 @@ fn peer_boundary_pre_caps_every_message_and_rejects_trailing_bytes() {
     let mut encoded = norito::encode_canonical(&request).expect("encode request");
     encoded.push(0);
     assert!(decode_kagemusha_payment_request_v1(&encoded).is_err());
-    let mut encoded = fixture_message_bytes("acceptance_intent");
-    encoded.push(0);
-    assert!(decode_kagemusha_acceptance_intent_v1(&encoded, &request).is_err());
-    let mut encoded = fixture_message_bytes("acceptance_ticket");
-    encoded.push(0);
-    assert!(decode_kagemusha_acceptance_ticket_v1(&encoded, &request, &intent).is_err());
     let mut encoded = fixture_message_bytes("payment");
     encoded.push(0);
-    assert!(decode_kagemusha_payment_v1(&encoded, &request, &intent, &ticket).is_err());
+    assert!(decode_kagemusha_payment_v1(&encoded, &request).is_err());
     let mut encoded = fixture_message_bytes("acknowledgement");
     encoded.push(0);
-    assert!(
-        decode_kagemusha_acknowledgement_v1(&encoded, &request, &intent, &ticket, &payment)
-            .is_err()
-    );
+    assert!(decode_kagemusha_acknowledgement_v1(&encoded, &request, &payment).is_err());
 }
 
 #[test]
-fn peer_intent_is_unproved_and_ticket_owns_the_recipient_key() {
-    let (request, intent, ticket, _, _) = peer_fixture();
-    let json = norito::json::to_string(&intent).expect("encode compact intent JSON");
-    let value: norito::json::Value = norito::json::from_str(&json).expect("intent JSON");
-    let object = value.as_object().expect("intent object");
-    assert_eq!(object.len(), 5);
-    for field in [
-        "version",
-        "request_digest",
-        "intent_id",
-        "exact_amount",
-        "sender_one_time_commitment",
-    ] {
-        assert!(
-            object.contains_key(field),
-            "compact intent is missing {field}"
-        );
-    }
-    let mut substituted_ticket = ticket;
-    substituted_ticket.recipient_one_time_key = [0; 32];
-    let encoded = norito::encode_canonical(&substituted_ticket).expect("encode substituted ticket");
-    assert!(decode_kagemusha_acceptance_ticket_v1(&encoded, &request, &intent).is_err());
-
-    let replacement_key = recipient_encryption_key(0x29);
-    assert_ne!(replacement_key, ticket.recipient_one_time_key);
-    let envelope = encrypted_credit(replacement_key, 0x27);
+fn peer_request_owns_one_exact_amount_and_recipient_encryption_key() {
+    let request = payment_request();
+    assert!(request.amount > 0);
+    assert_ne!(request.recipient_encryption_key, [0; 32]);
+    let encrypted = encrypted_credit(request.recipient_encryption_key, 0x27);
     KagemushaEncryptedCreditEnvelopeV1::decode_canonical_shape_exact_against_recipient_key(
-        &envelope,
-        replacement_key,
+        &encrypted,
+        request.recipient_encryption_key,
     )
-    .expect("replacement recipient key passes X25519 shape validation");
-    let mut substituted_ticket = ticket;
-    substituted_ticket.recipient_one_time_key = replacement_key;
-    assert_eq!(substituted_ticket.signature, ticket.signature);
-    let encoded =
-        norito::encode_canonical(&substituted_ticket).expect("encode valid-key substitution");
-    assert!(matches!(
-        decode_kagemusha_acceptance_ticket_v1(&encoded, &request, &intent),
-        Err(KagemushaValidationErrorV1::InvalidField {
-            field: "device_signature",
-        })
-    ));
+    .expect("request-owned recipient key validates encrypted credit shape");
+
+    let mut invalid = request.clone();
+    invalid.amount = 0;
+    assert!(invalid.validate_shape().is_err());
+    let mut invalid = request;
+    invalid.recipient_encryption_key = [0; 32];
+    assert!(invalid.validate_shape().is_err());
 }
 
 #[test]
 fn peer_payment_rejects_post_commit_proof_and_certificate_substitution() {
-    let (request, intent, ticket, payment, _) = peer_fixture();
+    let (request, payment, _) = peer_fixture();
     assert_eq!(
         payment.proof.commit_certificate_digest,
         payment
@@ -496,12 +393,12 @@ fn peer_payment_rejects_post_commit_proof_and_certificate_substitution() {
     let mut substituted_payment = payment.clone();
     substituted_payment.proof.commit_certificate_digest[0] ^= 1;
     let encoded = norito::encode_canonical(&substituted_payment).expect("encode substituted proof");
-    assert!(decode_kagemusha_payment_v1(&encoded, &request, &intent, &ticket).is_err());
+    assert!(decode_kagemusha_payment_v1(&encoded, &request).is_err());
     let mut substituted_payment = payment;
     substituted_payment.commit_certificate.transition_nullifier[0] ^= 1;
     let encoded =
         norito::encode_canonical(&substituted_payment).expect("encode substituted certificate");
-    assert!(decode_kagemusha_payment_v1(&encoded, &request, &intent, &ticket).is_err());
+    assert!(decode_kagemusha_payment_v1(&encoded, &request).is_err());
 }
 
 #[test]
@@ -519,7 +416,7 @@ fn payment_request_has_no_receiver_balance_or_history_shape() {
         "input_count",
         "note_inventory",
         "recipient_hardware_epoch_id",
-        "recipient_one_time_key",
+        "request_mode",
     ] {
         assert!(
             !json.contains(forbidden),
@@ -527,6 +424,8 @@ fn payment_request_has_no_receiver_balance_or_history_shape() {
         );
     }
     assert!(json.contains("lane_commitment"));
+    assert!(json.contains("recipient_encryption_key"));
+    assert!(json.contains("amount"));
     assert!(json.contains("request_id"));
 }
 

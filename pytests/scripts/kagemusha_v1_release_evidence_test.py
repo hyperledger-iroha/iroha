@@ -29,6 +29,8 @@ SPEC.loader.exec_module(VERIFIER)
 INTERNAL_HELPER_PROOF_LENGTHS = {
     "platform_credential": (8_000, 8_032),
     "guard_bundle": (12_000, 12_032),
+    "mint_hash_shard": (8_064, 8_096),
+    "mint_hash_claim": (12_064, 12_096),
 }
 
 
@@ -388,8 +390,8 @@ def _fixture(tmp_path: Path) -> EvidenceFixture:
         "state_ep_protocol_digest": state_ep,
         "terminal_authorization_eq_protocol_digest": _digest(3),
         "terminal_authorization_ep_protocol_digest": _digest(4),
-        "commit_wrapper_eq_protocol_digest": _digest(13),
-        "commit_wrapper_ep_protocol_digest": _digest(14),
+        "commit_wrapper_eq_protocol_digest": _digest(17),
+        "commit_wrapper_ep_protocol_digest": _digest(18),
         "helper_protocols": helper_protocols,
     }
     artifact_projection = [
@@ -576,27 +578,6 @@ def _fixture(tmp_path: Path) -> EvidenceFixture:
             [*proof_inputs, artifact_paths[eq_role], artifact_paths[ep_role]],
         )
         helper_rows.append({"helper": helper, "report": report_path})
-
-    occupancy_rows: list[dict[str, Any]] = []
-    for occupancy in range(1, VERIFIER.RECEIVE_FOLD_BATCH_WIDTH + 1):
-        proof = f"samples/occupancy-{occupancy:02d}.proof"
-        fixture.write(proof, bytes([40 + occupancy]) * (140 + occupancy), "proof")
-        fixture.proof_paths.append(proof)
-        report_path = add_report(
-            f"reports/profile/occupancy-{occupancy:02d}.json",
-            "iroha.kagemusha_v1.receive_fold_occupancy_report",
-            {
-                "hardware_profile_id": profile_id,
-                "occupancy": occupancy,
-                "eq_protocol_digest": state_eq,
-                "ep_protocol_digest": state_ep,
-                "eq_verifying_key": artifact_paths["state_vk_eq"],
-                "ep_verifying_key": artifact_paths["state_vk_ep"],
-                "proof": proof,
-            },
-            [proof, artifact_paths["state_vk_eq"], artifact_paths["state_vk_ep"]],
-        )
-        occupancy_rows.append({"occupancy": occupancy, "report": report_path})
 
     depth_rows: list[dict[str, Any]] = []
     for depth in (8, 64, 1024, 1025):
@@ -790,7 +771,6 @@ def _fixture(tmp_path: Path) -> EvidenceFixture:
                 "qualification_report": qualification_path,
                 "relations": relation_rows,
                 "helpers": helper_rows,
-                "receive_fold_occupancies": occupancy_rows,
                 "recursive_depths": depth_rows,
                 "aggregate_balance": aggregate_path,
                 "thermal": thermal_path,
@@ -971,7 +951,7 @@ def test_release_artifact_ordinals_match_current_rust_model() -> None:
         for ordinal, role in enumerate(VERIFIER.ARTIFACT_ROLES)
     ]
     assert rust_roles == expected
-    assert len(rust_roles) == 42
+    assert len(rust_roles) == 50
 
 
 def test_native_inner_mint_profiles_are_required_and_authenticated() -> None:
@@ -992,20 +972,24 @@ def test_native_inner_mint_profiles_are_required_and_authenticated() -> None:
         r"^    (\w+): KagemushaBaseCircuitProfileFileV1,", config_profile, re.MULTILINE
     )
     assert native_fields == config_fields
-    inner_fields = (
+    mint_profile_fields = (
         "inner_mint_authorization_eq",
         "inner_mint_authorization_ep",
         "inner_mint_eq",
         "inner_mint_ep",
+        "mint_hash_shard_eq",
+        "mint_hash_shard_ep",
+        "mint_hash_claim_eq",
+        "mint_hash_claim_ep",
     )
-    assert tuple(native_fields[-4:]) == inner_fields
+    assert tuple(native_fields[-8:]) == mint_profile_fields
     digest_impl = native.split("impl KagemushaRecursiveVerifierProfileV1 {", 1)[1].split(
         "    fn validate(&self)", 1
     )[0]
     validation_impl = native.split("    fn validate(&self)", 1)[1].split(
         "        if self.mint_eq_protocol_digest", 1
     )[0]
-    for tag, field in enumerate(inner_fields, start=18):
+    for tag, field in enumerate(mint_profile_fields, start=18):
         assert re.search(rf"\({tag}(?:_u8)?, &self\.{field}\)", digest_impl)
         assert f"&self.{field}" in validation_impl
 
@@ -1027,7 +1011,7 @@ def test_release_rejects_missing_inner_mint_artifacts(
     fixture.write_manifest()
     result = _run(fixture)
     assert result.returncode == 1
-    assert "artifact inventory must contain exactly the 42 V1 roles" in result.stderr
+    assert "artifact inventory must contain exactly the 50 V1 roles" in result.stderr
 
 
 def test_release_rejects_reordered_inner_mint_artifacts(tmp_path: Path) -> None:
@@ -1149,13 +1133,10 @@ def test_valid_closure_derives_complete_projection_deterministically(tmp_path: P
         "terminal_authorization_vk_ep",
         "commit_wrapper_vk_ep",
     }
-    assert len(profile["helper_circuits"]) == 4
+    assert len(profile["helper_circuits"]) == 6
     assert [row["helper"] for row in profile["helper_circuits"]] == list(
         VERIFIER.HELPERS
     )
-    assert [
-        row["occupancy"] for row in profile["receive_fold_occupancies"]
-    ] == list(range(1, VERIFIER.RECEIVE_FOLD_BATCH_WIDTH + 1))
     for helper in profile["helper_circuits"][2:]:
         expected_eq, expected_ep = INTERNAL_HELPER_PROOF_LENGTHS[helper["helper"]]
         assert helper["eq_proof_bytes"] == expected_eq
@@ -1171,7 +1152,7 @@ def test_valid_closure_derives_complete_projection_deterministically(tmp_path: P
         VERIFIER.ACCEPTANCE_CASES
     )
     assert len(profile["acceptance_cases"]) == len(VERIFIER.ACCEPTANCE_CASES)
-    assert len(projection["artifact_inventory"]) == 42
+    assert len(projection["artifact_inventory"]) == 50
     assert [row["role"] for row in projection["artifact_inventory"]][2:10] == [
         "inner_state_pk_eq",
         "inner_state_vk_eq",
@@ -1197,6 +1178,16 @@ def test_valid_closure_derives_complete_projection_deterministically(tmp_path: P
         "inner_mint_credit_vk_eq",
         "inner_mint_credit_pk_ep",
         "inner_mint_credit_vk_ep",
+    ]
+    assert [row["role"] for row in projection["artifact_inventory"]][42:50] == [
+        "mint_hash_shard_pk_eq",
+        "mint_hash_shard_vk_eq",
+        "mint_hash_shard_pk_ep",
+        "mint_hash_shard_vk_ep",
+        "mint_hash_claim_pk_eq",
+        "mint_hash_claim_vk_eq",
+        "mint_hash_claim_pk_ep",
+        "mint_hash_claim_vk_ep",
     ]
     assert len(projection["verifier_commands"]) == len(fixture.commands)
     candidate_context_digest = projection["receipt_projection"]["evidence_closure"][
@@ -1499,25 +1490,6 @@ def test_one_measurement_sample_cannot_alias_two_matrix_cells(tmp_path: Path) ->
     result = _run(fixture)
     assert result.returncode == 1
     assert "measurement sample" in result.stderr and "aliased" in result.stderr
-
-
-def test_receive_fold_occupancies_are_exactly_one_through_sixteen(
-    tmp_path: Path,
-) -> None:
-    missing = _fixture(tmp_path / "missing")
-    missing.manifest["profiles"][0]["receive_fold_occupancies"].pop()
-    missing.write_manifest()
-    result = _run(missing)
-    assert result.returncode == 1
-    assert "exactly 1 through 16" in result.stderr
-
-    unordered = _fixture(tmp_path / "unordered")
-    rows = unordered.manifest["profiles"][0]["receive_fold_occupancies"]
-    rows[0], rows[1] = rows[1], rows[0]
-    unordered.write_manifest()
-    result = _run(unordered)
-    assert result.returncode == 1
-    assert "exactly 1 through 16" in result.stderr
 
 
 def test_counts_are_derived_from_typed_logs(tmp_path: Path) -> None:

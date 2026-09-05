@@ -28,33 +28,38 @@ public final class KagemushaDeviceLifecycleBridgeV1 {
    * once, and recovers every terminal certificate and installed envelope byte-identically.
    */
   public enum Operation {
-    READ_ACTIVE_HARDWARE_CREDENTIAL,
-    PREPARE_ACCEPTANCE_INTENT,
-    RECOVER_ACCEPTANCE_INTENT,
-    VALIDATE_INTENT_RESERVE_INBOX_AND_ISSUE_ACCEPTANCE_TICKET,
-    RECOVER_ACCEPTANCE_TICKET,
-    STAGE_INBOUND_PAYMENT,
-    RECOVER_STAGED_INBOUND_PAYMENT,
-    RECOVER_INBOUND_INBOX_PAGE,
-    PREPARE_EXACT_NEXT_TRANSITION,
-    RECOVER_PREPARED_TRANSITION,
-    ABANDON_UNCOMMITTED_PREPARED_TRANSITION,
-    COMMIT_VERIFIED_CANDIDATE_AND_SIGN_TERMINAL,
-    RECOVER_TERMINAL_OUTCOME,
-    INSTALL_TERMINAL_ENVELOPE,
-    RECOVER_INSTALLED_ENVELOPE_OR_STATE_PROOF,
-    SIGN_RECEIVE_ACKNOWLEDGEMENT,
-    RELEASE_OUTBOX_ENTRY,
-    READ_TRUSTED_TIME_OR_LEASE,
-    PREPARE_MINT_AUTHORIZATION,
-    RECOVER_MINT_AUTHORIZATION,
-    VERIFY_AUTHORIZATION_AND_STAGE_MINT_CREDIT,
-    FOLD_RECEIVE_BATCH,
-    READ_PENDING_CREDIT_WATERMARK,
-    ROTATE_HARDWARE_EPOCH,
-    BOOTSTRAP_AGGREGATE_STATE,
-    RECOVER_WALLET_SNAPSHOT,
-    CREATE_SIGNED_PAYMENT_REQUEST,
+    READ_ACTIVE_HARDWARE_CREDENTIAL(1),
+    STAGE_INBOUND_PAYMENT(2),
+    RECOVER_STAGED_INBOUND_PAYMENT(3),
+    RECOVER_INBOUND_INBOX_PAGE(4),
+    PREPARE_EXACT_NEXT_TRANSITION(5),
+    RECOVER_PREPARED_TRANSITION(6),
+    COMMIT_VERIFIED_CANDIDATE_AND_SIGN_TERMINAL(7),
+    RECOVER_TERMINAL_OUTCOME(8),
+    INSTALL_TERMINAL_ENVELOPE(9),
+    RECOVER_INSTALLED_ENVELOPE_OR_STATE_PROOF(10),
+    SIGN_RECEIVE_ACKNOWLEDGEMENT(11),
+    RELEASE_OUTBOX_ENTRY(12),
+    READ_TRUSTED_TIME_OR_LEASE(13),
+    PREPARE_MINT_AUTHORIZATION(14),
+    RECOVER_MINT_AUTHORIZATION(15),
+    VERIFY_AUTHORIZATION_AND_STAGE_MINT_CREDIT(16),
+    FOLD_RECEIVE_CREDIT(17),
+    READ_PENDING_CREDIT_WATERMARK(18),
+    ROTATE_HARDWARE_EPOCH(19),
+    BOOTSTRAP_AGGREGATE_STATE(20),
+    RECOVER_WALLET_SNAPSHOT(21),
+    CREATE_SIGNED_PAYMENT_REQUEST(22);
+
+    private final int code;
+
+    Operation(final int code) {
+      this.code = code;
+    }
+
+    public int code() {
+      return code;
+    }
   }
 
   /** Exact secure-backend capabilities shared with the Kotlin bridge. */
@@ -63,8 +68,8 @@ public final class KagemushaDeviceLifecycleBridgeV1 {
     ONE_USE_SUCCESSOR_AUTHORIZATION(1 << 1),
     ROLLBACK_RESISTANT_COUNTER_AND_JOURNAL(1 << 2),
     SEALED_TRANSITION_RECOVERY(1 << 3),
-    ONE_USE_ACCEPTANCE_TICKETS(1 << 4),
-    DURABLE_INBOX_RESERVATION(1 << 5),
+    RECEIVER_BOUND_CREDIT_COMMIT(1 << 4),
+    ROLLBACK_RESISTANT_ACCEPTED_CREDIT_INBOX(1 << 5),
     AUTHENTICATED_INBOUND_STAGING(1 << 6),
     AUTHORITATIVE_REPLAY_ROOT_RECOVERY(1 << 7),
     SENDER_OUTBOX_RESERVATION(1 << 8),
@@ -106,25 +111,21 @@ public final class KagemushaDeviceLifecycleBridgeV1 {
   /** Defensively copied native secure-backend identity. */
   public static final class Capabilities {
     private final byte[] hardwarePolicyId;
-    private final byte[] attestationDigest;
+    private final byte[] qualificationReportDigest;
 
     private Capabilities(
         final org.hyperledger.iroha.sdk.offline.KagemushaDeviceLifecycleBridgeV1.Capabilities
             source) {
       hardwarePolicyId = source.hardwarePolicyId();
-      attestationDigest = source.attestationDigest();
+      qualificationReportDigest = source.qualificationReportDigest();
     }
 
     public byte[] hardwarePolicyId() {
       return hardwarePolicyId.clone();
     }
 
-    public byte[] attestationDigest() {
-      return attestationDigest.clone();
-    }
-
     public byte[] qualificationReportDigest() {
-      return attestationDigest();
+      return qualificationReportDigest.clone();
     }
   }
 
@@ -162,6 +163,20 @@ public final class KagemushaDeviceLifecycleBridgeV1 {
 
   private final org.hyperledger.iroha.sdk.offline.KagemushaDeviceLifecycleBridgeV1 delegate;
 
+  public static final int PROTOCOL_VERSION =
+      org.hyperledger.iroha.sdk.offline.KagemushaDeviceLifecycleBridgeV1.PROTOCOL_VERSION;
+  public static final int MAXIMUM_COMMAND_PAYLOAD_BYTES =
+      org.hyperledger.iroha.sdk.offline.KagemushaDeviceLifecycleBridgeV1
+          .MAXIMUM_COMMAND_PAYLOAD_BYTES;
+  public static final int MAXIMUM_RESPONSE_PAYLOAD_BYTES =
+      org.hyperledger.iroha.sdk.offline.KagemushaDeviceLifecycleBridgeV1
+          .MAXIMUM_RESPONSE_PAYLOAD_BYTES;
+  public static final int MAXIMUM_AUTHENTICATOR_BYTES =
+      org.hyperledger.iroha.sdk.offline.KagemushaDeviceLifecycleBridgeV1.MAXIMUM_AUTHENTICATOR_BYTES;
+  public static final int MAXIMUM_NATIVE_CONTRACT_VECTOR_BYTES =
+      org.hyperledger.iroha.sdk.offline.KagemushaDeviceLifecycleBridgeV1
+          .MAXIMUM_NATIVE_CONTRACT_VECTOR_BYTES;
+
   private KagemushaDeviceLifecycleBridgeV1(
       final org.hyperledger.iroha.sdk.offline.KagemushaDeviceLifecycleBridgeV1 delegate) {
     this.delegate = Objects.requireNonNull(delegate, "delegate");
@@ -179,6 +194,18 @@ public final class KagemushaDeviceLifecycleBridgeV1 {
         org.hyperledger.iroha.sdk.offline.KagemushaDeviceLifecycleBridgeV1.onlineOnly());
   }
 
+  /**
+   * Return the canonical Norito contract vector compiled into the native bridge, when linked.
+   *
+   * <p>Its domain-separated digest is an ABI/tamper pin only and never grants monetary authority.
+   */
+  public static byte[] nativeContractVector() {
+    final byte[] vector =
+        org.hyperledger.iroha.sdk.offline.KagemushaDeviceLifecycleBridgeV1
+            .nativeContractVector();
+    return vector == null ? null : vector.clone();
+  }
+
   public Availability availability() {
     return Availability.valueOf(delegate.getAvailability().name());
   }
@@ -189,29 +216,7 @@ public final class KagemushaDeviceLifecycleBridgeV1 {
     return source == null ? null : new Capabilities(source);
   }
 
-  /** Execute one bounded canonical KAGEMUSHA V1 command through the qualifying backend. */
-  public Result execute(
-      final Operation operation,
-      final byte[] requestId,
-      final byte[] canonicalCommand) {
-    final Operation requiredOperation = Objects.requireNonNull(operation, "operation");
-    final byte[] requestIdCopy = Objects.requireNonNull(requestId, "requestId").clone();
-    final byte[] commandCopy =
-        Objects.requireNonNull(canonicalCommand, "canonicalCommand").clone();
-    try {
-      return new Result(
-          delegate.execute(
-              org.hyperledger.iroha.sdk.offline.KagemushaDeviceLifecycleBridgeV1.Operation
-                  .valueOf(requiredOperation.name()),
-              requestIdCopy,
-              commandCopy));
-    } finally {
-      Arrays.fill(requestIdCopy, (byte) 0);
-      Arrays.fill(commandCopy, (byte) 0);
-    }
-  }
-
-  /** Execute with the operation-1 bootstrapped response key required for operations 2 through 27. */
+  /** Execute with the operation-1 bootstrapped response key required for operations 2 through 22. */
   public Result executeAuthenticated(
       final Operation operation,
       final byte[] requestId,

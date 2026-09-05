@@ -30,7 +30,7 @@ use std::{
 #[cfg(unix)]
 use std::{fs, fs::OpenOptions};
 
-const KAGEMUSHA_RELEASE_ARTIFACT_ROLE_COUNT_V1: usize = 42;
+const KAGEMUSHA_RELEASE_ARTIFACT_ROLE_COUNT_V1: usize = 50;
 const _: [(); KAGEMUSHA_RELEASE_ARTIFACT_ROLE_COUNT_V1] = [(); KagemushaArtifactRoleV1::ALL.len()];
 const AUTHORITY_REVIEW_PROJECTION_MAX_BYTES_V1: usize = 128 * 1024 * 1024;
 const AUTHORITY_REVIEW_PROJECTION_SCHEMA_V1: &str =
@@ -49,12 +49,10 @@ const REQUIRED_PRIVACY_C_EXPORTS_V1: [&str; 5] = [
     "iroha_privacy_validate_exact12_fixture_bundle_v1",
     "iroha_privacy_free_buffer",
 ];
-const REQUIRED_C_JNI_SYMBOLS_V1: [&str; 40] = [
+const REQUIRED_C_JNI_SYMBOLS_V1: [&str; 48] = [
     "connect_norito_bridge_abi_version",
     "connect_norito_free",
     "connect_norito_kagemusha_v1_payment_request_validate",
-    "connect_norito_kagemusha_v1_acceptance_intent_validate",
-    "connect_norito_kagemusha_v1_acceptance_ticket_validate",
     "connect_norito_kagemusha_v1_payment_validate",
     "connect_norito_kagemusha_v1_acknowledgement_validate",
     "connect_norito_kagemusha_v1_complete_exchange_validate",
@@ -63,8 +61,6 @@ const REQUIRED_C_JNI_SYMBOLS_V1: [&str; 40] = [
     "connect_norito_kagemusha_v1_mint_credit_against_authorization_validate",
     "connect_norito_kagemusha_v1_redemption_voucher_validate",
     "connect_norito_kagemusha_v1_payment_request_text_validate",
-    "connect_norito_kagemusha_v1_acceptance_intent_text_validate",
-    "connect_norito_kagemusha_v1_acceptance_ticket_text_validate",
     "connect_norito_kagemusha_v1_payment_text_validate",
     "connect_norito_kagemusha_v1_acknowledgement_text_validate",
     "connect_norito_kagemusha_v1_complete_exchange_text_validate",
@@ -74,8 +70,13 @@ const REQUIRED_C_JNI_SYMBOLS_V1: [&str; 40] = [
     "connect_norito_kagemusha_v1_redemption_voucher_text_validate",
     "connect_norito_kagemusha_device_mint_stage_command_v1_validate",
     "connect_norito_kagemusha_device_mint_stage_result_v1_validate",
+    "connect_norito_kagemusha_contract_vector_v1",
+    "connect_norito_kagemusha_core_coordinator_contract_v1",
+    "connect_norito_kagemusha_core_coordinator_open_v1",
+    "connect_norito_kagemusha_core_coordinator_invoke_v1",
     "connect_norito_kagemusha_device_capabilities_v1",
     "connect_norito_kagemusha_device_execute_v1",
+    "connect_norito_kagemusha_device_response_authenticator_v1_verify",
     "connect_norito_validation_fee_hijiri_quote_request_v1",
     "connect_norito_validation_fee_hijiri_quote_response_verify_v1",
     "connect_norito_private_settlement_committee_proof_response_verify_v1",
@@ -89,6 +90,13 @@ const REQUIRED_C_JNI_SYMBOLS_V1: [&str; 40] = [
     "Java_org_hyperledger_iroha_android_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeVerifyCommitteeProofResponseV1",
     "Java_org_hyperledger_iroha_android_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeVerifyAuditorCapsuleResponseWithRequestV1",
     "Java_org_hyperledger_iroha_android_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeVerifyAuditApprovalResponseV1",
+    "Java_org_hyperledger_iroha_sdk_offline_KagemushaDeviceLifecycleBridgeV1_00024NativeEndpoint_nativeCapabilitiesV1",
+    "Java_org_hyperledger_iroha_sdk_offline_KagemushaDeviceLifecycleBridgeV1_00024NativeEndpoint_nativeContractVectorV1",
+    "Java_org_hyperledger_iroha_sdk_offline_KagemushaDeviceLifecycleBridgeV1_00024NativeEndpoint_nativeExecuteV1",
+    "Java_org_hyperledger_iroha_sdk_offline_KagemushaDeviceLifecycleBridgeV1_00024NativeEndpoint_nativeVerifyResponseAuthenticatorV1",
+    "Java_pg_bpng_digitalkina_KagemushaNativeCoreJniV1_nativeContractV1",
+    "Java_pg_bpng_digitalkina_KagemushaNativeCoreJniV1_nativeOpenV1",
+    "Java_pg_bpng_digitalkina_KagemushaNativeCoreJniV1_nativeInvokeV1",
     "connect_norito_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json",
 ];
 
@@ -123,7 +131,7 @@ struct AuthenticateReleaseV1Args {
     /// Canonical JSON recursive-verifier profile consumed by Core.
     #[arg(long, value_name = "PATH")]
     recursive_profile: PathBuf,
-    /// Absolute directory containing all 42 SHA-256-addressed release artifacts.
+    /// Absolute directory containing all 50 SHA-256-addressed release artifacts.
     #[arg(long, value_name = "PATH")]
     artifact_root: PathBuf,
     /// Canonical output from the separately pinned authority-review verifier.
@@ -312,7 +320,7 @@ fn validate_exact_release_inventory_v1(
             .zip(KagemushaArtifactRoleV1::ALL)
             .any(|(binding, expected)| binding.role != expected)
     {
-        bail!("KAGEMUSHA V1 release requires the exact ordered 42-role artifact inventory");
+        bail!("KAGEMUSHA V1 release requires the exact ordered 50-role artifact inventory");
     }
     for (index, binding) in artifacts.iter().enumerate() {
         if binding.sha256 == [0; 32]

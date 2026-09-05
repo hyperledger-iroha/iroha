@@ -3,25 +3,23 @@ import XCTest
 
 final class IrohaPeerWireMessageV1Tests: XCTestCase {
 
-    func testKagemushaFiveMessageKindsPinCurrentV1Schemas() {
-        XCTAssertEqual(IrohaPeerWireKindV1.allCases.map(\.rawValue), [1, 2, 3, 4, 5])
+    func testKagemushaThreeMessageKindsPinCurrentV1Schemas() {
+        XCTAssertEqual(IrohaPeerWireKindV1.allCases.map(\.rawValue), [1, 2, 3])
         XCTAssertEqual(
             IrohaPeerWireKindV1.allCases.map(\.requiredKagemushaCanonicalSchema),
             [
                 "iroha_data_model::kagemusha::kagemusha_v1::KagemushaPaymentRequestV1",
-                "iroha_data_model::kagemusha::kagemusha_v1::KagemushaAcceptanceIntentV1",
-                "iroha_data_model::kagemusha::kagemusha_v1::KagemushaAcceptanceTicketV1",
                 "iroha_data_model::kagemusha::kagemusha_v1::KagemushaPaymentV1",
                 "iroha_data_model::kagemusha::kagemusha_v1::KagemushaAcknowledgementV1",
             ]
         )
         XCTAssertEqual(
             IrohaPeerWireKindV1.allCases.map(\.requiredKagemushaPayloadAlignment),
-            [16, 16, 8, 8, 2]
+            [16, 16, 2]
         )
         XCTAssertEqual(
             IrohaPeerWireKindV1.allCases.map(\.maximumKagemushaCanonicalBytes),
-            [928, 192, 256, 7_552, 256]
+            [928, 7_552, 256]
         )
     }
 

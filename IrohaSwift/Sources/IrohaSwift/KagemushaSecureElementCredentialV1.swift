@@ -4,33 +4,7 @@
 import CryptoKit
 import Foundation
 
-#if OFFLINE_SECURE_ELEMENT_CREDENTIAL && canImport(SecureElementCredential)
-  import SecureElementCredential
-#endif
-
-/// Exact Apple-provisioned credential and applet identity used for wired lifecycle APDUs.
-public struct KagemushaSecureElementCredentialConfigurationV1: Equatable, Sendable {
-  public let credentialIdentifier: UUID
-  public let instanceAID: Data
-
-  public init(credentialIdentifier: UUID, instanceAID: Data) {
-    precondition((5...16).contains(instanceAID.count), "instanceAID must contain 5...16 bytes")
-    precondition(instanceAID.contains { $0 != 0 }, "instanceAID must be non-zero")
-    self.credentialIdentifier = credentialIdentifier
-    self.instanceAID = instanceAID
-  }
-
-  public static func foundation(credentialIdentifier: UUID)
-    -> KagemushaSecureElementCredentialConfigurationV1
-  {
-    KagemushaSecureElementCredentialConfigurationV1(
-      credentialIdentifier: credentialIdentifier,
-      instanceAID: Data([0xf0, 0x4f, 0x44, 0x4a, 0x52, 0x4e, 0x00, 0x01])
-    )
-  }
-}
-
-#if OFFLINE_SECURE_ELEMENT_CREDENTIAL && canImport(SecureElementCredential)
+#if OFFLINE_SECURE_ELEMENT_CREDENTIAL && canImport(SecureElementCredential) && canImport(Security)
   /// Async wired-mode session admitted only by the exact ABI-23 applet capability frame.
   ///
   /// Targets must define `OFFLINE_SECURE_ELEMENT_CREDENTIAL` only after Apple grants the Secure
@@ -38,56 +12,31 @@ public struct KagemushaSecureElementCredentialConfigurationV1: Equatable, Sendab
   /// non-entitled build from calling `CredentialSession.startSession()`.
   @available(iOS 18.1, *)
   public final class KagemushaSecureElementCredentialSessionV1: @unchecked Sendable {
-    public let acceptedCapabilities: KagemushaDeviceLifecycleCapabilitiesV1
+    public var acceptedCapabilities: KagemushaDeviceLifecycleCapabilitiesV1 {
+      admission.acceptedCapabilities
+    }
 
-    private let session: CredentialSession
-    private let gate = AsyncGate()
+    private let admission: KagemushaSecureElementCredentialAdmissionV1
+    private static let provisioner = KagemushaSecureElementCredentialProvisionerV1(
+      backend: KagemushaAppleSecureElementCredentialBackendV1(),
+      persistence: KagemushaSecureElementCredentialKeychainPersistenceV1()
+    )
 
-    private init(
-      session: CredentialSession,
-      acceptedCapabilities: KagemushaDeviceLifecycleCapabilitiesV1
-    ) {
-      self.session = session
-      self.acceptedCapabilities = acceptedCapabilities
+    private init(admission: KagemushaSecureElementCredentialAdmissionV1) {
+      self.admission = admission
     }
 
     /// Open the exact installed credential without blocking the caller's executor.
     public static func openIfAvailable(
       configuration: KagemushaSecureElementCredentialConfigurationV1
     ) async -> KagemushaSecureElementCredentialSessionV1? {
-      do {
-        guard try await CredentialSession.isEligible else { return nil }
-        let session = try await CredentialSession.startSession()
-        do {
-          let matching = try await session.listCredentials().filter {
-            $0.identifier == configuration.credentialIdentifier
-          }
-          guard matching.count == 1,
-            case .installed(let instances) = matching[0].state,
-            instances.count == 1,
-            instances[0].instanceAID == configuration.instanceAID
-          else {
-            try? await session.invalidate()
-            return nil
-          }
-          try await session.enterWiredMode(using: matching[0])
-          let frame = try await APDU.capabilities(session: session)
-          let capabilities = try KagemushaDeviceLifecycleBridgeV1.Codec.decodeCapabilities(
-            frame,
-            expectedPlatform: KagemushaDeviceLifecycleBridgeV1.Codec.iosPlatformCode
-          )
-          return KagemushaSecureElementCredentialSessionV1(
-            session: session,
-            acceptedCapabilities: capabilities
-          )
-        } catch {
-          try? await session.endWiredMode()
-          try? await session.invalidate()
-          return nil
-        }
-      } catch {
-        return nil
-      }
+      guard let applicationIdentifier = Bundle.main.bundleIdentifier,
+        let admission = await provisioner.open(
+          configuration: configuration,
+          applicationIdentifier: applicationIdentifier
+        )
+      else { return nil }
+      return KagemushaSecureElementCredentialSessionV1(admission: admission)
     }
 
     /// Execute one canonical lifecycle command entirely through the admitted wired-mode applet.
@@ -96,7 +45,7 @@ public struct KagemushaSecureElementCredentialConfigurationV1: Equatable, Sendab
       requestID: Data,
       canonicalCommand: Data
     ) async throws -> KagemushaDeviceLifecycleResultV1 {
-      try await gate.withLock {
+      try await admission.gate.withLock {
         var command = try KagemushaDeviceLifecycleBridgeV1.Codec.encodeCommand(
           operation: operation,
           requestID: requestID,
@@ -104,7 +53,7 @@ public struct KagemushaSecureElementCredentialConfigurationV1: Equatable, Sendab
         )
         let commandRange = command.startIndex..<command.endIndex
         defer { command.resetBytes(in: commandRange) }
-        var response = try await APDU.execute(command, session: session)
+        var response = try await APDU.execute(command, session: admission.session)
         let responseRange = response.startIndex..<response.endIndex
         defer { response.resetBytes(in: responseRange) }
         return try KagemushaDeviceLifecycleBridgeV1.Codec.decodeResponse(
@@ -116,61 +65,17 @@ public struct KagemushaSecureElementCredentialConfigurationV1: Equatable, Sendab
     }
 
     public func close() async {
-      await gate.withLockWithoutThrowing {
-        try? await self.session.endWiredMode()
-        try? await self.session.invalidate()
-      }
-    }
-
-    private actor AsyncGate {
-      private var occupied = false
-      private var waiters: [CheckedContinuation<Void, Never>] = []
-
-      func withLock<T>(_ operation: () async throws -> T) async rethrows -> T {
-        await acquire()
-        defer { release() }
-        return try await operation()
-      }
-
-      func withLockWithoutThrowing(_ operation: () async -> Void) async {
-        await acquire()
-        defer { release() }
-        await operation()
-      }
-
-      private func acquire() async {
-        if !occupied {
-          occupied = true
-          return
-        }
-        await withCheckedContinuation { continuation in
-          waiters.append(continuation)
-        }
-      }
-
-      private func release() {
-        if waiters.isEmpty {
-          occupied = false
-        } else {
-          waiters.removeFirst().resume()
-        }
+      await admission.gate.withLockWithoutThrowing {
+        try? await self.admission.session.endWiredMode()
+        try? await self.admission.session.invalidate()
       }
     }
 
     private enum APDU {
-      static func capabilities(session: CredentialSession) async throws -> Data {
-        let response = try await exchange(
-          shortCommand(instruction: insCapabilities, expectedLength: capabilityBytes),
-          label: "capabilities",
-          session: session
-        )
-        guard response.count == capabilityBytes else {
-          throw invalid("secure-element capability response must contain exactly 96 bytes")
-        }
-        return response
-      }
-
-      static func execute(_ command: Data, session: CredentialSession) async throws -> Data {
+      static func execute(
+        _ command: Data,
+        session: any KagemushaSecureElementCredentialSessionBackendV1
+      ) async throws -> Data {
         guard (minimumCommandBytes...maximumCommandBytes).contains(command.count) else {
           throw invalid("secure-element command is outside the ABI-23 bound")
         }
@@ -260,7 +165,7 @@ public struct KagemushaSecureElementCredentialConfigurationV1: Equatable, Sendab
       private static func exchange(
         _ original: Data,
         label: String,
-        session: CredentialSession
+        session: any KagemushaSecureElementCredentialSessionBackendV1
       ) async throws -> Data {
         var command = original
         let commandRange = command.startIndex..<command.endIndex
@@ -279,7 +184,9 @@ public struct KagemushaSecureElementCredentialConfigurationV1: Equatable, Sendab
         return Data(raw.prefix(statusOffset))
       }
 
-      private static func abortBestEffort(session: CredentialSession) async {
+      private static func abortBestEffort(
+        session: any KagemushaSecureElementCredentialSessionBackendV1
+      ) async {
         var command = shortCommand(instruction: insAbortTransport)
         let range = command.startIndex..<command.endIndex
         defer { command.resetBytes(in: range) }
@@ -345,7 +252,6 @@ public struct KagemushaSecureElementCredentialConfigurationV1: Equatable, Sendab
       }
 
       private static let cla: UInt8 = 0x80
-      private static let insCapabilities: UInt8 = 0x11
       private static let insBeginCommand: UInt8 = 0x12
       private static let insWriteCommand: UInt8 = 0x13
       private static let insCommitCommand: UInt8 = 0x14
@@ -353,7 +259,6 @@ public struct KagemushaSecureElementCredentialConfigurationV1: Equatable, Sendab
       private static let insAbortTransport: UInt8 = 0x16
       private static let chunkBytes = 224
       private static let metadataBytes = 36
-      private static let capabilityBytes = 96
       private static let minimumCommandBytes = 80
       private static let maximumCommandBytes = 80 + 64 * 1024
       private static let minimumResponseBytes = 116

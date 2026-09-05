@@ -85,18 +85,14 @@ public final class IrohaPeerCanonicalPayload {
     final String schema = switch (kind) {
       case REQUEST ->
           "iroha_data_model::kagemusha::kagemusha_v1::KagemushaPaymentRequestV1";
-      case INTENT ->
-          "iroha_data_model::kagemusha::kagemusha_v1::KagemushaAcceptanceIntentV1";
-      case TICKET ->
-          "iroha_data_model::kagemusha::kagemusha_v1::KagemushaAcceptanceTicketV1";
       case PAYMENT ->
           "iroha_data_model::kagemusha::kagemusha_v1::KagemushaPaymentV1";
       case ACKNOWLEDGEMENT ->
           "iroha_data_model::kagemusha::kagemusha_v1::KagemushaAcknowledgementV1";
     };
     final int requiredPadding = switch (kind) {
-      case REQUEST, INTENT -> 8;
-      case TICKET, PAYMENT, ACKNOWLEDGEMENT -> 0;
+      case REQUEST, PAYMENT -> 8;
+      case ACKNOWLEDGEMENT -> 0;
     };
     try {
       final NoritoHeader.DecodeResult decoded =
@@ -123,8 +119,6 @@ public final class IrohaPeerCanonicalPayload {
     return switch (profile) {
       case KAGEMUSHA_V1 -> switch (kind) {
         case REQUEST -> KagemushaWireV1.MAXIMUM_PAYMENT_REQUEST_BYTES;
-        case INTENT -> KagemushaWireV1.MAXIMUM_ACCEPTANCE_INTENT_BYTES;
-        case TICKET -> KagemushaWireV1.MAXIMUM_ACCEPTANCE_TICKET_BYTES;
         case PAYMENT -> KagemushaWireV1.MAXIMUM_PAYMENT_BYTES;
         case ACKNOWLEDGEMENT -> KagemushaWireV1.MAXIMUM_ACKNOWLEDGEMENT_BYTES;
       };

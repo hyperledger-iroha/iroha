@@ -7,6 +7,7 @@ public enum KagemushaHardwareCapabilityV1
     OneUseSuccessorAuthorization,
     RollbackResistantCounterAndJournal,
     SealedTransitionRecovery,
+    ReceiverBoundCreditCommit,
     RollbackResistantAcceptedCreditInbox,
     AuthenticatedInboundStaging,
     AuthoritativeReplayRootRecovery,
@@ -24,6 +25,8 @@ public enum KagemushaHardwareCapabilityV1
 public sealed class KagemushaHardwareQualificationV1
 {
     private readonly byte[] releaseId;
+    private readonly byte[] hardwarePolicyDigest;
+    private readonly byte[] coreAuthorizationKeyReference;
     private readonly HashSet<KagemushaHardwareCapabilityV1> capabilities;
 
     public KagemushaHardwareQualificationV1(
@@ -31,6 +34,8 @@ public sealed class KagemushaHardwareQualificationV1
         KagemushaHardwareProfileV1 profile,
         KagemushaHardwareCredentialV1 credential,
         ReadOnlySpan<byte> releaseId,
+        ReadOnlySpan<byte> hardwarePolicyDigest,
+        ReadOnlySpan<byte> coreAuthorizationKeyReference,
         IEnumerable<KagemushaHardwareCapabilityV1> capabilities)
     {
         ArgumentNullException.ThrowIfNull(profile);
@@ -40,6 +45,10 @@ public sealed class KagemushaHardwareQualificationV1
         Profile = profile;
         Credential = credential;
         this.releaseId = KagemushaModelValidation.Fixed32(releaseId, nameof(releaseId));
+        this.hardwarePolicyDigest = KagemushaModelValidation.Fixed32(
+            hardwarePolicyDigest, nameof(hardwarePolicyDigest));
+        this.coreAuthorizationKeyReference = KagemushaModelValidation.Fixed32(
+            coreAuthorizationKeyReference, nameof(coreAuthorizationKeyReference));
         this.capabilities = [.. capabilities];
     }
 
@@ -47,6 +56,8 @@ public sealed class KagemushaHardwareQualificationV1
     public KagemushaHardwareProfileV1 Profile { get; }
     public KagemushaHardwareCredentialV1 Credential { get; }
     public byte[] ReleaseId() => releaseId.ToArray();
+    public byte[] HardwarePolicyDigest() => hardwarePolicyDigest.ToArray();
+    public byte[] CoreAuthorizationKeyReference() => coreAuthorizationKeyReference.ToArray();
     public IReadOnlySet<KagemushaHardwareCapabilityV1> Capabilities => capabilities.ToHashSet();
 
     /// <summary>Reject a partial, old, expired, or software-backed provider.</summary>
@@ -161,31 +172,200 @@ public sealed class KagemushaHardwareTerminalResultV1
     public byte[] AggregateState() => aggregateState.ToArray();
 }
 
+/// <summary>Authenticated inbox that owns a pending monetary credit.</summary>
+public enum KagemushaPendingCreditKindV1
+{
+    Mint,
+    Receive,
+}
+
+/// <summary>One globally ordered pending mint or peer credit.</summary>
+public sealed class KagemushaPendingCreditSelectorV1
+{
+    private readonly byte[] creditId;
+
+    public KagemushaPendingCreditSelectorV1(
+        KagemushaPendingCreditKindV1 kind,
+        ReadOnlySpan<byte> creditId)
+    {
+        if (!Enum.IsDefined(kind)) throw new ArgumentOutOfRangeException(nameof(kind));
+        Kind = kind;
+        this.creditId = KagemushaModelValidation.Fixed32(creditId, nameof(creditId));
+    }
+
+    public KagemushaPendingCreditKindV1 Kind { get; }
+    public byte[] CreditId() => creditId.ToArray();
+
+    public bool Matches(KagemushaPendingCreditSelectorV1 other) =>
+        other is not null
+        && Kind == other.Kind
+        && creditId.AsSpan().SequenceEqual(other.creditId);
+}
+
+/// <summary>Epoch-qualified inclusive inbox boundary for one finite selection pass.</summary>
+public sealed class KagemushaPendingCreditWatermarkV1
+{
+    private readonly byte[] hardwareEpochId;
+
+    public KagemushaPendingCreditWatermarkV1(
+        UInt128 hardwareEpochGeneration,
+        ReadOnlySpan<byte> hardwareEpochId,
+        UInt128 inboxRevision)
+    {
+        if (hardwareEpochGeneration == 0)
+            throw new ArgumentOutOfRangeException(nameof(hardwareEpochGeneration));
+        HardwareEpochGeneration = hardwareEpochGeneration;
+        this.hardwareEpochId = KagemushaModelValidation.Fixed32(
+            hardwareEpochId, nameof(hardwareEpochId));
+        InboxRevision = inboxRevision;
+    }
+
+    public UInt128 HardwareEpochGeneration { get; }
+    public byte[] HardwareEpochId() => hardwareEpochId.ToArray();
+    public UInt128 InboxRevision { get; }
+
+    public bool Matches(KagemushaPendingCreditWatermarkV1 other) =>
+        other is not null
+        && HardwareEpochGeneration == other.HardwareEpochGeneration
+        && InboxRevision == other.InboxRevision
+        && hardwareEpochId.AsSpan().SequenceEqual(other.hardwareEpochId);
+}
+
+/// <summary>Amount-aware objective for one pending-credit selection.</summary>
+public sealed class KagemushaPendingCreditTargetV1
+{
+    private KagemushaPendingCreditTargetV1(bool drainAll, UInt128 requiredBalance)
+    {
+        if (!drainAll && requiredBalance == 0)
+            throw new ArgumentOutOfRangeException(nameof(requiredBalance));
+        IsDrainAll = drainAll;
+        Amount = requiredBalance;
+    }
+
+    public static KagemushaPendingCreditTargetV1 DrainAll { get; } = new(true, 0);
+    public static KagemushaPendingCreditTargetV1 RequiredBalance(UInt128 amount) =>
+        new(false, amount);
+
+    public bool IsDrainAll { get; }
+    public UInt128 Amount { get; }
+}
+
+/// <summary>Authenticated hardware result for operation 18.</summary>
+public sealed class KagemushaPendingCreditSelectionV1
+{
+    public KagemushaPendingCreditSelectionV1(
+        KagemushaPendingCreditWatermarkV1 watermark,
+        KagemushaPendingCreditSelectorV1? nextPending)
+    {
+        ArgumentNullException.ThrowIfNull(watermark);
+        Watermark = watermark;
+        NextPending = nextPending;
+    }
+
+    public KagemushaPendingCreditWatermarkV1 Watermark { get; }
+    public KagemushaPendingCreditSelectorV1? NextPending { get; }
+}
+
 /// <summary>One exact-next transition that folds one durably staged credit.</summary>
 public sealed class KagemushaHardwareReceiveFoldV1
 {
     private readonly byte[] aggregateState;
 
-    public KagemushaHardwareReceiveFoldV1(ReadOnlySpan<byte> aggregateState)
+    public KagemushaHardwareReceiveFoldV1(
+        ReadOnlySpan<byte> aggregateState,
+        KagemushaPendingCreditSelectorV1 selector)
     {
         if (aggregateState.IsEmpty)
             throw new ArgumentException("Native aggregate state cannot be empty.", nameof(aggregateState));
+        ArgumentNullException.ThrowIfNull(selector);
         this.aggregateState = aggregateState.ToArray();
+        Selector = selector;
     }
 
     public byte[] AggregateState() => aggregateState.ToArray();
+    public KagemushaPendingCreditSelectorV1 Selector { get; }
 }
 
 /// <summary>Public result of installing one received credit into the aggregate state.</summary>
 public sealed class KagemushaReceiveFoldResultV1
 {
-    public KagemushaReceiveFoldResultV1(KagemushaAggregateStateCommitmentV1 aggregateState)
+    public KagemushaReceiveFoldResultV1(
+        KagemushaAggregateStateCommitmentV1 aggregateState,
+        KagemushaPendingCreditSelectorV1 selector)
     {
         ArgumentNullException.ThrowIfNull(aggregateState);
+        ArgumentNullException.ThrowIfNull(selector);
         AggregateState = aggregateState;
+        Selector = selector;
     }
 
     public KagemushaAggregateStateCommitmentV1 AggregateState { get; }
+    public KagemushaPendingCreditSelectorV1 Selector { get; }
+}
+
+/// <summary>
+/// Complete immutable hardware-produced mint authorization and encrypted credit.
+/// The host can validate and forward these bytes but cannot synthesize either value.
+/// </summary>
+public sealed class KagemushaMintConstructionBundleV1
+{
+    private readonly byte[] canonicalAuthorization;
+    private readonly byte[] encryptedCredit;
+
+    public KagemushaMintConstructionBundleV1(
+        ReadOnlySpan<byte> canonicalAuthorization,
+        ReadOnlySpan<byte> encryptedCredit)
+    {
+        if (canonicalAuthorization.IsEmpty || encryptedCredit.IsEmpty)
+            throw new ArgumentException("KAGEMUSHA mint construction bytes cannot be empty.");
+        Authorization = Kagemusha.DecodeMintAuthorization(canonicalAuthorization);
+        _ = Kagemusha.DecodeEncryptedCreditEnvelope(encryptedCredit);
+        if (!Authorization.Statement.CiphertextDigest.Span.SequenceEqual(
+                Kagemusha.CiphertextDigest(encryptedCredit)))
+            throw new ArgumentException("KAGEMUSHA mint encrypted-credit digest differs from authorization.");
+        this.canonicalAuthorization = canonicalAuthorization.ToArray();
+        this.encryptedCredit = encryptedCredit.ToArray();
+    }
+
+    public KagemushaMintAuthorizationV1 Authorization { get; }
+    public byte[] CanonicalAuthorization() => canonicalAuthorization.ToArray();
+    public byte[] EncryptedCredit() => encryptedCredit.ToArray();
+
+    /// <summary>Build the exact reserve-facing request without replacing hardware-owned bytes.</summary>
+    public KagemushaTopUpRequestV1 TopUpRequest(KagemushaHardwareCredentialV1 hardwareCredential)
+    {
+        ArgumentNullException.ThrowIfNull(hardwareCredential);
+        var statement = Authorization.Statement;
+        var context = statement.Context;
+        if (!context.HardwareCredentialId.Span.SequenceEqual(hardwareCredential.CredentialId.Span)
+            || !context.HardwareProfileId.Span.SequenceEqual(hardwareCredential.HardwareProfileId.Span)
+            || !context.SuiteId.Span.SequenceEqual(hardwareCredential.SuiteId.Span)
+            || context.PolicyEpoch != hardwareCredential.PolicyEpoch)
+            throw new InvalidOperationException("KAGEMUSHA mint bundle does not match hardware qualification.");
+        return new KagemushaTopUpRequestV1(
+            Kagemusha.WireVersion,
+            context.OperationId,
+            statement.IssuanceCommitment,
+            statement.CreditId,
+            context.ReleaseId,
+            context.SuiteId,
+            context.VkDigest,
+            context.NetworkId,
+            context.Asset,
+            context.AssetIncarnation,
+            context.Scale,
+            context.Amount,
+            context.LiabilityPoolId,
+            context.Payer,
+            context.Recipient,
+            hardwareCredential,
+            context.RecipientCredentialCommitment,
+            context.CreditCommitment,
+            context.RecipientOneTimeKey,
+            encryptedCredit,
+            context.ArtifactManifestDigest,
+            Authorization);
+    }
 }
 
 public sealed class KagemushaStagedPaymentV1
@@ -229,27 +409,43 @@ public interface IKagemushaNativeHardwareProviderV1
         byte[] canonicalPayment);
     /// <summary>Stage without folding the balance or advancing the monetary journal.</summary>
     KagemushaHardwareMintStageV1 StageMintCredit(byte[] canonicalAuthorization, byte[] canonicalMintCredit);
-    UInt128 PendingCreditWatermark();
+    KagemushaPendingCreditSelectionV1 SelectPendingCredit(
+        KagemushaPendingCreditWatermarkV1? watermark,
+        KagemushaPendingCreditTargetV1 target);
     /// <summary>Return the monetary transition revision, never the independent inbox revision.</summary>
     UInt128 JournalRevision();
-    KagemushaHardwareReceiveFoldV1? FoldReceiveCredit(UInt128 inboxSequenceInclusive);
+    KagemushaHardwareReceiveFoldV1 FoldPendingCredit(KagemushaPendingCreditSelectorV1 selector);
+    byte[] ReservePaymentOperationId(byte[] canonicalRequest);
     /// <summary>
-    /// Fold only required credits, prepare and verify the candidate, commit exactly once, then
-    /// generate and persist the post-commit proof and payment. Unrelated inbox backlog remains.
+    /// Prepare and verify the candidate, commit exactly once, then generate and persist the
+    /// post-commit proof and payment under the caller-persisted operation identity.
     /// </summary>
-    KagemushaHardwareTerminalResultV1 CommitPayment(byte[] canonicalRequest);
+    KagemushaHardwareTerminalResultV1 CommitPayment(byte[] operationId, byte[] canonicalRequest);
     byte[]? RecoverPayment(byte[] creditId);
+    byte[]? RecoverPaymentByOperationId(byte[] operationId, byte[] canonicalRequest);
+    byte[] ReserveMintOperationId(UInt128 amount, byte[] payerAccount, byte[] recipientAccount);
+    KagemushaMintConstructionBundleV1 PrepareMintConstructionBundle(
+        byte[] operationId,
+        UInt128 amount,
+        byte[] payerAccount,
+        byte[] recipientAccount);
+    KagemushaMintConstructionBundleV1? RecoverMintConstructionBundle(byte[] operationId);
     void RecordAcknowledgement(
         byte[] creditId,
         byte[] canonicalRequest,
         byte[] canonicalPayment,
         byte[] canonicalAcknowledgement);
     /// <summary>
-    /// Fold only credits needed for <paramref name="amount"/>, then atomically prepare, prove,
-    /// commit, and persist one redemption. Unrelated inbox backlog remains for background folding.
+    /// Atomically prepare, prove, commit, and persist one redemption under the caller-persisted
+    /// operation identity.
     /// </summary>
-    KagemushaHardwareTerminalResultV1 CommitRedemption(UInt128 amount, byte[] beneficiaryAccount);
+    byte[] ReserveRedemptionOperationId(UInt128 amount, byte[] beneficiaryAccount);
+    KagemushaHardwareTerminalResultV1 CommitRedemption(
+        byte[] operationId,
+        UInt128 amount,
+        byte[] beneficiaryAccount);
     byte[]? RecoverRedemption(byte[] redemptionId);
+    byte[]? RecoverRedemptionByOperationId(byte[] operationId);
     /// <summary>Rotate the complete balance, replay root, and pending inbox without folding first.</summary>
     byte[] RotateHardwareEpoch();
 }
@@ -353,13 +549,28 @@ public sealed class KagemushaWalletV1
         }
     }
 
-    public KagemushaPaymentV1 Send(KagemushaPaymentRequestV1 request)
+    /// <summary>Reserve the nonzero identity the caller persists before a sender mutation.</summary>
+    public byte[] ReservePaymentOperationId(KagemushaPaymentRequestV1 request)
     {
         ArgumentNullException.ThrowIfNull(request);
+        var canonicalRequest = Kagemusha.EncodePaymentRequest(request);
+        return KagemushaModelValidation.Fixed32(
+            provider.ReservePaymentOperationId(canonicalRequest).AsSpan(),
+            "paymentOperationId");
+    }
+
+    /// <summary>Fold accepted credits, then commit a payment under a caller-persisted identity.</summary>
+    public KagemushaPaymentV1 Send(
+        KagemushaPaymentRequestV1 request,
+        ReadOnlySpan<byte> operationId)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var expectedOperationId = KagemushaModelValidation.Fixed32(operationId, nameof(operationId));
         using (EnterForegroundTransition())
         {
+            FoldRequiredCreditsLocked(request.Amount);
             var canonicalRequest = Kagemusha.EncodePaymentRequest(request);
-            var result = provider.CommitPayment(canonicalRequest);
+            var result = provider.CommitPayment(expectedOperationId, canonicalRequest);
             var payment = Kagemusha.DecodePayment(result.CanonicalEnvelope(), request);
             InstallAuthoritativeState(result.AggregateState());
             return payment;
@@ -410,10 +621,11 @@ public sealed class KagemushaWalletV1
         }
     }
 
-    /// <summary>Fold one durably staged credit, if one is pending.</summary>
-    public KagemushaReceiveFoldResultV1? FoldReceiveCredit()
+    /// <summary>Fold exactly one authenticated mint or peer selector.</summary>
+    public KagemushaReceiveFoldResultV1 FoldPendingCredit(KagemushaPendingCreditSelectorV1 selector)
     {
-        using (EnterForegroundTransition()) return FoldAtWatermarkLocked(provider.PendingCreditWatermark());
+        ArgumentNullException.ThrowIfNull(selector);
+        using (EnterForegroundTransition()) return FoldPendingCreditLocked(selector);
     }
 
     /// <summary>
@@ -426,15 +638,14 @@ public sealed class KagemushaWalletV1
     {
         byte[] epochId;
         ulong epochGeneration;
-        UInt128 watermark;
         lock (transitionLock)
         {
             YieldToForegroundLocked();
             epochId = qualification.Credential.HardwareEpochId.ToArray();
             epochGeneration = qualification.Credential.HardwareEpochGeneration;
-            watermark = provider.PendingCreditWatermark();
         }
         UInt128 total = 0;
+        KagemushaPendingCreditWatermarkV1? watermark = null;
         while (true)
         {
             lock (transitionLock)
@@ -444,8 +655,15 @@ public sealed class KagemushaWalletV1
                     || !qualification.Credential.HardwareEpochId.Span.SequenceEqual(epochId))
                     throw new InvalidOperationException(
                         "Hardware epoch changed during inbox drain; retry with a new snapshot.");
-                var fold = FoldAtWatermarkLocked(watermark);
-                if (fold is null) return total;
+                var selection = provider.SelectPendingCredit(
+                    watermark, KagemushaPendingCreditTargetV1.DrainAll);
+                RequireCurrentWatermark(selection.Watermark);
+                if (watermark is not null && !selection.Watermark.Matches(watermark))
+                    throw new InvalidOperationException(
+                        "Native pending-credit watermark changed during inbox drain.");
+                watermark = selection.Watermark;
+                if (selection.NextPending is null) return total;
+                _ = FoldPendingCreditLocked(selection.NextPending);
                 total = checked(total + 1);
             }
         }
@@ -464,6 +682,79 @@ public sealed class KagemushaWalletV1
             throw new InvalidOperationException("Recovered payment has a different credit id.");
         return payment;
     }
+
+    /// <summary>Recover a payment after a crash before its credit ID reached the caller.</summary>
+    public KagemushaPaymentV1? RecoverPaymentByOperationId(
+        KagemushaPaymentRequestV1 request,
+        ReadOnlySpan<byte> operationId)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var expected = KagemushaModelValidation.Fixed32(operationId, nameof(operationId));
+        var canonicalRequest = Kagemusha.EncodePaymentRequest(request);
+        var canonical = provider.RecoverPaymentByOperationId(expected, canonicalRequest);
+        if (canonical is null) return null;
+        var payment = Kagemusha.DecodePayment(canonical, request);
+        if (!Kagemusha.EncodePayment(payment, request).AsSpan().SequenceEqual(canonical))
+            throw new InvalidOperationException("Recovered payment is not byte-identical.");
+        return payment;
+    }
+
+    /// <summary>Reserve the nonzero identity the caller persists before mint preparation.</summary>
+    public byte[] ReserveMintOperationId(
+        UInt128 amount,
+        KagemushaAccountIdV1 payer,
+        KagemushaAccountIdV1 recipient)
+    {
+        if (amount == 0) throw new ArgumentOutOfRangeException(nameof(amount));
+        ArgumentNullException.ThrowIfNull(payer);
+        ArgumentNullException.ThrowIfNull(recipient);
+        return KagemushaModelValidation.Fixed32(
+            provider.ReserveMintOperationId(
+                amount,
+                payer.CanonicalPayload(),
+                recipient.CanonicalPayload()).AsSpan(),
+            "mintOperationId");
+    }
+
+    public KagemushaMintConstructionBundleV1 PrepareMintConstructionBundle(
+        ReadOnlySpan<byte> operationId,
+        UInt128 amount,
+        KagemushaAccountIdV1 payer,
+        KagemushaAccountIdV1 recipient)
+    {
+        if (amount == 0) throw new ArgumentOutOfRangeException(nameof(amount));
+        ArgumentNullException.ThrowIfNull(payer);
+        ArgumentNullException.ThrowIfNull(recipient);
+        var expected = KagemushaModelValidation.Fixed32(operationId, nameof(operationId));
+        var bundle = provider.PrepareMintConstructionBundle(
+            expected,
+            amount,
+            payer.CanonicalPayload(),
+            recipient.CanonicalPayload());
+        if (!bundle.Authorization.Statement.Context.OperationId.Span.SequenceEqual(expected))
+            throw new InvalidOperationException("Native mint bundle substituted the operation ID.");
+        return bundle;
+    }
+
+    public KagemushaMintConstructionBundleV1? RecoverMintConstructionBundle(
+        ReadOnlySpan<byte> operationId)
+    {
+        var expected = KagemushaModelValidation.Fixed32(operationId, nameof(operationId));
+        var bundle = provider.RecoverMintConstructionBundle(expected);
+        if (bundle is not null
+            && !bundle.Authorization.Statement.Context.OperationId.Span.SequenceEqual(expected))
+            throw new InvalidOperationException("Recovered mint bundle substituted the operation ID.");
+        return bundle;
+    }
+
+    /// <summary>Construct a reserve request only from the hardware-owned mint bundle.</summary>
+    public KagemushaTopUpRequestV1 PrepareTopUpRequest(
+        ReadOnlySpan<byte> operationId,
+        UInt128 amount,
+        KagemushaAccountIdV1 payer,
+        KagemushaAccountIdV1 recipient) =>
+        PrepareMintConstructionBundle(operationId, amount, payer, recipient)
+            .TopUpRequest(qualification.Credential);
 
     public void RecordAcknowledgement(
         KagemushaPaymentRequestV1 request,
@@ -485,13 +776,33 @@ public sealed class KagemushaWalletV1
             canonicalAcknowledgement);
     }
 
-    public KagemushaRedemptionVoucherV1 Redeem(UInt128 amount, KagemushaAccountIdV1 beneficiary)
+    /// <summary>Reserve the nonzero identity the caller persists before redemption.</summary>
+    public byte[] ReserveRedemptionOperationId(
+        UInt128 amount,
+        KagemushaAccountIdV1 beneficiary)
     {
         if (amount == 0) throw new ArgumentOutOfRangeException(nameof(amount));
         ArgumentNullException.ThrowIfNull(beneficiary);
+        return KagemushaModelValidation.Fixed32(
+            provider.ReserveRedemptionOperationId(amount, beneficiary.CanonicalPayload()).AsSpan(),
+            "redemptionOperationId");
+    }
+
+    public KagemushaRedemptionVoucherV1 Redeem(
+        UInt128 amount,
+        KagemushaAccountIdV1 beneficiary,
+        ReadOnlySpan<byte> operationId)
+    {
+        if (amount == 0) throw new ArgumentOutOfRangeException(nameof(amount));
+        ArgumentNullException.ThrowIfNull(beneficiary);
+        var expectedOperationId = KagemushaModelValidation.Fixed32(operationId, nameof(operationId));
         using (EnterForegroundTransition())
         {
-            var result = provider.CommitRedemption(amount, beneficiary.CanonicalPayload());
+            FoldRequiredCreditsLocked(amount);
+            var result = provider.CommitRedemption(
+                expectedOperationId,
+                amount,
+                beneficiary.CanonicalPayload());
             var voucher = Kagemusha.DecodeRedemptionVoucher(result.CanonicalEnvelope());
             if (voucher.Statement.Amount != amount || !voucher.Statement.Beneficiary.Equals(beneficiary))
                 throw new InvalidOperationException("Native redemption output differs from the request.");
@@ -508,6 +819,19 @@ public sealed class KagemushaWalletV1
         var voucher = Kagemusha.DecodeRedemptionVoucher(canonical);
         if (!voucher.Statement.RedemptionId.Span.SequenceEqual(expected))
             throw new InvalidOperationException("Recovered redemption has a different id.");
+        return voucher;
+    }
+
+    /// <summary>Recover a redemption after a crash before its terminal ID reached the caller.</summary>
+    public KagemushaRedemptionVoucherV1? RecoverRedemptionByOperationId(
+        ReadOnlySpan<byte> operationId)
+    {
+        var expected = KagemushaModelValidation.Fixed32(operationId, nameof(operationId));
+        var canonical = provider.RecoverRedemptionByOperationId(expected);
+        if (canonical is null) return null;
+        var voucher = Kagemusha.DecodeRedemptionVoucher(canonical);
+        if (!Kagemusha.EncodeRedemptionVoucher(voucher).AsSpan().SequenceEqual(canonical))
+            throw new InvalidOperationException("Recovered redemption is not byte-identical.");
         return voucher;
     }
 
@@ -546,32 +870,52 @@ public sealed class KagemushaWalletV1
         }
     }
 
-    private KagemushaReceiveFoldResultV1? FoldAtWatermarkLocked(UInt128 watermark)
+    private KagemushaReceiveFoldResultV1 FoldPendingCreditLocked(
+        KagemushaPendingCreditSelectorV1 selector)
     {
         var before = journalRevision;
         var previousState = aggregateState;
-        var hardwareFold = provider.FoldReceiveCredit(watermark);
+        var hardwareFold = provider.FoldPendingCredit(selector);
+        if (!hardwareFold.Selector.Matches(selector))
+            throw new InvalidOperationException("Native pending fold substituted the selector.");
         var after = provider.JournalRevision();
-        KagemushaAggregateStateCommitmentV1? successor = null;
-        if (hardwareFold is not null)
-        {
-            successor = Kagemusha.DecodeAggregateState(hardwareFold.AggregateState());
-            RequireSameAsset(previousState, successor);
-            RequireStateQualification(successor, qualification);
-            if (successor.StateCommitment.Span.SequenceEqual(previousState.StateCommitment.Span)
-                || previousState.Sequence == UInt128.MaxValue
-                || successor.Sequence != previousState.Sequence + 1)
-                throw new InvalidOperationException("A receive fold did not produce an exact next aggregate state.");
-        }
-        if (hardwareFold is null ? after != before : before == UInt128.MaxValue || after != before + 1)
+        var successor = Kagemusha.DecodeAggregateState(hardwareFold.AggregateState());
+        RequireSameAsset(previousState, successor);
+        RequireStateQualification(successor, qualification);
+        if (successor.StateCommitment.Span.SequenceEqual(previousState.StateCommitment.Span)
+            || previousState.Sequence == UInt128.MaxValue
+            || successor.Sequence != previousState.Sequence + 1)
+            throw new InvalidOperationException("A receive fold did not produce an exact next aggregate state.");
+        if (before == UInt128.MaxValue || after != before + 1)
             throw new InvalidOperationException("A receive fold did not consume exactly one journal revision.");
 
         // No validation or provider call follows publication, and every reader holds this gate.
-        if (successor is not null) aggregateState = successor;
+        aggregateState = successor;
         journalRevision = after;
-        return hardwareFold is null
-            ? null
-            : new KagemushaReceiveFoldResultV1(aggregateState);
+        return new KagemushaReceiveFoldResultV1(aggregateState, selector);
+    }
+
+    private void FoldRequiredCreditsLocked(UInt128 requiredBalance)
+    {
+        while (true)
+        {
+            var selection = provider.SelectPendingCredit(
+                null, KagemushaPendingCreditTargetV1.RequiredBalance(requiredBalance));
+            RequireCurrentWatermark(selection.Watermark);
+            if (selection.NextPending is null) return;
+            _ = FoldPendingCreditLocked(selection.NextPending);
+        }
+    }
+
+    private void RequireCurrentWatermark(KagemushaPendingCreditWatermarkV1 watermark)
+    {
+        ArgumentNullException.ThrowIfNull(watermark);
+        if (watermark.HardwareEpochGeneration
+                != (UInt128)qualification.Credential.HardwareEpochGeneration
+            || !watermark.HardwareEpochId().AsSpan().SequenceEqual(
+                qualification.Credential.HardwareEpochId.Span))
+            throw new InvalidOperationException(
+                "Native pending-credit watermark belongs to another hardware epoch.");
     }
 
     private void InstallAuthoritativeState(byte[] bytes)
@@ -658,7 +1002,7 @@ public sealed class KagemushaWalletV1
             || !state.LaneId.Span.SequenceEqual(qualification.Credential.LaneCommitment.Span)
             || !state.HardwareEpochId.Span.SequenceEqual(qualification.Credential.HardwareEpochId.Span)
             || !state.KeyReference.Span.SequenceEqual(qualification.Credential.DeviceKeyReference.Span)
-            || !state.HardwarePolicyId.Span.SequenceEqual(qualification.Profile.HardwareProfileId.Span))
+            || !state.HardwarePolicyId.Span.SequenceEqual(qualification.HardwarePolicyDigest()))
             throw new InvalidOperationException("Aggregate state does not match native qualification.");
     }
 

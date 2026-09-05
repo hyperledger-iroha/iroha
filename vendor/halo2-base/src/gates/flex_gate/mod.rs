@@ -1,6 +1,4 @@
 use crate::{
-    AssignedValue, Context,
-    QuantumCell::{self, Constant, Existing, Witness, WitnessFraction},
     halo2_proofs::{
         plonk::{
             Advice, Assigned, Column, ConstraintSystem, FirstPhase, Fixed, SecondPhase, Selector,
@@ -9,6 +7,8 @@ use crate::{
         poly::Rotation,
     },
     utils::ScalarField,
+    AssignedValue, Context,
+    QuantumCell::{self, Constant, Existing, Witness, WitnessFraction},
 };
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};

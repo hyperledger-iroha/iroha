@@ -532,14 +532,14 @@ convenience APIs are Ed25519-only while native-backed algorithms use
 ### KAGEMUSHA peer transport V1
 
 `KagemushaNoritoV1` is the sole peer-payment codec namespace. It carries the
-canonical five-message exchange—request, compact unproved acceptance intent,
-acceptance ticket with a fresh recipient key, proof-bearing payment, and
-acknowledgement—plus independently framed mint authorization, mint credit,
+canonical three-message exchange—direct request, proof-bearing payment, and
+durable acknowledgement—plus independently framed mint authorization, mint credit,
 and redemption voucher values through bounded Norito archives or `kgm1:` text.
 The payment carries the terminal commit certificate and paired proof; its
 proof-independent body digest binds the output and actual encrypted credit.
-No-commit recovery inputs are fail-closed and neither signatures nor expiry
-release a ticket reservation. QR, NFC, and Nearby
+Each request binds one exact amount and a fresh recipient encryption key;
+distinct valid payments against the same request remain acceptable. Exposed
+credits cannot be cancelled. QR, NFC, and Nearby
 all use the same canonical bytes from
 `../fixtures/offline/kagemusha_v1.json`; no transport has a second codec.
 Public proofs and payment envelopes remain constant-size as aggregate history

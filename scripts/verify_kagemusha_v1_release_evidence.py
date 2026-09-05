@@ -79,7 +79,6 @@ MIN_AGGREGATED_CREDITS = 1_000
 MIN_THERMAL_FOLDED_CREDITS = 1_000
 HALO2_K = 16
 MAX_CIRCUIT_ROWS = 1 << HALO2_K
-RECEIVE_FOLD_BATCH_WIDTH = 16
 
 ARTIFACT_ROLES = (
     "params_eq",
@@ -124,6 +123,14 @@ ARTIFACT_ROLES = (
     "inner_mint_credit_vk_eq",
     "inner_mint_credit_pk_ep",
     "inner_mint_credit_vk_ep",
+    "mint_hash_shard_pk_eq",
+    "mint_hash_shard_vk_eq",
+    "mint_hash_shard_pk_ep",
+    "mint_hash_shard_vk_ep",
+    "mint_hash_claim_pk_eq",
+    "mint_hash_claim_vk_eq",
+    "mint_hash_claim_pk_ep",
+    "mint_hash_claim_vk_ep",
 )
 
 RELATIONS = (
@@ -142,9 +149,13 @@ HELPERS = (
     "mint_credit",
     "platform_credential",
     "guard_bundle",
+    "mint_hash_shard",
+    "mint_hash_claim",
 )
 
-INTERNAL_PROOF_HELPERS = frozenset({"platform_credential", "guard_bundle"})
+INTERNAL_PROOF_HELPERS = frozenset(
+    {"platform_credential", "guard_bundle", "mint_hash_shard", "mint_hash_claim"}
+)
 
 ACCEPTANCE_CASES = (
     "receiver_inbox_pressure",
@@ -779,16 +790,6 @@ def _depth_payload(value: Mapping[str, object]) -> bytes:
     )
 
 
-def _occupancy_payload(value: Mapping[str, object]) -> bytes:
-    return _norito_struct(
-        _u8(int(value["occupancy"])),
-        _u32(int(value["complete_proof_bytes"])),
-        _evidence_file_payload(
-            _object(value["report"], "receive-fold occupancy report", {"sha256", "byte_len"})
-        ),
-    )
-
-
 def _aggregate_payload(value: Mapping[str, object]) -> bytes:
     return _norito_struct(
         _u32(int(value["independent_payments"])),
@@ -836,10 +837,6 @@ def _profile_qualification_payload(value: Mapping[str, object]) -> bytes:
         _enabled_profile_payload(profile),
         _norito_vec([_relation_qualification_payload(row) for row in _array(value["relations"], "relations")]),
         _norito_vec([_helper_qualification_payload(row) for row in _array(value["helper_circuits"], "helper circuits")]),
-        _norito_vec([
-            _occupancy_payload(row)
-            for row in _array(value["receive_fold_occupancies"], "receive-fold occupancies")
-        ]),
         _norito_vec([_depth_payload(row) for row in _array(value["recursive_depths"], "recursive depths")]),
         _aggregate_payload(_object(value["aggregate_balance"], "aggregate qualification", {
             "independent_payments", "folded_credits", "spend_payments", "report",
@@ -1566,7 +1563,6 @@ class EvidenceVerifier:
             "qualification_report",
             "relations",
             "helpers",
-            "receive_fold_occupancies",
             "recursive_depths",
             "aggregate_balance",
             "thermal",
@@ -1848,7 +1844,9 @@ class EvidenceVerifier:
             all_digests.append(value)
         helper_rows = _array(protocols["helper_protocols"], "helper protocols")
         if len(helper_rows) != len(HELPERS):
-            _fail("compiled helper protocols must contain exactly four rows")
+            _fail(
+                f"compiled helper protocols must contain exactly {len(HELPERS)} rows"
+            )
         helper_projection: list[dict[str, object]] = []
         for index, (raw_row, expected_helper) in enumerate(zip(helper_rows, HELPERS)):
             row = _object(
@@ -1905,7 +1903,7 @@ class EvidenceVerifier:
             )
         if len(set(all_digests)) != len(all_digests):
             _fail(
-                "state, terminal-authorization, acceptance-authorization, and helper "
+                "state, terminal-authorization, commit-wrapper, and helper "
                 "protocol digests must all be distinct"
             )
         result["helper_protocols"] = helper_projection
@@ -2068,7 +2066,6 @@ class EvidenceVerifier:
             "qualification_report",
             "relations",
             "helpers",
-            "receive_fold_occupancies",
             "recursive_depths",
             "aggregate_balance",
             "thermal",
@@ -2171,7 +2168,7 @@ class EvidenceVerifier:
 
         helper_rows = _array(profile["helpers"], f"profile {profile_id} helpers")
         if len(helper_rows) != len(HELPERS):
-            _fail("profile helper matrix must contain exactly four rows")
+            _fail(f"profile helper matrix must contain exactly {len(HELPERS)} rows")
         helpers: list[dict[str, object]] = []
         for helper_index, (raw_row, expected_helper) in enumerate(zip(helper_rows, HELPERS)):
             row = _object(
@@ -2187,30 +2184,6 @@ class EvidenceVerifier:
                     report_path,
                     profile_id=profile_id,
                     helper=expected_helper,
-                    protocols=protocols,
-                )
-            )
-
-        occupancy_rows = _array(
-            profile["receive_fold_occupancies"], f"profile {profile_id} occupancies"
-        )
-        if len(occupancy_rows) != RECEIVE_FOLD_BATCH_WIDTH:
-            _fail("receive-fold occupancy matrix must contain exactly 1 through 16")
-        occupancies: list[dict[str, object]] = []
-        for occupancy_index, raw_row in enumerate(occupancy_rows, start=1):
-            row = _object(
-                raw_row,
-                f"receive-fold occupancy {occupancy_index}",
-                {"occupancy", "report"},
-            )
-            if row["occupancy"] != occupancy_index:
-                _fail("receive-fold occupancies must be exactly 1 through 16")
-            report_path = self._path(row["report"], "receive-fold occupancy report")
-            occupancies.append(
-                self._verify_occupancy(
-                    report_path,
-                    profile_id=profile_id,
-                    occupancy=occupancy_index,
                     protocols=protocols,
                 )
             )
@@ -2303,7 +2276,6 @@ class EvidenceVerifier:
             "profile": profile_projection,
             "relations": relations,
             "helper_circuits": helpers,
-            "receive_fold_occupancies": occupancies,
             "recursive_depths": depths,
             "aggregate_balance": aggregate,
             "thermal": thermal,
@@ -2486,55 +2458,6 @@ class EvidenceVerifier:
             "ep_proof_bytes": ep_proof_bytes,
             "complete_proof_bytes": complete_proof_bytes,
             **metrics,
-            "report": _binding(self.files[path]),
-        }
-
-    def _verify_occupancy(
-        self,
-        path: str,
-        *,
-        profile_id: str,
-        occupancy: int,
-        protocols: Mapping[str, object],
-    ) -> dict[str, object]:
-        report = self._report(
-            path,
-            "iroha.kagemusha_v1.receive_fold_occupancy_report",
-            {
-                "hardware_profile_id",
-                "occupancy",
-                "eq_protocol_digest",
-                "ep_protocol_digest",
-                "eq_verifying_key",
-                "ep_verifying_key",
-                "proof",
-            },
-        )
-        if report["hardware_profile_id"] != profile_id or report["occupancy"] != occupancy:
-            _fail("receive-fold occupancy report binding differs from its matrix row")
-        self._protocol_and_keys(
-            report,
-            eq_protocol=str(protocols["state_eq_protocol_digest"]),
-            ep_protocol=str(protocols["state_ep_protocol_digest"]),
-            eq_role="state_vk_eq",
-            ep_role="state_vk_ep",
-        )
-        proof = self._sample(
-            report["proof"], "proof", f"occupancy:{profile_id}:{occupancy}"
-        )
-        self._bind_report_command(
-            path,
-            report,
-            {
-                path,
-                proof,
-                self.artifacts["state_vk_eq"],
-                self.artifacts["state_vk_ep"],
-            },
-        )
-        return {
-            "occupancy": occupancy,
-            "complete_proof_bytes": self.files[proof].size,
             "report": _binding(self.files[path]),
         }
 

@@ -26,14 +26,15 @@ use super::{
     KagemushaOutgoingOperationIndexErrorV1, KagemushaOutgoingOperationIndexV1,
     KagemushaOutgoingOperationPhaseV1, KagemushaOutgoingOperationPrepareOutcomeV1,
     KagemushaStateErrorV1, KagemushaStateProofReleaseV1, KagemushaStateV1,
-    TransitionProofStatementV1, canonical_sha256_digest,
+    TransitionProofStatementV1, VerifiedKagemushaRedemptionReleaseV1, canonical_sha256_digest,
 };
 use crate::zk::kagemusha_v1_recursion::{
     KagemushaPastaParityV1, KagemushaRecursionArtifactsV1, KagemushaRecursivePublicOutputV1,
     KagemushaRecursiveVerifierV1, KagemushaStateRelationPublicInputsV1,
-    canonical_incoming_payment_claims_binding_v1, canonical_precommit_binding_digest_v1,
-    canonical_terminal_send_output_binding_v1, kagemusha_candidate_envelope_digest_v1,
-    verify_kagemusha_recursive_proof_v1, verify_kagemusha_state_proof_v1,
+    canonical_incoming_payment_claims_binding_v1, canonical_prepared_transition_binding_digest_v1,
+    canonical_sender_state_pair_digest_v1, canonical_terminal_send_output_binding_v1,
+    kagemusha_candidate_envelope_digest_v1, verify_kagemusha_recursive_proof_v1,
+    verify_kagemusha_state_proof_v1,
 };
 
 const PREPARATION_ID_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:outgoing-preparation";
@@ -798,9 +799,9 @@ impl PreparedOutgoingCandidateV1 {
             mint_finality_semantic_digest: statement.mint_finality_semantic_digest,
             mint_finality_proof_binding_digest: statement.mint_finality_proof_binding_digest,
             peer_credit_id: statement.peer_credit_id,
-            peer_recipient_lane_id: statement.peer_recipient_lane_id,
+            recipient_encryption_key_binding: statement.recipient_encryption_key_binding,
             lifecycle_binding_digest: statement.lifecycle_binding_digest,
-            precommit_binding_digest: statement.precommit_binding_digest,
+            prepared_transition_binding_digest: statement.prepared_transition_binding_digest,
             receive_credit_binding_digest: statement.receive_credit_binding_digest,
             transport_semantic_digest: self.semantic_digest().map_err(|error| error.to_string())?,
             guard_statement_digest: self.normalized_guard_statement_digest,
@@ -818,6 +819,8 @@ impl PreparedOutgoingCandidateV1 {
             mint_ep_protocol_digest: artifacts
                 .mint_finality_protocol_digest(KagemushaPastaParityV1::Ep)
                 .map_err(|error| error.to_string())?,
+            mint_authorization_eq_protocol_digest: artifacts.mint_authorization_eq_protocol_digest,
+            mint_authorization_ep_protocol_digest: artifacts.mint_authorization_ep_protocol_digest,
             commit_wrapper_eq_protocol_digest: artifacts.commit_wrapper_eq_protocol_digest,
             commit_wrapper_ep_protocol_digest: artifacts.commit_wrapper_ep_protocol_digest,
             guard_eq_credential_audit: proof.guard_eq_credential_audit,
@@ -1184,9 +1187,12 @@ impl CommittedOutgoingCandidateV1 {
                     canonical_incoming_payment_claims_binding_v1([
                         request_digest,
                         receiver_binding_digest,
-                        output.sender_before_commitment,
-                        output.sender_after_commitment,
+                        canonical_sender_state_pair_digest_v1(
+                            output.sender_before_commitment,
+                            output.sender_after_commitment,
+                        ),
                         output_digest,
+                        kagemusha_ciphertext_digest_v1(&projection.encrypted_credit),
                         candidate_digest,
                         certificate_digest,
                     ]),
@@ -1536,7 +1542,7 @@ impl KagemushaOutgoingCandidateJournalV1 {
     }
 
     /// Atomically stage an exact transition intent before hardware commit.
-    pub(super) fn prepare(
+    fn prepare(
         &mut self,
         prepared: PreparedOutgoingCandidateV1,
     ) -> Result<(), KagemushaStateErrorV1> {
@@ -1681,22 +1687,6 @@ impl KagemushaOutgoingCandidateJournalV1 {
         self.finalized_outbox.len()
     }
 
-    pub(crate) fn release_finalized(
-        &mut self,
-        reservation_id: DigestV1,
-        expected_envelope_digest: DigestV1,
-        outbox: &mut KagemushaSenderOutboxCapacityV1,
-    ) -> Result<(), KagemushaStateErrorV1> {
-        if self
-            .operation_index
-            .record_by_reservation(reservation_id)
-            .is_some()
-        {
-            return Err(KagemushaStateErrorV1::InvalidCandidateStage);
-        }
-        self.release_finalized_inner(reservation_id, expected_envelope_digest, outbox)
-    }
-
     /// Verify a peer ACK and atomically retain the indexed release tombstone.
     pub(super) fn release_indexed_payment(
         &mut self,
@@ -1717,14 +1707,50 @@ impl KagemushaOutgoingCandidateJournalV1 {
             .finalized_outbox
             .get(&record.outbox_reservation_id)
             .ok_or(KagemushaStateErrorV1::InvalidCandidateStage)?;
-        let acknowledgement_digest = record
-            .verified_payment_acknowledgement_digest(finalized, acknowledgement_bytes)
+        let terminal_receipt_digest = record
+            .verified_payment_terminal_receipt_digest(finalized, acknowledgement_bytes)
             .map_err(map_operation_index_error)?;
         let reservation_id = record.outbox_reservation_id;
         let envelope_digest = finalized.envelope_digest;
         let next_index = self
             .operation_index
-            .release_successor(reservation_id, envelope_digest, acknowledgement_digest)
+            .release_successor(reservation_id, envelope_digest, terminal_receipt_digest)
+            .map_err(map_operation_index_error)?;
+        let mut next = self.clone();
+        let mut next_outbox = outbox.clone();
+        next.operation_index = next_index;
+        next.release_finalized_inner(reservation_id, envelope_digest, &mut next_outbox)?;
+        *self = next;
+        *outbox = next_outbox;
+        Ok(())
+    }
+
+    /// Consume a Core-authenticated settlement capability and retain the exact redemption
+    /// release tombstone in the same successor which removes the retry envelope.
+    pub(super) fn release_indexed_redemption(
+        &mut self,
+        verified: VerifiedKagemushaRedemptionReleaseV1,
+        outbox: &mut KagemushaSenderOutboxCapacityV1,
+    ) -> Result<(), KagemushaStateErrorV1> {
+        let operation_id = verified.operation_id();
+        let record = self
+            .operation_index
+            .lookup(operation_id)
+            .ok_or(KagemushaStateErrorV1::InvalidCandidateStage)?;
+        if record.phase == KagemushaOutgoingOperationPhaseV1::Released {
+            return verified.validate_against_record(record, None);
+        }
+        let finalized = self
+            .finalized_outbox
+            .get(&record.outbox_reservation_id)
+            .ok_or(KagemushaStateErrorV1::InvalidCandidateStage)?;
+        verified.validate_against_record(record, Some(finalized))?;
+        let reservation_id = record.outbox_reservation_id;
+        let envelope_digest = verified.envelope_digest();
+        let terminal_receipt_digest = verified.terminal_receipt_digest();
+        let next_index = self
+            .operation_index
+            .release_successor(reservation_id, envelope_digest, terminal_receipt_digest)
             .map_err(map_operation_index_error)?;
         let mut next = self.clone();
         let mut next_outbox = outbox.clone();
@@ -2282,7 +2308,7 @@ fn validate_prepared_transition_statement(
                 ([0; 32], [0; 32], [0; 32], projection.statement.amount)
             }
         };
-    let precommit_binding_digest = canonical_precommit_binding_digest_v1(
+    let prepared_transition_binding_digest = canonical_prepared_transition_binding_digest_v1(
         lifecycle_digest,
         request_digest,
         sender_before_commitment,
@@ -2340,9 +2366,9 @@ fn validate_prepared_transition_statement(
                 .journal_revision_before
                 .checked_add(1)
                 .ok_or(KagemushaStateErrorV1::JournalRevisionOverflow)?
-        || statement.effect_digest != precommit_binding_digest
+        || statement.effect_digest != prepared_transition_binding_digest
         || statement.lifecycle_binding_digest != lifecycle_digest
-        || statement.precommit_binding_digest != precommit_binding_digest
+        || statement.prepared_transition_binding_digest != prepared_transition_binding_digest
         || statement.mint_finality_semantic_digest != [0; 32]
         || statement.mint_finality_proof_binding_digest != [0; 32]
         || statement.receive_credit_binding_digest != [0; 32]
@@ -2356,13 +2382,14 @@ fn validate_prepared_transition_statement(
             statement.kind == super::KagemushaTransitionKindV1::SendSplit
                 && statement.amount == projection.request.amount
                 && statement.peer_credit_id == projection.output.credit_id
-                && statement.peer_recipient_lane_id == projection.request.recipient_encryption_key
+                && statement.recipient_encryption_key_binding
+                    == projection.request.recipient_encryption_key
         }
         PreparedPublicProjectionV1::Redemption(projection) => {
             statement.kind == super::KagemushaTransitionKindV1::RedeemSplit
                 && statement.amount == projection.statement.amount
                 && statement.peer_credit_id == [0; 32]
-                && statement.peer_recipient_lane_id == [0; 32]
+                && statement.recipient_encryption_key_binding == [0; 32]
         }
     };
     if !operation_valid || projection.operation() != projection.lifecycle().operation_kind {

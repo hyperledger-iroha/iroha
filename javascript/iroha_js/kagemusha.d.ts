@@ -312,7 +312,7 @@ declare namespace Kagemusha {
     readonly encryptedCredit: Uint8Array; readonly artifactManifestDigest: Uint8Array;
   }
 
-  /** Public operation-21 body; private openings and Guard certificates stay in native storage. */
+  /** Public operation-16 body; private openings and Guard certificates stay in native storage. */
   class DeviceMintStageCommand {
     constructor(value: { version: 1; canonicalAuthorization: Bytes; canonicalMintCredit: Bytes });
     readonly version: 1; readonly canonicalAuthorization: Uint8Array; readonly canonicalMintCredit: Uint8Array;

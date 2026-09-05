@@ -9,6 +9,8 @@ cd "$repo_root"
 readonly autoscale_file="integration_tests/tests/nexus/autoscale_localnet.rs"
 readonly native_file="integration_tests/tests/native_amx_routing.rs"
 readonly native_recovery_file="$native_file"
+readonly bpng_native_file="integration_tests/tests/alias_registry_bootstrap_network.rs"
+readonly network_functional_harness="integration_tests/tests/network_functional.rs"
 readonly launcher="scripts/run_nexus_cross_dataspace_atomic_swap.sh"
 readonly release_runner="scripts/run_sumeragi_v2_release_gates.sh"
 readonly release_runner_support="scripts/run_sumeragi_v2_release_gates_support.sh"
@@ -54,8 +56,11 @@ readonly autoscale_drain_test="nexus_autoscale_two_phase_drain_closes_certifies_
 readonly autoscale_drain_qualified_test="nexus::autoscale_localnet::${autoscale_drain_test}"
 readonly native_test="native_amx_rotating_validator_fault_soak_preserves_independent_participant_qcs"
 readonly bpng_native_bootstrap_test="alias_registry_bootstrap_network::bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansion"
+readonly bpng_native_bootstrap_function="${bpng_native_bootstrap_test##*::}"
 readonly native_grouped_pruning_marker="[multilane-release-native-evidence] grouped_sources=2 durable_manifest=passed body_eviction_recovery=passed authenticated_remote_recovery=passed exact_once=passed"
-readonly canonical_production_test_count=867
+readonly canonical_production_test_count=866
+readonly canonical_production_module_count=42
+readonly canonical_corridor_leg_count=83
 
 for release_support_component in \
   "$release_runner_support" \
@@ -146,10 +151,23 @@ require_exact_digest_occurrences() {
   fi
 }
 
+for bpng_source_path in "$bpng_native_file" "$network_functional_harness"; do
+  if [[ ! -f "$bpng_source_path" || -L "$bpng_source_path" ]]; then
+    echo "native BPNG release source must be a regular non-symlink file: ${bpng_source_path}" >&2
+    exit 1
+  fi
+done
 require_nonignored_test "$autoscale_file" "$autoscale_test"
 require_nonignored_test "$autoscale_file" "$autoscale_restart_test"
 require_nonignored_test "$autoscale_file" "$autoscale_drain_test"
 require_nonignored_test "$native_file" "$native_test"
+require_nonignored_test "$bpng_native_file" "$bpng_native_bootstrap_function"
+require_exact_token \
+  "$network_functional_harness" \
+  '#[path = "alias_registry_bootstrap_network.rs"]'
+require_exact_token \
+  "$network_functional_harness" \
+  'mod alias_registry_bootstrap_network;'
 if [[ ! -f "$release_receipt_component" || -L "$release_receipt_component" ]]; then
   echo "release receipt formal-artifact component must be a regular non-symlink file" >&2
   exit 1
@@ -199,31 +217,75 @@ require_exact_token \
   "readonly bpng_native_bootstrap_release_test=\"${bpng_native_bootstrap_test}\""
 require_exact_token \
   "$release_runner" \
-  '      --test network_functional -- --list'
+  'verify_bpng_native_bootstrap_release_identity() {'
 require_exact_token \
   "$release_runner" \
-  '      --test network_functional -- --list --ignored'
+  'run_bpng_native_bootstrap_release_gate() {'
+require_exact_token \
+  "$release_runner" \
+  '  test_list="$(run_cargo test --locked --offline -p integration_tests --test network_functional -- --list)" || { echo "native BPNG release-test discovery failed" >&2; return 1; }'
+require_exact_token \
+  "$release_runner" \
+  '  ignored_test_list="$(run_cargo test --locked --offline -p integration_tests --test network_functional -- --list --ignored)" || { echo "native BPNG ignored-test discovery failed" >&2; return 1; }'
 require_exact_token \
   "$release_runner" \
   '      --test network_functional "$bpng_native_bootstrap_release_test" -- \'
 require_exact_token \
   "$release_runner" \
-  '    export IROHA_TEST_SERIALIZE_NETWORKS=1'
+  '    export IROHA_TEST_SERIALIZE_NETWORKS=1 IROHA_TEST_NETWORK_START_ATTEMPTS=1'
 require_exact_token \
   "$release_runner" \
-  '    export IROHA_TEST_NETWORK_START_ATTEMPTS=1'
+  '  run_log="$(mktemp "${TMPDIR%/}/bpng-native-bootstrap-release.log.XXXXXX")" \'
+require_exact_token \
+  "$release_runner" \
+  'export IROHA_TEST_REQUIRE_NETWORK=1'
+require_exact_token \
+  "$release_runner" \
+  'export IROHA_TEST_BUILD_PROFILE=release'
+require_exact_token \
+  "$release_runner" \
+  'export PROFILE=release'
+require_exact_token \
+  "$release_runner" \
+  '      --exact --show-output --test-threads=1'
+require_exact_token \
+  "$release_runner" \
+  '  if [[ "$(grep -Ec '\''^running [0-9]+ tests?$'\'' "$run_log" || true)" != 1 \'
+require_exact_token \
+  "$release_runner" \
+  '    || "$(grep -Ec '\''^test result:'\'' "$run_log" || true)" != 1 \'
+require_exact_token \
+  "$release_runner" \
+  '    echo "native BPNG release gate lacks one unambiguous passing result; log retained at ${run_log}" >&2'
+require_exact_token \
+  "$release_runner" \
+  '  rm -f -- "$run_log" \'
 require_exact_token \
   "$release_runner" \
   '  run_cooperative_gate bpng-native-bootstrap-release \'
 require_exact_token \
   "$release_runner" \
   '    run_bpng_native_bootstrap_release_gate'
+require_exact_fragment \
+  "$release_runner" \
+  '  verify_bpng_native_bootstrap_release_identity \' \
+  2
 require_exact_token \
   "$release_runner" \
-  '  verify_release_identity "before native BPNG bootstrap release gate"'
+  '    "before native BPNG bootstrap release gate"'
 require_exact_token \
   "$release_runner" \
-  '  verify_release_identity "after native BPNG bootstrap release gate"'
+  '    "after native BPNG bootstrap release gate"'
+require_exact_token \
+  "$release_runner" \
+  '  verify_release_identity "$checkpoint" || return $?'
+require_exact_fragment \
+  "$release_runner" \
+  '  if ! localnet_binary_attestation_valid; then' \
+  2
+require_exact_token \
+  "$release_runner" \
+  '      != "${IROHA_TEST_TARGET_DIR:-}/message-control/release/iroha3d" \'
 require_exact_token \
   "$release_runner" \
   "readonly multilane_native_amx_grouped_pruning_marker=\"${native_grouped_pruning_marker}\""
@@ -250,7 +312,7 @@ require_exact_token \
   "readonly expected_production_liveness_test_count=${canonical_production_test_count}"
 require_exact_token \
   "$release_runner" \
-  "  readonly expected_corridor_leg_count=85"
+  "  readonly expected_corridor_leg_count=${canonical_corridor_leg_count}"
 require_exact_token \
   "$release_runner" \
   "export CARGO_INCREMENTAL=0"
@@ -372,7 +434,9 @@ python3 -I -S - \
   "$release_receipt_gate_component" \
   "$release_receipt_publication_component" \
   "$release_bootstrap_component" \
-  "$cargo_cache_cli_component" <<'PY'
+  "$cargo_cache_cli_component" \
+  "$canonical_production_module_count" \
+  "$canonical_corridor_leg_count" <<'PY'
 from __future__ import annotations
 
 import ast
@@ -395,6 +459,8 @@ receipt_component_source = receipt_component.read_text(encoding="utf-8")
 receipt_corridor_component = Path(sys.argv[4])
 receipt_corridor_component_source = receipt_corridor_component.read_text(encoding="utf-8")
 canonical_production_test_count = int(sys.argv[5])
+canonical_production_module_count = int(sys.argv[16])
+canonical_corridor_leg_count = int(sys.argv[17])
 process_policy = Path(sys.argv[6])
 process_policy_source = process_policy.read_text(encoding="utf-8")
 cargo_cache_copier = Path(sys.argv[7])
@@ -696,6 +762,69 @@ def exact_line(line: str) -> int:
     return matches[0]
 
 
+def exact_shell_function(name: str, expected_sha256: str) -> str:
+    definitions = list(re.finditer(
+        rf"^[ \t]*(?:function[ \t]+)?{re.escape(name)}"
+        rf"(?:[ \t]*\(\))?[ \t]*\{{",
+        runner_parent_source,
+        flags=re.MULTILINE,
+    ))
+    if len(definitions) != 1:
+        reject(f"{name} must have exactly one shell definition")
+    canonical_prefix = f"{name}() {{\n"
+    start = definitions[0].start()
+    if not runner_parent_source.startswith(canonical_prefix, start):
+        reject(f"{name} definition is not in canonical form")
+    try:
+        end = runner_parent_source.index("\n}\n", start) + 2
+    except ValueError as error:
+        raise SystemExit(f"{runner}: {name} has no canonical terminator") from error
+    block = runner_parent_source[start:end]
+    if hashlib.sha256(block.encode("utf-8")).hexdigest() != expected_sha256:
+        reject(f"{name} exact fail-closed body changed")
+    return block
+
+
+bpng_identity_function = exact_shell_function(
+    "verify_bpng_native_bootstrap_release_identity",
+    "2f4bdaabddcea06942140a194eba5ccda37207b9d691d7232c5b80de7bf07001",
+)
+bpng_run_function = exact_shell_function(
+    "run_bpng_native_bootstrap_release_gate",
+    "f381e794a38192ea93ccbe7e6ca3ffae718f20353b4cf7871a424af672d43672",
+)
+if bpng_identity_function.count("localnet_binary_attestation_valid") != 1:
+    reject("native BPNG identity checkpoint must revalidate one exact four-binary bundle")
+if bpng_run_function.count("run_cargo test --locked --offline") != 3:
+    reject("native BPNG gate must own exactly two discovery calls and one execution")
+if "run_corridor_leg" in bpng_run_function or "corridor_leg_index" in bpng_run_function:
+    reject(
+        "native BPNG gate must not change the fixed "
+        f"{canonical_corridor_leg_count}-leg corridor receipt"
+    )
+
+
+bpng_gate_block = """\
+if [[ "$profile" == "--release" ]]; then
+  verify_bpng_native_bootstrap_release_identity \\
+    "before native BPNG bootstrap release gate"
+  run_cooperative_gate bpng-native-bootstrap-release \\
+    run_bpng_native_bootstrap_release_gate
+  verify_bpng_native_bootstrap_release_identity \\
+    "after native BPNG bootstrap release gate"
+fi"""
+if source.count(bpng_gate_block) != 1:
+    reject("native BPNG qualification must be one release-only cooperative gate")
+if not (
+    source.index("export_source_bound_localnet_binaries || release_prebuilt_status=$?")
+    < source.index("if ((release_prebuilt_status != 0)); then")
+    < source.index(bpng_gate_block)
+    < source.index(
+        'IROHA_MULTILANE_FOUR_PEER_COMPLETION_PATH_FILE="$multilane_four_peer_completion_path_file"'
+    )
+):
+    reject("native BPNG qualification escaped the prebuilt release-child boundary")
+
 production_marker = "required_production_liveness_tests=(\n"
 if source.count(production_marker) != 1:
     reject("release runner must contain one canonical production inventory")
@@ -732,6 +861,9 @@ for node in receipt_tree.body:
             "_RELEASE_RECEIPT_COMPONENT_SHA256",
             "_PRODUCTION_TEST_COUNT",
             "_PRODUCTION_MODULES",
+            "_G_UNIT_GROUPS",
+            "_NATIVE_AMX_GROUPED_PARITY_SUITES",
+            "_SUMERAGI_SDK_DIAGNOSTICS_SUITES",
             "_APALACHE_REFINEMENT_RESULTS",
             "_APALACHE_LAYOUT_ONLY_RESULTS",
         }
@@ -866,6 +998,103 @@ if (
     != expected_receipt_publication_component_symbols
 ):
     reject("receipt writer publication component symbol inventory is not exact")
+
+
+def static_corridor_leg_count() -> int:
+    """Derive the receipt corridor cardinality without executing release code."""
+
+    functions = [
+        node
+        for node in receipt_corridor_component_tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "_corridor_legs"
+    ]
+    if len(functions) != 1:
+        reject("receipt writer must define exactly one corridor-leg constructor")
+    iterable_counts: dict[str, int] = {}
+    for name in (
+        "_G_UNIT_GROUPS",
+        "_PRODUCTION_MODULES",
+        "_NATIVE_AMX_GROUPED_PARITY_SUITES",
+        "_SUMERAGI_SDK_DIAGNOSTICS_SUITES",
+    ):
+        value = receipt_assignments.get(name)
+        if not isinstance(value, tuple):
+            reject(f"receipt writer {name} must be one literal tuple")
+        iterable_counts[name] = len(value)
+
+    count = 0
+    initializers = 0
+    returns = 0
+    for statement in functions[0].body:
+        if isinstance(statement, ast.Assign):
+            if (
+                len(statement.targets) != 1
+                or not isinstance(statement.targets[0], ast.Name)
+                or statement.targets[0].id != "legs"
+                or not isinstance(statement.value, ast.ListComp)
+                or len(statement.value.generators) != 1
+                or statement.value.generators[0].ifs
+                or not isinstance(statement.value.generators[0].iter, ast.Name)
+            ):
+                reject("receipt corridor legs must have one canonical initializer")
+            iterable = statement.value.generators[0].iter.id
+            if iterable != "_G_UNIT_GROUPS":
+                reject("receipt corridor must begin with the exact G-UNIT groups")
+            count += iterable_counts[iterable]
+            initializers += 1
+            continue
+        if isinstance(statement, ast.Expr) and isinstance(statement.value, ast.Call):
+            call = statement.value
+            if (
+                not isinstance(call.func, ast.Attribute)
+                or not isinstance(call.func.value, ast.Name)
+                or call.func.value.id != "legs"
+                or call.keywords
+                or len(call.args) != 1
+            ):
+                reject("receipt corridor contains a noncanonical leg mutation")
+            if call.func.attr == "append":
+                count += 1
+                continue
+            if call.func.attr != "extend":
+                reject("receipt corridor contains an unsupported leg mutation")
+            extension = call.args[0]
+            if isinstance(extension, ast.Tuple):
+                count += len(extension.elts)
+                continue
+            if (
+                isinstance(extension, ast.GeneratorExp)
+                and len(extension.generators) == 1
+                and not extension.generators[0].ifs
+                and isinstance(extension.generators[0].iter, ast.Name)
+            ):
+                iterable = extension.generators[0].iter.id
+                if iterable not in iterable_counts:
+                    reject(
+                        "receipt corridor generator uses an unreviewed leg inventory"
+                    )
+                count += iterable_counts[iterable]
+                continue
+            reject("receipt corridor extend must use a reviewed tuple or inventory")
+        if (
+            isinstance(statement, ast.Return)
+            and isinstance(statement.value, ast.Name)
+            and statement.value.id == "legs"
+        ):
+            returns += 1
+            continue
+        reject("receipt corridor constructor contains unreviewed control flow")
+    if initializers != 1 or returns != 1:
+        reject("receipt corridor constructor must initialize and return exactly once")
+    return count
+
+
+derived_corridor_leg_count = static_corridor_leg_count()
+if derived_corridor_leg_count != canonical_corridor_leg_count:
+    reject(
+        "receipt corridor static leg count must equal "
+        f"{canonical_corridor_leg_count}; found {derived_corridor_leg_count}"
+    )
 receipt_component_paths = (
     receipt_component,
     receipt_corridor_component,
@@ -911,13 +1140,19 @@ if (
         f"{canonical_production_test_count}"
     )
 production_modules = receipt_assignments.get("_PRODUCTION_MODULES")
-if not isinstance(production_modules, tuple) or len(production_modules) != 44:
-    reject("receipt writer must bind exactly 44 production modules")
+if (
+    not isinstance(production_modules, tuple)
+    or len(production_modules) != canonical_production_module_count
+):
+    reject(
+        "receipt writer must bind exactly "
+        f"{canonical_production_module_count} production modules"
+    )
 module_counts = {
     module: count for _leg_id, module, count in production_modules
 }
 if (
-    len(module_counts) != 44
+    len(module_counts) != canonical_production_module_count
     or sum(module_counts.values()) != canonical_production_test_count
 ):
     reject(
@@ -948,10 +1183,22 @@ runner_modules = shell_array("production_liveness_modules")
 runner_leg_ids = shell_array("production_liveness_leg_ids")
 receipt_modules = tuple(module for _leg_id, module, _count in production_modules)
 receipt_leg_ids = tuple(leg_id for leg_id, _module, _count in production_modules)
-if runner_modules != receipt_modules or len(set(runner_modules)) != 44:
-    reject("release runner must bind the exact 44 receipt production modules")
-if runner_leg_ids != receipt_leg_ids or len(set(runner_leg_ids)) != 44:
-    reject("release runner must bind the exact 44 receipt production leg IDs")
+if (
+    runner_modules != receipt_modules
+    or len(set(runner_modules)) != canonical_production_module_count
+):
+    reject(
+        "release runner must bind the exact "
+        f"{canonical_production_module_count} receipt production modules"
+    )
+if (
+    runner_leg_ids != receipt_leg_ids
+    or len(set(runner_leg_ids)) != canonical_production_module_count
+):
+    reject(
+        "release runner must bind the exact "
+        f"{canonical_production_module_count} receipt production leg IDs"
+    )
 
 expected_apalache_refinement_results = (
     (
@@ -1046,8 +1293,8 @@ if observed_counts != module_counts:
     reject("release runner inventory does not match receipt module counts")
 canonical_inventory = ("\n".join(canonical_rows) + "\n").encode()
 if hashlib.sha256(canonical_inventory).hexdigest() != (
-    "49312043ca34bd4a1857ef64d21bd858"
-    "c4f9af1e4f39d02e5338e57bc6494a8a"
+    "47a818de4cc0793664977d5e0f4b7e56"
+    "dda943580b647f15671c3b8aa8a5cd20"
 ):
     reject(
         f"canonical {canonical_production_test_count}-test production TSV "
@@ -2726,4 +2973,4 @@ if [[ "$(grep -Fxc -- "      export IROHA_MULTILANE_RELEASE_MODE=1" "$launcher" 
   exit 1
 fi
 
-echo "[multilane-release-inventory] 85 corridor legs, exact ${canonical_production_test_count}/${canonical_production_test_count} production tests across 44 modules, exact 522/522 G-UNIT (316 core, 143 queue-journal, 13 config, 8 data-model, 39 Torii, 1 Torii-shared, 2 integration), four mandatory G-4P gates, guarded Cargo execution, Rust-owned grouped SDK corpus parity, and exact no-skip Sumeragi diagnostics SDK inventories are source-bound (fixture_sha256=${grouped_fixture_sha256}, grouped_suite_source_manifest_sha256=${grouped_suite_source_manifest_sha256}, sdk_diagnostics_suite_source_manifest_sha256=${sdk_diagnostics_suite_source_manifest_sha256})"
+echo "[multilane-release-inventory] ${canonical_corridor_leg_count} corridor legs, exact ${canonical_production_test_count}/${canonical_production_test_count} production tests across ${canonical_production_module_count} modules, exact 522/522 G-UNIT (316 core, 143 queue-journal, 13 config, 8 data-model, 39 Torii, 1 Torii-shared, 2 integration), four mandatory G-4P gates, one sealed-child BPNG native bootstrap gate, guarded Cargo execution, Rust-owned grouped SDK corpus parity, and exact no-skip Sumeragi diagnostics SDK inventories are source-bound (fixture_sha256=${grouped_fixture_sha256}, grouped_suite_source_manifest_sha256=${grouped_suite_source_manifest_sha256}, sdk_diagnostics_suite_source_manifest_sha256=${sdk_diagnostics_suite_source_manifest_sha256})"

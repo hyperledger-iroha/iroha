@@ -16,19 +16,19 @@ use super::{
     KagemushaValidationErrorV1,
 };
 
-/// Maximum canonical bytes accepted for an operation-21 mint-stage body.
+/// Maximum canonical bytes accepted for an operation-16 mint-stage body.
 ///
 /// Both nested frames retain their tighter independent 7,936-byte limits. The larger outer bound
 /// matches the already frozen secure-device command payload cap and permits no unbounded decode.
 pub const KAGEMUSHA_DEVICE_MINT_STAGE_COMMAND_MAX_BYTES_V1: usize = 64 * 1024;
-/// Maximum canonical bytes accepted for the fixed operation-21 public result.
+/// Maximum canonical bytes accepted for the fixed operation-16 public result.
 pub const KAGEMUSHA_DEVICE_MINT_STAGE_RESULT_MAX_BYTES_V1: usize = 128;
 /// A previously unseen finalized credit was durably staged.
 pub const KAGEMUSHA_DEVICE_MINT_STAGE_DISPOSITION_STAGED_V1: u8 = 0;
 /// The same canonical credit was already pending or consumed.
 pub const KAGEMUSHA_DEVICE_MINT_STAGE_DISPOSITION_EXACT_DUPLICATE_V1: u8 = 1;
 
-/// Public operation-21 input delivered to a qualified secure-device service.
+/// Public operation-16 input delivered to a qualified secure-device service.
 ///
 /// The nested values remain canonical independent archives so hardware can validate their exact
 /// byte identities before it mutates its rollback-resistant inbox.
@@ -46,7 +46,7 @@ pub struct KagemushaDeviceMintStageCommandV1 {
     pub canonical_mint_credit: Vec<u8>,
 }
 
-/// Public operation-21 result returned only after durable hardware completion.
+/// Public operation-16 result returned only after durable hardware completion.
 ///
 /// The complete hardware Guard certificate remains in native authenticated storage. The bounded
 /// lifecycle response authenticator separately binds this result and must be verified by the
@@ -65,7 +65,7 @@ pub struct KagemushaDeviceMintStageResultV1 {
 }
 
 impl KagemushaDeviceMintStageCommandV1 {
-    /// Construct and validate an operation-21 command from exact nested archives.
+    /// Construct and validate an operation-16 command from exact nested archives.
     ///
     /// # Errors
     ///
@@ -129,7 +129,7 @@ impl KagemushaDeviceMintStageCommandV1 {
         Ok(bytes)
     }
 
-    /// Decode one exact, bounded canonical operation-21 command.
+    /// Decode one exact, bounded canonical operation-16 command.
     ///
     /// # Errors
     ///
@@ -223,7 +223,7 @@ impl KagemushaDeviceMintStageResultV1 {
         Ok(norito::encode_canonical(self)?)
     }
 
-    /// Decode one exact, bounded canonical operation-21 result.
+    /// Decode one exact, bounded canonical operation-16 result.
     ///
     /// # Errors
     ///

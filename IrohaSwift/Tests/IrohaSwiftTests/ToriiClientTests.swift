@@ -13336,7 +13336,7 @@ final class ToriiClientTests: XCTestCase {
             policyEpoch: request.hardwareCredential.policyEpoch,
             operationKind: .redeemSplit,
             requestID: Data(repeating: 0, count: 32),
-            acceptanceTicketID: Data(repeating: 0, count: 32),
+            receiverLaneCommitment: Data(repeating: 0, count: 32),
             creditID: Data(repeating: 0, count: 32),
             ciphertextDigest: Data(repeating: 0, count: 32)
         )
@@ -13425,22 +13425,11 @@ final class ToriiClientTests: XCTestCase {
                     JSONSerialization.jsonObject(with: Data(contentsOf: candidate))
                         as? [String: Any])
                 let requestSection = try XCTUnwrap(root["payment_request"] as? [String: Any])
-                let intentSection = try XCTUnwrap(
-                    root["acceptance_intent"] as? [String: Any])
-                let ticketSection = try XCTUnwrap(
-                    root["acceptance_ticket"] as? [String: Any])
                 let paymentSection = try XCTUnwrap(root["payment"] as? [String: Any])
                 let request = try KagemushaNoritoV1.decodePaymentRequestShapeExact(
                     try kagemushaFixtureHex(requestSection))
-                let intent = try KagemushaNoritoV1
-                    .decodeAcceptanceIntentShapeExact(
-                        try kagemushaFixtureHex(intentSection), against: request)
-                let ticket = try KagemushaNoritoV1.decodeAcceptanceTicketShapeExact(
-                    try kagemushaFixtureHex(ticketSection), against: request,
-                    intent: intent)
                 let payment = try KagemushaNoritoV1.decodePaymentShapeExact(
-                    try kagemushaFixtureHex(paymentSection), against: request,
-                    intent: intent, ticket: ticket)
+                    try kagemushaFixtureHex(paymentSection), against: request)
                 return (request, payment)
             }
             current.deleteLastPathComponent()

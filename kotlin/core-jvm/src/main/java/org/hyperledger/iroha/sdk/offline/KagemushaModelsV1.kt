@@ -637,10 +637,9 @@ enum class KagemushaOperationKindV1(@JvmField val wireTag: Int) {
     BOOTSTRAP(0),
     MINT_FOLD(1),
     SEND_SPLIT(2),
-    RECEIVE_FOLD_BATCH(3),
+    RECEIVE_FOLD(3),
     REDEEM_SPLIT(4),
-    SUITE_UPGRADE(5),
-    ROTATE(6),
+    ROTATE(5),
 }
 
 /** Complete history-independent lifecycle context for one released transition. */
@@ -982,7 +981,7 @@ class KagemushaMintCreditV1(
     fun artifactManifestDigest(): ByteArray = artifactManifestDigestValue.copyOf()
 }
 
-/** Canonical public body for secure-device operation 21. */
+/** Canonical public body for secure-device operation 16. */
 class KagemushaDeviceMintStageCommandV1(
     @JvmField val version: Int,
     canonicalAuthorization: ByteArray,
@@ -1012,7 +1011,7 @@ class KagemushaDeviceMintStageCommandV1(
     fun canonicalMintCredit(): ByteArray = canonicalMintCreditValue.copyOf()
 }
 
-/** Bounded public summary returned after secure-device operation 21 completes durably. */
+/** Bounded public summary returned after secure-device operation 16 completes durably. */
 class KagemushaDeviceMintStageResultV1(
     @JvmField val version: Int,
     @JvmField val disposition: Int,

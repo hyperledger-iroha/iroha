@@ -1,15 +1,74 @@
 # KAGEMUSHA V1 secure-device bridge
 
-This document fixes the V1 ABI between the audited KAGEMUSHA native core and a
-qualified non-forking hardware service. A missing service, incomplete profile,
-invalid credential, malformed frame, or unsupported operation fails closed.
-There is no software fallback.
+This document fixes the only V1 ABI between the audited KAGEMUSHA native core
+and a qualified non-forking hardware service. A missing service, incomplete
+profile, invalid credential, malformed frame, unsupported operation, or failed
+binding check fails closed. There is no software fallback.
 
 All integers are unsigned little-endian, digests are SHA-256, reserved bytes
-are zero, and every canonical Norito frame has version `1`. Frame bounds protect
-parsers; they are not cumulative limits on hops, receipts, ancestry, fan-in, or
-proof depth. Authenticated state and replay data may be paged, but valid staged
-money cannot be rejected because a historical count was reached.
+are zero, and every canonical Norito archive has version `1`. Frame and page
+bounds protect parsers and transports. They are not limits on payment history,
+hops, received credits, aggregate balance ancestry, or recursive proof depth.
+
+## Peer protocol
+
+The only peer exchange is:
+
+1. `KagemushaPaymentRequestV1` (`IPM1` tag `1`)
+2. `KagemushaPaymentV1` (`IPM1` tag `2`)
+3. `KagemushaAcknowledgementV1` (`IPM1` tag `3`)
+
+Raw and `kgm1:` transport validators expose only those three shapes. A payment
+request directly binds the network, release, asset incarnation and scale,
+liability pool, amount, recipient account, recipient encryption key, hardware
+credential, request ID, issue time, expiry, and receiver signature. It does not
+bind the receiver's current aggregate-state head.
+
+A payment directly binds the request digest, amount, sender before/after
+commitments, transition nullifier, unique credit ID, ciphertext commitment,
+trusted commit evidence, commit time, encrypted credit, terminal commit
+certificate, and constant-size paired proof. The sender's hardware commit time
+must be inside the request window. A payment committed in that window remains
+stageable and foldable indefinitely.
+
+The acknowledgement binds the request digest, payment digest, credit ID,
+rollback-resistant inbox receipt, and receiver signature. It is created only
+after the exact request/payment bytes and receipt have been irreversibly staged.
+An exact duplicate recovers the same durable result; reusing an operation ID or
+credit ID with different bytes is a conflict.
+
+Distinct valid payments made against the same request are independently valid.
+Invoice deduplication is outside the monetary protocol.
+
+## Native contract vector
+
+Every linked native bridge exports one canonical Norito
+`KagemushaNativeContractVectorV1`. Its typed body contains exact counts and
+ordered `{code, name}` entries for the three peer messages, 50 proof-artifact
+roles, eight qualified relations, six helper circuits, sixteen mandatory
+hardware capabilities, and 22 secure-device operations. The helper inventory
+ends with `mint_hash_shard` and `mint_hash_claim`; the relation inventory is the
+six monetary operations followed by `terminal_authorization` and
+`commit_wrapper`.
+
+The body digest transcript is:
+
+```text
+ASCII "iroha:kagemusha:native-contract-vector:v1"
+|| canonical_body_length:u64_le
+|| canonical_norito(KagemushaNativeContractVectorBodyV1)
+```
+
+Its pinned SHA-256 is
+`13b51124f0329fc47b0aa3bf551f83f1806920c9898e7c07cd7f0730eb57fbb9`.
+The complete archive is bounded at 4,096 bytes. Rust reconstructs every entry
+from the authoritative V1 constants/enums and rejects noncanonical encoding,
+count/order/name drift, or digest mismatch. Swift, Kotlin, and mirrored Java
+expose the raw canonical archive as an optional native probe.
+
+This digest is an ABI/tamper pin only. It is not a signature, hardware
+attestation, consensus proof, settlement receipt, or source of monetary
+authority.
 
 ## Capability frame
 
@@ -24,29 +83,38 @@ The capability frame is 96 bytes:
 | 12 | 4 | exact required-feature mask |
 | 16 | 4 | maximum command payload, at least `65,536` |
 | 20 | 4 | maximum response payload, at least `65,536` |
-| 24 | 32 | non-zero active hardware profile ID |
-| 56 | 32 | non-zero qualification-report SHA-256 of the active hardware profile |
+| 24 | 32 | nonzero active hardware-policy ID |
+| 56 | 32 | nonzero qualification-report SHA-256 |
 | 88 | 8 | zero trailer |
 
-The offset-56 field is named `attestationDigest` in the mobile SDKs. It equals
-the active profile's `qualification_report_digest`, which the release validator
-binds to the qualification-report file's SHA-256. It is not a device credential
-digest or `credential_id`. The enrolled device credential remains a separate
-authenticated object read through operation 1 and verified against its profile,
-network, key, and epoch bindings. Capability framing alone grants no monetary
-authority.
+The offset-56 field is `qualificationReportDigest` in the mobile SDKs. It is the
+active profile's qualification-report digest, not a device credential identity. The
+device credential is read through operation 1 and separately checked against
+its release, profile, network, key, policy, and epoch bindings.
 
-The required mask is exactly `0xffff`. Its sixteen bits attest exact-next
-predecessor consumption, one-use successor authorization, rollback-resistant
-counter/journal, sealed deterministic recovery inputs, one-use acceptance
-tickets, durable inbox reservation, authenticated inbound staging/paging,
-authoritative replay-root recovery, sender outbox reservation, authenticated
-durable retry outbox, atomic commit of a Core-verified candidate, recoverable
-terminal commit certificates, trusted time or lease, offline hardware-epoch
-rotation, rollback-safe counter rollover, and no software fallback. Unknown or
-missing required bits fail closed.
+The required mask is exactly `0xffff`. Its sixteen bits attest:
 
-## Command and response frames
+- exact-next predecessor consumption;
+- one-use successor authorization;
+- rollback-resistant counter and journal;
+- sealed transition recovery;
+- receiver-bound credit commit;
+- rollback-resistant accepted-credit inbox;
+- authenticated inbound staging;
+- authoritative replay-root recovery;
+- sender outbox reservation;
+- authenticated durable retry outbox;
+- atomic commit of a Core-verified candidate;
+- recoverable terminal commit certificates;
+- trusted time or monotonic lease;
+- offline hardware-epoch rotation;
+- rollback-safe counter rollover; and
+- absence of a software fallback.
+
+Unknown or missing required bits fail closed. Capability framing alone grants
+no monetary authority.
+
+## Command frame and operation inventory
 
 A command has an 80-byte header followed by 1 to 65,536 canonical payload
 bytes:
@@ -57,251 +125,170 @@ bytes:
 | 8 | 2 | version `1` |
 | 10 | 1 | operation code |
 | 11 | 1 | zero flags |
-| 12 | 32 | non-zero idempotency or request ID |
+| 12 | 32 | nonzero idempotency/request ID |
 | 44 | 4 | payload length |
 | 48 | 32 | payload SHA-256 |
 | 80 | variable | canonical operation payload |
 
-The closed operation inventory is:
+The V1 operation inventory is closed and contiguous:
 
 | Code | Operation |
 | ---: | --- |
 | 1 | `ReadActiveHardwareCredential` |
-| 2 | `PrepareAcceptanceIntent` |
-| 3 | `RecoverAcceptanceIntent` |
-| 4 | `ValidateIntentReserveInboxAndIssueAcceptanceTicket` |
-| 5 | `RecoverAcceptanceTicket` |
-| 6 | `StageInboundPayment` |
-| 7 | `RecoverStagedInboundPayment` |
-| 8 | `RecoverInboundInboxPage` |
-| 9 | `PrepareExactNextTransition` |
-| 10 | `RecoverPreparedTransition` |
-| 11 | `AbandonUncommittedPreparedTransition` |
-| 12 | `CommitVerifiedCandidateAndSignTerminal` |
-| 13 | `RecoverTerminalOutcome` |
-| 14 | `InstallTerminalEnvelope` |
-| 15 | `RecoverInstalledEnvelopeOrStateProof` |
-| 16 | `SignReceiveAcknowledgement` |
-| 17 | `ReleaseOutboxEntry` |
-| 18 | `ReadTrustedTimeOrLease` |
-| 19 | `PrepareMintAuthorization` |
-| 20 | `RecoverMintAuthorization` |
-| 21 | `VerifyAuthorizationAndStageMintCredit` |
-| 22 | `FoldReceiveBatch` |
-| 23 | `ReadPendingCreditWatermark` |
-| 24 | `RotateHardwareEpoch` |
-| 25 | `BootstrapAggregateState` |
-| 26 | `RecoverWalletSnapshot` |
-| 27 | `CreateSignedPaymentRequest` |
+| 2 | `StageInboundPayment` |
+| 3 | `RecoverStagedInboundPayment` |
+| 4 | `RecoverInboundInboxPage` |
+| 5 | `PrepareExactNextTransition` |
+| 6 | `RecoverPreparedTransition` |
+| 7 | `CommitVerifiedCandidateAndSignTerminal` |
+| 8 | `RecoverTerminalOutcome` |
+| 9 | `InstallTerminalEnvelope` |
+| 10 | `RecoverInstalledEnvelopeOrStateProof` |
+| 11 | `SignReceiveAcknowledgement` |
+| 12 | `ReleaseOutboxEntry` |
+| 13 | `ReadTrustedTimeOrLease` |
+| 14 | `PrepareMintAuthorization` |
+| 15 | `RecoverMintAuthorization` |
+| 16 | `VerifyAuthorizationAndStageMintCredit` |
+| 17 | `FoldReceiveCredit` |
+| 18 | `ReadPendingCreditWatermark` |
+| 19 | `RotateHardwareEpoch` |
+| 20 | `BootstrapAggregateState` |
+| 21 | `RecoverWalletSnapshot` |
+| 22 | `CreateSignedPaymentRequest` |
 
-Codes `0`, `28`, and `255` are unknown, as is every code outside `1..=27`.
-The inventory is closed; aliases or reused codes are invalid.
+Codes `0`, `23` through `255`, aliases, and reused codes are invalid.
 
-Operations 2 through 5 implement the compact pre-ticket exchange. Operation 2
-prepares only `KagemushaAcceptanceIntentV1`, with no proof, terminal key,
-recipient key, or encrypted transfer. Operation 3 recovers the identical intent.
-After Core authenticates the receiver profile and signed request/intent
-context, operation 4 atomically applies the private request-mode allowance,
-reserves inbox bytes, records the intent decision, and issues a signed one-use
-ticket containing a fresh X25519 recipient key. Operation 5 recovers that exact
-ticket and key. Neither request nor intent carries the recipient encryption key.
-Retries cannot create another decision, and new tickets cannot reuse unresolved
-or previously accepted keys. Expiry alone never releases allowance or capacity.
+### Direct inbound staging: operations 2--4 and 11
 
-Operations 6 through 8 accept the final `KagemushaPaymentV1` only against its
-existing ticket allocation. Before hardware mutation, Core verifies the exact
-request, compact intent, ticket, actual post-commit payment proof and certificate
-under the authenticated release/profile, including decrypted opening and
-receiver binding. Hardware atomically stores canonical bytes and returns a
-durable opaque receipt. Exact duplicates return the same receipt; reuse of a
-ticket or credit ID with different bytes conflicts. A validly committed payment
-must remain stageable after delivery delay, ticket expiry, ordinary suite or
-credential rotation, and later traffic; old verification authority and the
-reserved delivery slot must remain available.
+Operation 2 accepts exactly one canonical request, its canonical payment, and
+bounded staging metadata. The outer request ID is the payment's credit ID. Core
+must authenticate the release and profile and verify the actual recursive proof,
+terminal certificate, decrypted opening, request binding, and hardware guard
+before asking hardware to mutate its inbox. Hardware then atomically stores the
+exact public bytes and a rollback-resistant receipt.
 
-The receiver command bodies are distinct canonical Norito V1 archives and
-repeat the outer version and operation binding. Operation 4 carries the exact
-signed request and compact intent (2 KiB maximum); operation 5 carries only the
-non-zero ticket ID (512 bytes); operation 6 carries the request, intent, signed
-ticket, and payment (12 KiB); operation 7 carries the non-zero credit ID and
-exact envelope digest (512 bytes); and operation 8 carries a full-width `u128`
-journal revision, optional non-zero credit cursor, and requested page count
-1--4 (512 bytes). Replies are capped at 16 KiB for ticket issue/recovery, 24 KiB
-for staging/recovery, and 64 KiB for a page. The page-count bound limits one
-response only; repeated revision-consistent pages support an arbitrary backlog.
+Operation 3 recovers the byte-identical staged record selected by credit ID.
+Operation 4 recovers an ordered page at one stable inbox revision. Its
+`maximum_entries` range of 1 through 4 limits one response only; repeated
+revision-consistent pages support an arbitrary backlog. Page entries are unique,
+ordered, at or below the returned revision, and cursor-consistent.
 
-Ticket replies preserve the exact signed ticket, request and intent plus Core's
-reservation certificate. Staged replies preserve the public exchange, Core's
-stage certificate, and the exact durable acknowledgement bytes; they never
-return the private credit opening. Recovery replies must match both the selected
-identity and its exact digest. Page entries must be ordered, unique, at or below
-the authenticated revision and consistent with the returned cursor. Canonical
-shape and public binding checks do not authenticate `GuardBundle`, a recursive
-proof, Core state, trusted time, receiver key custody, or journal durability.
+Operation 11 signs the acknowledgement for one already durable inbox receipt.
+Its body contains only the canonical request, canonical payment, and receipt.
+The outer request ID, receipt credit ID, and payment credit ID must match.
 
-The [sender recovery body contract](kagemusha_device_sender_v1.md) specifies
-operations 9–15/17, caller-known operation IDs, immutable creation context,
-authenticated historical recovery, monotonic tombstones and bounded native
-index paging. Stock dispatch validates these public schemas but remains unavailable.
+Receiver schemas are:
 
-Receiver archives use stable schema names rather than Rust private type names:
+| Operation | Canonical schema suffix after `iroha.kagemusha.device.v1.` |
+| ---: | --- |
+| 2 | `stage-inbound-payment-command` |
+| 3 | `recover-staged-inbound-payment-command` |
+| 4 | `recover-inbound-inbox-page-command` |
+| 2/3 reply | `staged-inbound-payment-reply` |
+| 4 reply | `inbound-inbox-page-reply` |
+| nested staged record | `staged-inbound-payment-record` |
+| 11 | `sign-receive-acknowledgement-command` |
+| 11 reply | `receive-acknowledgement-reply` |
 
-| Body | Canonical schema name |
-| --- | --- |
-| operation 4 command | `iroha.kagemusha.device.v1.reserve-acceptance-ticket-command` |
-| operation 5 command | `iroha.kagemusha.device.v1.recover-acceptance-ticket-command` |
-| operation 6 command | `iroha.kagemusha.device.v1.stage-inbound-payment-command` |
-| operation 7 command | `iroha.kagemusha.device.v1.recover-staged-inbound-payment-command` |
-| operation 8 command | `iroha.kagemusha.device.v1.recover-inbound-inbox-page-command` |
-| operation 4/5 reply | `iroha.kagemusha.device.v1.acceptance-ticket-reply` |
-| staged receipt nested in operations 6–8 | `iroha.kagemusha.device.v1.public-staged-inbound-receipt` |
-| operation 6/7 reply | `iroha.kagemusha.device.v1.staged-inbound-payment-reply` |
-| operation 8 reply | `iroha.kagemusha.device.v1.inbound-inbox-page-reply` |
+### Outgoing lifecycle: operations 5--10 and 12
 
-For peer sends, operations 9 through 15 implement the outgoing lifecycle only
-after the receiver ticket/key is fixed. Redemption uses the same lifecycle
-without a peer ticket. Preparation seals exact inputs, randomness,
-ticket/key, encrypted output, and deterministic recovery material, and reserves
-the complete sender budget before locking the predecessor. Core generates,
-durably persists, and verifies the actual recursive aggregate-state candidate
-before constructing operation 12 from an authenticated-candidate capability.
+Operations 5--10 implement the sole crash-recoverable outgoing lifecycle for a
+peer `SendSplit` or chain-facing `RedeemSplit`. Operation 5 seals the immutable
+public input preimage, reserves durable outbox capacity, and prepares one
+exact-next transition. Operation 6 recovers that preparation. Core generates,
+persists, and verifies the actual recursive candidate before operation 7.
 
-Operation 12 consumes the predecessor exactly once, installs the sole
-successor, and returns the recoverable hardware terminal certificate for that
-exact candidate and full lifecycle. Its fixed ABI name
-`CommitVerifiedCandidateAndSignTerminal` describes internal hardware outcome
-authentication; it does not authorize a transported signature-only payment or
-cancellation. Core subsequently proves the actual `TerminalAuthorization`
-relation and narrow `CommitWrapper`, verifies the final proof/certificate, and
-uses operation 14 to install the canonical terminal envelope. Operations 10,
-13, and 15 recover the exact prepared, committed, or installed record after
-restart or power loss. They cannot select new inputs, seeds, a different
-ticket/key, another successor, or a different canonical envelope. Only the
-installed result recovered by operation 15 may be exposed.
+Operation 7 consumes the predecessor exactly once, installs the sole successor,
+and returns the recoverable hardware terminal certificate for the exact
+candidate and lifecycle. The hardware commit makes a peer credit irrevocable;
+there is no path that recreates the predecessor or cancels an exposed credit.
+The sender remainder is immediately usable.
 
-The state candidate and final proof bind the same proof-independent payment
-body digest; the final proof separately binds the candidate and certificate.
-The full envelope digest exists only after the final proof and is the retry/ACK
-identity. Neither proof/certificate bytes nor the full envelope digest enter
-the precommit body, and actual ciphertext never enters its own AEAD AAD.
-Operation 11 can abandon only a provably uncommitted local preparation; it
-cannot roll back a committed successor or independently release the receiver's
-ticket. Genuine proof-authenticated irreversible cancellation remains
-unfinished, so the current cancellation input always fails closed.
+Operation 8 recovers the terminal outcome. Operation 9 installs the verified
+canonical terminal envelope. Operation 10 recovers either one installed result
+or a stable page of sender records. Only installed bytes may be exposed to a
+peer or chain submitter. A missing acknowledgement retains the byte-identical
+retry outbox but does not freeze the successor balance. Operation 12 releases
+an outbox entry only after checking the exact installed envelope and a closed
+terminal receipt: either the matching durable peer acknowledgement for
+`SendSplit`, or a compact projection selected by a Core-verified finalized
+redemption capability for `RedeemSplit`. Redemption receipt bytes are selectors
+only: the qualified in-process service must already hold and consume the
+non-constructible, operation-indexed Core capability, so a host call or matching
+public digest cannot authorize release. Immutable replay anchors remain after
+either terminal path.
 
-`Bootstrap`, `MintFold`, `SendSplit`, `ReceiveFoldBatch`, `RedeemSplit`,
-`SuiteUpgrade`, and `Rotate` use the exact-next aggregate-state relation.
-Operation 22 folds a padded fixed-shape batch of 1--16 staged credits with one
-replay nonmembership/update per active slot. Repeating it drains an arbitrary
-backlog without a protocol count maximum. `SuiteUpgrade` requires a separately
-authenticated old-to-new verifier bridge; operation 24 is hardware rotation
-only and cannot silently change suite or verifier authority.
+Every sender command uses canonical schema
+`iroha.kagemusha.device.v1.sender-command`; every reply uses
+`iroha.kagemusha.device.v1.sender-reply`. Commands are bounded at 16 KiB and
+replies at 64 KiB. A sender page contains at most four records per response,
+which is a transport bound rather than a wallet-history bound.
 
-### Control and recovery public bodies
+### Mint and aggregate-state control: operations 13--21
 
-Operations 1–3, 16, 18–20 and 22–27 use distinct canonical Norito archives.
-Every archive starts with `version: u16 = 1` and its exact `operation: u8`.
-The remaining command fields are in this wire order:
+Operation 13 reads a hiding trusted-time or monotonic-lease evidence object.
+Operations 14 and 15 prepare and recover one proof-bearing mint authorization
+under a caller-generated, durably stored operation ID.
 
-| Operation | Schema suffix after `iroha.kagemusha.device.v1.` | Remaining command fields | Bound |
-| ---: | --- | --- | ---: |
-| 1 | `read-active-hardware-credential-command` | none | 256 B |
-| 2 | `prepare-acceptance-intent-command` | `intent_id: [u8;32]`, `canonical_request: Vec<u8>`, `exact_amount: u128` | 2 KiB |
-| 3 | `recover-acceptance-intent-command` | `intent_id: [u8;32]` | 256 B |
-| 16 | `sign-receive-acknowledgement-command` | canonical request, intent, ticket and payment byte vectors, then `KagemushaInboxReceiptV1` | 12 KiB |
-| 18 | `read-trusted-time-or-lease-command` | none | 256 B |
-| 19 | `prepare-mint-authorization-command` | `operation_id: [u8;32]`, `amount: u128`, canonical `payer: AccountId`, canonical `recipient: AccountId` | 2 KiB |
-| 20 | `recover-mint-authorization-command` | `operation_id: [u8;32]` | 256 B |
-| 22 | `fold-receive-batch-command` | `operation_id: [u8;32]`, `inbox_sequence_inclusive: u128` | 256 B |
-| 23 | `read-pending-credit-watermark-command` | none | 256 B |
-| 24 | `rotate-hardware-epoch-command` | `operation_id: [u8;32]` | 256 B |
-| 25 | `bootstrap-aggregate-state-command` | `operation_id: [u8;32]` | 256 B |
-| 26 | `recover-wallet-snapshot-command` | none | 256 B |
-| 27 | `create-signed-payment-request-command` | `request_id: [u8;32]`, canonical `recipient: AccountId`, `request_mode: KagemushaPaymentRequestModeV1`, `validity_window_ms: u64` | 2 KiB |
+Operation 16 validates one canonical `KagemushaDeviceMintStageCommandV1`
+containing the exact mint authorization and finalized mint credit. A qualified
+service verifies release authority, recursive proof, finalized reserve debit,
+recipient binding, and journal state, then atomically stages the credit. Its
+result is `KagemushaDeviceMintStageResultV1` with disposition `0` for newly
+staged or `1` for an exact already-pending/consumed duplicate. It can never bind
+the same operation or credit ID to different bytes.
 
-Nested limits are request 928 bytes, intent 192, ticket 256, payment 7,552,
-acknowledgement 256, aggregate state 768, profile 512, credential 768, and mint
-authorization 7,936 bytes. Before operation 2 the caller generates and durably
-stores a random nonzero intent ID. It is both the outer request ID and body
-`intent_id`; operations 2 and 3 reject a difference, and success returns that
-same intent ID. Operation 16 uses the payment credit ID as its outer request ID
-and receipt credit ID. Operations 19/20 repeat their operation ID. Before each
-operation 22 batch and operation 24 rotation, the caller durably stores an
-independent nonzero operation ID repeated in the outer frame and body. Operation
-25 likewise persists its operation ID before bootstrap, and operation 27 uses
-its request ID as both the outer ID and signed request nonce. Read-only operations
-1, 18, 23 and 26 use a fresh nonzero correlation ID. Operation 27 accepts only
-`1..=300,000` milliseconds; the device selects trusted `issued_at_ms` and uses
-checked addition to derive `expires_at_ms`.
+Operation 17 folds exactly one staged credit selected by `credit_id` into the
+aggregate balance, proves replay nonmembership, updates the replay root, and
+returns the successor aggregate state. It is intentionally singular. Clients
+repeat it to drain any backlog; there is no batch width, fan-in maximum, or
+count-based rejection of valid money.
 
-Successful replies repeat version and operation, followed by:
+Operation 18 reads the pending-credit inclusive high-water mark. Operation 19
+carries the complete balance and replay root into the next qualified hardware
+epoch without an online checkpoint. Operation 20 creates the unique
+hardware-owned sequence-zero aggregate state. Operation 21 returns one atomic
+snapshot of the optional aggregate state, journal revision, pending-credit
+count, and retry-outbox count, all as full-width values.
 
-| Operation | Schema suffix | Remaining reply fields | Bound |
-| ---: | --- | --- | ---: |
-| 1 | `active-hardware-credential-reply` | nonzero release ID, nonzero hardware-policy digest, full profile, full credential | 2 KiB |
-| 2/3 | `acceptance-intent-reply` | canonical intent bytes | 2 KiB |
-| 16 | `receive-acknowledgement-reply` | canonical acknowledgement bytes | 2 KiB |
-| 18 | `trusted-time-or-lease-reply` | `KagemushaCommitEvidenceV1` | 512 B |
-| 19/20 | `mint-authorization-reply` | canonical authorization bytes | 12 KiB |
-| 22 | `fold-receive-batch-reply` | echoed inclusive sequence, active count `1..=16`, canonical aggregate state | 2 KiB |
-| 23 | `pending-credit-watermark-reply` | inclusive sequence as `u128` | 256 B |
-| 24 | `rotate-hardware-epoch-reply` | canonical sequence-zero aggregate state | 2 KiB |
-| 25 | `bootstrap-aggregate-state-reply` | canonical sequence-zero aggregate state | 2 KiB |
-| 26 | `wallet-recovery-snapshot-reply` | optional canonical aggregate state, journal revision `u128`, pending-credit count `u128`, retry-outbox count `u128` | 2 KiB |
-| 27 | `signed-payment-request-reply` | exact canonical signed payment request | 2 KiB |
+Control schemas and fields are:
 
-An absent operation 3 or 20 record is outer status `Missing` with an empty
-body. Operation 1 checks profile shape and the credential governance signature,
-but the release ID and hardware-policy digest still need response authentication
-and Core release-catalog membership. Operation 18 exposes only a hiding evidence
-commitment, not wall-clock time or payment-request signing authority. Operation
-24 becomes authoritative only after response authentication, Core old-to-new
-verification and atomic hardware persistence; the caller then repeats operation
-1 to read the new qualification.
+| Operation | Schema suffix | Fields after `version`, `operation` |
+| ---: | --- | --- |
+| 1 | `read-active-hardware-credential-command` | none |
+| 11 | `sign-receive-acknowledgement-command` | canonical request, canonical payment, inbox receipt |
+| 13 | `read-trusted-time-or-lease-command` | none |
+| 14 | `prepare-mint-authorization-command` | operation ID, positive amount, payer, recipient |
+| 15 | `recover-mint-authorization-command` | operation ID |
+| 17 | `fold-receive-credit-command` | operation ID, credit ID |
+| 18 | `read-pending-credit-watermark-command` | none |
+| 19 | `rotate-hardware-epoch-command` | operation ID |
+| 20 | `bootstrap-aggregate-state-command` | operation ID |
+| 21 | `recover-wallet-snapshot-command` | none |
+| 22 | `create-signed-payment-request-command` | request ID, recipient, positive amount, validity window |
 
-Operation 25 takes no host-selected state, release, proof, lane, nonce, time,
-credential or capacity. The qualified native service owns those values and may
-return success only after it atomically persists the unique sequence-zero state.
-Operation 26 reads the optional aggregate state and all three full-width counters
-from one atomic journal snapshot. The counters remain independent full-width
-observations even when the optional state is absent. Pending-credit watermark
-remains the separate operation 23 read. Operation 27 takes only the
-host-selected recipient, closed request mode, request nonce and bounded lifetime;
-its reply must match all four values and contain a valid signature under its
-embedded active credential. These contracts define bodies and bindings; stock
-dispatch remains unavailable because it owns none of the required authority.
+Operations 14, 15, 17, 19, and 20 repeat the outer request ID as their inner
+operation ID. Operation 22 repeats it as the request ID. Read-only operations
+1, 13, 18, and 21 use a fresh nonzero correlation ID. Operation 17 additionally
+requires a distinct nonzero credit ID.
 
-### Operation 21 public mint-stage bodies
+### Native request creation: operation 22
 
-`KagemushaDeviceMintStageCommandV1` is one canonical Norito archive with
-`version: u16 = 1`, `canonical_authorization: Vec<u8>`, and
-`canonical_mint_credit: Vec<u8>`, in that order. Its schema is
-`iroha_data_model::kagemusha::kagemusha_device_v1::KagemushaDeviceMintStageCommandV1`
-with root alignment 8. The outer body is bounded at 65,536 bytes; each exact
-nested archive independently retains its 7,936-byte limit. Decoders validate
-both nested shapes and their complete public authorization/credit binding.
+Operation 22 constructs and signs the complete `KagemushaPaymentRequestV1`
+under the active qualified receiver key. The caller supplies only the recipient,
+positive amount, independent request ID, and validity window. Hardware supplies
+the authenticated network/lane/asset/release/policy context, recipient
+encryption key, credential, and trusted issue time. The validity window is
+between 1 and `KAGEMUSHA_REQUEST_MAX_TTL_MS_V1` milliseconds, inclusive, and
+expiry is derived with checked arithmetic.
 
-`KagemushaDeviceMintStageResultV1` has `version: u16 = 1`, `disposition: u8`,
-and nonzero `credit_id: [u8; 32]`, in that order, with root alignment 2 and the
-same schema namespace. Its cap is 128 bytes. Disposition 0 denotes newly staged
-credit and 1 an exact already-pending or consumed credit. The result must name
-the command's exact credit. Replaying the same outer operation ID must recover
-the byte-identical original response, including its original disposition;
-using a different operation ID may report an exact duplicate. Reusing an
-operation or credit ID with different canonical bytes conflicts.
+Any number of such requests may be outstanding simultaneously. Request creation
+does not reserve aggregate balance or inbox capacity.
 
-Private reservation openings, key handles, hardware snapshots, and complete
-Guard certificates never enter these public bodies. The outer request ID must
-equal the authorization context's operation ID. A qualified native service
-must verify the authenticated release, recursive proofs, finalized mint,
-reserved recipient binding and hardware journal, then atomically stage the
-credit before returning an authenticated result. The public codec and C
-validation exports check shape only. Stock C/JNI validates operation 21's body
-but still returns unavailable; the SDK-to-OEM staging adapter remains
-unfinished. The [Rust-owned structural fixture](../fixtures/offline/kagemusha_device_mint_stage_v1.json)
-is shared by the maintained SDKs and is not monetary proof or hardware evidence.
+## Response frame and authentication
 
-The response has this 116-byte header, followed by payload and authenticator:
+The response has a 116-byte header followed by payload and authenticator:
 
 | Offset | Width | Field |
 | ---: | ---: | --- |
@@ -316,15 +303,12 @@ The response has this 116-byte header, followed by payload and authenticator:
 | 84 | 32 | authenticator SHA-256 |
 | 116 | variable | payload, then authenticator |
 
-A successful response has 1--65,536 payload bytes and exactly 64 authenticator
-bytes. The authenticator is a canonical low-S P-256 ECDSA-SHA256 signature in
-fixed `r || s` form under the enrolled `credential.device_public_key`. A
-non-success response has empty payload and authenticator and both header digests
-equal SHA-256 of the empty string.
+A successful response has 1 through 65,536 payload bytes and exactly 64 bytes
+of canonical low-S P-256 ECDSA-SHA256 `r || s` authentication. A non-success
+response has empty payload and authenticator and both header digests equal the
+SHA-256 of empty bytes.
 
-The exact signature message is the concatenation below. Integer fields remain
-little-endian. No field has an implicit length or encoding beyond the listed
-bytes.
+The exact success-authenticator message is:
 
 ```text
 ASCII "iroha:kagemusha:device:v1:response-authenticator"
@@ -341,46 +325,71 @@ ASCII "iroha:kagemusha:device:v1:response-authenticator"
 || capability_qualification_report_digest:[u8;32]
 ```
 
-The header's authenticator SHA-256 is transport integrity for the signature and
-is excluded from its own signing message. Both capability digests must be
-nonzero and distinct. The operation-1 payload must first validate its profile,
-governance credential and equality of `hardware_policy_digest`, profile ID and
-the capability policy ID; its profile qualification-report digest must equal
-the capability qualification digest. Only then may its embedded device key
-verify that response. Core must additionally establish signed release-catalog
-membership for the returned release before the session enables monetary use.
-Every later successful response verifies under that accepted key and the same
-capability bindings.
+The authenticator digest in the response header is excluded from its own
+signature message. Both capability digests must be nonzero and distinct.
 
-Before commit, unavailable capacity may reject a new preparation without
-changing the predecessor. After operation 12 commits, only success, retryable
-concurrency, or governed recovery are legal; the same command must eventually
-recover the committed result.
+Operation 1 bootstraps response authentication only after its profile,
+credential, policy ID, qualification digest, credential governance signature,
+and embedded device key validate. Core must additionally establish release
+catalog membership. Operations 2--22 verify under that accepted 65-byte
+uncompressed SEC1 key and the same capability bindings.
 
 Canonical decoding or a host-side signature check is never monetary authority.
-The native core verifies response authentication, credential/profile,
-normalized GuardBundle, actual persisted state candidate, post-commit terminal
-relation and final wrapper, exact state projection, certificate, and release
-before advancing its internal typestates. Signature-only terminal material,
-compact intents, and shape-valid proof bytes cannot grant monetary or
-capacity-release authority. The generic bridge now performs exact outer-frame
-validation and operation-specific canonical body checks for every code 1–27.
-Valid commands still return unavailable because the stock service has no
-monetary engine. Codec or frame tests do not establish real-proof or hardware
-qualification.
+Core recursively verifies the normalized hardware guard, aggregate transition,
+terminal relation, state projection, certificate, proof release, and replay-root
+update before advancing state.
 
-Operation 8 pages staged inbox records at a pinned journal revision. Operation
-15 pages the authenticated sender index, including installed retry entries and
-terminal tombstones, four at a time. These are the exact enumeration mechanisms
-for recovery after operation 26 atomically establishes the aggregate state and
-counts. Operation 23 separately reads the pending-credit watermark when the
-provider needs that selector.
+## Persistence and recovery requirements
+
+A qualified provider must implement exact-next transitions or one-use successor
+keys, a rollback-resistant journal and inbox, trusted commit time, atomic and
+recoverable transition certificates, authenticated durable state, a durable
+payment outbox, and offline epoch rotation.
+
+Outgoing work stages its exact immutable inputs, commits hardware state exactly
+once, then generates and persists the proof and canonical envelope before
+exposure. Recovery resumes that same transition and can never recreate a
+consumed predecessor. Incoming work stores the exact request/payment and durable
+receipt before acknowledgement. Credits may be folded continuously in the
+background; before a send or redemption, the wallet synchronously folds whatever
+pending credits are required. Backlog may add latency but cannot make valid value
+unspendable.
+
+Secure monetary state is intentionally non-cloneable. Backup/restore must never
+permit two devices to spend the same predecessor; unrecoverable device loss has
+the same consequence as lost physical cash.
 
 ## Platform entry points
 
-Swift and Android discover equivalent optional native entry points:
+Swift and Android discover the same optional native entry points:
 
 ```c
+int32_t connect_norito_kagemusha_contract_vector_v1(
+    uint8_t *output,
+    size_t output_capacity,
+    size_t *output_length
+);
+
+int32_t connect_norito_kagemusha_core_coordinator_contract_v1(
+    uint32_t *output_words,
+    size_t output_capacity_words
+);
+
+int32_t connect_norito_kagemusha_core_coordinator_open_v1(
+    const uint8_t *storage_path_utf8,
+    size_t storage_path_length,
+    uint64_t *output_handle
+);
+
+int32_t connect_norito_kagemusha_core_coordinator_invoke_v1(
+    uint64_t handle,
+    uint8_t method,
+    const uint8_t *request_frame,
+    size_t request_frame_length,
+    uint8_t **output_frame,
+    size_t *output_frame_length
+);
+
 int32_t connect_norito_kagemusha_device_capabilities_v1(
     uint8_t *output,
     size_t output_capacity
@@ -409,25 +418,45 @@ int32_t connect_norito_kagemusha_device_response_authenticator_v1_verify(
 );
 ```
 
-For operation 1, the last pointer is null and its length is zero; the verifier
-extracts the key only after checking the qualification payload bindings above.
-For operations 2--27, it is the accepted 65-byte uncompressed SEC1 key from
-operation 1. This entry point authenticates the response and its capability
-bindings. It does not substitute for Core's release membership, recursive-proof,
-state-transition or journal checks.
+For the contract-vector function, `output = NULL` and `output_capacity = 0` is
+the length probe: `output_length` receives the required length and the function
+returns the bridge's buffer-too-small status. The second call must provide
+exactly that much or more storage and returns the same canonical bytes. This
+probe remains available even when the stock monetary provider correctly reports
+device-unavailable.
 
-The stock bridge intentionally provides no qualifying hardware service. An
-OEM or secure-element implementation must pass physical airplane-mode,
-restart, power-loss, clock-rollback, backup/restore, counter-rollover, thermal,
-latency, memory, throughput, and byte-identical recovery qualification before
-its profile may be enabled. Swift, Kotlin, mirrored Java, JavaScript, Python,
-C#, JNI, QR, and NFC use one audited native cryptographic core; SDK layers own
-only framing, storage, transport, and orchestration.
+The coordinator contract call returns the written word count and pins exactly
+`[1, 23, 3, 6, 50, 8, 6, 22, 16, 0xffff]`: frame version, native ABI, peer
+messages, complete wire payloads, artifact roles, relations, helper circuits,
+device operations, hardware capabilities, and the required capability mask.
+Its digest/inventory role is compatibility and tamper detection only.
 
-JNI forwards bounded byte arrays through the same C entry points. Signed Java
-array lengths are converted without narrowing before the 80..=65,616-byte
-command bound is applied; malformed C results become `IllegalArgumentException`,
-unavailable remains a null optional service result, and every other invalid
-status or response length becomes `IllegalStateException`. Copied command and
-response buffers are zeroized. This wiring does not install an Android applet,
-Apple credential, OEM service, hardware profile, or qualification report.
+Coordinator request and response frames start with ASCII `IKGMCOR1`, followed
+by little-endian `version:u16 = 1`, `field_count:u16`, reserved zero `u32`, and
+then `field_count` repetitions of `length:u32 || bytes`. A frame has at most 16
+fields, each field at most 64 KiB, a request at most 256 KiB, and a response at
+most 128 KiB. Methods 1 through 10 are, in order: reserve operation ID, accept
+qualification, accept authenticated reply, begin sender transition, prove the
+prepared sender transition, build the terminal envelope, accept the installed
+terminal, recover sender, recover the byte-identical terminal envelope, and
+release the outbox after a closed terminal receipt. JNI exposes only the
+KAGEMUSHA-named `KagemushaNativeCoreJniV1.nativeContractV1`, `nativeOpenV1`,
+and `nativeInvokeV1` boundary.
+
+The generic bridge installs no qualified durable coordinator. It validates
+storage paths, method codes, and complete frames, clears outputs, and returns
+device-unavailable. It never fabricates a handle, monetary response, terminal
+receipt, or hardware authority. A product build may enable these operations
+only by explicitly installing the process-global Rust
+`KagemushaCoreCoordinatorBackendV1` once. That backend cannot be overwritten or
+uninstalled and must bind an authenticated durable coordinator to qualified
+non-forking hardware. There is no C/JNI installer and the stock fail-closed path
+is not a coordinator implementation. The bridge also validates and bounds the
+backend's complete response frame before it crosses C or JNI.
+
+The generic bridge validates the complete outer frame and each canonical body,
+but returns unavailable because it contains no qualifying monetary service. An
+OEM or secure-element provider must pass physical airplane-mode, restart,
+power-loss, clock-rollback, backup/restore, counter-rollover, thermal, latency,
+memory, throughput, and byte-identical recovery qualification before its profile
+is enabled.

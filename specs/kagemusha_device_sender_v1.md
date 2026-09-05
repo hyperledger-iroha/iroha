@@ -1,104 +1,87 @@
-# Offline sender recovery device contract
+# KAGEMUSHA V1 sender recovery device contract
 
 `connect_norito_bridge/src/kagemusha_device_bridge_v1/sender_payload.rs` defines
-canonical public bodies for ABI-23 sender operations 9–15 and 17. Stock C/JNI
-validates these bodies and returns unavailable. The contract does not implement
-a monetary service, authenticate hardware, persist an operation index, or grant
-Core proof authority. The source's native integration TODO remains open.
+the canonical public bodies for secure-device operations 5–10 and 12. These are
+shape and binding codecs, not a monetary software implementation. Stock C/JNI
+dispatch validates every body and returns unavailable until a qualified,
+attested, non-forking hardware provider is installed.
 
 ## Operation identity and authority
 
-Before its first native call, the caller generates and durably retains an
-independent, nonzero 32-byte operation ID. It must not derive that ID from the
-amount or receiver request: the same reusable request can legitimately be paid
-more than once. Every single-operation body repeats this ID and must match the
-outer command's request ID and operation code exactly. A page has an independent
-query ID; each returned record retains its original operation ID.
+Before its first native call, the wallet generates and durably retains an
+independent nonzero 32-byte operation ID. It must not derive that ID from an
+amount or payment request because the same reusable request can receive more
+than one distinct valid payment. Every single-operation command repeats the ID
+and must match the outer command frame exactly. Reuse with different bytes or
+context is a conflict.
 
-The public-input digest is SHA-256 of the ASCII domain
+The public-input digest is SHA-256 over the domain
 `iroha:kagemusha:device:v1:sender-public-inputs`, a zero byte, the canonical
-preimage byte count as `u64` little-endian, and the canonical Norito preimage.
-The preimage binds version 1, operation ID, complete creation wallet context,
-and either exact receiver request/intent/ticket bytes or the positive `u128`
-redemption amount and canonical beneficiary. The native service must atomically
-retain this digest, operation ID, exact Core preparation/reservation/output
-identities, private recovery material and phase before reporting success.
-Reusing an ID with another context or input digest is a conflict. Retrying an
-existing ID observes or resumes that exact operation and never starts a new one.
+preimage length as little-endian `u64`, and the canonical Norito preimage. That
+preimage binds version 1, operation ID, complete creation wallet context, and
+either the exact signed `KagemushaPaymentRequestV1` or a positive redemption
+amount and canonical beneficiary. There is no receiver reservation, handshake
+sub-protocol, cancellation path, or alternate request policy.
 
-The wallet context includes the stable network/device lane/asset/scale,
-protocol/suite/key-set/release/asset incarnation, hardware profile/policy epoch,
-credential ID, full `u128` hardware generation and epoch ID, and device policy
-binding. These are selectors, not caller authority. The qualified native
-session authenticates both its current context and retained historical records.
+The creation context includes the network, device lane, asset, scale, proof
+release, asset incarnation, hardware profile and policy epoch, authenticated
+credential ID, full-width hardware generation and epoch ID, and device-policy
+binding. These are selectors, not authority. The qualified native session must
+authenticate current state and every retained historical record.
 
-A reply carries the **current** authenticated context. Each record carries its
-immutable **creation** context. Ordinary hardware, credential and suite rotation
-must not strand installed outboxes: historical recovery is valid only within
-the same stable lane/network/asset/scale and asset incarnation, with creation
-generation no greater than current generation. Equal generations require the
-same epoch ID. A single-operation descriptor must exactly match its record's
-creation context and digest. New Prepare commands and page queries use the
-current context; historical authority cannot prepare new work. Retained proof
-release, credentials, sealed material and native authentication are still
-required and cannot be established by these shape comparisons.
+Ordinary credential, proof-suite, and hardware-epoch rotation must not strand a
+committed outbox. Historical recovery is valid only for the same stable lane,
+network, asset, scale, and asset incarnation. Its creation generation cannot be
+greater than the current generation; equal generations require the same epoch
+ID. Historical state can recover existing work but cannot prepare new work.
 
-## Canonical bodies and observations
+## Canonical operations
 
-All bodies are canonical, resource-bounded Norito archives with distinct schema
-names. Commands are at most 16 KiB and replies at most 64 KiB. Integers retain
-their full width. Appended bytes, wrong schemas, substituted outer IDs, unknown
-operation/body pairings and noncanonical archives reject before dispatch.
+All command and reply bodies are bounded canonical Norito archives. Command
+bodies are at most 16 KiB and replies at most 64 KiB. Appended bytes, unknown
+variants, substituted outer IDs, noncanonical archives, and mismatched native
+contexts reject before dispatch.
 
-| Operation | Public body |
+| ABI operation | Sender body |
 | --- | --- |
-| 9 Prepare | Exact public inputs; input digest is derived from the canonical preimage. |
-| 10 Recover prepared | Original input digest. |
-| 11 Abandon uncommitted | Original input digest and preparation ID. |
-| 12 Commit | Original input digest, preparation ID and persisted candidate digest. |
-| 13 Recover terminal | Original input digest. |
-| 14 Install | Original input digest, preparation ID, candidate digest, public inputs and exact terminal envelope. |
-| 15 Recover installed | Single original input digest, or pinned index revision, exclusive operation-ID cursor and page count. |
-| 17 Release peer outbox | Original input digest, exact envelope digest, public inputs, envelope and matching acknowledgement. |
+| 5 `PrepareExactNextTransition` | Original public inputs; reserves outbox capacity and fixes the exact predecessor/successor transition. |
+| 6 `RecoverPreparedTransition` | Original input digest; returns the byte-identical retained preparation or later phase. |
+| 7 `CommitVerifiedCandidateAndSignTerminal` | Original input digest, preparation ID, and persisted Core-verified candidate digest. |
+| 8 `RecoverTerminalOutcome` | Original input digest; returns the immutable committed outcome or later phase. |
+| 9 `InstallTerminalEnvelope` | Original binding plus exact canonical payment or redemption envelope. |
+| 10 `RecoverInstalledEnvelopeOrStateProof` | Single-operation lookup or a revision-pinned bounded index page. |
+| 12 `ReleaseOutboxEntry` | Exact installed envelope plus either its durable payment acknowledgement or the compact selector bound to a Core-verified redemption-settlement capability. |
 
-Record phases are Prepared, CandidatePersisted, Committed, Installed, Released
-and Abandoned. Missing exists only as an authenticated, tombstone-aware native
-lookup result; empty bytes or transport errors never become Missing. Phase
-observations can skip intermediate phases after lost returns, but they cannot
-regress, change immutable selectors, replace previously known digests or reuse a
-terminal operation. Any change requires a greater native index revision.
-Released and Abandoned tombstones retain immutable replay anchors and discard
-public input bytes. Committed work cannot be abandoned. This is an observation
-check; operation 11 still requires independent proof that commitment did not
-occur and does not release a receiver ticket.
+The durable phases are `Prepared`, `CandidatePersisted`, `Committed`,
+`Installed`, and `Released`. Observations may skip intermediate phases after a
+lost return, but they cannot regress, change immutable selectors, reuse a
+consumed predecessor, or replace retained bytes. Missing is an authenticated,
+tombstone-aware lookup result; an empty response or transport error is never
+interpreted as missing. A committed credit cannot be cancelled.
 
-Only operation 15's Installed item carries exact terminal bytes. The returned
-bytes must match the retained envelope, candidate, commit-certificate and output
-identities and the original exchange context. Released entries expose no bytes
-and cannot be resurrected by installation retry. Peer acknowledgement release
-binds the exact payment and acknowledgement digests. A peer ACK cannot release
-a redemption; an authenticated settlement-receipt contract remains required.
+Only an installed result may carry terminal envelope bytes. Those bytes must
+match the retained public inputs, candidate, commit certificate, outcome, and
+envelope digest. A peer acknowledgement releases only its byte-identical payment
+outbox entry. A redemption selector is not authority: the qualified in-process
+service must bind it to and consume the non-serializable
+`VerifiedKagemushaRedemptionReleaseV1` that Core created from the complete
+finalized operation status and caller-pinned trust anchor. Raw operation-12
+bytes or a host-computed digest can never release a redemption outbox entry.
 
-Pages are ordered by operation ID and contain at most four entries per response,
-with no lifetime backlog cap. They pin a stable-wallet `u128` index revision;
-the revision does not reset at hardware rotation. Noninitial cursors require a
-revision. The native service selects the exact bounded prefix atomically, and
-the response must match that selection, revision and end marker. Self-consistent
-host pages do not prove completeness. Native lookup-selection and monotonic
-observation checks also reject omitted operations and disappearing tombstones.
+Recovery pages are ordered by operation ID, contain at most four entries per
+response, and pin a stable full-width index revision. This is a transport page
+size, not a backlog or history limit: callers continue with the returned cursor
+until the authenticated index is exhausted.
 
-Core binding helpers compare these public selectors against actual retained
-`PreparedOutgoingCandidateV1` and `DurableOutgoingEnvelopeV1` objects and borrow
-Core's immutable public recovery views. They preserve creation hardware and
-lifecycle scope across rotation and bind the exact ciphertext to the lifecycle.
-They never serialize private state, replace authenticated restore, verify a
-recursive proof, create a candidate capability or approve a hardware mutation.
+Core projection helpers compare the native selectors with actual
+`PreparedOutgoingCandidateV1` and `DurableOutgoingEnvelopeV1` values. They do
+not expose private state, substitute for recursive verification, manufacture a
+candidate capability, or authorize a hardware transition.
 
 ## Validation scope
 
-The adjacent tests cover canonical framing, exact operation/input bindings,
-lost Prepare/Commit/Install returns, immutable terminal digests, tombstones,
-full-width revisions, historical installed lookup/page/release, cross-wallet
-and epoch-rebinding rejection, exact page/lookup selection and Core public
-projection substitution. These are software contract tests, not real monetary
-proofs, rebuilt SDK packages, OEM service integration or physical qualification.
+Adjacent tests cover canonical framing, operation/input binding, lost-return
+recovery, immutable terminal digests, tombstones, full-width revisions,
+historical recovery across rotation, exact page selection, and cross-wallet or
+epoch substitution. These software tests do not qualify an OEM secure service
+or physical device profile.

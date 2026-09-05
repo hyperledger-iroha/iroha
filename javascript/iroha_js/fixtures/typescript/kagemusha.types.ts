@@ -35,9 +35,9 @@ const decodedStageResult: Kagemusha.DeviceMintStageResult = Kagemusha.decodeDevi
   Kagemusha.encodeDeviceMintStageResultShape(stageResult, decodedStageCommand), decodedStageCommand,
 );
 Kagemusha.validateDeviceMintStageResultAgainstCommand(decodedStageResult, decodedStageCommand);
-// @ts-expect-error operation-21 dispositions are closed
+// @ts-expect-error operation-16 dispositions are closed
 new Kagemusha.DeviceMintStageResult({ version: 1, disposition: 2, creditId: bytes });
-// @ts-expect-error operation-21 has no public private-opening field
+// @ts-expect-error operation-16 has no public private-opening field
 stageCommand.privateOpening;
 
 // @ts-expect-error request modes were removed from the first-release protocol

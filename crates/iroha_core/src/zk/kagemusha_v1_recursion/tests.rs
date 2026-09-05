@@ -19,21 +19,18 @@ use iroha_data_model::{
     block::BlockHeader,
     domain::DomainId,
     kagemusha::{
-        KAGEMUSHA_ACCEPTANCE_TICKET_MIN_RESERVED_INBOX_BYTES_V1,
         KAGEMUSHA_CURRENT_PROOFS_MAX_BYTES_V1, KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1,
         KAGEMUSHA_PAIRED_PROOF_MAX_BYTES_V1, KAGEMUSHA_PARITY_PROOF_MAX_BYTES_V1,
         KAGEMUSHA_WIRE_VERSION_V1, KAGEMUSHA_XCHACHA20POLY1305_NONCE_BYTES_V1,
-        KAGEMUSHA_XCHACHA20POLY1305_TAG_BYTES_V1, KagemushaAcceptanceIntentV1,
-        KagemushaAcceptanceTicketV1, KagemushaArtifactBindingV1, KagemushaArtifactRoleV1,
-        KagemushaCommitCertificateV1, KagemushaCommitEvidenceV1, KagemushaDevicePublicKeyV1,
-        KagemushaDeviceSignatureV1, KagemushaEncryptedCreditEnvelopeV1,
+        KAGEMUSHA_XCHACHA20POLY1305_TAG_BYTES_V1, KagemushaArtifactBindingV1,
+        KagemushaArtifactRoleV1, KagemushaCommitCertificateV1, KagemushaCommitEvidenceV1,
+        KagemushaDevicePublicKeyV1, KagemushaDeviceSignatureV1, KagemushaEncryptedCreditEnvelopeV1,
         KagemushaHardwareCredentialV1, KagemushaLifecycleBindingV1, KagemushaOperationKindV1,
         KagemushaPairedProofV1, KagemushaPastaStateCommitmentV1, KagemushaPaymentOutputV1,
-        KagemushaPaymentProofV1, KagemushaPaymentRequestModeV1, KagemushaPaymentRequestV1,
-        KagemushaPaymentV1, KagemushaRedemptionProofV1, KagemushaSingleExactV1,
-        KagemushaTrustedCommitTimeV1, kagemusha_credit_opening_canonical_len_v1,
-        kagemusha_device_key_reference_v1, kagemusha_liability_pool_id_v1,
-        kagemusha_payment_body_digest_v1,
+        KagemushaPaymentProofV1, KagemushaPaymentRequestV1, KagemushaPaymentV1,
+        KagemushaRedemptionProofV1, KagemushaTrustedCommitTimeV1,
+        kagemusha_credit_opening_canonical_len_v1, kagemusha_device_key_reference_v1,
+        kagemusha_liability_pool_id_v1, kagemusha_payment_body_digest_v1,
     },
     nexus::AxtAssetIncarnationV1,
 };
@@ -92,7 +89,7 @@ fn incarnation() -> AxtAssetIncarnationV1 {
     )
 }
 
-fn eq_history(tag: u64) -> KagemushaEqAccumulatorV1 {
+pub(crate) fn eq_history(tag: u64) -> KagemushaEqAccumulatorV1 {
     let challenges = (0..KAGEMUSHA_RECURSION_IPA_K_V1)
         .map(|round| Fp::from(tag + u64::from(round) + 1))
         .collect();
@@ -103,7 +100,7 @@ fn eq_history(tag: u64) -> KagemushaEqAccumulatorV1 {
     .expect("canonical Eq fixture")
 }
 
-fn ep_history(tag: u64) -> KagemushaEpAccumulatorV1 {
+pub(crate) fn ep_history(tag: u64) -> KagemushaEpAccumulatorV1 {
     let challenges = (0..KAGEMUSHA_RECURSION_IPA_K_V1)
         .map(|round| Fq::from(tag + u64::from(round) + 1))
         .collect();
@@ -122,7 +119,7 @@ fn artifact_binding(role: KagemushaArtifactRoleV1, tag: u8) -> KagemushaArtifact
     }
 }
 
-fn artifacts() -> KagemushaRecursionArtifactsV1 {
+pub(crate) fn artifacts() -> KagemushaRecursionArtifactsV1 {
     KagemushaRecursionArtifactsV1 {
         release_id: digest(0x43),
         profile_digest: digest(0x50),
@@ -138,6 +135,10 @@ fn artifacts() -> KagemushaRecursionArtifactsV1 {
         mint_finality_ep_protocol_digest: ep_digest(0x20),
         guard_bundle_eq_protocol_digest: eq_digest(0x1B),
         guard_bundle_ep_protocol_digest: ep_digest(0x1C),
+        mint_hash_shard_eq_protocol_digest: eq_digest(0x21),
+        mint_hash_shard_ep_protocol_digest: ep_digest(0x22),
+        mint_hash_claim_eq_protocol_digest: eq_digest(0x23),
+        mint_hash_claim_ep_protocol_digest: ep_digest(0x24),
         guard_bundle_verifying_key_eq: artifact_binding(
             KagemushaArtifactRoleV1::GuardBundleVkEq,
             0x53,
@@ -181,7 +182,7 @@ fn account(tag: u8) -> AccountId {
     )
 }
 
-fn p256_signing_key(seed: u8) -> SigningKey {
+pub(crate) fn p256_signing_key(seed: u8) -> SigningKey {
     SigningKey::from_bytes((&[seed; 32]).into()).expect("P-256 signing key")
 }
 
@@ -192,7 +193,7 @@ fn device_public_key(key: &SigningKey) -> KagemushaDevicePublicKeyV1 {
     .expect("device public key")
 }
 
-fn sign(key: &SigningKey, bytes: &[u8]) -> KagemushaDeviceSignatureV1 {
+pub(crate) fn sign(key: &SigningKey, bytes: &[u8]) -> KagemushaDeviceSignatureV1 {
     let signature: P256Signature = key.sign(bytes);
     let signature = signature.normalize_s().unwrap_or(signature);
     KagemushaDeviceSignatureV1::from_raw_bytes(signature.to_bytes().as_ref())
@@ -205,16 +206,14 @@ fn recipient_one_time_key() -> [u8; 32] {
     key
 }
 
-pub(super) struct IncomingPaymentFixtureV1 {
-    pub(super) request: KagemushaPaymentRequestV1,
-    pub(super) intent: KagemushaAcceptanceIntentV1,
-    pub(super) ticket: KagemushaAcceptanceTicketV1,
-    pub(super) payment: KagemushaPaymentV1,
+pub(crate) struct IncomingPaymentFixtureV1 {
+    pub(crate) request: KagemushaPaymentRequestV1,
+    pub(crate) payment: KagemushaPaymentV1,
 }
 
-pub(super) fn incoming_payment_fixture(
+pub(crate) fn incoming_payment_fixture(
     proof_tag: u8,
-    ticket_key_seed: u8,
+    recipient_key_seed: u8,
     eq_history_tag: u64,
     ep_history_tag: u64,
     eq_body_len: usize,
@@ -226,6 +225,8 @@ pub(super) fn incoming_payment_fixture(
     let network_id = network();
     let asset = asset();
     let asset_incarnation = incarnation();
+    let mut recipient_encryption_key = recipient_one_time_key();
+    recipient_encryption_key[1] = recipient_key_seed;
     let mut credential = KagemushaHardwareCredentialV1 {
         version: KAGEMUSHA_WIRE_VERSION_V1,
         credential_id: [0; 32],
@@ -261,9 +262,8 @@ pub(super) fn incoming_payment_fixture(
         liability_pool_id: kagemusha_liability_pool_id_v1(&network_id, &asset, asset_incarnation)
             .expect("liability pool"),
         recipient: account(0x27),
-        request_mode: KagemushaPaymentRequestModeV1::SingleExact(KagemushaSingleExactV1 {
-            amount: 7,
-        }),
+        amount: 7,
+        recipient_encryption_key,
         hardware_credential: credential,
         request_id: digest(0x28),
         issued_at_ms: 100,
@@ -278,50 +278,21 @@ pub(super) fn incoming_payment_fixture(
     );
     request.validate_shape().expect("valid signed request");
 
-    let intent = KagemushaAcceptanceIntentV1 {
-        version: KAGEMUSHA_WIRE_VERSION_V1,
-        request_digest: request.canonical_digest().expect("request digest"),
-        intent_id: digest(0x31),
-        exact_amount: 7,
-        sender_one_time_commitment: digest(0x32),
-    };
-    let mut ticket_key = recipient_one_time_key();
-    ticket_key[1] = ticket_key_seed;
-    let mut ticket = KagemushaAcceptanceTicketV1 {
-        version: KAGEMUSHA_WIRE_VERSION_V1,
-        acceptance_ticket_id: digest(0x35),
-        recipient_one_time_key: ticket_key,
-        reserved_inbox_bytes: KAGEMUSHA_ACCEPTANCE_TICKET_MIN_RESERVED_INBOX_BYTES_V1,
-        issued_at_ms: 200,
-        expires_at_ms: 9_000,
-        signature: sign(&receiver_key, b"ticket-placeholder"),
-    };
-    ticket.signature = sign(
-        &receiver_key,
-        &ticket
-            .canonical_signing_bytes_against(&request, &intent)
-            .expect("ticket signing bytes"),
-    );
-    ticket
-        .validate_shape_against_intent(&request, &intent)
-        .expect("valid ticket");
-
     let output = KagemushaPaymentOutputV1 {
         version: KAGEMUSHA_WIRE_VERSION_V1,
-        acceptance_intent_digest: intent
-            .canonical_digest_against(&request)
-            .expect("intent digest"),
-        acceptance_ticket_digest: ticket
-            .canonical_digest_against_intent(&request, &intent)
-            .expect("ticket digest"),
+        request_digest: request.canonical_digest().expect("request digest"),
+        amount: request.amount,
+        sender_before_commitment: digest(0x80),
+        sender_after_commitment: digest(0x86),
         transition_nullifier: digest(0x82),
         credit_id: [0; 32],
         ciphertext_commitment: digest(0x83),
         commit_evidence: KagemushaCommitEvidenceV1::TrustedTime(KagemushaTrustedCommitTimeV1 {
             time_evidence_commitment: digest(0x81),
         }),
+        committed_at_ms: 500,
     }
-    .seal_credit_id_against(&request, &intent)
+    .seal_credit_id_against(&request)
     .expect("credit identity");
     let encrypted_credit = KagemushaEncryptedCreditEnvelopeV1 {
         version: KAGEMUSHA_WIRE_VERSION_V1,
@@ -334,7 +305,7 @@ pub(super) fn incoming_payment_fixture(
                 + KAGEMUSHA_XCHACHA20POLY1305_TAG_BYTES_V1
         ],
     }
-    .canonical_bytes_against_recipient_key(ticket.recipient_one_time_key)
+    .canonical_bytes_against_recipient_key(request.recipient_encryption_key)
     .expect("encrypted credit envelope");
     // Deliberately structural fixtures, not a qualified hardware commit or real proof.
     let certificate = KagemushaCommitCertificateV1 {
@@ -374,14 +345,9 @@ pub(super) fn incoming_payment_fixture(
         proof,
     };
     payment
-        .validate_shape_against(&request, &intent, &ticket)
+        .validate_shape_against(&request)
         .expect("valid payment shape");
-    IncomingPaymentFixtureV1 {
-        request,
-        intent,
-        ticket,
-        payment,
-    }
+    IncomingPaymentFixtureV1 { request, payment }
 }
 
 #[test]
@@ -520,7 +486,7 @@ fn send_output() -> KagemushaRecursivePublicOutputV1 {
         policy_epoch: 1,
         operation_kind: KagemushaOperationKindV1::SendSplit,
         request_id: digest(0x63),
-        acceptance_ticket_id: digest(0x64),
+        receiver_lane_commitment: digest(0x64),
         credit_id: digest(0x65),
         ciphertext_digest: digest(0x66),
     };
@@ -557,7 +523,7 @@ pub(super) fn compact_mint_credit_fixture() -> KagemushaMintCreditV1 {
     let mut lifecycle = send_output().lifecycle;
     lifecycle.operation_kind = KagemushaOperationKindV1::MintFold;
     lifecycle.request_id = [0; 32];
-    lifecycle.acceptance_ticket_id = [0; 32];
+    lifecycle.receiver_lane_commitment = [0; 32];
     lifecycle.credit_id = [0; 32];
     lifecycle.ciphertext_digest =
         iroha_data_model::kagemusha::kagemusha_ciphertext_digest_v1(&encrypted_credit);
@@ -595,6 +561,8 @@ pub(super) fn compact_mint_credit_fixture() -> KagemushaMintCreditV1 {
         finality_certificate_binding: proof.guard_eq_credential_audit,
         finality_authority_head: proof.guard_ep_credential_audit,
         finality_genesis_roster_id: digest(0xAD),
+        // Compact fixtures exercise native framing only; recursive verification enforces that
+        // this equals the circuit-derived Eq deferred audit.
         finality_proof_binding_digest: digest(0xAE),
         proof,
         encrypted_credit,
@@ -640,8 +608,6 @@ impl KagemushaRecursiveVerifierV1 for MintFixtureVerifier {
     fn verify_payment_and_decide(
         &self,
         _request: &KagemushaPaymentRequestV1,
-        _intent: &KagemushaAcceptanceIntentV1,
-        _ticket: &KagemushaAcceptanceTicketV1,
         _payment: &KagemushaPaymentV1,
     ) -> Result<(), String> {
         Err("mint fixture has no payment proof".to_owned())
@@ -812,11 +778,9 @@ impl KagemushaRecursiveVerifierV1 for ExactFixtureVerifier {
     fn verify_payment_and_decide(
         &self,
         _request: &KagemushaPaymentRequestV1,
-        _intent: &KagemushaAcceptanceIntentV1,
-        _ticket: &KagemushaAcceptanceTicketV1,
         _payment: &KagemushaPaymentV1,
     ) -> Result<(), String> {
-        Err("fixture has no acceptance-intent authorization".to_owned())
+        Err("fixture has no direct payment authorization".to_owned())
     }
 
     fn verify_mint_finality_helper(
@@ -878,11 +842,9 @@ impl KagemushaRecursiveVerifierV1 for StateFixtureVerifier {
     fn verify_payment_and_decide(
         &self,
         _request: &KagemushaPaymentRequestV1,
-        _intent: &KagemushaAcceptanceIntentV1,
-        _ticket: &KagemushaAcceptanceTicketV1,
         _payment: &KagemushaPaymentV1,
     ) -> Result<(), String> {
-        Err("state fixture has no acceptance-intent authorization".to_owned())
+        Err("state fixture has no direct payment authorization".to_owned())
     }
 
     fn verify_mint_finality_helper(
@@ -953,12 +915,10 @@ fn state_verification_fixture() -> (KagemushaStateRelationPublicInputsV1, Kagemu
         mint_finality_semantic_digest: [0; 32],
         mint_finality_proof_binding_digest: [0; 32],
         peer_credit_id: [0; 32],
-        peer_recipient_lane_id: [0; 32],
-        receive_active_count: 0,
+        recipient_encryption_key_binding: [0; 32],
         receive_credit_binding_digest: [0; 32],
         lifecycle_binding_digest: digest(0xA0),
-        precommit_binding_digest: [0; 32],
-        suite_upgrade_authorization_digest: [0; 32],
+        prepared_transition_binding_digest: [0; 32],
         transport_semantic_digest,
         guard_statement_digest: digest(0xA1),
         eq_protocol_digest: artifacts.eq_protocol_digest,
@@ -971,6 +931,8 @@ fn state_verification_fixture() -> (KagemushaStateRelationPublicInputsV1, Kagemu
         mint_ep_protocol_digest: artifacts
             .mint_finality_protocol_digest(KagemushaPastaParityV1::Ep)
             .expect("Ep mint protocol"),
+        mint_authorization_eq_protocol_digest: artifacts.mint_authorization_eq_protocol_digest,
+        mint_authorization_ep_protocol_digest: artifacts.mint_authorization_ep_protocol_digest,
         commit_wrapper_eq_protocol_digest: artifacts.commit_wrapper_eq_protocol_digest,
         commit_wrapper_ep_protocol_digest: artifacts.commit_wrapper_ep_protocol_digest,
         guard_eq_credential_audit,
@@ -1018,12 +980,7 @@ impl AggregateState {
         self.balance = self.balance.checked_add(amount).expect("u128 balance");
         self.sequence = self.sequence.checked_add(1).expect("u128 sequence");
         self.replay_root = pasta_pair(next_root);
-        operation_witness(
-            before,
-            *self,
-            KagemushaOperationV1::ReceiveFold,
-            amount,
-        )
+        operation_witness(before, *self, KagemushaOperationV1::ReceiveFold, amount)
     }
 
     fn spend(
@@ -1072,46 +1029,8 @@ fn operation_tag(operation: KagemushaOperationV1) -> u64 {
         KagemushaOperationV1::SendSplit => 2,
         KagemushaOperationV1::ReceiveFold => 3,
         KagemushaOperationV1::RedeemSplit => 4,
-        KagemushaOperationV1::SuiteUpgrade => 5,
-        KagemushaOperationV1::Rotate => 6,
+        KagemushaOperationV1::Rotate => 5,
     }
-}
-
-#[test]
-fn suite_upgrade_authorization_binds_both_authenticated_releases() {
-    let binding = canonical_suite_upgrade_authorization_digest_v1(
-        digest(0x10),
-        digest(0x11),
-        [eq_digest(12), ep_digest(13)],
-        digest(0x14),
-        digest(0x15),
-        digest(0x16),
-        digest(0x17),
-        digest(0x18),
-    );
-    let changed_predecessor = canonical_suite_upgrade_authorization_digest_v1(
-        digest(0x19),
-        digest(0x11),
-        [eq_digest(12), ep_digest(13)],
-        digest(0x14),
-        digest(0x15),
-        digest(0x16),
-        digest(0x17),
-        digest(0x18),
-    );
-    let changed_successor = canonical_suite_upgrade_authorization_digest_v1(
-        digest(0x10),
-        digest(0x1a),
-        [eq_digest(12), ep_digest(13)],
-        digest(0x14),
-        digest(0x15),
-        digest(0x16),
-        digest(0x17),
-        digest(0x18),
-    );
-    assert_ne!(binding, changed_predecessor);
-    assert_ne!(binding, changed_successor);
-    assert_ne!(changed_predecessor, changed_successor);
 }
 
 fn assert_paired_operation_relation(witness: KagemushaOperationRelationWitnessV1) {
@@ -1483,27 +1402,20 @@ fn post_commit_caps_and_incoming_binding_commit_payment_claims() {
             .len()
             <= KAGEMUSHA_PAIRED_PROOF_MAX_BYTES_V1
     );
-    let binding = kagemusha_incoming_proof_binding_digest_v1(
-        &fixture.request,
-        &fixture.intent,
-        &fixture.ticket,
-        &fixture.payment,
-    )
-    .expect("incoming binding");
+    let binding = kagemusha_incoming_proof_binding_digest_v1(&fixture.request, &fixture.payment)
+        .expect("incoming binding");
+    let sender_state_pair = canonical_sender_state_pair_digest_v1(
+        fixture.payment.output.sender_before_commitment,
+        fixture.payment.output.sender_after_commitment,
+    );
     let claims = [
         fixture.request.canonical_digest().expect("request"),
-        fixture
-            .intent
-            .canonical_digest_against(&fixture.request)
-            .expect("intent"),
-        fixture
-            .ticket
-            .canonical_digest_against_intent(&fixture.request, &fixture.intent)
-            .expect("ticket"),
+        fixture.request.hardware_credential.credential_id,
+        sender_state_pair,
         fixture
             .payment
             .output
-            .canonical_digest_against(&fixture.request, &fixture.intent, &fixture.ticket)
+            .canonical_digest_against(&fixture.request)
             .expect("output"),
         iroha_data_model::kagemusha::kagemusha_ciphertext_digest_v1(
             &fixture.payment.encrypted_credit,
@@ -1515,6 +1427,19 @@ fn post_commit_caps_and_incoming_binding_commit_payment_claims() {
         binding,
         canonical_incoming_payment_claims_binding_v1(claims)
     );
+    assert_ne!(
+        binding,
+        canonical_incoming_payment_claims_binding_v1([
+            claims[0],
+            claims[1],
+            fixture.payment.output.sender_before_commitment,
+            fixture.payment.output.sender_after_commitment,
+            claims[3],
+            claims[5],
+            claims[6],
+        ]),
+        "candidate projection must not use raw state commitments in place of the canonical state-pair and ciphertext claims",
+    );
     for index in 0..claims.len() {
         let mut altered = claims;
         altered[index][0] ^= 1;
@@ -1524,7 +1449,7 @@ fn post_commit_caps_and_incoming_binding_commit_payment_claims() {
             "incoming claim {index}"
         );
     }
-    let different_ticket_key = incoming_payment_fixture(
+    let different_recipient_key = incoming_payment_fixture(
         0x41,
         10,
         7,
@@ -1534,12 +1459,10 @@ fn post_commit_caps_and_incoming_binding_commit_payment_claims() {
     );
     assert_ne!(
         kagemusha_incoming_proof_binding_digest_v1(
-            &different_ticket_key.request,
-            &different_ticket_key.intent,
-            &different_ticket_key.ticket,
-            &different_ticket_key.payment,
+            &different_recipient_key.request,
+            &different_recipient_key.payment,
         )
-        .expect("different ticket-key binding"),
+        .expect("different recipient-key binding"),
         binding,
     );
     let different_proof = incoming_payment_fixture(
@@ -1555,8 +1478,6 @@ fn post_commit_caps_and_incoming_binding_commit_payment_claims() {
     assert_eq!(
         kagemusha_incoming_proof_binding_digest_v1(
             &different_proof.request,
-            &different_proof.intent,
-            &different_proof.ticket,
             &different_proof.payment,
         )
         .expect("different proof binding"),
@@ -1573,8 +1494,6 @@ fn post_commit_caps_and_incoming_binding_commit_payment_claims() {
     assert_eq!(
         kagemusha_incoming_proof_binding_digest_v1(
             &different_history.request,
-            &different_history.intent,
-            &different_history.ticket,
             &different_history.payment,
         )
         .expect("different valid history binding"),
@@ -1595,28 +1514,17 @@ fn post_commit_caps_and_incoming_binding_commit_payment_claims() {
         .expect("changed certificate digest");
     assert_ne!(
         binding,
-        kagemusha_incoming_proof_binding_digest_v1(
-            &fixture.request,
-            &fixture.intent,
-            &fixture.ticket,
-            &different_candidate,
-        )
-        .expect("candidate/certificate claims are bound")
+        kagemusha_incoming_proof_binding_digest_v1(&fixture.request, &different_candidate,)
+            .expect("candidate/certificate claims are bound")
     );
 }
 
 #[cfg(feature = "zk-halo2-ipa")]
 #[test]
-fn payment_public_projection_binds_sender_profile_ticket_and_commit_certificate() {
+fn payment_public_projection_binds_sender_profile_request_and_commit_certificate() {
     let fixture = incoming_payment_fixture(0x41, 9, 7, 11, 128, 128);
     let project = |payment: &KagemushaPaymentV1| {
-        native_backend::payment_terminal_public_inputs_v1(
-            &fixture.request,
-            &fixture.intent,
-            &fixture.ticket,
-            payment,
-            digest(0xA1),
-        )
+        native_backend::payment_terminal_public_inputs_v1(&fixture.request, payment, digest(0xA1))
     };
     let public = project(&fixture.payment).expect("final projection");
     assert_eq!(public.operation, KagemushaOperationV1::SendSplit);
@@ -1656,12 +1564,12 @@ fn payment_public_projection_binds_sender_profile_ticket_and_commit_certificate(
         public.terminal_output_binding,
         canonical_terminal_send_output_binding_v1(
             fixture.payment.output.credit_id,
-            fixture.ticket.recipient_one_time_key,
+            fixture.request.recipient_encryption_key,
             fixture.request.hardware_credential.lane_commitment,
             iroha_data_model::kagemusha::kagemusha_prepared_transfer_digest_v1(
                 &fixture.request,
-                &fixture.intent,
-                &fixture.ticket,
+                fixture.payment.output.sender_before_commitment,
+                fixture.payment.output.sender_after_commitment,
                 fixture.payment.output.transition_nullifier,
                 fixture.payment.output.ciphertext_commitment,
             )
@@ -1669,15 +1577,10 @@ fn payment_public_projection_binds_sender_profile_ticket_and_commit_certificate(
             fixture
                 .payment
                 .output
-                .canonical_digest_against(&fixture.request, &fixture.intent, &fixture.ticket)
+                .canonical_digest_against(&fixture.request)
                 .expect("output"),
-            kagemusha_incoming_proof_binding_digest_v1(
-                &fixture.request,
-                &fixture.intent,
-                &fixture.ticket,
-                &fixture.payment,
-            )
-            .expect("incoming claims"),
+            kagemusha_incoming_proof_binding_digest_v1(&fixture.request, &fixture.payment)
+                .expect("incoming claims"),
         )
     );
     let mut wrong_body = fixture.payment.clone();
@@ -1696,12 +1599,7 @@ fn reject_all_backend_never_grants_monetary_authority() {
     let fixture = incoming_payment_fixture(0x41, 9, 7, 11, 128, 128);
     assert!(
         RejectAllKagemushaRecursiveVerifierV1
-            .verify_payment_and_decide(
-                &fixture.request,
-                &fixture.intent,
-                &fixture.ticket,
-                &fixture.payment,
-            )
+            .verify_payment_and_decide(&fixture.request, &fixture.payment)
             .is_err()
     );
     let output = send_output();

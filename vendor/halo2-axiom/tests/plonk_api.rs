@@ -558,3 +558,197 @@ fn plonk_api() {
     test_plonk_api_gwc();
     test_plonk_api_shplonk();
 }
+
+#[test]
+fn ipa_hybrid_instance_commitment_binds_the_caller_supplied_carrier() {
+    use halo2_proofs::{
+        halo2curves::pasta::{EqAffine, Fp},
+        plonk::Instance,
+        poly::ipa::{
+            commitment::{IPACommitmentScheme, ParamsIPA},
+            multiopen::{ProverIPA, ProverIPAHybrid, VerifierIPAHybrid},
+            strategy::SingleStrategy,
+        },
+    };
+    use rand_chacha::ChaCha20Rng;
+    use rand_core::SeedableRng;
+
+    const CARRIER_COLUMN: usize = 1;
+    const CARRIER_MASK: u64 = 1 << CARRIER_COLUMN;
+
+    #[derive(Clone)]
+    struct HybridInstanceCircuit {
+        semantic: Value<Fp>,
+        carrier_head: Value<Fp>,
+    }
+
+    #[derive(Clone, Copy)]
+    struct HybridInstanceConfig {
+        advice: [Column<Advice>; 2],
+        instances: [Column<Instance>; 2],
+    }
+
+    impl Circuit<Fp> for HybridInstanceCircuit {
+        type Config = HybridInstanceConfig;
+        type FloorPlanner = SimpleFloorPlanner;
+        #[cfg(feature = "circuit-params")]
+        type Params = ();
+
+        fn without_witnesses(&self) -> Self {
+            Self {
+                semantic: Value::unknown(),
+                carrier_head: Value::unknown(),
+            }
+        }
+
+        fn configure(meta: &mut ConstraintSystem<Fp>) -> Self::Config {
+            let advice = [meta.advice_column(), meta.advice_column()];
+            let instances = [meta.instance_column(), meta.instance_column()];
+            for column in advice {
+                meta.enable_equality(column);
+            }
+            for column in instances {
+                meta.enable_equality(column);
+            }
+            HybridInstanceConfig { advice, instances }
+        }
+
+        fn synthesize(
+            &self,
+            config: Self::Config,
+            mut layouter: impl Layouter<Fp>,
+        ) -> Result<(), Error> {
+            let cells = layouter.assign_region(
+                || "hybrid instance values",
+                |mut region| {
+                    Ok([
+                        region
+                            .assign_advice(config.advice[0], 0, self.semantic)
+                            .cell(),
+                        region
+                            .assign_advice(config.advice[1], 0, self.carrier_head)
+                            .cell(),
+                    ])
+                },
+            )?;
+            for ((cell, instance), row) in cells.into_iter().zip(config.instances).zip([0, 0]) {
+                layouter.constrain_instance(cell, instance, row);
+            }
+            Ok(())
+        }
+    }
+
+    let semantic = [Fp::from(7)];
+    // Rows after the constrained head exercise binding of the entire opaque
+    // carrier polynomial, not only cells directly queried by a gate.
+    let carrier = [Fp::from(11), Fp::from(12), Fp::from(13)];
+    let instance_columns: [&[Fp]; 2] = [&semantic, &carrier];
+    let proof_instances: [&[&[Fp]]; 1] = [&instance_columns];
+    let circuit = HybridInstanceCircuit {
+        semantic: Value::known(semantic[0]),
+        carrier_head: Value::known(carrier[0]),
+    };
+    let params = ParamsIPA::<EqAffine>::new(4);
+    let vk = keygen_vk(&params, &circuit).expect("hybrid instance VK");
+    let pk = keygen_pk(&params, vk, &circuit).expect("hybrid instance PK");
+
+    let seed = [41_u8; 32];
+    let mut hybrid_transcript = Blake2bWrite::<_, _, Challenge255<_>>::init(vec![]);
+    create_plonk_proof::<
+        IPACommitmentScheme<EqAffine>,
+        ProverIPAHybrid<EqAffine, CARRIER_MASK>,
+        _,
+        _,
+        _,
+        _,
+    >(
+        &params,
+        &pk,
+        &[circuit.clone()],
+        &proof_instances,
+        ChaCha20Rng::from_seed(seed),
+        &mut hybrid_transcript,
+    )
+    .expect("hybrid instance proof");
+    let hybrid_proof = hybrid_transcript.finalize();
+
+    let strategy = SingleStrategy::<EqAffine, true, CARRIER_MASK>::new(&params);
+    let mut hybrid_transcript = Blake2bRead::<_, _, Challenge255<_>>::init(hybrid_proof.as_slice());
+    verify_plonk_proof::<
+        IPACommitmentScheme<EqAffine>,
+        VerifierIPAHybrid<EqAffine, CARRIER_MASK>,
+        _,
+        _,
+        _,
+    >(
+        &params,
+        pk.get_vk(),
+        strategy,
+        &proof_instances,
+        &mut hybrid_transcript,
+    )
+    .expect("hybrid proof must verify against its full carrier values");
+
+    let tampered_carrier = [carrier[0], carrier[1], Fp::from(14)];
+    let tampered_columns: [&[Fp]; 2] = [&semantic, &tampered_carrier];
+    let tampered_instances: [&[&[Fp]]; 1] = [&tampered_columns];
+    let strategy = SingleStrategy::<EqAffine, true, CARRIER_MASK>::new(&params);
+    let mut tampered_transcript =
+        Blake2bRead::<_, _, Challenge255<_>>::init(hybrid_proof.as_slice());
+    assert!(
+        verify_plonk_proof::<
+            IPACommitmentScheme<EqAffine>,
+            VerifierIPAHybrid<EqAffine, CARRIER_MASK>,
+            _,
+            _,
+            _,
+        >(
+            &params,
+            pk.get_vk(),
+            strategy,
+            &tampered_instances,
+            &mut tampered_transcript,
+        )
+        .is_err(),
+        "the proof-carried commitment and opening must bind every carrier row"
+    );
+
+    let repeated_instances: [&[&[Fp]]; 2] = [&instance_columns, &instance_columns];
+    let mut repeated_transcript = Blake2bWrite::<_, _, Challenge255<_>>::init(vec![]);
+    let repeated = create_plonk_proof::<
+        IPACommitmentScheme<EqAffine>,
+        ProverIPAHybrid<EqAffine, CARRIER_MASK>,
+        _,
+        _,
+        _,
+        _,
+    >(
+        &params,
+        &pk,
+        &[circuit.clone(), circuit.clone()],
+        &repeated_instances,
+        ChaCha20Rng::from_seed(seed),
+        &mut repeated_transcript,
+    );
+    assert!(
+        matches!(repeated, Err(Error::InvalidInstances)),
+        "hybrid transcripts reject multi-proof ordering until commitments are hoisted"
+    );
+
+    let mut legacy_transcript = Blake2bWrite::<_, _, Challenge255<_>>::init(vec![]);
+    create_plonk_proof::<IPACommitmentScheme<EqAffine>, ProverIPA<EqAffine>, _, _, _, _>(
+        &params,
+        &pk,
+        &[circuit],
+        &proof_instances,
+        ChaCha20Rng::from_seed(seed),
+        &mut legacy_transcript,
+    )
+    .expect("legacy IPA proof");
+    let legacy_proof = legacy_transcript.finalize();
+    assert_eq!(
+        hybrid_proof.len(),
+        legacy_proof.len() + 32,
+        "exactly one compressed Pasta commitment is added to the proof"
+    );
+}

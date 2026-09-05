@@ -7,6 +7,27 @@ namespace Hyperledger.Iroha.Sdk.Tests;
 /// <summary>Focused first-release tests for the three-message KAGEMUSHA protocol.</summary>
 public sealed class KagemushaV1Tests
 {
+    [Fact]
+    public void PendingCreditSelectionDistinguishesMintAndReceiveAndRequiresAnAmount()
+    {
+        var creditId = Enumerable.Repeat((byte)0x5a, 32).ToArray();
+        var epochId = Enumerable.Repeat((byte)0xa5, 32).ToArray();
+        var mint = new KagemushaPendingCreditSelectorV1(
+            KagemushaPendingCreditKindV1.Mint, creditId);
+        var receive = new KagemushaPendingCreditSelectorV1(
+            KagemushaPendingCreditKindV1.Receive, creditId);
+        var watermark = new KagemushaPendingCreditWatermarkV1(1, epochId, 4_096);
+
+        Assert.False(mint.Matches(receive));
+        Assert.True(watermark.Matches(
+            new KagemushaPendingCreditWatermarkV1(1, epochId, 4_096)));
+        Assert.True(KagemushaPendingCreditTargetV1.DrainAll.IsDrainAll);
+        Assert.Equal((UInt128)1_000,
+            KagemushaPendingCreditTargetV1.RequiredBalance(1_000).Amount);
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            KagemushaPendingCreditTargetV1.RequiredBalance(0));
+    }
+
     [Theory]
     [InlineData(1)]
     [InlineData(1_283)]
@@ -178,20 +199,30 @@ public sealed class KagemushaV1Tests
         var profile = context.Profile();
         var all = Enum.GetValues<KagemushaHardwareCapabilityV1>();
         var complete = new KagemushaHardwareQualificationV1(
-            1, profile, context.Credential, context.ReleaseId, all);
+            1, profile, context.Credential, context.ReleaseId, Repeat(0x47), Repeat(0x48), all);
         complete.RequireProductionReady();
+        Assert.Equal(Repeat(0x48), complete.CoreAuthorizationKeyReference());
 
         var incomplete = new KagemushaHardwareQualificationV1(
-            1, profile, context.Credential, context.ReleaseId, all.Skip(1));
+            1, profile, context.Credential, context.ReleaseId,
+            Repeat(0x47), Repeat(0x48), all.Skip(1));
         Assert.Throws<InvalidOperationException>(incomplete.RequireProductionReady);
     }
 
     [Fact]
-    public void ReceiveFoldRepresentsExactlyOneCredit()
+    public void PendingFoldRepresentsExactlyOneCreditAndInboxKind()
     {
-        Assert.NotEmpty(new KagemushaHardwareReceiveFoldV1(new byte[] { 1 }).AggregateState());
+        var creditId = Repeat(0x42);
+        var selector = new KagemushaPendingCreditSelectorV1(
+            KagemushaPendingCreditKindV1.Receive, creditId);
+        var result = new KagemushaHardwareReceiveFoldV1(new byte[] { 1 }, selector);
+        Assert.NotEmpty(result.AggregateState());
+        Assert.True(result.Selector.Matches(selector));
         Assert.Throws<ArgumentException>(() =>
-            new KagemushaHardwareReceiveFoldV1(Array.Empty<byte>()));
+            new KagemushaHardwareReceiveFoldV1(Array.Empty<byte>(), selector));
+        Assert.Throws<ArgumentException>(() =>
+            new KagemushaPendingCreditSelectorV1(
+                KagemushaPendingCreditKindV1.Receive, Array.Empty<byte>()));
     }
 
     private static byte[] Repeat(byte value, int count = 32) =>

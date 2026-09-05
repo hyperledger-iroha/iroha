@@ -19,32 +19,27 @@ public enum KagemushaDeviceLifecycleBridgeErrorV1: Error, Equatable {
 /// terminal certificate and installed envelope byte-identically.
 public enum KagemushaDeviceLifecycleOperationV1: UInt8, CaseIterable, Sendable {
   case readActiveHardwareCredential = 1
-  case prepareAcceptanceIntent = 2
-  case recoverAcceptanceIntent = 3
-  case validateIntentReserveInboxAndIssueAcceptanceTicket = 4
-  case recoverAcceptanceTicket = 5
-  case stageInboundPayment = 6
-  case recoverStagedInboundPayment = 7
-  case recoverInboundInboxPage = 8
-  case prepareExactNextTransition = 9
-  case recoverPreparedTransition = 10
-  case abandonUncommittedPreparedTransition = 11
-  case commitVerifiedCandidateAndSignTerminal = 12
-  case recoverTerminalOutcome = 13
-  case installTerminalEnvelope = 14
-  case recoverInstalledEnvelopeOrStateProof = 15
-  case signReceiveAcknowledgement = 16
-  case releaseOutboxEntry = 17
-  case readTrustedTimeOrLease = 18
-  case prepareMintAuthorization = 19
-  case recoverMintAuthorization = 20
-  case verifyAuthorizationAndStageMintCredit = 21
-  case foldReceiveBatch = 22
-  case readPendingCreditWatermark = 23
-  case rotateHardwareEpoch = 24
-  case bootstrapAggregateState = 25
-  case recoverWalletSnapshot = 26
-  case createSignedPaymentRequest = 27
+  case stageInboundPayment = 2
+  case recoverStagedInboundPayment = 3
+  case recoverInboundInboxPage = 4
+  case prepareExactNextTransition = 5
+  case recoverPreparedTransition = 6
+  case commitVerifiedCandidateAndSignTerminal = 7
+  case recoverTerminalOutcome = 8
+  case installTerminalEnvelope = 9
+  case recoverInstalledEnvelopeOrStateProof = 10
+  case signReceiveAcknowledgement = 11
+  case releaseOutboxEntry = 12
+  case readTrustedTimeOrLease = 13
+  case prepareMintAuthorization = 14
+  case recoverMintAuthorization = 15
+  case verifyAuthorizationAndStageMintCredit = 16
+  case foldReceiveCredit = 17
+  case readPendingCreditWatermark = 18
+  case rotateHardwareEpoch = 19
+  case bootstrapAggregateState = 20
+  case recoverWalletSnapshot = 21
+  case createSignedPaymentRequest = 22
 }
 
 /// Exact secure-backend capabilities required by KAGEMUSHA V1.
@@ -53,8 +48,8 @@ public enum KagemushaDeviceLifecycleCapabilityV1: UInt32, CaseIterable, Sendable
   case oneUseSuccessorAuthorization = 0x0000_0002
   case rollbackResistantCounterAndJournal = 0x0000_0004
   case sealedTransitionRecovery = 0x0000_0008
-  case oneUseAcceptanceTickets = 0x0000_0010
-  case durableInboxReservation = 0x0000_0020
+  case receiverBoundCreditCommit = 0x0000_0010
+  case rollbackResistantAcceptedCreditInbox = 0x0000_0020
   case authenticatedInboundStaging = 0x0000_0040
   case authoritativeReplayRootRecovery = 0x0000_0080
   case senderOutboxReservation = 0x0000_0100
@@ -87,8 +82,6 @@ public struct KagemushaDeviceLifecycleCapabilitiesV1: Equatable, Sendable {
   public let hardwarePolicyID: Data
   public let qualificationReportDigest: Data
 
-  /// Compatibility alias for the capability frame's qualification-report digest.
-  public var attestationDigest: Data { qualificationReportDigest }
 }
 
 /// Bounded response from the complete secure backend.
@@ -152,6 +145,7 @@ public final class KagemushaDeviceLifecycleBridgeV1 {
   public static let maximumCommandPayloadBytes = 64 * 1024
   public static let maximumResponsePayloadBytes = 64 * 1024
   public static let maximumAuthenticatorBytes = 64
+  public static let maximumNativeContractVectorBytes = 4 * 1024
 
   public let availability: Availability
   public let acceptedCapabilities: KagemushaDeviceLifecycleCapabilitiesV1?
@@ -189,29 +183,16 @@ public final class KagemushaDeviceLifecycleBridgeV1 {
     KagemushaDeviceLifecycleBridgeV1(endpoint: nil, capabilities: nil)
   }
 
-  /// Execute one exact canonical Core V1 command through the qualifying native backend.
+  /// Read the canonical Norito contract vector compiled into the native bridge.
   ///
-  /// The native implementation must decode only the canonical KAGEMUSHA V1 command for the
-  /// selected operation. Any non-V1 aggregate-state archive is invalid input.
-  @available(
-    *, deprecated,
-    message: "Use executeAuthenticated and supply the accepted operation-1 device key for operations 2 through 27"
-  )
-  public func execute(
-    operation: KagemushaDeviceLifecycleOperationV1,
-    requestID: Data,
-    canonicalCommand: Data
-  ) throws -> KagemushaDeviceLifecycleResultV1 {
-    try executeAuthenticated(
-      operation: operation,
-      requestID: requestID,
-      canonicalCommand: canonicalCommand,
-      acceptedDevicePublicKey: nil
-    )
+  /// The vector's domain-separated digest is an ABI/tamper pin only. It is not
+  /// hardware attestation, a settlement receipt, or monetary authority.
+  public static func nativeContractVector() -> Data? {
+    NativeContractVector.load()
   }
 
   /// Execute and expose a success only after native verification of its complete response.
-  /// Operation 1 bootstraps the device key; operations 2 through 27 require that accepted key.
+  /// Operation 1 bootstraps the device key; operations 2 through 22 require that accepted key.
   public func executeAuthenticated(
     operation: KagemushaDeviceLifecycleOperationV1,
     requestID: Data,
@@ -235,7 +216,7 @@ public final class KagemushaDeviceLifecycleBridgeV1 {
         acceptedDevicePublicKey.dropFirst().contains(where: { $0 != 0 })
       else {
         throw KagemushaDeviceLifecycleBridgeErrorV1.invalidContract(
-          "operations 2 through 27 require the accepted 65-byte uncompressed SEC1 device key")
+          "operations 2 through 22 require the accepted 65-byte uncompressed SEC1 device key")
       }
       responseKey = Data(acceptedDevicePublicKey)
     }
@@ -288,6 +269,46 @@ public final class KagemushaDeviceLifecycleBridgeV1 {
       endpoint: endpoint,
       capabilities: capabilities
     )
+  }
+
+  private enum NativeContractVector {
+    #if canImport(Darwin)
+      private typealias ExportFn =
+        @convention(c) (
+          UnsafeMutablePointer<UInt8>?,
+          Int,
+          UnsafeMutablePointer<Int>?
+        ) -> Int32
+
+      static func load() -> Data? {
+        let (handle, _) = NoritoBridgeLoader.openHandle()
+        guard let handle,
+          let symbol = dlsym(handle, "connect_norito_kagemusha_contract_vector_v1")
+        else {
+          return nil
+        }
+        let export = unsafeBitCast(symbol, to: ExportFn.self)
+        var required = 0
+        guard export(nil, 0, &required) == -12,
+          required > 0,
+          required <= KagemushaDeviceLifecycleBridgeV1.maximumNativeContractVectorBytes
+        else {
+          return nil
+        }
+        var output = Data(repeating: 0, count: required)
+        let capacity = output.count
+        var written = 0
+        let status = output.withUnsafeMutableBytes { raw in
+          export(raw.bindMemory(to: UInt8.self).baseAddress, capacity, &written)
+        }
+        guard status == 0, written == required else {
+          return nil
+        }
+        return output
+      }
+    #else
+      static func load() -> Data? { nil }
+    #endif
   }
 
   private final class NativeEndpoint: KagemushaDeviceLifecycleEndpointV1 {

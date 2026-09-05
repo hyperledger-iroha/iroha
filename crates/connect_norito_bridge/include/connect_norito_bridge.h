@@ -459,6 +459,57 @@ int32_t connect_norito_kagemusha_v1_redemption_voucher_text_validate(
 // Closed lower-sixteen-bit capability mask shared with KagemushaHardwareProfileV1.
 #define CONNECT_NORITO_KAGEMUSHA_DEVICE_REQUIRED_CAPABILITIES_V1 UINT32_C(0x0000FFFF)
 
+// Exact inventories embedded in the canonical Norito contract vector.
+#define CONNECT_NORITO_KAGEMUSHA_CONTRACT_VECTOR_VERSION_V1 UINT16_C(1)
+#define CONNECT_NORITO_KAGEMUSHA_CONTRACT_VECTOR_PEER_MESSAGE_COUNT_V1 UINT16_C(3)
+#define CONNECT_NORITO_KAGEMUSHA_CONTRACT_VECTOR_ARTIFACT_ROLE_COUNT_V1 UINT16_C(50)
+#define CONNECT_NORITO_KAGEMUSHA_CONTRACT_VECTOR_RELATION_COUNT_V1 UINT16_C(8)
+#define CONNECT_NORITO_KAGEMUSHA_CONTRACT_VECTOR_HELPER_COUNT_V1 UINT16_C(6)
+#define CONNECT_NORITO_KAGEMUSHA_CONTRACT_VECTOR_HARDWARE_CAPABILITY_COUNT_V1 UINT16_C(16)
+#define CONNECT_NORITO_KAGEMUSHA_CONTRACT_VECTOR_DEVICE_OPERATION_COUNT_V1 UINT16_C(22)
+#define CONNECT_NORITO_KAGEMUSHA_CONTRACT_VECTOR_DIGEST_HEX_V1 \
+  "13b51124f0329fc47b0aa3bf551f83f1806920c9898e7c07cd7f0730eb57fbb9"
+
+// Exact bounded KAGEMUSHA Core coordinator contract. The contract probe
+// returns the number of uint32_t words written (10) on success. It is an ABI
+// pin only and grants no monetary authority.
+#define CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_CONTRACT_WORD_COUNT_V1 10
+#define CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_FRAME_MAGIC_V1 "IKGMCOR1"
+#define CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_FRAME_VERSION_V1 UINT16_C(1)
+#define CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_MAX_FIELDS_V1 16
+#define CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_MAX_FIELD_BYTES_V1 65536
+#define CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_MAX_REQUEST_BYTES_V1 262144
+#define CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_MAX_RESPONSE_BYTES_V1 131072
+#define CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_MAX_STORAGE_PATH_BYTES_V1 4096
+
+typedef enum ConnectNoritoKagemushaCoreCoordinatorMethodV1 {
+  CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_RESERVE_OPERATION_ID_V1 = 1,
+  CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_ACCEPT_QUALIFICATION_V1 = 2,
+  CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_ACCEPT_AUTHENTICATED_REPLY_V1 = 3,
+  CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_BEGIN_SENDER_TRANSITION_V1 = 4,
+  CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_PROVE_PREPARED_SENDER_TRANSITION_V1 = 5,
+  CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_BUILD_TERMINAL_ENVELOPE_V1 = 6,
+  CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_ACCEPT_INSTALLED_TERMINAL_V1 = 7,
+  CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_RECOVER_SENDER_V1 = 8,
+  CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_RECOVER_TERMINAL_ENVELOPE_V1 = 9,
+  CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_RELEASE_OUTBOX_V1 = 10
+} ConnectNoritoKagemushaCoreCoordinatorMethodV1;
+
+int32_t connect_norito_kagemusha_core_coordinator_contract_v1(
+    uint32_t* output_words, size_t output_capacity_words);
+int32_t connect_norito_kagemusha_core_coordinator_open_v1(
+    const uint8_t* storage_path_utf8, size_t storage_path_length,
+    uint64_t* output_handle);
+int32_t connect_norito_kagemusha_core_coordinator_invoke_v1(
+    uint64_t handle, uint8_t method,
+    const uint8_t* request_frame, size_t request_frame_length,
+    uint8_t** output_frame, size_t* output_frame_length);
+// Generic builds install no backend, so open/invoke return
+// CONNECT_NORITO_ERR_KAGEMUSHA_DEVICE_UNAVAILABLE_V1. A qualified platform
+// build must install the Rust backend exactly once; there is no C/JNI
+// installer, replacement, uninstall, or monetary software fallback. Invoke
+// results are allocated by the bridge and released with connect_norito_free.
+
 typedef enum ConnectNoritoKagemushaDeviceCapabilityV1 {
   CONNECT_NORITO_KAGEMUSHA_DEVICE_CAPABILITY_EXACT_NEXT_PREDECESSOR_CONSUMPTION_V1 = 1u << 0,
   CONNECT_NORITO_KAGEMUSHA_DEVICE_CAPABILITY_ONE_USE_SUCCESSOR_AUTHORIZATION_V1 = 1u << 1,
@@ -525,6 +576,11 @@ typedef enum ConnectNoritoKagemushaDeviceStatusV1 {
 // frame and canonical operation bodies 1 through 22, returning CONNECT_NORITO_ERR_KAGEMUSHA_V1 for
 // malformed input and DEVICE_UNAVAILABLE for valid input until a qualified, attested non-forking
 // platform provider is installed.
+// Exports the canonical Norito ABI contract vector. Passing NULL/zero for the output is a
+// supported length probe: output_len receives the required size and BUFFER_TOO_SMALL is returned.
+// The embedded domain-separated digest is an ABI/tamper pin only, never monetary authority.
+int32_t connect_norito_kagemusha_contract_vector_v1(
+    uint8_t* output, size_t output_capacity, size_t* output_len);
 int32_t connect_norito_kagemusha_device_capabilities_v1(
     uint8_t* output, size_t output_capacity);
 int32_t connect_norito_kagemusha_device_execute_v1(

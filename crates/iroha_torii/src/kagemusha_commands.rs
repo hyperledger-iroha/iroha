@@ -25,7 +25,7 @@ use iroha_data_model::{
     isi::{InstructionBox, kagemusha_v1::RedeemKagemushaV1},
     transaction::{SignedTransaction, TransactionAdmissionIntent, TransactionBuilder},
 };
-use iroha_primitives::numeric::{Numeric, Quantity};
+use iroha_primitives::numeric::Quantity;
 use iroha_torii_shared::kagemusha_api::{
     KAGEMUSHA_CHAIN_VERSION_V1, KAGEMUSHA_OPERATION_STATUS_ROUTE_PREFIX_V1, KagemushaApiErrorV1,
     KagemushaOperationKindV1, KagemushaOperationRejectionCodeV1, KagemushaOperationRejectionV1,
@@ -44,7 +44,6 @@ const OPERATION_ACCOUNTED_BYTES: usize =
 #[derive(Debug, Clone)]
 pub(crate) struct KagemushaCommandRuntime {
     redemption_issuer: Option<KagemushaRedemptionIssuer>,
-    max_tx_value: Quantity,
     registry: Arc<Mutex<KagemushaOperationRegistry>>,
 }
 
@@ -65,7 +64,6 @@ impl KagemushaCommandRuntime {
                     key_pair: issuer.key_pair,
                     minimum_xor_balance: issuer.minimum_xor_balance,
                 }),
-            max_tx_value: config.max_tx_value,
             registry: Arc::new(Mutex::new(KagemushaOperationRegistry::new(
                 config.operation_registry_max_entries,
                 config.operation_registry_max_bytes,
@@ -291,7 +289,6 @@ pub(crate) async fn handle_top_up(
         }
         SubmissionClaim::Reserved(reservation) => {
             validate_top_up_snapshot(&app, &request)?;
-            ensure_amount_within_policy(request.amount, request.scale, &runtime.max_tx_value)?;
             let response = crate::submit_signed_transaction_for_ingress_strict_durable(
                 app,
                 headers,
@@ -371,7 +368,6 @@ pub(crate) async fn handle_redeem(
             format!("KAGEMUSHA V1 redemption request is invalid: {source}"),
         )
     })?;
-    let statement = &request.voucher.statement;
     let binding = KagemushaOperationBinding {
         operation_id: request.operation_id,
         kind: KagemushaOperationKindV1::Redemption,
@@ -398,11 +394,6 @@ pub(crate) async fn handle_redeem(
         }
         SubmissionClaim::Reserved(reservation) => {
             validate_redemption_snapshot(&app, &request)?;
-            ensure_amount_within_policy(
-                statement.amount,
-                statement.lifecycle.scale,
-                &runtime.max_tx_value,
-            )?;
             let issuer =
                 runtime
                     .redemption_issuer
@@ -939,32 +930,6 @@ fn validate_live_asset_scale(
     Ok(())
 }
 
-fn ensure_amount_within_policy(
-    atomic_units: u128,
-    scale: u32,
-    maximum: &Quantity,
-) -> Result<(), Error> {
-    let numeric = Numeric::try_new(atomic_units, scale).map_err(|source| {
-        validation_owned(
-            "kagemusha_amount_invalid",
-            format!("KAGEMUSHA V1 amount is not canonical: {source}"),
-        )
-    })?;
-    let amount = Quantity::try_from_numeric(numeric).map_err(|source| {
-        validation_owned(
-            "kagemusha_amount_invalid",
-            format!("KAGEMUSHA V1 amount is not a quantity: {source}"),
-        )
-    })?;
-    if &amount > maximum {
-        return Err(validation(
-            "kagemusha_amount_exceeds_limit",
-            "KAGEMUSHA V1 amount exceeds issuer policy.",
-        ));
-    }
-    Ok(())
-}
-
 fn require_command_runtime(app: &AppState) -> Result<Arc<KagemushaCommandRuntime>, Error> {
     app.kagemusha_commands
         .clone()
@@ -1301,7 +1266,6 @@ mod tests {
         };
         let runtime = Arc::new(KagemushaCommandRuntime {
             redemption_issuer: None,
-            max_tx_value: Quantity::from(1_u32),
             registry: Arc::new(Mutex::new(KagemushaOperationRegistry::new(
                 NonZeroUsize::new(1).expect("positive entry capacity"),
                 NonZeroUsize::new(OPERATION_ACCOUNTED_BYTES).expect("positive byte capacity"),
@@ -1328,7 +1292,6 @@ mod tests {
     fn payer_signed_top_up_admission_does_not_require_a_redemption_signer() {
         let runtime = Arc::new(KagemushaCommandRuntime {
             redemption_issuer: None,
-            max_tx_value: Quantity::from(1_u32),
             registry: Arc::new(Mutex::new(KagemushaOperationRegistry::new(
                 NonZeroUsize::new(1).expect("positive entry capacity"),
                 NonZeroUsize::new(OPERATION_ACCOUNTED_BYTES).expect("positive byte capacity"),
@@ -1351,7 +1314,6 @@ mod tests {
     fn identical_concurrent_claim_returns_the_canonical_pending_binding() {
         let runtime = Arc::new(KagemushaCommandRuntime {
             redemption_issuer: None,
-            max_tx_value: Quantity::from(1_u32),
             registry: Arc::new(Mutex::new(KagemushaOperationRegistry::new(
                 NonZeroUsize::new(1).expect("positive entry capacity"),
                 NonZeroUsize::new(OPERATION_ACCOUNTED_BYTES).expect("positive byte capacity"),
@@ -1502,7 +1464,6 @@ mod tests {
         };
         let runtime = Arc::new(KagemushaCommandRuntime {
             redemption_issuer: None,
-            max_tx_value: Quantity::from(1_u32),
             registry: Arc::new(Mutex::new(KagemushaOperationRegistry::new(
                 NonZeroUsize::new(1).expect("positive entry capacity"),
                 NonZeroUsize::new(OPERATION_ACCOUNTED_BYTES).expect("positive byte capacity"),

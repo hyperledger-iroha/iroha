@@ -25,6 +25,7 @@ RETIRED_RAW = (
     _reversed("RedeemRequest", "Offline"),
     _reversed("OperationReference", "Offline"),
     _reversed("OperationIdentity", "Offline"),
+    _reversed("NativeCore", "Offline"),
     _reversed("line", "off", "v1/"),
     _reversed(":", "oc1"),
     _reversed("handoff_v1", "cash_"),
@@ -45,6 +46,7 @@ RETIRED_NORMALIZED = (
     _reversed("redeemrequest", "offline"),
     _reversed("operationreference", "offline"),
     _reversed("operationidentity", "offline"),
+    _reversed("nativecore", "offline"),
     _reversed("v2", "kagemusha"),
     _reversed("v4", "kagemusha"),
     _reversed("v5", "kagemusha"),
@@ -58,7 +60,7 @@ KAGEMUSHA_FIXTURE_SOURCES = (
     ROOT / "crates/connect_norito_bridge/src/kagemusha_fixture_tests.rs",
     ROOT / "IrohaSwift/Tests/IrohaSwiftTests/KagemushaWireV1Tests.swift",
     ROOT
-    / "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaWireV1Test.kt",
+    / "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaThreeMessageV1Test.kt",
     ROOT
     / "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaWireV1Tests.java",
     ROOT / "javascript/iroha_js/test/kagemushaCanonicalFixture.test.js",
@@ -82,6 +84,18 @@ WIRE_CONTRACT_SOURCES = (
     ROOT / "csharp/src/Hyperledger.Iroha.Sdk/Kagemusha/KagemushaV1Models.cs",
     ROOT / "csharp/src/Hyperledger.Iroha.Sdk/Kagemusha/Kagemusha.cs",
     ROOT / "formal/kagemusha_v1/KagemushaV1.tla",
+)
+
+DEVICE_OPERATION_SOURCES = (
+    ROOT / "IrohaSwift/Sources/IrohaSwift/KagemushaDeviceLifecycleBridgeV1.swift",
+    ROOT
+    / "kotlin/client-android/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaDeviceLifecycleBridgeV1.kt",
+    ROOT
+    / "kotlin/client-android/src/test/java/org/hyperledger/iroha/sdk/offline/KagemushaDeviceLifecycleBridgeV1Test.kt",
+    ROOT
+    / "java/iroha_android/android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaDeviceLifecycleBridgeV1.java",
+    ROOT
+    / "java/iroha_android/android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaDeviceLifecycleBridgeV1Tests.java",
 )
 
 RETIRED_INTENT_AUTHORIZATION_SPELLINGS = (
@@ -241,8 +255,8 @@ class KagemushaHardCutTests(unittest.TestCase):
 
         expected_v1_assertions = (
             'fixture["fixture_version"] as? Int), 1)',
-            'assertEquals(1, fixture.getValue("fixture_version")',
-            'assertEquals(1L, fixtureLong(fixture, null, "fixture_version"))',
+            'assertEquals(1, fixtureInt(fixture, "fixture_version"))',
+            'assertEquals(1L, fixtureLong(fixture, "fixture_version"))',
             "assert.equal(fixture.fixture_version, 1)",
             'fixture["fixture_version"] == 1',
             'Assert.Equal(1, root.GetProperty("fixture_version")',
@@ -256,11 +270,13 @@ class KagemushaHardCutTests(unittest.TestCase):
         retired_name = _reversed("CashV1", "Offline")
         retired_route = _reversed("readiness", "/", "line", "off", "/v1/")
         retired_schema = _reversed("OperationReference", "Offline")
+        retired_native_core = _reversed("NativeCore", "Offline")
         for payload in (
             retired_name,
             retired_name.replace(b"Cash", b"_cash_"),
             retired_route,
             retired_schema.hex().encode(),
+            retired_native_core,
         ):
             self.assertIsNotNone(_retired_identity(payload))
         retired_route = b"/v1/" + _reversed("line", "off") + b"/readiness"
@@ -375,6 +391,62 @@ class KagemushaHardCutTests(unittest.TestCase):
                         f"{path.relative_to(ROOT)} contains {retired.decode()}"
                     )
         self.assertEqual(failures, [])
+
+    def test_device_operation_sources_and_tests_have_no_retired_handshake(self) -> None:
+        """Keep mobile operation inventories and their tests on the exact 22-operation cut."""
+        failures: list[str] = []
+        for path in DEVICE_OPERATION_SOURCES:
+            data = path.read_bytes().lower()
+            for retired in (
+                *RETIRED_INTENT_AUTHORIZATION_SPELLINGS,
+                *RETIRED_HANDSHAKE_SPELLINGS,
+            ):
+                if retired.lower() in data:
+                    failures.append(
+                        f"{path.relative_to(ROOT)} contains {retired.decode()}"
+                    )
+        self.assertEqual(failures, [])
+
+        kotlin_test = DEVICE_OPERATION_SOURCES[2].read_text(encoding="utf-8")
+        java_test = DEVICE_OPERATION_SOURCES[4].read_text(encoding="utf-8")
+        self.assertIn("assertEquals((1..22).toList(), operations.map { it.code })", kotlin_test)
+        self.assertIn(
+            "assertEquals(22, KagemushaDeviceLifecycleBridgeV1.Operation.values().length)",
+            java_test,
+        )
+
+    def test_csharp_wallet_requires_operation_ids_and_complete_mint_bundle(self) -> None:
+        """Keep the mirrored managed wallet on the same crash-safe first-release contract."""
+        source = (
+            ROOT / "csharp/src/Hyperledger.Iroha.Sdk/Kagemusha/KagemushaWalletV1.cs"
+        ).read_text(encoding="utf-8")
+        for required in (
+            "ReceiverBoundCreditCommit",
+            "ReservePaymentOperationId",
+            "RecoverPaymentByOperationId",
+            "KagemushaMintConstructionBundleV1",
+            "ReserveMintOperationId",
+            "PrepareMintConstructionBundle",
+            "RecoverMintConstructionBundle",
+            "ReserveRedemptionOperationId",
+            "RecoverRedemptionByOperationId",
+            "FoldRequiredCreditsLocked(request.Amount);",
+            "FoldRequiredCreditsLocked(amount);",
+            "KagemushaPendingCreditSelectorV1",
+            "KagemushaPendingCreditWatermarkV1",
+            "CoreAuthorizationKeyReference",
+            "SelectPendingCredit",
+            "FoldPendingCredit",
+        ):
+            self.assertIn(required, source)
+        for retired in (
+            "CommitPayment(byte[] canonicalRequest)",
+            "CommitRedemption(UInt128 amount, byte[] beneficiaryAccount)",
+            "FoldReceiveCredit(UInt128 inboxSequenceInclusive)",
+            "NextPendingCreditId",
+            "DrainPendingCreditsLocked",
+        ):
+            self.assertNotIn(retired, source)
 
     def test_three_message_payment_contract_is_directly_request_bound(self) -> None:
         """Pin the direct request/payment/ACK contract and post-commit proof."""

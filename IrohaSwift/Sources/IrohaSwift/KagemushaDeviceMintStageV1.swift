@@ -1,6 +1,6 @@
 import Foundation
 
-/// Canonical public body for secure-device operation 21.
+/// Canonical public body for secure-device operation 16.
 ///
 /// The nested values are exact independent Norito archives. Private reservation openings, key
 /// handles, hardware snapshots, and complete Guard certificates never cross this SDK boundary.
@@ -26,7 +26,7 @@ public struct KagemushaDeviceMintStageCommandV1: Equatable, Sendable {
   }
 }
 
-/// Closed public result of secure-device operation 21.
+/// Closed public result of secure-device operation 16.
 public enum KagemushaDeviceMintStageDispositionV1: UInt8, CaseIterable, Sendable {
   /// A previously unseen finalized credit was installed durably.
   case staged = 0
@@ -34,7 +34,7 @@ public enum KagemushaDeviceMintStageDispositionV1: UInt8, CaseIterable, Sendable
   case exactDuplicate = 1
 }
 
-/// Bounded public summary returned only after qualified hardware completes operation 21.
+/// Bounded public summary returned only after qualified hardware completes operation 16.
 ///
 /// The response authenticator must still be verified by the qualified native platform adapter;
 /// canonical decoding and a nonzero identifier do not authenticate durable staging.

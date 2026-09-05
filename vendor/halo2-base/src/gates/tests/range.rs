@@ -1,8 +1,8 @@
 use super::*;
-use crate::QuantumCell::Witness;
 use crate::utils::biguint_to_fe;
 use crate::utils::testing::base_test;
-use crate::{QuantumCell, gates::range::RangeInstructions};
+use crate::QuantumCell::Witness;
+use crate::{gates::range::RangeInstructions, QuantumCell};
 use num_bigint::BigUint;
 use test_case::test_case;
 

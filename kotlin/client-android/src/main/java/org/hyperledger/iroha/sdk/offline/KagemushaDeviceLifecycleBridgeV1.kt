@@ -234,6 +234,7 @@ class KagemushaDeviceLifecycleBridgeV1 private constructor(
         const val MAXIMUM_COMMAND_PAYLOAD_BYTES: Int = 64 * 1024
         const val MAXIMUM_RESPONSE_PAYLOAD_BYTES: Int = 64 * 1024
         const val MAXIMUM_AUTHENTICATOR_BYTES: Int = 64
+        const val MAXIMUM_NATIVE_CONTRACT_VECTOR_BYTES: Int = 4 * 1024
 
         private const val LIBRARY_NAME = "connect_norito_bridge"
         private const val ANDROID_PLATFORM_CODE = 1
@@ -258,6 +259,15 @@ class KagemushaDeviceLifecycleBridgeV1 private constructor(
         fun onlineOnly(): KagemushaDeviceLifecycleBridgeV1 =
             KagemushaDeviceLifecycleBridgeV1(null, null)
 
+        /**
+         * Return the native library's canonical Norito contract vector, when linked.
+         *
+         * Its domain-separated digest is an ABI/tamper pin only and never grants monetary
+         * authority. This probe does not require an available secure-device provider.
+         */
+        @JvmStatic
+        fun nativeContractVector(): ByteArray? = NativeEndpoint.contractVector()
+
         internal fun withEndpointForTests(endpoint: Endpoint): KagemushaDeviceLifecycleBridgeV1 {
             return withSecureElementEndpoint(endpoint)
         }
@@ -276,6 +286,17 @@ class KagemushaDeviceLifecycleBridgeV1 private constructor(
             System.loadLibrary(LIBRARY_NAME)
             val capabilities = nativeCapabilitiesV1()
             if (capabilities == null) null else this
+        } catch (_: RuntimeException) {
+            null
+        } catch (_: LinkageError) {
+            null
+        }
+
+        fun contractVector(): ByteArray? = try {
+            System.loadLibrary(LIBRARY_NAME)
+            nativeContractVectorV1()
+                ?.takeIf { it.isNotEmpty() && it.size <= MAXIMUM_NATIVE_CONTRACT_VECTOR_BYTES }
+                ?.copyOf()
         } catch (_: RuntimeException) {
             null
         } catch (_: LinkageError) {
@@ -314,6 +335,9 @@ class KagemushaDeviceLifecycleBridgeV1 private constructor(
 
         @JvmStatic
         private external fun nativeCapabilitiesV1(): ByteArray?
+
+        @JvmStatic
+        private external fun nativeContractVectorV1(): ByteArray?
 
         @JvmStatic
         private external fun nativeExecuteV1(command: ByteArray): ByteArray?

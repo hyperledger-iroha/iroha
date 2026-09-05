@@ -1340,7 +1340,7 @@ mod isi_gas_fees_tests;
 #[cfg(test)]
 #[path = "../tests/ivm_corehost_axt.rs"]
 mod ivm_corehost_axt_tests;
-#[cfg(test)]
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 mod kagemusha_v1_test_fixtures;
 #[cfg(test)]
 #[path = "../tests/overlay_chunking.rs"]

@@ -454,7 +454,7 @@ def _release_inventory_fixture_paths(module, paths: tuple[Path, ...]) -> tuple[P
         (
             "  peer::shared_byte_budget_tests::frame_retention_coalesces_each_distinct_source_owner_without_reaccounting\n",
             "",
-            "must contain exactly 867 tests",
+            "must contain exactly 866 tests",
         ),
         (
             "  peer::shared_byte_budget_tests::frame_retention_coalesces_each_distinct_source_owner_without_reaccounting\n",
@@ -525,9 +525,9 @@ def _release_inventory_fixture_paths(module, paths: tuple[Path, ...]) -> tuple[P
             "canonical module/test inventory SHA-256",
         ),
         (
-            "readonly expected_production_liveness_test_count=867",
+            "readonly expected_production_liveness_test_count=866",
             "readonly expected_production_liveness_test_count=861",
-            "production liveness source count must be sealed as 867",
+            "production liveness source count must be sealed as 866",
         ),
         (
             "  sumeragi::v2_core::tests\n"
@@ -1277,26 +1277,26 @@ def test_production_release_inventory_seals_closed_prefix_suffix_retry(
     (
         (
             Path("formal/sumeragi_v2/README.md"),
-            "current inventory to 867 tests across 44 modules.\n"
+            "current inventory to 866 tests across 42 modules.\n"
             "Together with the source-sealed command and tooling legs, the pre-network\n"
-            "corridor contains 85 legs.",
-            "current inventory to 867 tests across 44 modules.\n"
+            "corridor contains 83 legs.",
+            "current inventory to 866 tests across 42 modules.\n"
             "Together with the source-sealed command and tooling legs, the pre-network\n"
-            "corridor contains 84 legs.",
+            "corridor contains 82 legs.",
         ),
         (
             Path("formal/sumeragi_v2/PROOF.md"),
-            "current 867-test,\n44-module inventory. The complete source-sealed\n"
+            "current 866-test,\n42-module inventory. The complete source-sealed\n"
             "pre-network corridor\n"
-            "contains 85 legs",
-            "current 867-test,\n44-module inventory. The complete source-sealed\n"
+            "contains 83 legs",
+            "current 866-test,\n42-module inventory. The complete source-sealed\n"
             "pre-network corridor\n"
-            "contains 84 legs",
+            "contains 82 legs",
         ),
         (
             Path("specs/sumeragi_v2_liveness.md"),
-            "current inventory to 867\nexact tests across 44 modules and 85 pre-network legs.",
-            "current inventory to 867\nexact tests across 44 modules and 84 pre-network legs.",
+            "current inventory to 866\nexact tests across 42 modules and 83 pre-network legs.",
+            "current inventory to 866\nexact tests across 42 modules and 82 pre-network legs.",
         ),
         (
             Path("specs/sumeragi_v2_multilane_closure_ledger.md"),
@@ -1377,9 +1377,9 @@ def test_production_release_inventory_rejects_stale_liveness_corridor_claim(
     (
         (
             Path("scripts/write_sumeragi_v2_release_receipt.py"),
-            "_PRODUCTION_TEST_COUNT = 867",
+            "_PRODUCTION_TEST_COUNT = 866",
             "_PRODUCTION_TEST_COUNT = 861",
-            "production test count must equal the exact shell inventory count 867",
+            "production test count must equal the exact shell inventory count 866",
         ),
         (
             Path("scripts/write_sumeragi_v2_release_receipt.py"),
@@ -1531,9 +1531,9 @@ def test_production_release_inventory_rejects_stale_liveness_corridor_claim(
         ),
         (
             Path("scripts/run_sumeragi_v2_release_gates.sh"),
-            "  readonly expected_corridor_leg_count=85",
+            "  readonly expected_corridor_leg_count=83",
             "  readonly expected_corridor_leg_count=84",
-            "sealed at 85 legs",
+            "sealed at 83 legs",
         ),
         (
             Path("scripts/run_sumeragi_v2_release_gates.sh"),

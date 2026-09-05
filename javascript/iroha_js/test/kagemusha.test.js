@@ -177,7 +177,7 @@ test("KAGEMUSHA submission responses pin status, Location, and Retry-After", () 
     assert.doesNotThrow(() => requireKagemushaSubmissionResponseV1({ statusCode, location, retryAfter, operationIdHex, operationState }));
 });
 
-test("operation-21 mint-stage bodies are canonical, bounded, and credit-bound", () => {
+test("operation-16 mint-stage bodies are canonical, bounded, and credit-bound", () => {
   const { authorization, credit } = mintStagePair();
   const authorizationBytes = Kagemusha.encodeMintAuthorization(authorization);
   const creditBytes = Kagemusha.encodeMintCredit(credit, authorization);
@@ -230,7 +230,7 @@ test("operation-21 mint-stage bodies are canonical, bounded, and credit-bound", 
   ), /authorization digest/u);
 });
 
-test("operation-21 result decoding rejects semantic and canonical mutations", () => {
+test("operation-16 result decoding rejects semantic and canonical mutations", () => {
   const raw = Kagemusha.encodeDeviceMintStageResultShape(new Kagemusha.DeviceMintStageResult({
     version: 1, disposition: 0, creditId: octets(1),
   }));
@@ -257,7 +257,7 @@ test("operation-21 result decoding rejects semantic and canonical mutations", ()
   })));
 });
 
-test("operation-21 command archive bytes are defensively copied", () => {
+test("operation-16 command archive bytes are defensively copied", () => {
   const { authorization, credit } = mintStagePair();
   const authorizationBytes = Kagemusha.encodeMintAuthorization(authorization);
   const creditBytes = Kagemusha.encodeMintCredit(credit, authorization);

@@ -505,7 +505,7 @@ const encodeMintAuthorization = (value) => encodeTopLevel(value, KagemushaMintAu
 const decodeMintAuthorization = (raw) => decodeTopLevel(raw, KagemushaMintAuthorizationV1, SCHEMAS.mintAuthorization, 7936, validateMintAuthorization);
 const encodeMintCredit = (value, authorization) => encodeTopLevel(value, KagemushaMintCreditV1, SCHEMAS.mintCredit, 7936, (model) => validateMintCredit(model, authorization));
 const decodeMintCredit = (raw, authorization) => decodeTopLevel(raw, KagemushaMintCreditV1, SCHEMAS.mintCredit, 7936, (model) => validateMintCredit(model, authorization));
-/** Encode a public operation-21 body. Shape checks never authorize a hardware transition. */
+/** Encode a public operation-16 body. Shape checks never authorize a hardware transition. */
 function encodeDeviceMintStageCommandShape(value, canonicalMintCredit = undefined) {
   const command = canonicalMintCredit === undefined ? value : new KagemushaDeviceMintStageCommandV1({
     version: 1, canonicalAuthorization: value, canonicalMintCredit,

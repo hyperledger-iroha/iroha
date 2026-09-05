@@ -1852,8 +1852,10 @@ that checkpoint to 857 tests. The retired-attempt, mixed-carrier, and two-link
 cold-restart rows plus the two predecessor-durability handoff rows, followed by
 retirement of the dormant generic persisted-continuation regression, leave the
 864-test checkpoint. The two sealed Certified-Serve storage regressions and
-the CompleteTip payload-before-ledger-repair regression leave the current
-production inventory at 867 tests while
+the CompleteTip payload-before-ledger-repair regression produced a historical
+867-test inventory. The Kagemusha clean-break retired two one-test module legs
+and replaced their rows with one consensus-signature-envelope regression in an
+existing module, leaving the current production inventory at 866 tests while
 the G-UNIT inventory contains 522 tests. Source binding is not an execution receipt.
 The finalized predecessor remains active while the shared ordinary/PendingKura
 preflight rehydrates late canonical lane ownership, services bounded
@@ -1926,7 +1928,7 @@ fetches, and every persistence crash boundary. Tests that exercise only
 `#[cfg(test)]` producer helpers do not close a live-path obligation.
 
 The mutable source inventory is internally count-consistent. The production
-inventory contains exactly 867 tests across 44 modules, including 453
+inventory contains exactly 866 tests across 42 modules, including 453
 source-sealed ownership/regression names. The duplicate inline V2 core network
 simulations are retired; the standalone `iroha_sumeragi_core` harness remains. The three Kura recovery
 regressions and governance-unlock audit are retained beside the prior source-bound closure.
@@ -2186,7 +2188,7 @@ marker must be classified here before release.
   implementation gaps are resolved and source-bound. Their focused Rust,
   formal-engine, SDK, and multi-peer execution receipts remain open; structural
   source validation alone cannot close those gates.
-- `G-UNIT`, `G-SDK`, and `G-FORMAL` remain Open. The exact 867-production-test,
+- `G-UNIT`, `G-SDK`, and `G-FORMAL` remain Open. The exact 866-production-test,
   522-G-UNIT-test, and 56-control counts, SDK group counts, recursive closure
   shapes, and 27-action formal extraction partition are mutable-development
   inventories only. Historical focused Rust and direct SDK subsets do not

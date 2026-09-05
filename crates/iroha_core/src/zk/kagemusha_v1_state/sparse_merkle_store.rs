@@ -6,6 +6,10 @@
 //! byte admission limit here. A storage outage reports the exact committed root as unavailable;
 //! it never substitutes an empty root or discards already committed value.
 
+#[cfg(unix)]
+#[path = "disk_history_store.rs"]
+pub(crate) mod disk_history_store;
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use iroha_data_model::kagemusha::{
@@ -38,7 +42,7 @@ const PROOF_ROOT_BRIDGE_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:history-store:pr
 pub(crate) enum KagemushaHistoryTreeV1 {
     /// Consumed-credit replay nonmembership tree.
     Replay,
-    /// Terminal acceptance/commit/no-commit decision tree.
+    /// Durable transition-outcome decision tree used for exact crash recovery.
     TerminalDecision,
 }
 
@@ -360,6 +364,7 @@ struct KagemushaHistoryNodeWriteV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub(crate) struct KagemushaPreparedHistoryCasV1 {
     transaction_id: DigestV1,
+    attempt_binding_digest: DigestV1,
     root_selection: KagemushaHistoryRootSelectionV1,
     node_writes: Vec<KagemushaHistoryNodeWriteV1>,
 }
@@ -367,6 +372,7 @@ pub(crate) struct KagemushaPreparedHistoryCasV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode)]
 struct KagemushaPreparedHistoryCasSubjectV1 {
     version: u16,
+    attempt_binding_digest: DigestV1,
     root_selection: KagemushaHistoryRootSelectionV1,
     node_writes: Vec<KagemushaHistoryNodeWriteV1>,
 }
@@ -376,7 +382,11 @@ impl KagemushaPreparedHistoryCasV1 {
     pub(crate) fn new(
         root_selection: KagemushaHistoryRootSelectionV1,
         nodes: Vec<KagemushaHistoryNodeRecordV1>,
+        attempt_binding_digest: DigestV1,
     ) -> Result<Self, KagemushaHistoryStoreErrorV1> {
+        if digest_is_zero(attempt_binding_digest) {
+            return Err(KagemushaHistoryStoreErrorV1::InvalidTransaction);
+        }
         root_selection.validate()?;
         let mut node_writes = Vec::with_capacity(nodes.len());
         for node in nodes {
@@ -394,6 +404,7 @@ impl KagemushaPreparedHistoryCasV1 {
         }
         let subject = KagemushaPreparedHistoryCasSubjectV1 {
             version: HISTORY_STORE_VERSION_V1,
+            attempt_binding_digest,
             root_selection,
             node_writes: node_writes.clone(),
         };
@@ -403,6 +414,7 @@ impl KagemushaPreparedHistoryCasV1 {
         }
         Ok(Self {
             transaction_id,
+            attempt_binding_digest,
             root_selection,
             node_writes,
         })
@@ -411,6 +423,11 @@ impl KagemushaPreparedHistoryCasV1 {
     /// Return this prepared transaction's deterministic content address.
     pub(crate) const fn transaction_id(&self) -> DigestV1 {
         self.transaction_id
+    }
+
+    /// Return the Core transition attempt bound into the transaction identity.
+    pub(crate) const fn attempt_binding_digest(&self) -> DigestV1 {
+        self.attempt_binding_digest
     }
 
     /// Return the exact independently scoped root selection.
@@ -435,6 +452,9 @@ impl KagemushaPreparedHistoryCasV1 {
     }
 
     fn validate(&self) -> Result<(), KagemushaHistoryStoreErrorV1> {
+        if digest_is_zero(self.attempt_binding_digest) {
+            return Err(KagemushaHistoryStoreErrorV1::InvalidTransaction);
+        }
         self.root_selection.validate()?;
         if self.node_writes.windows(2).any(|pair| {
             pair[0].address >= pair[1].address
@@ -448,6 +468,7 @@ impl KagemushaPreparedHistoryCasV1 {
         }
         let subject = KagemushaPreparedHistoryCasSubjectV1 {
             version: HISTORY_STORE_VERSION_V1,
+            attempt_binding_digest: self.attempt_binding_digest,
             root_selection: self.root_selection,
             node_writes: self.node_writes.clone(),
         };
@@ -542,42 +563,41 @@ impl KagemushaHistoryRootSelectionCertificateV1 {
         self.signature
             .verify(device_public_key, &signing_bytes)
             .map_err(|_| KagemushaHistoryStoreErrorV1::InvalidCertificate)?;
-        Ok(VerifiedKagemushaHistoryRootSelectionV1 {
-            subject: self.subject,
-        })
+        Ok(VerifiedKagemushaHistoryRootSelectionV1 { certificate: self })
     }
 }
 
 /// Typestate proving that a release-approved device authenticated one exact root selection.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct VerifiedKagemushaHistoryRootSelectionV1 {
-    subject: KagemushaHistoryRootSelectionSubjectV1,
+    // Keep signed evidence for durable replay, but never serialize the verified typestate.
+    certificate: KagemushaHistoryRootSelectionCertificateV1,
 }
 
 impl VerifiedKagemushaHistoryRootSelectionV1 {
     /// Return the authenticated prepared-transaction identity.
     pub(crate) const fn transaction_id(self) -> DigestV1 {
-        self.subject.transaction_id
+        self.certificate.subject.transaction_id
     }
 
     /// Return the authenticated independent root selection.
     pub(crate) const fn root_selection(self) -> KagemushaHistoryRootSelectionV1 {
-        self.subject.root_selection
+        self.certificate.subject.root_selection
     }
 
     /// Return the authenticated hardware profile identity.
     pub(crate) const fn hardware_profile_id(self) -> DigestV1 {
-        self.subject.hardware_profile_id
+        self.certificate.subject.hardware_profile_id
     }
 
     /// Return the authenticated hardware epoch.
     pub(crate) const fn hardware_epoch(self) -> u128 {
-        self.subject.hardware_epoch
+        self.certificate.subject.hardware_epoch
     }
 
     /// Return the authenticated rollback-resistant device counter.
     pub(crate) const fn monotonic_counter(self) -> u128 {
-        self.subject.monotonic_counter
+        self.certificate.subject.monotonic_counter
     }
 }
 
@@ -705,6 +725,9 @@ pub(crate) enum KagemushaHistoryStoreErrorV1 {
     /// The external SHA-256 and recursive Pasta roots do not describe one exact replay CAS.
     #[error("invalid KAGEMUSHA authenticated-history proof-root bridge request")]
     InvalidProofRootBridge,
+    /// A new hardware authorization requires this exact attempt to remain prepared.
+    #[error("KAGEMUSHA history attempt is no longer prepared: {0:?}")]
+    AttemptNotPrepared(DigestV1),
     /// The certificate selects different roots or a different transaction.
     #[error("KAGEMUSHA history certificate does not match the prepared transaction")]
     CertificateMismatch,
@@ -785,6 +808,18 @@ pub(crate) enum KagemushaHistoryStoreErrorV1 {
     /// The external immutable-node store is currently unavailable.
     #[error("KAGEMUSHA authenticated-history storage is unavailable")]
     StorageUnavailable,
+    /// The persisted journal failed framing, identity, or deterministic replay validation.
+    #[error("KAGEMUSHA authenticated-history journal is corrupt")]
+    JournalCorrupt,
+    /// Another owner already holds the journal's descriptor-based writer lock.
+    #[error("KAGEMUSHA authenticated-history journal already has a writer")]
+    StoreAlreadyOpen,
+    /// The exact retained prepare/terminal history differs from the hardware-sealed snapshot.
+    #[error("KAGEMUSHA authenticated-history recovery commitment mismatch")]
+    RecoveryCommitmentMismatch,
+    /// A write or sync had an uncertain outcome; this handle can no longer authorize work.
+    #[error("KAGEMUSHA authenticated-history durability is uncertain")]
+    DurabilityUncertain,
 }
 
 /// External persistence boundary for KAGEMUSHA's two authenticated history trees.
@@ -796,6 +831,35 @@ pub(crate) enum KagemushaHistoryStoreErrorV1 {
 pub(crate) trait KagemushaAuthenticatedHistoryStoreV1 {
     /// Return both authoritative committed roots without consulting object availability.
     fn committed_roots(&self) -> KagemushaHistoryRootsV1;
+
+    /// Bind the exact successful prepare/commit/abort history into the hardware-sealed snapshot.
+    /// This detects valid host-log rollback even when neither committed tree root changed.
+    fn recovery_commitment(&self) -> Result<DigestV1, KagemushaHistoryStoreErrorV1>;
+
+    /// Require a retained hardware-sealed checkpoint with no later hardware commit. Any
+    /// prepare/abort suffix remains recorded; validating it never commits or discards work.
+    fn validate_recovery_checkpoint(
+        &self,
+        expected: DigestV1,
+    ) -> Result<(), KagemushaHistoryStoreErrorV1>;
+
+    /// Validate one complete retained tree. Implementations may reuse only process-local
+    /// validation of immutable durable subtrees whose availability/integrity is still known.
+    /// The default always traverses every node; external data cannot supply cache authority.
+    fn validate_tree(
+        &self,
+        tree: KagemushaHistoryTreeV1,
+        root: DigestV1,
+    ) -> Result<(), KagemushaHistoryStoreErrorV1> {
+        validate_tree_with_lookup(tree, root, |address| self.read_node(address))
+    }
+
+    /// Require an exact, currently prepared CAS before requesting new hardware authority.
+    /// Storage/integrity and stale-root errors remain errors, never `false` or absence.
+    fn require_prepared(
+        &self,
+        transaction: &KagemushaPreparedHistoryCasV1,
+    ) -> Result<(), KagemushaHistoryStoreErrorV1>;
 
     /// Return exact byte usage of the uncommitted overlay.
     fn overlay_usage(&self) -> KagemushaHistoryOverlayUsageV1;
@@ -1078,16 +1142,20 @@ where
 ///
 /// The committed tree is validated before the live overlay is touched. Repeating an already
 /// committed identity returns exact duplicate/conflict classification without consuming WAL
-/// capacity. Only a genuinely absent identity can consume the byte-bounded precommit overlay.
+/// capacity. Only a genuinely absent identity can consume the byte-bounded prepared overlay.
 pub(crate) fn prepare_history_identity_insert_v1<S>(
     store: &mut S,
     tree: KagemushaHistoryTreeV1,
     key: DigestV1,
     value_digest: DigestV1,
+    attempt_binding_digest: DigestV1,
 ) -> Result<KagemushaHistoryInsertPreparationV1, KagemushaHistoryStoreErrorV1>
 where
     S: KagemushaAuthenticatedHistoryStoreV1 + ?Sized,
 {
+    if digest_is_zero(attempt_binding_digest) {
+        return Err(KagemushaHistoryStoreErrorV1::InvalidTransaction);
+    }
     if digest_is_zero(key) || digest_is_zero(value_digest) {
         return Err(KagemushaHistoryStoreErrorV1::InvalidNode);
     }
@@ -1116,7 +1184,11 @@ where
             KagemushaHistoryRootSelectionV1::terminal_decision(expected_root, selected_root)
         }
     };
-    let transaction = KagemushaPreparedHistoryCasV1::new(selection, nodes.into_values().collect())?;
+    let transaction = KagemushaPreparedHistoryCasV1::new(
+        selection,
+        nodes.into_values().collect(),
+        attempt_binding_digest,
+    )?;
     let outcome = store.prepare_cas(transaction.clone())?;
     Ok(KagemushaHistoryInsertPreparationV1::Prepared {
         transaction,
@@ -1135,10 +1207,14 @@ pub(crate) fn prepare_history_identity_pair_v1<S>(
     replay_value_digest: DigestV1,
     terminal_decision_key: DigestV1,
     terminal_decision_value_digest: DigestV1,
+    attempt_binding_digest: DigestV1,
 ) -> Result<KagemushaHistoryDualInsertPreparationV1, KagemushaHistoryStoreErrorV1>
 where
     S: KagemushaAuthenticatedHistoryStoreV1 + ?Sized,
 {
+    if digest_is_zero(attempt_binding_digest) {
+        return Err(KagemushaHistoryStoreErrorV1::InvalidTransaction);
+    }
     if [
         replay_key,
         replay_value_digest,
@@ -1229,110 +1305,11 @@ where
             ));
         }
     }
-    let transaction =
-        KagemushaPreparedHistoryCasV1::new(root_selection, replay_nodes.into_values().collect())?;
-    let outcome = store.prepare_cas(transaction.clone())?;
-    Ok(KagemushaHistoryDualInsertPreparationV1::Prepared {
-        transaction,
-        outcome,
-    })
-}
-
-/// Prepare an ordered replay batch and one terminal decision under a single dual-root CAS.
-///
-/// Replay identities must be unique and non-empty. Each insert is evaluated against the prior
-/// slot's prepared successor, so the selected replay root commits the caller's deterministic
-/// order while all immutable nodes remain in one byte-accounted WAL transaction.
-pub(crate) fn prepare_history_replay_batch_and_terminal_v1<S>(
-    store: &mut S,
-    replay_entries: &[(DigestV1, DigestV1)],
-    terminal_decision_key: DigestV1,
-    terminal_decision_value_digest: DigestV1,
-) -> Result<KagemushaHistoryDualInsertPreparationV1, KagemushaHistoryStoreErrorV1>
-where
-    S: KagemushaAuthenticatedHistoryStoreV1 + ?Sized,
-{
-    if replay_entries.is_empty()
-        || digest_is_zero(terminal_decision_key)
-        || digest_is_zero(terminal_decision_value_digest)
-    {
-        return Err(KagemushaHistoryStoreErrorV1::InvalidNode);
-    }
-    let mut unique_replay_keys = BTreeSet::new();
-    if replay_entries.iter().any(|(key, value_digest)| {
-        digest_is_zero(*key) || digest_is_zero(*value_digest) || !unique_replay_keys.insert(*key)
-    }) {
-        return Err(KagemushaHistoryStoreErrorV1::InvalidNode);
-    }
-
-    let predecessor = validate_committed_history_v1(store)?;
-    let mut nodes = BTreeMap::new();
-    let mut replay_selected = predecessor.replay();
-    let mut replay_changed = false;
-    for &(key, value_digest) in replay_entries {
-        match build_inserted_root(
-            store,
-            KagemushaHistoryTreeV1::Replay,
-            replay_selected,
-            key,
-            value_digest,
-            &mut nodes,
-        )? {
-            KagemushaHistoryInsertBuildV1::Inserted(root) => {
-                replay_selected = root;
-                replay_changed = true;
-            }
-            KagemushaHistoryInsertBuildV1::ExactDuplicate => {}
-            KagemushaHistoryInsertBuildV1::Conflict {
-                existing_value_digest,
-            } => {
-                return Ok(KagemushaHistoryDualInsertPreparationV1::Conflict {
-                    tree: KagemushaHistoryTreeV1::Replay,
-                    key,
-                    existing_value_digest,
-                });
-            }
-        }
-    }
-
-    let decision = build_inserted_root(
-        store,
-        KagemushaHistoryTreeV1::TerminalDecision,
-        predecessor.terminal_decision(),
-        terminal_decision_key,
-        terminal_decision_value_digest,
-        &mut nodes,
+    let transaction = KagemushaPreparedHistoryCasV1::new(
+        root_selection,
+        replay_nodes.into_values().collect(),
+        attempt_binding_digest,
     )?;
-    let (decision_selected, decision_changed) = match decision {
-        KagemushaHistoryInsertBuildV1::Inserted(root) => (root, true),
-        KagemushaHistoryInsertBuildV1::ExactDuplicate => (predecessor.terminal_decision(), false),
-        KagemushaHistoryInsertBuildV1::Conflict {
-            existing_value_digest,
-        } => {
-            return Ok(KagemushaHistoryDualInsertPreparationV1::Conflict {
-                tree: KagemushaHistoryTreeV1::TerminalDecision,
-                key: terminal_decision_key,
-                existing_value_digest,
-            });
-        }
-    };
-
-    let root_selection = match (replay_changed, decision_changed) {
-        (true, true) => KagemushaHistoryRootSelectionV1::both(
-            KagemushaHistoryRootCasV1::new(predecessor.replay(), replay_selected),
-            KagemushaHistoryRootCasV1::new(predecessor.terminal_decision(), decision_selected),
-        ),
-        (true, false) => {
-            KagemushaHistoryRootSelectionV1::replay(predecessor.replay(), replay_selected)
-        }
-        (false, true) => KagemushaHistoryRootSelectionV1::terminal_decision(
-            predecessor.terminal_decision(),
-            decision_selected,
-        ),
-        (false, false) => return Ok(KagemushaHistoryDualInsertPreparationV1::ExactDuplicate),
-    };
-    let transaction =
-        KagemushaPreparedHistoryCasV1::new(root_selection, nodes.into_values().collect())?;
     let outcome = store.prepare_cas(transaction.clone())?;
     Ok(KagemushaHistoryDualInsertPreparationV1::Prepared {
         transaction,
@@ -1553,66 +1530,129 @@ fn validate_tree_from_store<S>(
 where
     S: KagemushaAuthenticatedHistoryStoreV1 + ?Sized,
 {
-    validate_tree_with_lookup(tree, root, |address| store.read_node(address))
+    store.validate_tree(tree, root)
+}
+
+// A summary certifies the entire immutable subtree, not just its root record. Its root
+// shape must still satisfy every new incoming edge; a valid subtree cannot be moved across
+// prefixes/namespaces or attached above a non-increasing branch depth.
+#[derive(Clone, Copy)]
+struct ValidatedHistorySubtree {
+    tree: KagemushaHistoryTreeV1,
+    representative: DigestV1,
+    branch_depth: Option<usize>,
+}
+
+#[derive(Clone, Copy)]
+struct HistoryParentEdge {
+    depth: usize,
+    prefix: DigestV1,
+    right: bool,
+}
+
+fn validate_subtree_edge(
+    tree: KagemushaHistoryTreeV1,
+    root: DigestV1,
+    address: DigestV1,
+    summary: ValidatedHistorySubtree,
+    parent: Option<HistoryParentEdge>,
+) -> Result<(), KagemushaHistoryStoreErrorV1> {
+    if summary.tree != tree {
+        return Err(KagemushaHistoryStoreErrorV1::CorruptHistoryNode { tree, address });
+    }
+    if let Some(parent) = parent {
+        if canonical_prefix(summary.representative, parent.depth) != parent.prefix
+            || key_bit(summary.representative, parent.depth) != parent.right
+            || summary
+                .branch_depth
+                .is_some_and(|depth| depth <= parent.depth)
+        {
+            return Err(KagemushaHistoryStoreErrorV1::InvalidHistoryTree { tree, root });
+        }
+    }
+    Ok(())
 }
 
 fn validate_tree_with_lookup<F>(
     tree: KagemushaHistoryTreeV1,
     root: DigestV1,
-    mut lookup: F,
+    lookup: F,
 ) -> Result<(), KagemushaHistoryStoreErrorV1>
 where
     F: FnMut(
         DigestV1,
     ) -> Result<Option<KagemushaHistoryNodeRecordV1>, KagemushaHistoryStoreErrorV1>,
 {
+    validate_tree_with_immutable_subtrees(tree, root, lookup, |_| None).map(|_| ())
+}
+
+fn validate_tree_with_immutable_subtrees<F, C>(
+    tree: KagemushaHistoryTreeV1,
+    root: DigestV1,
+    mut lookup: F,
+    mut cached: C,
+) -> Result<BTreeMap<DigestV1, ValidatedHistorySubtree>, KagemushaHistoryStoreErrorV1>
+where
+    F: FnMut(
+        DigestV1,
+    ) -> Result<Option<KagemushaHistoryNodeRecordV1>, KagemushaHistoryStoreErrorV1>,
+    C: FnMut(DigestV1) -> Option<ValidatedHistorySubtree>,
+{
+    let mut newly_validated = BTreeMap::new();
     if root == empty_root(tree) {
-        return Ok(());
+        return Ok(newly_validated);
     }
     if digest_is_zero(root) {
         return Err(KagemushaHistoryStoreErrorV1::InvalidHistoryTree { tree, root });
     }
-
-    #[derive(Clone, Copy)]
-    struct ParentEdge {
-        depth: usize,
-        prefix: DigestV1,
-        right: bool,
+    enum Work {
+        Enter(DigestV1, Option<HistoryParentEdge>),
+        Complete(DigestV1, ValidatedHistorySubtree),
     }
-
     let mut visited = BTreeSet::new();
-    let mut stack = vec![(root, None::<ParentEdge>)];
-    while let Some((address, parent)) = stack.pop() {
+    let mut stack = vec![Work::Enter(root, None)];
+    while let Some(work) = stack.pop() {
+        let (address, parent) = match work {
+            Work::Complete(address, summary) => {
+                // Published locally only after every child passed. The caller publishes this
+                // delta to the retained index only when a Commit becomes durable.
+                newly_validated.insert(address, summary);
+                continue;
+            }
+            Work::Enter(address, parent) => (address, parent),
+        };
         if address == empty_root(tree) {
             continue;
         }
         if !visited.insert(address) {
             return Err(KagemushaHistoryStoreErrorV1::InvalidHistoryTree { tree, root });
         }
+        if let Some(summary) = cached(address) {
+            validate_subtree_edge(tree, root, address, summary, parent)?;
+            // Validated subtree descendants all obey this root's prefix. Distinct branches
+            // impose disjoint key prefixes, so their cached descendants cannot overlap while
+            // both incoming-edge checks succeed. New nodes retain the explicit visited guard.
+            continue;
+        }
         let node = lookup(address)?
             .ok_or(KagemushaHistoryStoreErrorV1::MissingHistoryNode { tree, address })?;
         if node.tree() != tree || node.content_address().ok() != Some(address) {
             return Err(KagemushaHistoryStoreErrorV1::CorruptHistoryNode { tree, address });
         }
-
-        let representative = match node.body() {
-            KagemushaHistoryNodeBodyV1::Leaf { key, .. } => *key,
-            KagemushaHistoryNodeBodyV1::Branch { prefix, .. } => *prefix,
+        let summary = match node.body() {
+            KagemushaHistoryNodeBodyV1::Leaf { key, .. } => ValidatedHistorySubtree {
+                tree,
+                representative: *key,
+                branch_depth: None,
+            },
+            KagemushaHistoryNodeBodyV1::Branch { depth, prefix, .. } => ValidatedHistorySubtree {
+                tree,
+                representative: *prefix,
+                branch_depth: Some(usize::from(*depth)),
+            },
         };
-        if let Some(parent) = parent {
-            let belongs_to_parent = canonical_prefix(representative, parent.depth) == parent.prefix
-                && key_bit(representative, parent.depth) == parent.right;
-            let branch_depth_advances = match node.body() {
-                KagemushaHistoryNodeBodyV1::Leaf { .. } => true,
-                KagemushaHistoryNodeBodyV1::Branch { depth, .. } => {
-                    usize::from(*depth) > parent.depth
-                }
-            };
-            if !belongs_to_parent || !branch_depth_advances {
-                return Err(KagemushaHistoryStoreErrorV1::InvalidHistoryTree { tree, root });
-            }
-        }
-
+        validate_subtree_edge(tree, root, address, summary, parent)?;
+        stack.push(Work::Complete(address, summary));
         if let KagemushaHistoryNodeBodyV1::Branch {
             depth,
             prefix,
@@ -1620,21 +1660,21 @@ where
             right,
         } = node.body()
         {
-            let depth = usize::from(*depth);
             if left == right {
                 return Err(KagemushaHistoryStoreErrorV1::InvalidHistoryTree { tree, root });
             }
-            stack.push((
+            let depth = usize::from(*depth);
+            stack.push(Work::Enter(
                 *right,
-                Some(ParentEdge {
+                Some(HistoryParentEdge {
                     depth,
                     prefix: *prefix,
                     right: true,
                 }),
             ));
-            stack.push((
+            stack.push(Work::Enter(
                 *left,
-                Some(ParentEdge {
+                Some(HistoryParentEdge {
                     depth,
                     prefix: *prefix,
                     right: false,
@@ -1642,7 +1682,56 @@ where
             ));
         }
     }
-    Ok(())
+    Ok(newly_validated)
+}
+
+// The sole production mutation adds immutable records and their fully validated subtree delta
+// after commit. Fault injection invalidates every cached subtree before replacing/removing data.
+// No cache is serialized, loaded from disk, or retained across another process's storage handle.
+#[derive(Clone, Default)]
+struct ImmutableHistoryNodeIndex {
+    nodes: BTreeMap<DigestV1, KagemushaHistoryNodeRecordV1>,
+    subtrees: BTreeMap<DigestV1, ValidatedHistorySubtree>,
+    #[cfg(test)]
+    validation_visits: std::cell::Cell<u64>,
+}
+
+impl ImmutableHistoryNodeIndex {
+    fn get(&self, address: &DigestV1) -> Option<&KagemushaHistoryNodeRecordV1> {
+        self.nodes.get(address)
+    }
+
+    fn validated_subtree(&self, address: DigestV1) -> Option<ValidatedHistorySubtree> {
+        self.subtrees.get(&address).copied()
+    }
+
+    fn record_validation_visit(&self) {
+        #[cfg(test)]
+        self.validation_visits.set(self.validation_visits.get() + 1);
+    }
+
+    fn install_committed(
+        &mut self,
+        writes: Vec<KagemushaHistoryNodeWriteV1>,
+        subtrees: BTreeMap<DigestV1, ValidatedHistorySubtree>,
+    ) {
+        for write in writes {
+            self.nodes.entry(write.address).or_insert(write.node);
+        }
+        self.subtrees.extend(subtrees);
+    }
+
+    #[cfg(test)]
+    fn remove(&mut self, address: &DigestV1) -> Option<KagemushaHistoryNodeRecordV1> {
+        self.subtrees.clear();
+        self.nodes.remove(address)
+    }
+
+    #[cfg(test)]
+    fn insert(&mut self, address: DigestV1, node: KagemushaHistoryNodeRecordV1) {
+        self.subtrees.clear();
+        self.nodes.insert(address, node);
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1651,9 +1740,10 @@ struct KagemushaLiveHistoryWalEntryV1 {
     wal_bytes: u64,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum KagemushaTerminalHistoryCasV1 {
     Committed {
+        certificate: Box<KagemushaHistoryRootSelectionCertificateV1>,
         root_selection: KagemushaHistoryRootSelectionV1,
         committed_roots: KagemushaHistoryRootsV1,
     },
@@ -1670,12 +1760,14 @@ enum KagemushaTerminalHistoryCasV1 {
 #[derive(Clone)]
 pub(crate) struct KagemushaMemoryAuthenticatedHistoryStoreV1 {
     roots: KagemushaHistoryRootsV1,
-    durable_nodes: BTreeMap<DigestV1, KagemushaHistoryNodeRecordV1>,
+    durable_nodes: ImmutableHistoryNodeIndex,
     prepared: BTreeMap<DigestV1, KagemushaLiveHistoryWalEntryV1>,
     terminal: BTreeMap<DigestV1, KagemushaTerminalHistoryCasV1>,
     live_overlay_bytes: u64,
     overlay_capacity_bytes: u64,
     object_store_available: bool,
+    recovery_commitment: DigestV1,
+    recoverable_checkpoints: BTreeSet<DigestV1>,
 }
 
 impl KagemushaMemoryAuthenticatedHistoryStoreV1 {
@@ -1683,12 +1775,18 @@ impl KagemushaMemoryAuthenticatedHistoryStoreV1 {
     pub(crate) fn new(overlay_capacity_bytes: u64) -> Self {
         Self {
             roots: KagemushaHistoryRootsV1::empty(),
-            durable_nodes: BTreeMap::new(),
+            durable_nodes: ImmutableHistoryNodeIndex::default(),
             prepared: BTreeMap::new(),
             terminal: BTreeMap::new(),
             live_overlay_bytes: 0,
             overlay_capacity_bytes,
             object_store_available: true,
+            recovery_commitment: Sha256::digest(b"iroha:kagemusha:v1:history-recovery:empty\0")
+                .into(),
+            recoverable_checkpoints: BTreeSet::from([Sha256::digest(
+                b"iroha:kagemusha:v1:history-recovery:empty\0",
+            )
+            .into()]),
         }
     }
 
@@ -1705,6 +1803,7 @@ impl KagemushaMemoryAuthenticatedHistoryStoreV1 {
             KagemushaTerminalHistoryCasV1::Committed {
                 root_selection: terminal_selection,
                 committed_roots,
+                ..
             } => {
                 if terminal_selection != root_selection {
                     return Err(KagemushaHistoryStoreErrorV1::InvalidTransaction);
@@ -1724,14 +1823,18 @@ impl KagemushaMemoryAuthenticatedHistoryStoreV1 {
 
     fn terminal_commit_outcome(
         terminal: KagemushaTerminalHistoryCasV1,
-        root_selection: KagemushaHistoryRootSelectionV1,
+        certificate: VerifiedKagemushaHistoryRootSelectionV1,
     ) -> Result<KagemushaHistoryCommitOutcomeV1, KagemushaHistoryStoreErrorV1> {
+        let root_selection = certificate.root_selection();
         match terminal {
             KagemushaTerminalHistoryCasV1::Committed {
                 root_selection: terminal_selection,
                 committed_roots,
+                certificate: original_certificate,
             } => {
-                if terminal_selection != root_selection {
+                if terminal_selection != root_selection
+                    || *original_certificate != certificate.certificate
+                {
                     return Err(KagemushaHistoryStoreErrorV1::CertificateMismatch);
                 }
                 Ok(KagemushaHistoryCommitOutcomeV1::AlreadyCommitted { committed_roots })
@@ -1750,7 +1853,8 @@ impl KagemushaMemoryAuthenticatedHistoryStoreV1 {
     fn validate_selected_root_nodes(
         &self,
         transaction: &KagemushaPreparedHistoryCasV1,
-    ) -> Result<(), KagemushaHistoryStoreErrorV1> {
+    ) -> Result<BTreeMap<DigestV1, ValidatedHistorySubtree>, KagemushaHistoryStoreErrorV1> {
+        let mut validated = BTreeMap::new();
         for tree in [
             KagemushaHistoryTreeV1::Replay,
             KagemushaHistoryTreeV1::TerminalDecision,
@@ -1758,15 +1862,34 @@ impl KagemushaMemoryAuthenticatedHistoryStoreV1 {
             let Some(cas) = transaction.root_selection.for_tree(tree) else {
                 continue;
             };
-            validate_tree_with_lookup(tree, cas.selected(), |address| {
-                Ok(transaction
+            let overlay = |address| {
+                transaction
                     .node_writes
                     .binary_search_by_key(&address, |write| write.address)
                     .ok()
                     .and_then(|index| transaction.node_writes.get(index))
-                    .map(|write| write.node.clone())
-                    .or_else(|| self.durable_nodes.get(&address).cloned()))
-            })
+            };
+            let delta = validate_tree_with_immutable_subtrees(
+                tree,
+                cas.selected(),
+                |address| {
+                    Ok(overlay(address)
+                        .map(|write| write.node.clone())
+                        .or_else(|| self.durable_nodes.get(&address).cloned()))
+                },
+                // An overlay record must validate on its own, even if a retained record has
+                // the same address. The separate collision check still compares exact bytes.
+                |address| {
+                    // This callback runs for every nonempty Work::Enter, including overlay
+                    // nodes. Count total traversal work rather than only cache lookups.
+                    self.durable_nodes.record_validation_visit();
+                    if overlay(address).is_some() {
+                        None
+                    } else {
+                        self.durable_nodes.validated_subtree(address)
+                    }
+                },
+            )
             .map_err(|error| match error {
                 KagemushaHistoryStoreErrorV1::MissingHistoryNode { address, .. }
                     if address == cas.selected() =>
@@ -1778,8 +1901,9 @@ impl KagemushaMemoryAuthenticatedHistoryStoreV1 {
                 }
                 other => other,
             })?;
+            validated.extend(delta);
         }
-        Ok(())
+        Ok(validated)
     }
 
     fn validate_node_collisions(
@@ -1806,9 +1930,327 @@ impl KagemushaMemoryAuthenticatedHistoryStoreV1 {
     }
 }
 
+// Plans retain only the changing overlay entry, not a clone of committed history. The disk store
+// persists a plan's authenticated journal operation before applying its infallible state delta.
+struct HistoryMutationPlan<T> {
+    outcome: T,
+    mutation: Option<HistoryMutation>,
+    next_recovery_commitment: Option<DigestV1>,
+}
+
+impl<T> HistoryMutationPlan<T> {
+    const fn unchanged(outcome: T) -> Self {
+        Self {
+            outcome,
+            mutation: None,
+            next_recovery_commitment: None,
+        }
+    }
+}
+
+#[derive(Encode)]
+enum HistoryRecoveryOperationV1 {
+    Prepared(DigestV1),
+    Committed(KagemushaHistoryRootSelectionCertificateV1),
+    Aborted(DigestV1),
+}
+
+fn next_history_recovery_commitment(
+    previous: DigestV1,
+    operation: HistoryRecoveryOperationV1,
+) -> Result<DigestV1, KagemushaHistoryStoreErrorV1> {
+    digest_canonical(
+        b"iroha:kagemusha:v1:history-recovery:operation\0",
+        &(previous, operation),
+    )
+}
+
+enum HistoryMutation {
+    Prepare {
+        entry: KagemushaLiveHistoryWalEntryV1,
+        next_live_bytes: u64,
+    },
+    Commit {
+        certificate: KagemushaHistoryRootSelectionCertificateV1,
+        entry: KagemushaLiveHistoryWalEntryV1,
+        committed_roots: KagemushaHistoryRootsV1,
+        next_live_bytes: u64,
+        validated_subtrees: BTreeMap<DigestV1, ValidatedHistorySubtree>,
+    },
+    Abort {
+        transaction_id: DigestV1,
+        root_selection: KagemushaHistoryRootSelectionV1,
+        next_live_bytes: u64,
+    },
+}
+
+impl KagemushaMemoryAuthenticatedHistoryStoreV1 {
+    fn plan_prepare_cas(
+        &self,
+        transaction: KagemushaPreparedHistoryCasV1,
+    ) -> Result<HistoryMutationPlan<KagemushaHistoryPrepareOutcomeV1>, KagemushaHistoryStoreErrorV1>
+    {
+        transaction.validate()?;
+        let transaction_id = transaction.transaction_id();
+        let root_selection = transaction.root_selection();
+        if let Some(terminal) = self.terminal.get(&transaction_id).cloned() {
+            return Self::terminal_prepare_outcome(terminal, root_selection)
+                .map(HistoryMutationPlan::unchanged);
+        }
+        if let Some(existing) = self.prepared.get(&transaction_id) {
+            return if existing.transaction == transaction {
+                Ok(HistoryMutationPlan::unchanged(
+                    KagemushaHistoryPrepareOutcomeV1::AlreadyPrepared,
+                ))
+            } else {
+                Err(KagemushaHistoryStoreErrorV1::InvalidTransaction)
+            };
+        }
+        if !self.object_store_available {
+            return Err(KagemushaHistoryStoreErrorV1::StorageUnavailable);
+        }
+        root_selection.apply_to(self.roots)?;
+        self.validate_selected_root_nodes(&transaction)?;
+        self.validate_node_collisions(&transaction)?;
+
+        let wal_bytes = transaction.wal_bytes()?;
+        let available_bytes = self.available_overlay_bytes();
+        if wal_bytes > available_bytes {
+            return Err(KagemushaHistoryStoreErrorV1::OverlayCapacityExceeded {
+                required_bytes: wal_bytes,
+                available_bytes,
+            });
+        }
+        let next_live_bytes = self.live_overlay_bytes.checked_add(wal_bytes).ok_or(
+            KagemushaHistoryStoreErrorV1::OverlayCapacityExceeded {
+                required_bytes: wal_bytes,
+                available_bytes,
+            },
+        )?;
+        Ok(HistoryMutationPlan {
+            outcome: KagemushaHistoryPrepareOutcomeV1::Prepared,
+            next_recovery_commitment: Some(next_history_recovery_commitment(
+                self.recovery_commitment,
+                HistoryRecoveryOperationV1::Prepared(transaction_id),
+            )?),
+            mutation: Some(HistoryMutation::Prepare {
+                entry: KagemushaLiveHistoryWalEntryV1 {
+                    transaction,
+                    wal_bytes,
+                },
+                next_live_bytes,
+            }),
+        })
+    }
+
+    fn plan_commit_prepared(
+        &self,
+        certificate: VerifiedKagemushaHistoryRootSelectionV1,
+    ) -> Result<HistoryMutationPlan<KagemushaHistoryCommitOutcomeV1>, KagemushaHistoryStoreErrorV1>
+    {
+        let transaction_id = certificate.transaction_id();
+        let root_selection = certificate.root_selection();
+        if let Some(terminal) = self.terminal.get(&transaction_id).cloned() {
+            return Self::terminal_commit_outcome(terminal, certificate)
+                .map(HistoryMutationPlan::unchanged);
+        }
+        let entry = self.prepared.get(&transaction_id).cloned().ok_or(
+            KagemushaHistoryStoreErrorV1::UnknownTransaction(transaction_id),
+        )?;
+        if entry.transaction.root_selection() != root_selection {
+            return Err(KagemushaHistoryStoreErrorV1::CertificateMismatch);
+        }
+        if !self.object_store_available {
+            return Err(KagemushaHistoryStoreErrorV1::StorageUnavailable);
+        }
+
+        let committed_roots = root_selection.apply_to(self.roots)?;
+        let validated_subtrees = self.validate_selected_root_nodes(&entry.transaction)?;
+        self.validate_node_collisions(&entry.transaction)?;
+        let next_live_bytes = self
+            .live_overlay_bytes
+            .checked_sub(entry.wal_bytes)
+            .ok_or(KagemushaHistoryStoreErrorV1::InvalidTransaction)?;
+
+        Ok(HistoryMutationPlan {
+            outcome: KagemushaHistoryCommitOutcomeV1::Committed { committed_roots },
+            next_recovery_commitment: Some(next_history_recovery_commitment(
+                self.recovery_commitment,
+                HistoryRecoveryOperationV1::Committed(certificate.certificate),
+            )?),
+            mutation: Some(HistoryMutation::Commit {
+                certificate: certificate.certificate,
+                entry,
+                committed_roots,
+                next_live_bytes,
+                validated_subtrees,
+            }),
+        })
+    }
+
+    fn plan_abort_prepared(
+        &self,
+        transaction_id: DigestV1,
+    ) -> Result<HistoryMutationPlan<KagemushaHistoryAbortOutcomeV1>, KagemushaHistoryStoreErrorV1>
+    {
+        if let Some(terminal) = self.terminal.get(&transaction_id).cloned() {
+            return Ok(HistoryMutationPlan::unchanged(match terminal {
+                KagemushaTerminalHistoryCasV1::Committed {
+                    committed_roots, ..
+                } => KagemushaHistoryAbortOutcomeV1::AlreadyCommitted { committed_roots },
+                KagemushaTerminalHistoryCasV1::Aborted { .. } => {
+                    KagemushaHistoryAbortOutcomeV1::AlreadyAborted
+                }
+            }));
+        }
+        if !self.object_store_available {
+            return Err(KagemushaHistoryStoreErrorV1::StorageUnavailable);
+        }
+        let entry = self.prepared.get(&transaction_id).cloned().ok_or(
+            KagemushaHistoryStoreErrorV1::UnknownTransaction(transaction_id),
+        )?;
+        let next_live_bytes = self
+            .live_overlay_bytes
+            .checked_sub(entry.wal_bytes)
+            .ok_or(KagemushaHistoryStoreErrorV1::InvalidTransaction)?;
+        Ok(HistoryMutationPlan {
+            outcome: KagemushaHistoryAbortOutcomeV1::Aborted,
+            next_recovery_commitment: Some(next_history_recovery_commitment(
+                self.recovery_commitment,
+                HistoryRecoveryOperationV1::Aborted(transaction_id),
+            )?),
+            mutation: Some(HistoryMutation::Abort {
+                transaction_id,
+                root_selection: entry.transaction.root_selection(),
+                next_live_bytes,
+            }),
+        })
+    }
+
+    fn apply_plan<T>(&mut self, plan: HistoryMutationPlan<T>) -> T {
+        match plan.mutation {
+            None => {}
+            Some(HistoryMutation::Prepare {
+                entry,
+                next_live_bytes,
+            }) => {
+                self.prepared
+                    .insert(entry.transaction.transaction_id(), entry);
+                self.live_overlay_bytes = next_live_bytes;
+            }
+            Some(HistoryMutation::Commit {
+                certificate,
+                entry,
+                committed_roots,
+                next_live_bytes,
+                validated_subtrees,
+            }) => {
+                let transaction_id = entry.transaction.transaction_id();
+                let root_selection = entry.transaction.root_selection();
+                self.durable_nodes
+                    .install_committed(entry.transaction.node_writes, validated_subtrees);
+                self.roots = committed_roots;
+                // An older anchor cannot authorize a suffix that selected new money-history
+                // roots. Only subsequent non-monetary prepare/abort suffixes are recoverable.
+                self.recoverable_checkpoints.clear();
+                self.prepared.remove(&transaction_id);
+                self.live_overlay_bytes = next_live_bytes;
+                self.terminal.insert(
+                    transaction_id,
+                    KagemushaTerminalHistoryCasV1::Committed {
+                        certificate: Box::new(certificate),
+                        root_selection,
+                        committed_roots,
+                    },
+                );
+            }
+            Some(HistoryMutation::Abort {
+                transaction_id,
+                root_selection,
+                next_live_bytes,
+            }) => {
+                self.prepared.remove(&transaction_id);
+                self.live_overlay_bytes = next_live_bytes;
+                self.terminal.insert(
+                    transaction_id,
+                    KagemushaTerminalHistoryCasV1::Aborted { root_selection },
+                );
+            }
+        }
+        if let Some(commitment) = plan.next_recovery_commitment {
+            self.recovery_commitment = commitment;
+            self.recoverable_checkpoints.insert(commitment);
+        }
+        plan.outcome
+    }
+}
+
 impl KagemushaAuthenticatedHistoryStoreV1 for KagemushaMemoryAuthenticatedHistoryStoreV1 {
     fn committed_roots(&self) -> KagemushaHistoryRootsV1 {
         self.roots
+    }
+
+    fn recovery_commitment(&self) -> Result<DigestV1, KagemushaHistoryStoreErrorV1> {
+        if !self.object_store_available {
+            return Err(KagemushaHistoryStoreErrorV1::StorageUnavailable);
+        }
+        Ok(self.recovery_commitment)
+    }
+
+    fn validate_recovery_checkpoint(
+        &self,
+        expected: DigestV1,
+    ) -> Result<(), KagemushaHistoryStoreErrorV1> {
+        if !self.object_store_available {
+            return Err(KagemushaHistoryStoreErrorV1::StorageUnavailable);
+        }
+        if !self.recoverable_checkpoints.contains(&expected) {
+            return Err(KagemushaHistoryStoreErrorV1::RecoveryCommitmentMismatch);
+        }
+        Ok(())
+    }
+
+    fn validate_tree(
+        &self,
+        tree: KagemushaHistoryTreeV1,
+        root: DigestV1,
+    ) -> Result<(), KagemushaHistoryStoreErrorV1> {
+        if root != empty_root(tree) && !self.object_store_available {
+            return Err(KagemushaHistoryStoreErrorV1::StorageUnavailable);
+        }
+        validate_tree_with_immutable_subtrees(
+            tree,
+            root,
+            |address| self.read_node(address),
+            |address| {
+                self.durable_nodes.record_validation_visit();
+                self.durable_nodes.validated_subtree(address)
+            },
+        )
+        .map(|_| ())
+    }
+
+    fn require_prepared(
+        &self,
+        transaction: &KagemushaPreparedHistoryCasV1,
+    ) -> Result<(), KagemushaHistoryStoreErrorV1> {
+        if !self.object_store_available {
+            return Err(KagemushaHistoryStoreErrorV1::StorageUnavailable);
+        }
+        transaction.validate()?;
+        let Some(entry) = self.prepared.get(&transaction.transaction_id()) else {
+            return Err(KagemushaHistoryStoreErrorV1::AttemptNotPrepared(
+                transaction.transaction_id(),
+            ));
+        };
+        if &entry.transaction != transaction {
+            return Err(KagemushaHistoryStoreErrorV1::InvalidTransaction);
+        }
+        transaction
+            .root_selection()
+            .apply_to(validate_committed_history_v1(self)?)?;
+        self.validate_selected_root_nodes(transaction)?;
+        Ok(())
     }
 
     fn overlay_usage(&self) -> KagemushaHistoryOverlayUsageV1 {
@@ -1870,126 +2312,24 @@ impl KagemushaAuthenticatedHistoryStoreV1 for KagemushaMemoryAuthenticatedHistor
         &mut self,
         transaction: KagemushaPreparedHistoryCasV1,
     ) -> Result<KagemushaHistoryPrepareOutcomeV1, KagemushaHistoryStoreErrorV1> {
-        transaction.validate()?;
-        let transaction_id = transaction.transaction_id();
-        let root_selection = transaction.root_selection();
-        if let Some(terminal) = self.terminal.get(&transaction_id).copied() {
-            return Self::terminal_prepare_outcome(terminal, root_selection);
-        }
-        if let Some(existing) = self.prepared.get(&transaction_id) {
-            return if existing.transaction == transaction {
-                Ok(KagemushaHistoryPrepareOutcomeV1::AlreadyPrepared)
-            } else {
-                Err(KagemushaHistoryStoreErrorV1::InvalidTransaction)
-            };
-        }
-        if !self.object_store_available {
-            return Err(KagemushaHistoryStoreErrorV1::StorageUnavailable);
-        }
-        root_selection.apply_to(self.roots)?;
-        self.validate_selected_root_nodes(&transaction)?;
-        self.validate_node_collisions(&transaction)?;
-
-        let wal_bytes = transaction.wal_bytes()?;
-        let available_bytes = self.available_overlay_bytes();
-        if wal_bytes > available_bytes {
-            return Err(KagemushaHistoryStoreErrorV1::OverlayCapacityExceeded {
-                required_bytes: wal_bytes,
-                available_bytes,
-            });
-        }
-        let next_live_bytes = self.live_overlay_bytes.checked_add(wal_bytes).ok_or(
-            KagemushaHistoryStoreErrorV1::OverlayCapacityExceeded {
-                required_bytes: wal_bytes,
-                available_bytes,
-            },
-        )?;
-        self.prepared.insert(
-            transaction_id,
-            KagemushaLiveHistoryWalEntryV1 {
-                transaction,
-                wal_bytes,
-            },
-        );
-        self.live_overlay_bytes = next_live_bytes;
-        Ok(KagemushaHistoryPrepareOutcomeV1::Prepared)
+        let plan = self.plan_prepare_cas(transaction)?;
+        Ok(self.apply_plan(plan))
     }
 
     fn commit_prepared(
         &mut self,
         certificate: VerifiedKagemushaHistoryRootSelectionV1,
     ) -> Result<KagemushaHistoryCommitOutcomeV1, KagemushaHistoryStoreErrorV1> {
-        let transaction_id = certificate.transaction_id();
-        let root_selection = certificate.root_selection();
-        if let Some(terminal) = self.terminal.get(&transaction_id).copied() {
-            return Self::terminal_commit_outcome(terminal, root_selection);
-        }
-        let entry = self.prepared.get(&transaction_id).cloned().ok_or(
-            KagemushaHistoryStoreErrorV1::UnknownTransaction(transaction_id),
-        )?;
-        if entry.transaction.root_selection() != root_selection {
-            return Err(KagemushaHistoryStoreErrorV1::CertificateMismatch);
-        }
-        if !self.object_store_available {
-            return Err(KagemushaHistoryStoreErrorV1::StorageUnavailable);
-        }
-
-        let committed_roots = root_selection.apply_to(self.roots)?;
-        self.validate_selected_root_nodes(&entry.transaction)?;
-        self.validate_node_collisions(&entry.transaction)?;
-        let next_live_bytes = self
-            .live_overlay_bytes
-            .checked_sub(entry.wal_bytes)
-            .ok_or(KagemushaHistoryStoreErrorV1::InvalidTransaction)?;
-
-        for write in &entry.transaction.node_writes {
-            self.durable_nodes
-                .entry(write.address)
-                .or_insert_with(|| write.node.clone());
-        }
-        self.roots = committed_roots;
-        self.prepared.remove(&transaction_id);
-        self.live_overlay_bytes = next_live_bytes;
-        self.terminal.insert(
-            transaction_id,
-            KagemushaTerminalHistoryCasV1::Committed {
-                root_selection,
-                committed_roots,
-            },
-        );
-        Ok(KagemushaHistoryCommitOutcomeV1::Committed { committed_roots })
+        let plan = self.plan_commit_prepared(certificate)?;
+        Ok(self.apply_plan(plan))
     }
 
     fn abort_prepared(
         &mut self,
         transaction_id: DigestV1,
     ) -> Result<KagemushaHistoryAbortOutcomeV1, KagemushaHistoryStoreErrorV1> {
-        if let Some(terminal) = self.terminal.get(&transaction_id).copied() {
-            return Ok(match terminal {
-                KagemushaTerminalHistoryCasV1::Committed {
-                    committed_roots, ..
-                } => KagemushaHistoryAbortOutcomeV1::AlreadyCommitted { committed_roots },
-                KagemushaTerminalHistoryCasV1::Aborted { .. } => {
-                    KagemushaHistoryAbortOutcomeV1::AlreadyAborted
-                }
-            });
-        }
-        let entry = self.prepared.get(&transaction_id).cloned().ok_or(
-            KagemushaHistoryStoreErrorV1::UnknownTransaction(transaction_id),
-        )?;
-        let next_live_bytes = self
-            .live_overlay_bytes
-            .checked_sub(entry.wal_bytes)
-            .ok_or(KagemushaHistoryStoreErrorV1::InvalidTransaction)?;
-        self.prepared.remove(&transaction_id);
-        self.live_overlay_bytes = next_live_bytes;
-        self.terminal.insert(
-            transaction_id,
-            KagemushaTerminalHistoryCasV1::Aborted {
-                root_selection: entry.transaction.root_selection(),
-            },
-        );
-        Ok(KagemushaHistoryAbortOutcomeV1::Aborted)
+        let plan = self.plan_abort_prepared(transaction_id)?;
+        Ok(self.apply_plan(plan))
     }
 
     fn recover_prepared(
@@ -2104,8 +2444,12 @@ mod tests {
             }
         };
         (
-            KagemushaPreparedHistoryCasV1::new(selection, vec![node])
-                .expect("prepared history CAS"),
+            KagemushaPreparedHistoryCasV1::new(
+                selection,
+                vec![node],
+                digest(b"history-test-attempt"),
+            )
+            .expect("prepared history CAS"),
             selected,
         )
     }
@@ -2235,6 +2579,7 @@ mod tests {
         let replay = KagemushaPreparedHistoryCasV1::new(
             KagemushaHistoryRootSelectionV1::replay(roots.replay(), replay_root),
             vec![replay_node],
+            digest(b"history-test-attempt"),
         )
         .expect("replay CAS");
         let decision = KagemushaPreparedHistoryCasV1::new(
@@ -2243,6 +2588,7 @@ mod tests {
                 decision_root,
             ),
             vec![decision_node],
+            digest(b"history-test-attempt"),
         )
         .expect("decision CAS");
         let replay_certificate = verified_selection(&replay);
@@ -2334,8 +2680,14 @@ mod tests {
         key: DigestV1,
         value_digest: DigestV1,
     ) -> KagemushaPreparedHistoryCasV1 {
-        match prepare_history_identity_insert_v1(store, tree, key, value_digest)
-            .expect("prepare authenticated identity")
+        match prepare_history_identity_insert_v1(
+            store,
+            tree,
+            key,
+            value_digest,
+            digest(b"history-test-attempt"),
+        )
+        .expect("prepare authenticated identity")
         {
             KagemushaHistoryInsertPreparationV1::Prepared {
                 transaction,
@@ -2407,6 +2759,7 @@ mod tests {
                 KagemushaHistoryTreeV1::Replay,
                 first_key,
                 first_value,
+                digest(b"history-test-attempt"),
             ),
             Ok(KagemushaHistoryInsertPreparationV1::ExactDuplicate)
         );
@@ -2458,6 +2811,7 @@ mod tests {
             replay_value,
             decision_key,
             decision_value,
+            digest(b"history-test-attempt"),
         )
         .expect("prepare dual-root CAS")
         {
@@ -2491,6 +2845,7 @@ mod tests {
                 replay_value,
                 decision_key,
                 decision_value,
+                digest(b"history-test-attempt"),
             ),
             Ok(KagemushaHistoryDualInsertPreparationV1::ExactDuplicate)
         );
@@ -2502,7 +2857,7 @@ mod tests {
                 digest(b"conflicting-replay-value"),
                 digest(b"never-inserted-decision"),
                 digest(b"never-inserted-value"),
-            ),
+             digest(b"history-test-attempt"),),
             Ok(KagemushaHistoryDualInsertPreparationV1::Conflict {
                 tree: KagemushaHistoryTreeV1::Replay,
                 key,
@@ -2551,6 +2906,13 @@ mod tests {
             }) if address == missing_address
         ));
         assert_eq!(store.committed_roots(), committed_roots);
+        assert!(
+            matches!(classify_history_identity_v1(&store, KagemushaHistoryTreeV1::Replay, digest(b"off-path key"), digest(b"off-path value")), Err(KagemushaHistoryStoreErrorV1::MissingHistoryNode { address, .. }) if address == missing_address)
+        );
+        assert!(
+            matches!(prepare_history_identity_insert_v1(&mut store, KagemushaHistoryTreeV1::Replay, digest(b"off-path key"), digest(b"off-path value"), digest(b"off-path attempt")), Err(KagemushaHistoryStoreErrorV1::MissingHistoryNode { address, .. }) if address == missing_address)
+        );
+        assert_eq!(store.overlay_usage().live_bytes(), 0);
 
         store.durable_nodes.insert(missing_address, missing_node);
         let corrupt = leaf(KagemushaHistoryTreeV1::Replay, b"corrupt-substitute");
@@ -2570,7 +2932,7 @@ mod tests {
     }
 
     #[test]
-    fn overlay_exhaustion_blocks_only_new_precommit_work() {
+    fn overlay_exhaustion_blocks_only_new_prepared_work() {
         let mut store = KagemushaMemoryAuthenticatedHistoryStoreV1::new(u64::MAX);
         let committed_key = digest(b"already-committed-key");
         let committed_value = digest(b"already-committed-value");
@@ -2587,8 +2949,9 @@ mod tests {
             prepare_history_identity_insert_v1(
                 &mut store,
                 KagemushaHistoryTreeV1::Replay,
-                digest(b"new-precommit-key"),
-                digest(b"new-precommit-value"),
+                digest(b"new-prepared-key"),
+                digest(b"new-prepared-value"),
+                digest(b"history-test-attempt"),
             ),
             Err(KagemushaHistoryStoreErrorV1::OverlayCapacityExceeded { .. })
         ));
@@ -2653,7 +3016,7 @@ mod tests {
         };
         let request = KagemushaHistoryProofRootBridgeRequestV1::new(
             &transaction,
-            digest(b"logical-receive-fold-batch"),
+            digest(b"logical-receive-fold"),
             predecessor_roots,
             successor_roots,
             pasta_predecessor,
@@ -2671,11 +3034,265 @@ mod tests {
             Err(KagemushaHistoryProofRootBridgeErrorV1::BindingMismatch { request })
         );
         assert_eq!(
-            require_history_proof_root_bridge_v1(request, digest(b"logical-receive-fold-batch"),)
+            require_history_proof_root_bridge_v1(request, digest(b"logical-receive-fold"),)
                 .expect("matching authenticated logical operation")
                 .request(),
             request
         );
         assert_eq!(store.committed_roots(), predecessor_roots);
+    }
+    #[test]
+    fn aborted_attempt_keeps_its_tombstone_while_a_new_attempt_can_prepare() {
+        let mut store = KagemushaMemoryAuthenticatedHistoryStoreV1::new(u64::MAX);
+        let roots = store.committed_roots();
+        let (first, _) = prepared_leaf(KagemushaHistoryTreeV1::Replay, roots.replay(), b"attempts");
+        store.prepare_cas(first.clone()).unwrap();
+        store.abort_prepared(first.transaction_id()).unwrap();
+        let next = KagemushaPreparedHistoryCasV1::new(
+            first.root_selection(),
+            first
+                .node_writes
+                .iter()
+                .map(|write| write.node.clone())
+                .collect(),
+            digest(b"next authenticated transition attempt"),
+        )
+        .unwrap();
+        assert_ne!(first.transaction_id(), next.transaction_id());
+        assert_eq!(
+            KagemushaPreparedHistoryCasV1::new(
+                first.root_selection(),
+                first
+                    .node_writes
+                    .iter()
+                    .map(|write| write.node.clone())
+                    .collect(),
+                [0; 32],
+            ),
+            Err(KagemushaHistoryStoreErrorV1::InvalidTransaction)
+        );
+        assert_eq!(
+            store.prepare_cas(next.clone()).unwrap(),
+            KagemushaHistoryPrepareOutcomeV1::Prepared
+        );
+        assert_eq!(
+            store.prepare_cas(next.clone()).unwrap(),
+            KagemushaHistoryPrepareOutcomeV1::AlreadyPrepared
+        );
+        assert_eq!(
+            store.prepare_cas(first).unwrap(),
+            KagemushaHistoryPrepareOutcomeV1::AlreadyAborted
+        );
+        let mut substituted = next;
+        substituted.attempt_binding_digest = digest(b"unbound replacement attempt");
+        assert_eq!(
+            store.prepare_cas(substituted),
+            Err(KagemushaHistoryStoreErrorV1::InvalidTransaction)
+        );
+        assert_eq!(store.committed_roots(), roots);
+    }
+
+    #[test]
+    fn immutable_subtree_cache_rejects_wrong_edges_depth_and_namespace() {
+        let mut store = KagemushaMemoryAuthenticatedHistoryStoreV1::new(u64::MAX);
+        let tree = KagemushaHistoryTreeV1::Replay;
+        let key_one = [0x10; 32];
+        commit_identity(&mut store, tree, key_one, digest(b"cached one"));
+        let leaf_root = store.committed_roots().replay();
+        assert!(store.durable_nodes.subtrees.contains_key(&leaf_root));
+        let wrong_edge =
+            KagemushaHistoryNodeRecordV1::branch(tree, 0, [0; 32], empty_root(tree), leaf_root)
+                .unwrap();
+        let foreign_tree = KagemushaHistoryTreeV1::TerminalDecision;
+        let foreign = KagemushaHistoryNodeRecordV1::branch(
+            foreign_tree,
+            0,
+            [0; 32],
+            leaf_root,
+            empty_root(foreign_tree),
+        )
+        .unwrap();
+        for (tree, node) in [(tree, wrong_edge), (foreign_tree, foreign)] {
+            let selected = node.content_address().unwrap();
+            let selection = match tree {
+                KagemushaHistoryTreeV1::Replay => KagemushaHistoryRootSelectionV1::replay(
+                    store.committed_roots().replay(),
+                    selected,
+                ),
+                KagemushaHistoryTreeV1::TerminalDecision => {
+                    KagemushaHistoryRootSelectionV1::terminal_decision(
+                        store.committed_roots().terminal_decision(),
+                        selected,
+                    )
+                }
+            };
+            let full = validate_tree_with_lookup(tree, selected, |address| {
+                Ok(if address == selected {
+                    Some(node.clone())
+                } else {
+                    store.durable_nodes.get(&address).cloned()
+                })
+            });
+            let tx = KagemushaPreparedHistoryCasV1::new(
+                selection,
+                vec![node],
+                digest(b"bad cached edge"),
+            )
+            .unwrap();
+            let cached = store.prepare_cas(tx);
+            assert_eq!(cached.unwrap_err(), full.unwrap_err());
+            assert_eq!(store.overlay_usage().live_bytes(), 0);
+        }
+        commit_identity(&mut store, tree, [0x20; 32], digest(b"cached two"));
+        let root = store.committed_roots().replay();
+        let summary = *store.durable_nodes.subtrees.get(&root).unwrap();
+        let depth = summary.branch_depth.unwrap();
+        let node = KagemushaHistoryNodeRecordV1::branch(
+            tree,
+            depth as u16,
+            summary.representative,
+            root,
+            empty_root(tree),
+        )
+        .unwrap();
+        let selected = node.content_address().unwrap();
+        let tx = KagemushaPreparedHistoryCasV1::new(
+            KagemushaHistoryRootSelectionV1::replay(root, selected),
+            vec![node],
+            digest(b"non-advancing cached depth"),
+        )
+        .unwrap();
+        assert!(matches!(
+            store.prepare_cas(tx),
+            Err(KagemushaHistoryStoreErrorV1::InvalidHistoryTree { .. })
+        ));
+    }
+
+    #[test]
+    fn immutable_subtree_cache_never_publishes_prepared_or_aborted_nodes() {
+        let mut store = KagemushaMemoryAuthenticatedHistoryStoreV1::new(u64::MAX);
+        let tree = KagemushaHistoryTreeV1::Replay;
+        let (first, selected) =
+            prepared_leaf(tree, store.committed_roots().replay(), b"not committed");
+        store.prepare_cas(first.clone()).unwrap();
+        assert!(store.durable_nodes.subtrees.is_empty());
+        store.abort_prepared(first.transaction_id()).unwrap();
+        let key = match first.node_writes[0].node.body() {
+            KagemushaHistoryNodeBodyV1::Leaf { key, .. } => *key,
+            _ => unreachable!(),
+        };
+        let (left, right) = if key_bit(key, 0) {
+            (empty_root(tree), selected)
+        } else {
+            (selected, empty_root(tree))
+        };
+        let node = KagemushaHistoryNodeRecordV1::branch(tree, 0, [0; 32], left, right).unwrap();
+        let next = KagemushaPreparedHistoryCasV1::new(
+            KagemushaHistoryRootSelectionV1::replay(
+                store.committed_roots().replay(),
+                node.content_address().unwrap(),
+            ),
+            vec![node],
+            digest(b"missing speculative child"),
+        )
+        .unwrap();
+        assert!(
+            matches!(store.prepare_cas(next), Err(KagemushaHistoryStoreErrorV1::MissingHistoryNode {address, ..}) if address == selected)
+        );
+        assert!(store.durable_nodes.subtrees.is_empty());
+    }
+
+    #[test]
+    fn immutable_subtree_validation_visits_only_new_paths_as_history_grows() {
+        let mut store = KagemushaMemoryAuthenticatedHistoryStoreV1::new(u64::MAX);
+        for index in 0_u64..512 {
+            store.durable_nodes.validation_visits.set(0);
+            let transaction = match prepare_history_identity_pair_v1(
+                &mut store,
+                digest(&[b"replay-key".as_slice(), &index.to_le_bytes()].concat()),
+                digest(b"replay-value"),
+                digest(&[b"decision-key".as_slice(), &index.to_le_bytes()].concat()),
+                digest(b"decision-value"),
+                digest(&[b"attempt".as_slice(), &index.to_le_bytes()].concat()),
+            )
+            .unwrap()
+            {
+                KagemushaHistoryDualInsertPreparationV1::Prepared { transaction, .. } => {
+                    transaction
+                }
+                _ => panic!("unique identities must prepare"),
+            };
+            let new_nodes = transaction.node_writes.len() as u64;
+            // Two 256-bit paths have at most 256 branches and one leaf each. A
+            // whole-history overlay would violate this bound as this fixture grows.
+            assert!(new_nodes <= 2 * 257);
+            assert!(store.durable_nodes.validation_visits.get() <= 2 * new_nodes + 4);
+            store.durable_nodes.validation_visits.set(0);
+            store
+                .commit_prepared(verified_selection(&transaction))
+                .unwrap();
+            assert!(store.durable_nodes.validation_visits.get() <= 2 * new_nodes + 2);
+            store.durable_nodes.validation_visits.set(0);
+            validate_committed_history_v1(&store).unwrap();
+            assert_eq!(store.durable_nodes.validation_visits.get(), 2);
+        }
+        assert!(store.durable_nodes.nodes.len() > 1_000);
+        store.set_object_store_available_for_test(false);
+        assert_eq!(
+            validate_committed_history_v1(&store),
+            Err(KagemushaHistoryStoreErrorV1::StorageUnavailable)
+        );
+    }
+    #[test]
+    fn hardware_preflight_requires_exact_live_prepared_attempt_and_storage() {
+        let mut store = KagemushaMemoryAuthenticatedHistoryStoreV1::new(u64::MAX);
+        let root = store.committed_roots().replay();
+        let (first, _) = prepared_leaf(KagemushaHistoryTreeV1::Replay, root, b"preflight first");
+        let (stale, _) = prepared_leaf(KagemushaHistoryTreeV1::Replay, root, b"preflight stale");
+        assert_eq!(
+            store.require_prepared(&first),
+            Err(KagemushaHistoryStoreErrorV1::AttemptNotPrepared(
+                first.transaction_id()
+            ))
+        );
+        store.prepare_cas(first.clone()).unwrap();
+        store.prepare_cas(stale.clone()).unwrap();
+        store.require_prepared(&first).unwrap();
+        store.require_prepared(&stale).unwrap();
+        let mut substituted = first.clone();
+        substituted.attempt_binding_digest = digest(b"unbound preflight");
+        assert_eq!(
+            store.require_prepared(&substituted),
+            Err(KagemushaHistoryStoreErrorV1::InvalidTransaction)
+        );
+        let cert = verified_selection(&first);
+        store.commit_prepared(cert).unwrap();
+        assert_eq!(
+            store.require_prepared(&first),
+            Err(KagemushaHistoryStoreErrorV1::AttemptNotPrepared(
+                first.transaction_id()
+            ))
+        );
+        assert!(matches!(
+            store.require_prepared(&stale),
+            Err(KagemushaHistoryStoreErrorV1::CasConflict { .. })
+        ));
+        assert!(matches!(
+            store.recover_prepared(cert).unwrap(),
+            KagemushaHistoryRecoveryOutcomeV1::AlreadyCommitted { .. }
+        ));
+        store.set_object_store_available_for_test(false);
+        assert_eq!(
+            store.require_prepared(&first),
+            Err(KagemushaHistoryStoreErrorV1::StorageUnavailable)
+        );
+        store.set_object_store_available_for_test(true);
+        store.abort_prepared(stale.transaction_id()).unwrap();
+        assert_eq!(
+            store.require_prepared(&stale),
+            Err(KagemushaHistoryStoreErrorV1::AttemptNotPrepared(
+                stale.transaction_id()
+            ))
+        );
     }
 }

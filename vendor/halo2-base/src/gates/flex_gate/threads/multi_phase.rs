@@ -1,10 +1,10 @@
 use getset::CopyGetters;
 
 use crate::{
-    Context,
     gates::{circuit::CircuitBuilderStage, flex_gate::FlexGateConfigParams},
     utils::ScalarField,
     virtual_region::copy_constraints::SharedCopyConstraintManager,
+    Context,
 };
 
 use super::SinglePhaseCoreManager;

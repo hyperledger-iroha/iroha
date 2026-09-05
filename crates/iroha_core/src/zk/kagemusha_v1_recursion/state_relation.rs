@@ -39,7 +39,7 @@ use crate::zk::{
 };
 
 pub(super) const PUBLIC_INSTANCE_COUNT: usize = 85;
-const KAGEMUSHA_RECEIVE_FOLD_ARITY_V1: usize = 1;
+pub(super) const KAGEMUSHA_RECEIVE_FOLD_ARITY_V1: usize = 1;
 const MINIMUM_UNUSABLE_ROWS: usize = 9;
 
 /// Public-instance positions shared by both state-proof parities.
@@ -81,13 +81,13 @@ pub mod public_instance {
     /// High 128 bits of the receiver-bound credit ID; zero outside `SendSplit`.
     pub const PEER_CREDIT_HI: usize = 17;
     /// Low 128 bits of the peer recipient lane; zero outside `SendSplit`.
-    pub const PEER_RECIPIENT_LANE_LO: usize = 18;
+    pub const RECIPIENT_ENCRYPTION_KEY_LO: usize = 18;
     /// High 128 bits of the peer recipient lane; zero outside `SendSplit`.
-    pub const PEER_RECIPIENT_LANE_HI: usize = 19;
-    /// Protocol-reserved zero cell.
-    pub const RESERVED_20: usize = 20;
-    /// Protocol-reserved zero cell.
-    pub const RESERVED_21: usize = 21;
+    pub const RECIPIENT_ENCRYPTION_KEY_HI: usize = 19;
+    /// Low 128 bits of the canonical Fp Eq mint-authorization compiled-protocol identity.
+    pub const MINT_AUTHORIZATION_EQ_PROTOCOL_LO: usize = 20;
+    /// High 128 bits of the canonical Fp Eq mint-authorization compiled-protocol identity.
+    pub const MINT_AUTHORIZATION_EQ_PROTOCOL_HI: usize = 21;
     /// Low 128 bits of the common predecessor Eq component.
     pub const PREDECESSOR_EQ_COMPONENT_LO: usize = 22;
     /// High 128 bits of the common predecessor Eq component.
@@ -156,10 +156,10 @@ pub mod public_instance {
     pub const LIFECYCLE_LO: usize = 54;
     /// High 128 bits of the released lifecycle binding.
     pub const LIFECYCLE_HI: usize = 55;
-    /// Low 128 bits of the precommit request/state/reservation binding.
-    pub const PRECOMMIT_LO: usize = 56;
-    /// High 128 bits of the precommit request/state/reservation binding.
-    pub const PRECOMMIT_HI: usize = 57;
+    /// Low 128 bits of the prepared request/state/reservation binding.
+    pub const PREPARED_TRANSITION_LO: usize = 56;
+    /// High 128 bits of the prepared request/state/reservation binding.
+    pub const PREPARED_TRANSITION_HI: usize = 57;
     /// Low 128 bits of the consumed suite identity.
     pub const PREDECESSOR_SUITE_LO: usize = 58;
     /// High 128 bits of the consumed suite identity.
@@ -176,10 +176,10 @@ pub mod public_instance {
     pub const SUCCESSOR_VK_LO: usize = 64;
     /// High 128 bits of the produced verifier-key digest.
     pub const SUCCESSOR_VK_HI: usize = 65;
-    /// Protocol-reserved zero cell.
-    pub const RESERVED_66: usize = 66;
-    /// Protocol-reserved zero cell.
-    pub const RESERVED_67: usize = 67;
+    /// Low 128 bits of the canonical Fq Ep mint-authorization compiled-protocol identity.
+    pub const MINT_AUTHORIZATION_EP_PROTOCOL_LO: usize = 66;
+    /// High 128 bits of the canonical Fq Ep mint-authorization compiled-protocol identity.
+    pub const MINT_AUTHORIZATION_EP_PROTOCOL_HI: usize = 67;
     /// Low 128 bits of the exact received-credit binding.
     pub const RECEIVE_CREDIT_BINDING_LO: usize = 68;
     /// High 128 bits of the exact received-credit binding.
@@ -229,7 +229,7 @@ pub struct KagemushaReceiveFoldCreditV1 {
     pub incoming_proof_binding_digest: DigestV1,
     /// Exact signed request digest authenticated by the incoming post-commit payment.
     pub request_digest: DigestV1,
-    /// Ticket-bound prepared-transfer digest authenticated by the final sender proof.
+    /// Request-bound prepared-transfer digest authenticated by the final sender proof.
     pub prepared_transfer_digest: DigestV1,
     /// Unique transition nullifier opened by the terminal payment output.
     pub transition_nullifier: DigestV1,
@@ -270,14 +270,14 @@ pub struct KagemushaStateRelationPublicInputsV1 {
     pub mint_finality_proof_binding_digest: DigestV1,
     /// Receiver-bound credit identity, nonzero only for `SendSplit`.
     pub peer_credit_id: DigestV1,
-    /// Receiver lane, nonzero only for `SendSplit`.
-    pub peer_recipient_lane_id: DigestV1,
+    /// Recipient encryption-key binding, nonzero only for `SendSplit`.
+    pub recipient_encryption_key_binding: DigestV1,
     /// Binding of the exact received credit.
     pub receive_credit_binding_digest: DigestV1,
     /// Released lifecycle digest.
     pub lifecycle_binding_digest: DigestV1,
-    /// Send/redemption precommit binding.
-    pub precommit_binding_digest: DigestV1,
+    /// Send/redemption prepared-transition binding.
+    pub prepared_transition_binding_digest: DigestV1,
     /// Common transport statement digest.
     pub transport_semantic_digest: DigestV1,
     /// Normalized GuardBundle statement digest.
@@ -294,6 +294,10 @@ pub struct KagemushaStateRelationPublicInputsV1 {
     pub mint_eq_protocol_digest: DigestV1,
     /// Ep mint-authority protocol identity.
     pub mint_ep_protocol_digest: DigestV1,
+    /// Eq mint-authorization protocol identity.
+    pub mint_authorization_eq_protocol_digest: DigestV1,
+    /// Ep mint-authorization protocol identity.
+    pub mint_authorization_ep_protocol_digest: DigestV1,
     /// Eq commit-wrapper protocol identity accepted by `ReceiveFold`.
     pub commit_wrapper_eq_protocol_digest: DigestV1,
     /// Ep commit-wrapper protocol identity accepted by `ReceiveFold`.
@@ -331,17 +335,18 @@ pub struct KagemushaStateRelationWitnessV1 {
     pub mint_finality_proof_binding_digest: DigestV1,
     /// Receiver-bound peer credit identity, nonzero only for `SendSplit`.
     pub peer_credit_id: DigestV1,
-    /// Receiver lane authorized by the peer credit, nonzero only for `SendSplit`.
-    pub peer_recipient_lane_id: DigestV1,
+    /// Recipient encryption-key binding authorized by the peer credit, nonzero only for
+    /// `SendSplit`.
+    pub recipient_encryption_key_binding: DigestV1,
     /// Exact received credit, present only for `ReceiveFold`.
     pub receive_credit: Option<KagemushaReceiveFoldCreditV1>,
     /// Binding of the exact credit and paired incoming proof.
     pub receive_credit_binding_digest: DigestV1,
-    /// Exact released lifecycle digest copied into the precommit candidate.
+    /// Exact released lifecycle digest copied into the prepared transition.
     pub lifecycle_binding_digest: DigestV1,
     /// Hiding binding of the request, sender states, and outbox reservation.
     /// Nonzero exactly for `SendSplit` and `RedeemSplit`.
-    pub precommit_binding_digest: DigestV1,
+    pub prepared_transition_binding_digest: DigestV1,
     /// Exact common transport statement digest.
     pub transport_semantic_digest: DigestV1,
     /// Exact normalized hardware GuardBundle statement digest.
@@ -358,6 +363,10 @@ pub struct KagemushaStateRelationWitnessV1 {
     pub mint_eq_protocol_digest: DigestV1,
     /// Native Fq Poseidon identity of the exact Ep finalized-mint compiled protocol.
     pub mint_ep_protocol_digest: DigestV1,
+    /// Native Fp Poseidon identity of the exact Eq mint-authorization compiled protocol.
+    pub mint_authorization_eq_protocol_digest: DigestV1,
+    /// Native Fq Poseidon identity of the exact Ep mint-authorization compiled protocol.
+    pub mint_authorization_ep_protocol_digest: DigestV1,
     /// Native Fp Poseidon identity of the exact Eq commit-wrapper protocol.
     pub commit_wrapper_eq_protocol_digest: DigestV1,
     /// Native Fq Poseidon identity of the exact Ep commit-wrapper protocol.
@@ -411,6 +420,24 @@ impl KagemushaStateRelationWitnessV1 {
                 .is_none()
             || decode::<halo2_proofs::halo2curves::pasta::Fq>(self.mint_ep_protocol_digest)
                 .is_none()
+            || self.mint_authorization_eq_protocol_digest == [0; 32]
+            || self.mint_authorization_ep_protocol_digest == [0; 32]
+            || self.mint_authorization_eq_protocol_digest
+                == self.mint_authorization_ep_protocol_digest
+            || self.mint_authorization_eq_protocol_digest == self.eq_protocol_digest
+            || self.mint_authorization_ep_protocol_digest == self.ep_protocol_digest
+            || self.mint_authorization_eq_protocol_digest == self.guard_eq_protocol_digest
+            || self.mint_authorization_ep_protocol_digest == self.guard_ep_protocol_digest
+            || self.mint_authorization_eq_protocol_digest == self.mint_eq_protocol_digest
+            || self.mint_authorization_ep_protocol_digest == self.mint_ep_protocol_digest
+            || decode::<halo2_proofs::halo2curves::pasta::Fp>(
+                self.mint_authorization_eq_protocol_digest,
+            )
+            .is_none()
+            || decode::<halo2_proofs::halo2curves::pasta::Fq>(
+                self.mint_authorization_ep_protocol_digest,
+            )
+            .is_none()
             || self.commit_wrapper_eq_protocol_digest == [0; 32]
             || self.commit_wrapper_ep_protocol_digest == [0; 32]
             || self.commit_wrapper_eq_protocol_digest == self.commit_wrapper_ep_protocol_digest
@@ -521,8 +548,7 @@ impl KagemushaStateRelationWitnessV1 {
             {
                 return Err("invalid ReceiveFold credit".to_owned());
             }
-        } else if self.receive_credit.is_some() || self.receive_credit_binding_digest != [0; 32]
-        {
+        } else if self.receive_credit.is_some() || self.receive_credit_binding_digest != [0; 32] {
             return Err("receive fields must be absent outside ReceiveFold".to_owned());
         }
         if matches!(
@@ -530,9 +556,7 @@ impl KagemushaStateRelationWitnessV1 {
             KagemushaOperationV1::Bootstrap | KagemushaOperationV1::Rotate
         ) != (self.amount == 0)
         {
-            return Err(
-                "amount must be zero exactly for Bootstrap and Rotate".to_owned(),
-            );
+            return Err("amount must be zero exactly for Bootstrap and Rotate".to_owned());
         }
         if self.operation == KagemushaOperationV1::Bootstrap {
             if self.journal_revision_before != 0 || self.journal_revision_after != 0 {
@@ -562,7 +586,7 @@ impl KagemushaStateRelationWitnessV1 {
         }
         let is_send = self.operation == KagemushaOperationV1::SendSplit;
         if is_send != (self.peer_credit_id != [0; 32])
-            || is_send != (self.peer_recipient_lane_id != [0; 32])
+            || is_send != (self.recipient_encryption_key_binding != [0; 32])
         {
             return Err("peer credit bindings must be nonzero exactly for SendSplit".to_owned());
         }
@@ -570,9 +594,10 @@ impl KagemushaStateRelationWitnessV1 {
             self.operation,
             KagemushaOperationV1::SendSplit | KagemushaOperationV1::RedeemSplit
         );
-        if uses_outbox != (self.precommit_binding_digest != [0; 32]) {
+        if uses_outbox != (self.prepared_transition_binding_digest != [0; 32]) {
             return Err(
-                "precommit binding must be nonzero exactly for send and redemption".to_owned(),
+                "prepared-transition binding must be nonzero exactly for send and redemption"
+                    .to_owned(),
             );
         }
         Ok(())
@@ -596,10 +621,10 @@ impl KagemushaStateRelationWitnessV1 {
             mint_finality_semantic_digest: self.mint_finality_semantic_digest,
             mint_finality_proof_binding_digest: self.mint_finality_proof_binding_digest,
             peer_credit_id: self.peer_credit_id,
-            peer_recipient_lane_id: self.peer_recipient_lane_id,
+            recipient_encryption_key_binding: self.recipient_encryption_key_binding,
             receive_credit_binding_digest: self.receive_credit_binding_digest,
             lifecycle_binding_digest: self.lifecycle_binding_digest,
-            precommit_binding_digest: self.precommit_binding_digest,
+            prepared_transition_binding_digest: self.prepared_transition_binding_digest,
             transport_semantic_digest: self.transport_semantic_digest,
             guard_statement_digest: self.guard_statement_digest,
             eq_protocol_digest: self.eq_protocol_digest,
@@ -608,6 +633,8 @@ impl KagemushaStateRelationWitnessV1 {
             guard_ep_protocol_digest: self.guard_ep_protocol_digest,
             mint_eq_protocol_digest: self.mint_eq_protocol_digest,
             mint_ep_protocol_digest: self.mint_ep_protocol_digest,
+            mint_authorization_eq_protocol_digest: self.mint_authorization_eq_protocol_digest,
+            mint_authorization_ep_protocol_digest: self.mint_authorization_ep_protocol_digest,
             commit_wrapper_eq_protocol_digest: self.commit_wrapper_eq_protocol_digest,
             commit_wrapper_ep_protocol_digest: self.commit_wrapper_ep_protocol_digest,
             guard_eq_credential_audit: self.guard_eq_credential_audit,
@@ -653,7 +680,7 @@ impl KagemushaStateRelationPublicInputsV1 {
         let release = digest_limbs::<F>(self.successor.release_id);
         let liability_pool = digest_limbs::<F>(self.successor.liability_pool_id);
         let peer_credit = digest_limbs::<F>(self.peer_credit_id);
-        let peer_recipient_lane = digest_limbs::<F>(self.peer_recipient_lane_id);
+        let recipient_encryption_key = digest_limbs::<F>(self.recipient_encryption_key_binding);
         let predecessor_components = self
             .predecessor
             .as_ref()
@@ -670,6 +697,10 @@ impl KagemushaStateRelationPublicInputsV1 {
         let guard_ep_protocol = digest_limbs::<F>(self.guard_ep_protocol_digest);
         let mint_eq_protocol = digest_limbs::<F>(self.mint_eq_protocol_digest);
         let mint_ep_protocol = digest_limbs::<F>(self.mint_ep_protocol_digest);
+        let mint_authorization_eq_protocol =
+            digest_limbs::<F>(self.mint_authorization_eq_protocol_digest);
+        let mint_authorization_ep_protocol =
+            digest_limbs::<F>(self.mint_authorization_ep_protocol_digest);
         let commit_wrapper_eq_protocol = digest_limbs::<F>(self.commit_wrapper_eq_protocol_digest);
         let commit_wrapper_ep_protocol = digest_limbs::<F>(self.commit_wrapper_ep_protocol_digest);
         let guard_eq_audit = digest_limbs::<F>(self.guard_eq_credential_audit);
@@ -677,7 +708,7 @@ impl KagemushaStateRelationPublicInputsV1 {
         let eq_audit = digest_limbs::<F>(self.eq_deferred_audit);
         let ep_audit = digest_limbs::<F>(self.ep_deferred_audit);
         let lifecycle = digest_limbs::<F>(self.lifecycle_binding_digest);
-        let precommit = digest_limbs::<F>(self.precommit_binding_digest);
+        let prepared_transition = digest_limbs::<F>(self.prepared_transition_binding_digest);
         let predecessor_suite = self
             .predecessor
             .as_ref()
@@ -709,10 +740,10 @@ impl KagemushaStateRelationPublicInputsV1 {
             liability_pool[1],
             peer_credit[0],
             peer_credit[1],
-            peer_recipient_lane[0],
-            peer_recipient_lane[1],
-            F::ZERO,
-            F::ZERO,
+            recipient_encryption_key[0],
+            recipient_encryption_key[1],
+            mint_authorization_eq_protocol[0],
+            mint_authorization_eq_protocol[1],
             predecessor_eq[0],
             predecessor_eq[1],
             predecessor_ep[0],
@@ -747,8 +778,8 @@ impl KagemushaStateRelationPublicInputsV1 {
             mint_proof_binding[1],
             lifecycle[0],
             lifecycle[1],
-            precommit[0],
-            precommit[1],
+            prepared_transition[0],
+            prepared_transition[1],
             predecessor_suite[0],
             predecessor_suite[1],
             predecessor_vk[0],
@@ -757,8 +788,8 @@ impl KagemushaStateRelationPublicInputsV1 {
             successor_suite[1],
             successor_vk[0],
             successor_vk[1],
-            F::ZERO,
-            F::ZERO,
+            mint_authorization_ep_protocol[0],
+            mint_authorization_ep_protocol[1],
             receive_credit[0],
             receive_credit[1],
             F::from(u64::from(self.successor.protocol_version)),
@@ -914,11 +945,11 @@ pub(super) struct KagemushaAssignedStateRelationV1<F: KagemushaPoseidonFieldV1> 
     pub(super) mint_finality_semantic_digest: [AssignedValue<F>; 2],
     pub(super) mint_finality_proof_binding_digest: [AssignedValue<F>; 2],
     pub(super) peer_credit_id: [AssignedValue<F>; 2],
-    pub(super) peer_recipient_lane_id: [AssignedValue<F>; 2],
+    pub(super) recipient_encryption_key_binding: [AssignedValue<F>; 2],
     pub(super) receive_credit: KagemushaAssignedReceiveFoldCreditV1<F>,
     pub(super) receive_credit_binding_digest: [AssignedValue<F>; 2],
     pub(super) lifecycle_binding_digest: [AssignedValue<F>; 2],
-    pub(super) precommit_binding_digest: [AssignedValue<F>; 2],
+    pub(super) prepared_transition_binding_digest: [AssignedValue<F>; 2],
     pub(super) predecessor_eq_components: [AssignedValue<F>; 2],
     pub(super) predecessor_ep_components: [AssignedValue<F>; 2],
     pub(super) successor_eq_components: [AssignedValue<F>; 2],
@@ -1102,10 +1133,10 @@ where
         &range,
         witness.map_or([0; 32], |value| value.peer_credit_id),
     );
-    let peer_recipient_lane_id = assign_digest(
+    let recipient_encryption_key_binding = assign_digest(
         ctx,
         &range,
-        witness.map_or([0; 32], |value| value.peer_recipient_lane_id),
+        witness.map_or([0; 32], |value| value.recipient_encryption_key_binding),
     );
     let zero = ctx.load_zero();
     let not_mint = gate.not(ctx, mint);
@@ -1189,14 +1220,12 @@ where
     }
     let peer = send;
     let not_peer = gate.not(ctx, peer);
-    for digest in [peer_credit_id, peer_recipient_lane_id] {
+    for digest in [peer_credit_id, recipient_encryption_key_binding] {
         assert_if_digest_different(ctx, &range, peer, digest, [zero; 2]);
         for limb in digest {
             assert_if_equal(ctx, &range, not_peer, limb, Constant(F::ZERO));
         }
     }
-    let not_receive = gate.not(ctx, receive);
-
     // Stable lane/asset scope and operation-specific release/epoch rules.
     for (after, before) in successor
         .liability_pool_id
@@ -1546,10 +1575,10 @@ where
         &range,
         witness.map_or([0; 32], |value| value.lifecycle_binding_digest),
     );
-    let precommit_binding_digest = assign_digest(
+    let prepared_transition_binding_digest = assign_digest(
         ctx,
         &range,
-        witness.map_or([0; 32], |value| value.precommit_binding_digest),
+        witness.map_or([0; 32], |value| value.prepared_transition_binding_digest),
     );
     let receive_credit_binding_digest = assign_digest(
         ctx,
@@ -1674,7 +1703,7 @@ where
         [replay_zero; 2],
     );
     for (selector, digest) in [
-        (outbound, precommit_binding_digest),
+        (outbound, prepared_transition_binding_digest),
         (receive, receive_credit_binding_digest),
     ] {
         assert_if_digest_different(ctx, &range, selector, digest, [replay_zero; 2]);
@@ -1708,8 +1737,8 @@ where
         successor.liability_pool_id[1],
         peer_credit_id[0],
         peer_credit_id[1],
-        peer_recipient_lane_id[0],
-        peer_recipient_lane_id[1],
+        recipient_encryption_key_binding[0],
+        recipient_encryption_key_binding[1],
         ctx.load_zero(),
         ctx.load_zero(),
         predecessor_eq_components[0],
@@ -1746,8 +1775,8 @@ where
         mint_finality_proof_binding_digest[1],
         lifecycle_binding_digest[0],
         lifecycle_binding_digest[1],
-        precommit_binding_digest[0],
-        precommit_binding_digest[1],
+        prepared_transition_binding_digest[0],
+        prepared_transition_binding_digest[1],
         predecessor.suite_id[0],
         predecessor.suite_id[1],
         predecessor.vk_digest[0],
@@ -1795,11 +1824,11 @@ where
             mint_finality_semantic_digest,
             mint_finality_proof_binding_digest,
             peer_credit_id,
-            peer_recipient_lane_id,
+            recipient_encryption_key_binding,
             receive_credit,
             receive_credit_binding_digest,
             lifecycle_binding_digest,
-            precommit_binding_digest,
+            prepared_transition_binding_digest,
             predecessor_eq_components,
             predecessor_ep_components,
             successor_eq_components,
@@ -2263,10 +2292,10 @@ mod tests {
             mint_finality_semantic_digest: projection_digest(26),
             mint_finality_proof_binding_digest: projection_digest(27),
             peer_credit_id: projection_digest(28),
-            peer_recipient_lane_id: projection_digest(29),
+            recipient_encryption_key_binding: projection_digest(29),
             receive_credit_binding_digest: projection_digest(30),
             lifecycle_binding_digest: projection_digest(31),
-            precommit_binding_digest: projection_digest(32),
+            prepared_transition_binding_digest: projection_digest(32),
             transport_semantic_digest: projection_digest(34),
             guard_statement_digest: projection_digest(35),
             eq_protocol_digest: projection_digest(36),
@@ -2275,6 +2304,8 @@ mod tests {
             guard_ep_protocol_digest: projection_digest(39),
             mint_eq_protocol_digest: projection_digest(40),
             mint_ep_protocol_digest: projection_digest(41),
+            mint_authorization_eq_protocol_digest: projection_digest(48),
+            mint_authorization_ep_protocol_digest: projection_digest(49),
             commit_wrapper_eq_protocol_digest: projection_digest(42),
             commit_wrapper_ep_protocol_digest: projection_digest(43),
             guard_eq_credential_audit: projection_digest(44),
@@ -2303,6 +2334,7 @@ mod tests {
             (14, 4),
             (16, 28),
             (18, 29),
+            (20, 48),
             (26, 14),
             (28, 15),
             (32, 36),
@@ -2320,6 +2352,7 @@ mod tests {
             (56, 32),
             (62, 1),
             (64, 2),
+            (66, 49),
             (68, 30),
             (73, 5),
             (81, 42),

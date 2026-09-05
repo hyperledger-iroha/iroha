@@ -65,10 +65,10 @@ object KagemushaNoritoV1 {
     private const val MAXIMUM_TOP_UP_INSTRUCTION_PAYLOAD_BYTES =
         MAXIMUM_TOP_UP_REQUEST_BYTES + 1024
 
-    /** Maximum canonical bytes in the public body of secure-device operation 21. */
+    /** Maximum canonical bytes in the public body of secure-device operation 16. */
     const val MAXIMUM_DEVICE_MINT_STAGE_COMMAND_BYTES: Int = 64 * 1024
 
-    /** Maximum canonical bytes in the fixed public result of secure-device operation 21. */
+    /** Maximum canonical bytes in the fixed public result of secure-device operation 16. */
     const val MAXIMUM_DEVICE_MINT_STAGE_RESULT_BYTES: Int = 128
 
     private val DEVICE_KEY_REFERENCE_DOMAIN = ascii("iroha:kagemusha:v1:device-key-reference")
@@ -474,7 +474,7 @@ object KagemushaNoritoV1 {
         MINT_ADAPTER,
     ) { encodeMintCreditShape(it, authorization) }
 
-    /** Encode a canonical operation-21 body after validating both nested public archives. */
+    /** Encode a canonical operation-16 body after validating both nested public archives. */
     @JvmStatic
     fun encodeDeviceMintStageCommandShape(
         value: KagemushaDeviceMintStageCommandV1,
@@ -486,7 +486,7 @@ object KagemushaNoritoV1 {
         )
     }
 
-    /** Build and encode a canonical operation-21 body from exact nested public archives. */
+    /** Build and encode a canonical operation-16 body from exact nested public archives. */
     @JvmStatic
     fun encodeDeviceMintStageCommandShape(
         canonicalAuthorization: ByteArray,
@@ -499,7 +499,7 @@ object KagemushaNoritoV1 {
         ),
     )
 
-    /** Decode one exact operation-21 body without granting staging or monetary authority. */
+    /** Decode one exact operation-16 body without granting staging or monetary authority. */
     @JvmStatic
     fun decodeDeviceMintStageCommandShapeExact(
         bytes: ByteArray,
@@ -511,7 +511,7 @@ object KagemushaNoritoV1 {
         ::encodeDeviceMintStageCommandShape,
     )
 
-    /** Encode the fixed public operation-21 result. */
+    /** Encode the fixed public operation-16 result. */
     @JvmStatic
     fun encodeDeviceMintStageResultShape(
         value: KagemushaDeviceMintStageResultV1,
@@ -520,7 +520,7 @@ object KagemushaNoritoV1 {
         MAXIMUM_DEVICE_MINT_STAGE_RESULT_BYTES,
     )
 
-    /** Decode one exact public operation-21 result. */
+    /** Decode one exact public operation-16 result. */
     @JvmStatic
     fun decodeDeviceMintStageResultShapeExact(
         bytes: ByteArray,
@@ -532,7 +532,7 @@ object KagemushaNoritoV1 {
         ::encodeDeviceMintStageResultShape,
     )
 
-    /** Decode and bind an operation-21 result to the exact command credit identity. */
+    /** Decode and bind an operation-16 result to the exact command credit identity. */
     @JvmStatic
     fun decodeDeviceMintStageResultShapeExact(
         bytes: ByteArray,
@@ -919,7 +919,7 @@ object KagemushaNoritoV1 {
 
     private fun paymentRequestTranscript(value: KagemushaPaymentRequestV1): ByteArray =
         fixedTranscript(
-            388, u16Le(value.version), value.releaseId(), value.networkId.bytes(),
+            390, u16Le(value.version), value.releaseId(), value.networkId.bytes(),
             digestEncoded(ascii("iroha:kagemusha:v1:asset-identity"), assetIdentityCanonicalShape(value.asset)),
             value.assetIncarnation.bytes(), u32Le(value.scale), value.liabilityPoolId(),
             digestEncoded(ascii("iroha:kagemusha:v1:account-identity"), accountIdentityCanonicalShape(value.recipient)),
@@ -1944,7 +1944,6 @@ object KagemushaNoritoV1 {
         COMMIT_CERTIFICATE_SCHEMA,
         REDEMPTION_PROOF_SCHEMA,
         PAYMENT_PROOF_SCHEMA,
-        PAYMENT_SCHEMA,
         DEVICE_MINT_STAGE_COMMAND_SCHEMA,
         -> 8
         ACK_SCHEMA,
@@ -1952,6 +1951,7 @@ object KagemushaNoritoV1 {
         AGGREGATE_SCHEMA,
         PASTA_STATE_SCHEMA,
         REQUEST_SCHEMA,
+        PAYMENT_SCHEMA,
         CREDIT_OPENING_SCHEMA,
         CREDIT_AAD_SCHEMA,
         PAYMENT_OUTPUT_SCHEMA,

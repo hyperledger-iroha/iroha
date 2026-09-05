@@ -13,7 +13,7 @@ function wire(section) {
   return bytes;
 }
 
-test("operation-21 public bodies match the Rust-generated canonical fixture", () => {
+test("operation-16 public bodies match the Rust-generated canonical fixture", () => {
   const fixture = JSON.parse(readFileSync(
     new URL("../../../fixtures/offline/kagemusha_device_mint_stage_v1.json", import.meta.url),
     "utf8",

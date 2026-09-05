@@ -14864,7 +14864,6 @@ mod universal_kagemusha_readiness_tests {
                         minimum_xor_balance: iroha_primitives::numeric::Quantity::from(1_u32),
                     },
                 ),
-                max_tx_value: iroha_primitives::numeric::Quantity::from(1_u32),
                 operation_registry_max_entries: std::num::NonZeroUsize::new(1)
                     .expect("positive KAGEMUSHA command registry entry limit"),
                 operation_registry_max_bytes: std::num::NonZeroUsize::new(

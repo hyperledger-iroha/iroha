@@ -7,12 +7,24 @@
 //! reject-all implementations make an unintegrated deployment fail closed.
 
 mod candidate_lifecycle;
+#[cfg(unix)]
+mod coordinator_operation_store;
+#[cfg(unix)]
+pub use coordinator_operation_store::{
+    KAGEMUSHA_COORDINATOR_INTENT_MAX_BYTES_V1, KAGEMUSHA_COORDINATOR_PUBLIC_BINDING_MAX_BYTES_V1,
+    KagemushaCoordinatorOperationStoreErrorV1, KagemushaCoordinatorOperationStoreV1,
+    KagemushaCoordinatorSenderIntentRecoveryV1,
+};
+mod handoff_verification;
 mod mint_fold_private_inputs;
 mod mint_inbox;
 mod mint_inbox_operations;
 mod outgoing_operation_index;
+#[cfg(unix)]
+mod private_journal;
 mod receive_fold;
 mod receive_fold_operation;
+mod redemption_release;
 mod sparse_merkle;
 
 pub use candidate_lifecycle::{
@@ -21,6 +33,11 @@ pub use candidate_lifecycle::{
     KagemushaOutgoingEnvelopeV1, KagemushaOutgoingJournalStageV1, KagemushaReceiverInboxCapacityV1,
     KagemushaSenderOutboxCapacityV1, PersistedOutgoingCandidateV1, PersistedOutgoingRecoveryViewV1,
     PreparedOutgoingCandidateV1, PreparedOutgoingRecoveryViewV1, SenderOutboxReservationOutcomeV1,
+};
+pub use handoff_verification::{
+    KagemushaHandoffEvidenceSizesV1, KagemushaHandoffEvidenceV1,
+    KagemushaHandoffSequenceVerificationV1, verify_kagemusha_handoff_evidence_sequence_v1,
+    verify_kagemusha_handoff_evidence_v1,
 };
 pub use iroha_data_model::kagemusha::KagemushaOutboxReservationV1;
 pub use mint_fold_private_inputs::KagemushaMintFoldOpeningCapabilityV1;
@@ -40,10 +57,14 @@ pub use outgoing_operation_index::{
     KagemushaOutgoingPublicInputPreimageV1, KagemushaOutgoingPublicInputsV1,
 };
 pub use receive_fold::{
-    KAGEMUSHA_RECEIVE_FOLD_CREDIT_BYTES_V1, KAGEMUSHA_RECEIVE_FOLD_DOMAIN_V1,
-    ReceiveFoldCreditV1, ReceiveFoldErrorV1, ReceiveFoldReplayRootUpdateInputV1, ReceiveFoldV1,
+    KAGEMUSHA_RECEIVE_FOLD_CREDIT_BYTES_V1, KAGEMUSHA_RECEIVE_FOLD_DOMAIN_V1, ReceiveFoldCreditV1,
+    ReceiveFoldErrorV1, ReceiveFoldReplayRootUpdateInputV1, ReceiveFoldV1,
 };
 pub use receive_fold_operation::{PeerCreditFoldInputV1, PeerCreditFoldPreviewV1};
+pub use redemption_release::{
+    KAGEMUSHA_REDEMPTION_TERMINAL_RECEIPT_DOMAIN_V1, KagemushaRedemptionTerminalReceiptV1,
+    VerifiedKagemushaRedemptionReleaseV1,
+};
 
 #[cfg(test)]
 mod tests;
@@ -57,6 +78,7 @@ use iroha_data_model::{
     NetworkId,
     account::AccountId,
     asset::AssetDefinitionId,
+    isi::kagemusha_v1::{KagemushaFinalityTrustAnchorV1, KagemushaOperationStatusV1},
     kagemusha::{
         KAGEMUSHA_ASSET_SCALE_MAX_V1, KAGEMUSHA_PAIRED_PROOF_MAX_BYTES_V1,
         KAGEMUSHA_WIRE_VERSION_V1, KagemushaAcknowledgementV1, KagemushaAuthenticatedReleaseV1,
@@ -78,6 +100,10 @@ use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 
 use self::sparse_merkle::ExactConsumedCreditIndex;
+#[cfg(unix)]
+pub(crate) use self::sparse_merkle::authenticated_history::disk_history_store::{
+    KagemushaDiskAuthenticatedHistoryStoreV1, KagemushaHistoryDeviceCredentialsV1,
+};
 pub(crate) use self::sparse_merkle::authenticated_history::{
     KagemushaAuthenticatedHistoryStoreV1, KagemushaCommittedRootReadV1,
     KagemushaHistoryAbortOutcomeV1, KagemushaHistoryCommitOutcomeV1,
@@ -92,9 +118,9 @@ pub(crate) use self::sparse_merkle::authenticated_history::{
     KagemushaPreparedHistoryCasV1, VerifiedKagemushaHistoryProofRootBridgeV1,
     VerifiedKagemushaHistoryRootSelectionV1, classify_history_identity_v1,
     prepare_history_identity_insert_v1, prepare_history_identity_pair_v1,
-    prepare_history_replay_batch_and_terminal_v1, require_history_proof_root_bridge_v1,
-    validate_committed_history_v1,
+    require_history_proof_root_bridge_v1, validate_committed_history_v1,
 };
+
 use super::kagemusha_v1_poseidon::{
     KAGEMUSHA_STATE_DOMAIN_V1, KagemushaPoseidonFieldV1, decode as decode_pasta, digest_limbs,
     encode as encode_pasta, from_u128 as pasta_from_u128, hash as pasta_hash,
@@ -102,7 +128,7 @@ use super::kagemusha_v1_poseidon::{
 use super::kagemusha_v1_recursion::{
     KagemushaGuardContextV1, KagemushaNormalizedGuardStatementV1, KagemushaRecursionArtifactsV1,
     KagemushaRecursiveVerifierV1, KagemushaStateRelationPublicInputsV1,
-    VerifiedKagemushaMintFinalityHelperV1, canonical_precommit_binding_digest_v1,
+    VerifiedKagemushaMintFinalityHelperV1, canonical_prepared_transition_binding_digest_v1,
     kagemusha_incoming_proof_binding_digest_v1, verify_kagemusha_state_proof_v1,
 };
 
@@ -130,6 +156,7 @@ where
     pub(crate) fn recover(
         store: S,
         expected_roots: KagemushaHistoryRootsV1,
+        expected_recovery_commitment: DigestV1,
     ) -> Result<Self, KagemushaHistoryStoreErrorV1> {
         let actual = validate_committed_history_v1(&store)?;
         if actual != expected_roots {
@@ -138,6 +165,7 @@ where
                 actual,
             });
         }
+        store.validate_recovery_checkpoint(expected_recovery_commitment)?;
         Ok(Self { store })
     }
 
@@ -184,12 +212,14 @@ where
         &mut self,
         credit_id: CreditIdV1,
         envelope_digest: DigestV1,
+        attempt_binding_digest: DigestV1,
     ) -> Result<KagemushaHistoryInsertPreparationV1, KagemushaHistoryStoreErrorV1> {
         prepare_history_identity_insert_v1(
             &mut self.store,
             KagemushaHistoryTreeV1::Replay,
             credit_id.0,
             envelope_digest,
+            attempt_binding_digest,
         )
     }
 
@@ -198,12 +228,14 @@ where
         &mut self,
         decision_id: DigestV1,
         decision_digest: DigestV1,
+        attempt_binding_digest: DigestV1,
     ) -> Result<KagemushaHistoryInsertPreparationV1, KagemushaHistoryStoreErrorV1> {
         prepare_history_identity_insert_v1(
             &mut self.store,
             KagemushaHistoryTreeV1::TerminalDecision,
             decision_id,
             decision_digest,
+            attempt_binding_digest,
         )
     }
 
@@ -214,6 +246,7 @@ where
         envelope_digest: DigestV1,
         decision_id: DigestV1,
         decision_digest: DigestV1,
+        attempt_binding_digest: DigestV1,
     ) -> Result<KagemushaHistoryDualInsertPreparationV1, KagemushaHistoryStoreErrorV1> {
         prepare_history_identity_pair_v1(
             &mut self.store,
@@ -221,26 +254,16 @@ where
             envelope_digest,
             decision_id,
             decision_digest,
+            attempt_binding_digest,
         )
     }
 
-    /// Prepare one ordered replay batch and its terminal decision as one dual-root CAS.
-    pub(crate) fn prepare_replay_batch_and_terminal_decision(
-        &mut self,
-        replay_entries: &[(CreditIdV1, DigestV1)],
-        decision_id: DigestV1,
-        decision_digest: DigestV1,
-    ) -> Result<KagemushaHistoryDualInsertPreparationV1, KagemushaHistoryStoreErrorV1> {
-        let replay_entries = replay_entries
-            .iter()
-            .map(|(credit_id, envelope_digest)| (credit_id.0, *envelope_digest))
-            .collect::<Vec<_>>();
-        prepare_history_replay_batch_and_terminal_v1(
-            &mut self.store,
-            &replay_entries,
-            decision_id,
-            decision_digest,
-        )
+    /// Require this exact live attempt before requesting fresh hardware authority.
+    pub(crate) fn require_prepared(
+        &self,
+        transaction: &KagemushaPreparedHistoryCasV1,
+    ) -> Result<(), KagemushaHistoryStoreErrorV1> {
+        self.store.require_prepared(transaction)
     }
 
     /// Commit an already prepared CAS selected by a verified hardware certificate.
@@ -368,7 +391,7 @@ impl KagemushaStateProofReleaseV1 {
     }
 
     #[cfg(test)]
-    fn from_test_artifacts(
+    pub(crate) fn from_test_artifacts(
         artifacts: KagemushaRecursionArtifactsV1,
         enabled_profiles: Vec<KagemushaEnabledProfileV1>,
     ) -> Result<Self, KagemushaStateErrorV1> {
@@ -812,13 +835,13 @@ pub struct TransitionProofStatementV1 {
     pub mint_finality_proof_binding_digest: DigestV1,
     /// Receiver-bound peer credit identifier, nonzero only for `SendSplit`.
     pub peer_credit_id: DigestV1,
-    /// For `SendSplit`, the exact recipient one-time key signed in message 3; zero otherwise.
-    /// The historical field name does not expose or authenticate a stable receiver lane.
-    pub peer_recipient_lane_id: DigestV1,
+    /// For `SendSplit`, the exact recipient encryption key signed in `PaymentRequestV1`;
+    /// zero otherwise.
+    pub recipient_encryption_key_binding: DigestV1,
     /// Complete released lifecycle binding used by terminal operations.
     pub lifecycle_binding_digest: DigestV1,
-    /// Digest of the sealed, locally verified precommit candidate.
-    pub precommit_binding_digest: DigestV1,
+    /// Digest of the sealed, locally verified prepared transition.
+    pub prepared_transition_binding_digest: DigestV1,
     /// Binding of the exact received credit.
     pub receive_credit_binding_digest: DigestV1,
     /// Authenticated proof release consumed by the predecessor state.
@@ -1102,7 +1125,7 @@ pub struct RedeemSplitPreparationV1 {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct TransitionAuxiliaryBindingsV1 {
     pub(crate) lifecycle_binding_digest: DigestV1,
-    pub(crate) precommit_binding_digest: DigestV1,
+    pub(crate) prepared_transition_binding_digest: DigestV1,
     pub(crate) receive_credit_binding_digest: DigestV1,
 }
 
@@ -1523,6 +1546,8 @@ pub struct KagemushaStateSnapshotV1 {
     pub consumed_credits: Vec<ConsumedCreditRecordV1>,
     /// Independently authenticated external replay and terminal-decision roots.
     pub(crate) authenticated_history_roots: KagemushaHistoryRootsV1,
+    /// Exact successful history-operation order, including prepares and abort tombstones.
+    pub(crate) authenticated_history_commitment: DigestV1,
     /// Physical receiver inbox capacity charged by exact canonical snapshot bytes.
     pub receiver_inbox_capacity: KagemushaReceiverInboxCapacityV1,
     /// Durable sender capacity reservations and terminal-envelope bindings.
@@ -1545,6 +1570,7 @@ struct SnapshotCommitmentPreimageV1 {
     mint_inbox: KagemushaMintInboxV1,
     consumed_credits: Vec<ConsumedCreditRecordV1>,
     authenticated_history_roots: KagemushaHistoryRootsV1,
+    authenticated_history_commitment: DigestV1,
     receiver_inbox_capacity: KagemushaReceiverInboxCapacityV1,
     sender_outbox_capacity: KagemushaSenderOutboxCapacityV1,
     outgoing_candidate_journal: KagemushaOutgoingCandidateJournalV1,
@@ -1620,10 +1646,17 @@ fn receiver_sequence_entry_bytes<T: norito::NoritoSerialize>(
 
 fn map_authenticated_history_error(error: KagemushaHistoryStoreErrorV1) -> KagemushaStateErrorV1 {
     match error {
+        KagemushaHistoryStoreErrorV1::AttemptNotPrepared(transaction_id) => {
+            KagemushaStateErrorV1::AuthenticatedHistoryAttemptNotPrepared(transaction_id)
+        }
         KagemushaHistoryStoreErrorV1::OverlayCapacityExceeded { .. } => {
-            KagemushaStateErrorV1::AuthenticatedHistoryPrecommitCapacityExhausted
+            KagemushaStateErrorV1::AuthenticatedHistoryPreparedCapacityExhausted
         }
         KagemushaHistoryStoreErrorV1::StorageUnavailable
+        | KagemushaHistoryStoreErrorV1::JournalCorrupt
+        | KagemushaHistoryStoreErrorV1::DurabilityUncertain
+        | KagemushaHistoryStoreErrorV1::StoreAlreadyOpen
+        | KagemushaHistoryStoreErrorV1::RecoveryCommitmentMismatch
         | KagemushaHistoryStoreErrorV1::MissingSelectedRoot { .. }
         | KagemushaHistoryStoreErrorV1::MissingCommittedRoot { .. }
         | KagemushaHistoryStoreErrorV1::MissingHistoryNode { .. }
@@ -1747,6 +1780,9 @@ pub enum KagemushaStateErrorV1 {
     /// A redemption request was malformed.
     #[error("invalid Kagemusha redemption request")]
     InvalidRedemption,
+    /// A redemption settlement status or its indexed outbox binding was not fully authenticated.
+    #[error("invalid Kagemusha authenticated redemption settlement receipt")]
+    InvalidRedemptionSettlementReceipt,
     /// A credit identity already committed the same envelope.
     #[error("Kagemusha credit {0:?} was already consumed")]
     CreditAlreadyConsumed(CreditIdV1),
@@ -1766,8 +1802,11 @@ pub enum KagemushaStateErrorV1 {
     #[error("Kagemusha authenticated external history failed closed")]
     AuthenticatedHistoryUnavailable,
     /// The byte-bounded external-history prepare/WAL overlay cannot accept new work.
-    #[error("Kagemusha authenticated-history precommit capacity is exhausted")]
-    AuthenticatedHistoryPrecommitCapacityExhausted,
+    #[error("Kagemusha authenticated-history prepared-transition capacity is exhausted")]
+    AuthenticatedHistoryPreparedCapacityExhausted,
+    /// A retained attempt was aborted/committed and cannot request new hardware authority.
+    #[error("KAGEMUSHA authenticated-history attempt is no longer prepared: {0:?}")]
+    AuthenticatedHistoryAttemptNotPrepared(DigestV1),
     /// The proof-authenticated SHA-256/Pasta root association was missing or did not match.
     #[error("Kagemusha authenticated-history proof-root bridge is missing or mismatched")]
     AuthenticatedHistoryProofRootBridgeUnavailable,
@@ -1793,6 +1832,81 @@ pub struct KagemushaStateMachineV1<R, G, H = KagemushaMemoryAuthenticatedHistory
     proof_release: KagemushaStateProofReleaseV1,
     recursive_verifier: R,
     guard_verifier: G,
+}
+
+/// Compute the private store identity from the exact governed lane and state context.
+#[cfg(unix)]
+pub(crate) fn disk_history_lane_binding(
+    context: KagemushaStateContextV1,
+    lane: &KagemushaLaneIdV1,
+) -> Result<DigestV1, KagemushaStateErrorV1> {
+    #[derive(Encode)]
+    struct LaneBinding {
+        version: u16,
+        context: KagemushaStateContextV1,
+        lane: KagemushaLaneIdV1,
+    }
+    context.validate()?;
+    lane.validate()?;
+    let encoded = norito::encode_canonical(&LaneBinding {
+        version: KAGEMUSHA_STATE_VERSION_V1,
+        context,
+        lane: lane.clone(),
+    })
+    .map_err(|_| KagemushaStateErrorV1::CanonicalEncoding)?;
+    let mut hash = Sha256::new();
+    hash.update(b"iroha:kagemusha:v1:history-disk:lane-binding\0");
+    hash.update(encoded);
+    Ok(hash.finalize().into())
+}
+
+#[cfg(unix)]
+impl<R, G> KagemushaStateMachineV1<R, G, KagemushaDiskAuthenticatedHistoryStoreV1>
+where
+    R: KagemushaRecursiveVerifierV1,
+    G: KagemushaGuardBundleVerifierV1,
+{
+    /// Restore a concrete durable state machine using the current authenticated hardware anchor.
+    ///
+    /// Historical device keys must be pinned by the Core owner, including the current state's
+    /// exact epoch/key reference. Journal replay alone cannot grant authority: the existing
+    /// restore path still verifies the guard, full snapshot commitment, both roots, and retained
+    /// proof state. This function never initializes missing files or falls back to empty history.
+    pub(crate) fn restore_from_disk_history(
+        snapshot: KagemushaStateSnapshotV1,
+        current_hardware_anchor: &DurabilityAnchorV1,
+        proof_release: KagemushaStateProofReleaseV1,
+        history_directory: &std::path::Path,
+        history_credentials: KagemushaHistoryDeviceCredentialsV1,
+        overlay_capacity_bytes: u64,
+        recursive_verifier: R,
+        guard_verifier: G,
+    ) -> Result<Self, KagemushaStateErrorV1> {
+        history_credentials
+            .require_current_binding(
+                snapshot.state.hardware_profile_id,
+                snapshot.state.hardware_epoch.generation,
+                snapshot.state.device_policy_binding.device_key_reference,
+            )
+            .map_err(map_authenticated_history_error)?;
+        let lane_binding =
+            disk_history_lane_binding(snapshot.state.context(), &snapshot.state.lane)?;
+        let history_store = KagemushaDiskAuthenticatedHistoryStoreV1::open_existing(
+            history_directory,
+            lane_binding,
+            history_credentials,
+            overlay_capacity_bytes,
+        )
+        .map_err(map_authenticated_history_error)?;
+        Self::restore(
+            snapshot,
+            current_hardware_anchor,
+            proof_release,
+            history_store,
+            recursive_verifier,
+            guard_verifier,
+        )
+    }
 }
 
 impl<R, G, H> KagemushaStateMachineV1<R, G, H>
@@ -2001,8 +2115,8 @@ where
     /// The signed request supplies the exact amount and recipient. Core authenticates its
     /// hardware profile, checks the trusted commit window and encrypted-credit framing, derives
     /// the aggregate successor and credit ID, and binds the exact normalized hardware statement.
-    /// The returned candidate must still pass [`Self::prepare_outgoing_candidate`] before hardware
-    /// may consume the predecessor.
+    /// The returned candidate must still pass [`Self::prepare_indexed_outgoing_candidate`] before
+    /// hardware may consume the predecessor.
     ///
     /// # Errors
     ///
@@ -2093,7 +2207,7 @@ where
         let reservation_commitment = outbox_reservation
             .canonical_commitment()
             .map_err(|_| KagemushaStateErrorV1::SenderOutboxCapacityExhausted)?;
-        let precommit_binding_digest = canonical_precommit_binding_digest_v1(
+        let prepared_transition_binding_digest = canonical_prepared_transition_binding_digest_v1(
             lifecycle_binding_digest,
             request_digest,
             output.sender_before_commitment,
@@ -2106,14 +2220,14 @@ where
         let preview = self.transition_preview(
             KagemushaTransitionKindV1::SendSplit,
             successor,
-            precommit_binding_digest,
+            prepared_transition_binding_digest,
             [0; 32],
             [0; 32],
             output.credit_id,
             request.recipient_encryption_key,
             TransitionAuxiliaryBindingsV1 {
                 lifecycle_binding_digest,
-                precommit_binding_digest,
+                prepared_transition_binding_digest,
                 ..TransitionAuxiliaryBindingsV1::default()
             },
             commit_authorization_reference_ms,
@@ -2122,7 +2236,7 @@ where
                     KagemushaTransitionKindV1::SendSplit,
                     self.state.release_id,
                     self.state.liability_pool_id,
-                    precommit_binding_digest,
+                    prepared_transition_binding_digest,
                     self.state.state_commitment,
                     successor_commitment,
                     normalized_guard_statement_digest,
@@ -2201,7 +2315,7 @@ where
             successor_state_nonce_commitment,
             self.state.consumed_credit_root,
         )?;
-        let mut statement = KagemushaRedemptionStatementV1 {
+        let statement = KagemushaRedemptionStatementV1 {
             version: KAGEMUSHA_WIRE_VERSION_V1,
             lifecycle: terminal_lifecycle_binding_v1(
                 &self.state,
@@ -2226,7 +2340,7 @@ where
         let reservation_commitment = outbox_reservation
             .canonical_commitment()
             .map_err(|_| KagemushaStateErrorV1::SenderOutboxCapacityExhausted)?;
-        let precommit_binding_digest = canonical_precommit_binding_digest_v1(
+        let prepared_transition_binding_digest = canonical_prepared_transition_binding_digest_v1(
             lifecycle_binding_digest,
             [0; 32],
             [0; 32],
@@ -2239,14 +2353,14 @@ where
         let preview = self.transition_preview(
             KagemushaTransitionKindV1::RedeemSplit,
             successor,
-            precommit_binding_digest,
+            prepared_transition_binding_digest,
             [0; 32],
             [0; 32],
             [0; 32],
             [0; 32],
             TransitionAuxiliaryBindingsV1 {
                 lifecycle_binding_digest,
-                precommit_binding_digest,
+                prepared_transition_binding_digest,
                 ..TransitionAuxiliaryBindingsV1::default()
             },
             commit_authorization_reference_ms,
@@ -2255,7 +2369,7 @@ where
                     KagemushaTransitionKindV1::RedeemSplit,
                     self.state.release_id,
                     self.state.liability_pool_id,
-                    precommit_binding_digest,
+                    prepared_transition_binding_digest,
                     self.state.state_commitment,
                     successor_commitment,
                     normalized_guard_statement_digest,
@@ -2283,37 +2397,6 @@ where
                 normalized_guard_statement_digest,
             },
         )
-    }
-
-    /// Atomically reserve sender bytes and durably prepare the exact transition intent.
-    ///
-    /// Hardware may lock the predecessor only after this succeeds. Failure leaves both the
-    /// capacity ledger and outgoing journal unchanged.
-    pub fn prepare_outgoing_candidate(
-        &mut self,
-        prepared: PreparedOutgoingCandidateV1,
-    ) -> Result<
-        (
-            SenderOutboxReservationOutcomeV1,
-            KagemushaOutgoingCommitCapabilityV1,
-        ),
-        KagemushaStateErrorV1,
-    > {
-        if prepared.private_state_link().0 != &self.state
-            || prepared.proof_statement.journal_revision_before != self.journal_revision
-        {
-            return Err(KagemushaStateErrorV1::InvalidCandidateStage);
-        }
-        prepared.validate_recovered()?;
-        prepared.validate_recipient_against_release(&self.proof_release)?;
-        let mut next_outbox = self.sender_outbox_capacity.clone();
-        let mut next_journal = self.outgoing_candidate_journal.clone();
-        let capability = KagemushaOutgoingCommitCapabilityV1::for_prepared(&prepared)?;
-        next_journal.prepare(prepared.clone())?;
-        let outcome = next_outbox.reserve(prepared.outbox_reservation, &next_journal)?;
-        self.sender_outbox_capacity = next_outbox;
-        self.outgoing_candidate_journal = next_journal;
-        Ok((outcome, capability))
     }
 
     /// Atomically bind a caller ID, reserve sender bytes, and prepare the exact transition.
@@ -2354,21 +2437,34 @@ where
         Ok((indexed_outcome, reservation_outcome, capability))
     }
 
-    /// Reissue authority for candidate persistence or hardware commit after recovery.
-    pub fn recover_outgoing_commit_capability(
+    /// Reissue authority for one exact caller-indexed preparation after authenticated recovery.
+    pub fn recover_indexed_outgoing_commit_capability(
         &self,
+        operation_id: DigestV1,
     ) -> Result<KagemushaOutgoingCommitCapabilityV1, KagemushaStateErrorV1> {
-        let prepared = match self.outgoing_candidate_journal.stage() {
-            KagemushaOutgoingJournalStageV1::Prepared(prepared) => prepared,
-            KagemushaOutgoingJournalStageV1::Candidate(candidate) => &candidate.prepared,
+        let (prepared, phase) = match self.outgoing_candidate_journal.stage() {
+            KagemushaOutgoingJournalStageV1::Prepared(prepared) => {
+                (prepared, KagemushaOutgoingOperationPhaseV1::Prepared)
+            }
+            KagemushaOutgoingJournalStageV1::Candidate(candidate) => (
+                &candidate.prepared,
+                KagemushaOutgoingOperationPhaseV1::CandidatePersisted,
+            ),
             _ => return Err(KagemushaStateErrorV1::InvalidCandidateStage),
         };
+        let record = self
+            .outgoing_operation_index()
+            .lookup(operation_id)
+            .ok_or(KagemushaStateErrorV1::InvalidCandidateStage)?;
+        if record.preparation_id != prepared.preparation_id || record.phase != phase {
+            return Err(KagemushaStateErrorV1::InvalidCandidateStage);
+        }
         self.sender_outbox_capacity
             .require_reservation(prepared.outbox_reservation)?;
         KagemushaOutgoingCommitCapabilityV1::for_prepared(prepared)
     }
 
-    /// Verify and persist the ticket-bound sender state proof before hardware consumes state.
+    /// Verify and persist the request-bound sender state proof before hardware consumes state.
     pub fn persist_outgoing_send_candidate(
         &mut self,
         capability: &KagemushaOutgoingCommitCapabilityV1,
@@ -2537,28 +2633,7 @@ where
         self.outgoing_candidate_journal.expose(reservation_id)
     }
 
-    /// Atomically retire a retry envelope and release its sender capacity.
-    pub fn release_outgoing_envelope(
-        &mut self,
-        reservation_id: DigestV1,
-        expected_envelope_digest: DigestV1,
-    ) -> Result<(), KagemushaStateErrorV1> {
-        let mut next_outbox = self.sender_outbox_capacity.clone();
-        let mut next_journal = self.outgoing_candidate_journal.clone();
-        next_journal.release_finalized(
-            reservation_id,
-            expected_envelope_digest,
-            &mut next_outbox,
-        )?;
-        self.sender_outbox_capacity = next_outbox;
-        self.outgoing_candidate_journal = next_journal;
-        Ok(())
-    }
-
     /// Verify a receiver acknowledgement and atomically retain an indexed release tombstone.
-    ///
-    /// This path accepts peer-payment acknowledgements only. Redemption release remains
-    /// unavailable until a distinct authenticated settlement-receipt contract is implemented.
     pub fn release_indexed_outgoing_payment(
         &mut self,
         operation_id: DigestV1,
@@ -2571,6 +2646,50 @@ where
             acknowledgement_bytes,
             &mut next_outbox,
         )?;
+        self.sender_outbox_capacity = next_outbox;
+        self.outgoing_candidate_journal = next_journal;
+        Ok(())
+    }
+
+    /// Authenticate a finalized redemption status and bind it to one exact indexed voucher.
+    ///
+    /// `trust_anchor` must be pinned by the caller from an already authenticated consensus
+    /// context. It is never selected from `status`. The returned capability is non-serializable
+    /// and must be consumed by [`Self::release_indexed_outgoing_redemption`].
+    pub fn verify_indexed_redemption_release(
+        &self,
+        operation_id: DigestV1,
+        status: &KagemushaOperationStatusV1,
+        trust_anchor: &KagemushaFinalityTrustAnchorV1,
+    ) -> Result<VerifiedKagemushaRedemptionReleaseV1, KagemushaStateErrorV1> {
+        let record = self
+            .outgoing_candidate_journal
+            .operation_index()
+            .lookup(operation_id)
+            .ok_or(KagemushaStateErrorV1::InvalidCandidateStage)?;
+        let durable = self
+            .outgoing_candidate_journal
+            .finalized_envelope(record.outbox_reservation_id);
+        redemption_release::verify_indexed_redemption_release(
+            record,
+            durable,
+            operation_id,
+            status,
+            trust_anchor,
+        )
+    }
+
+    /// Consume Core's closed settlement capability and atomically retain a release tombstone.
+    ///
+    /// The native hardware command may bind the capability's compact public projection, but raw
+    /// projection bytes or a host-computed digest can never call this authority path.
+    pub fn release_indexed_outgoing_redemption(
+        &mut self,
+        verified: VerifiedKagemushaRedemptionReleaseV1,
+    ) -> Result<(), KagemushaStateErrorV1> {
+        let mut next_outbox = self.sender_outbox_capacity.clone();
+        let mut next_journal = self.outgoing_candidate_journal.clone();
+        next_journal.release_indexed_redemption(verified, &mut next_outbox)?;
         self.sender_outbox_capacity = next_outbox;
         self.outgoing_candidate_journal = next_journal;
         Ok(())
@@ -2593,37 +2712,12 @@ where
         &self,
         amount: u128,
     ) -> Result<Vec<CreditIdV1>, KagemushaStateErrorV1> {
-        let mut amounts = self
-            .pending_credits
-            .iter()
-            .map(|(credit_id, staged)| (*credit_id, staged.request.amount))
-            .collect::<BTreeMap<_, _>>();
-        for (credit_id, staged) in self.mint_inbox.pending() {
-            if amounts
-                .insert(*credit_id, staged.credit().statement.amount)
-                .is_some()
-            {
-                return Err(KagemushaStateErrorV1::CreditConflict(*credit_id));
-            }
-        }
-        required_pending_credit_prefix(self.state.balance, amount, amounts)
-    }
-
-    /// Select peer credits that must be folded one at a time before a send or redemption.
-    ///
-    /// The returned list has no protocol count ceiling. Each identifier feeds one singular
-    /// `ReceiveFold` transition in deterministic order.
-    pub fn pending_receive_folds_required_for_amount(
-        &self,
-        amount: u128,
-    ) -> Result<Vec<CreditIdV1>, KagemushaStateErrorV1> {
-        required_pending_credit_prefix(
-            self.state.balance,
-            amount,
-            self.pending_credits
-                .iter()
-                .map(|(id, staged)| (*id, staged.request.amount)),
-        )
+        self.pending_fold_plan_required_for_amount(amount)
+            .map(|plan| {
+                plan.into_iter()
+                    .map(PendingCreditFoldV1::credit_id)
+                    .collect()
+            })
     }
 
     /// Preview folding one finalized mint credit into the aggregate and durably prepare its
@@ -2656,7 +2750,13 @@ where
         }
         let authenticated_history_transaction = match self
             .authenticated_history
-            .prepare_replay(credit_id, envelope_digest)
+            .prepare_replay(
+                credit_id,
+                envelope_digest,
+                transition
+                    .hardware_statement
+                    .normalized_guard_statement_digest,
+            )
             .map_err(map_authenticated_history_error)?
         {
             KagemushaHistoryInsertPreparationV1::Prepared {
@@ -2816,6 +2916,9 @@ where
         preview: &CreditFoldPreviewV1,
     ) -> Result<Vec<u8>, KagemushaStateErrorV1> {
         self.validate_mint_fold_history_preview(preview)?;
+        self.authenticated_history
+            .require_prepared(&preview.authenticated_history_transaction)
+            .map_err(map_authenticated_history_error)?;
         KagemushaHistoryRootSelectionSubjectV1::new(
             &preview.authenticated_history_transaction,
             self.state.hardware_profile_id,
@@ -2836,6 +2939,9 @@ where
         root_selection_signature: KagemushaDeviceSignatureV1,
     ) -> Result<TransitionAuthorizationV1, KagemushaStateErrorV1> {
         self.validate_mint_fold_history_preview(preview)?;
+        self.authenticated_history
+            .require_prepared(&preview.authenticated_history_transaction)
+            .map_err(map_authenticated_history_error)?;
         if authorization.authenticated_history.is_some()
             || kagemusha_device_key_reference_v1(device_public_key)
                 != self.state.device_policy_binding.device_key_reference
@@ -2924,7 +3030,13 @@ where
                 preview.transition.successor.state_nonce_commitment,
                 preview.trusted_commit_time_ms,
             )?;
-        if expected_transition != preview.transition
+        if preview
+            .authenticated_history_transaction
+            .attempt_binding_digest()
+            != expected_transition
+                .hardware_statement
+                .normalized_guard_statement_digest
+            || expected_transition != preview.transition
             || expected_witness != preview.replay_insert_witness
         {
             return Err(KagemushaStateErrorV1::InvalidConsumedCreditInsertWitness);
@@ -3035,7 +3147,14 @@ where
         let expected_private_inputs =
             self.mint_fold_private_inputs_for_credit(preview.mint_private_inputs.credit(), false)?;
         let bridge_request = preview.proof_root_bridge_request;
-        if expected_private_inputs != preview.mint_private_inputs
+        if preview
+            .authenticated_history_transaction
+            .attempt_binding_digest()
+            != preview
+                .transition
+                .hardware_statement
+                .normalized_guard_statement_digest
+            || expected_private_inputs != preview.mint_private_inputs
             || preview.transition.proof_statement.kind != KagemushaTransitionKindV1::MintFold
             || preview.transition.proof_statement.predecessor_commitment
                 != self.state.state_commitment
@@ -3354,6 +3473,11 @@ where
         let authenticated_history_roots =
             validate_committed_history_v1(&self.authenticated_history.store)
                 .map_err(map_authenticated_history_error)?;
+        let authenticated_history_commitment = self
+            .authenticated_history
+            .store
+            .recovery_commitment()
+            .map_err(map_authenticated_history_error)?;
         let receiver_snapshot_usage = receiver_snapshot_capacity_usage_v1(
             &self.pending_credits,
             &self.accepted_payment_receipts,
@@ -3399,6 +3523,7 @@ where
                 mint_inbox: self.mint_inbox.clone(),
                 consumed_credits: consumed_credits.clone(),
                 authenticated_history_roots,
+                authenticated_history_commitment,
                 receiver_inbox_capacity: self.receiver_inbox_capacity.clone(),
                 sender_outbox_capacity: self.sender_outbox_capacity.clone(),
                 outgoing_candidate_journal: self.outgoing_candidate_journal.clone(),
@@ -3415,6 +3540,7 @@ where
             mint_inbox: self.mint_inbox.clone(),
             consumed_credits,
             authenticated_history_roots,
+            authenticated_history_commitment,
             receiver_inbox_capacity: self.receiver_inbox_capacity.clone(),
             sender_outbox_capacity: self.sender_outbox_capacity.clone(),
             outgoing_candidate_journal: self.outgoing_candidate_journal.clone(),
@@ -3496,6 +3622,7 @@ where
                 mint_inbox: snapshot.mint_inbox.clone(),
                 consumed_credits: snapshot.consumed_credits.clone(),
                 authenticated_history_roots: snapshot.authenticated_history_roots,
+                authenticated_history_commitment: snapshot.authenticated_history_commitment,
                 receiver_inbox_capacity: snapshot.receiver_inbox_capacity.clone(),
                 sender_outbox_capacity: snapshot.sender_outbox_capacity.clone(),
                 outgoing_candidate_journal: snapshot.outgoing_candidate_journal.clone(),
@@ -3522,6 +3649,7 @@ where
         let authenticated_history = KagemushaStateAuthenticatedHistoryV1::recover(
             history_store,
             snapshot.authenticated_history_roots,
+            snapshot.authenticated_history_commitment,
         )
         .map_err(map_authenticated_history_error)?;
         let consumed_credits = ExactConsumedCreditIndex::from_records(&snapshot.consumed_credits)?;
@@ -3895,7 +4023,7 @@ where
         mint_finality_semantic_digest: DigestV1,
         mint_finality_proof_binding_digest: DigestV1,
         peer_credit_id: DigestV1,
-        peer_recipient_lane_id: DigestV1,
+        recipient_encryption_key_binding: DigestV1,
         auxiliary: TransitionAuxiliaryBindingsV1,
         trusted_commit_time_ms: u64,
         transport_semantic_digest: F,
@@ -3911,7 +4039,7 @@ where
             mint_finality_semantic_digest,
             mint_finality_proof_binding_digest,
             peer_credit_id,
-            peer_recipient_lane_id,
+            recipient_encryption_key_binding,
             auxiliary,
             trusted_commit_time_ms,
             transport_semantic_digest,
@@ -3927,7 +4055,7 @@ where
         mint_finality_semantic_digest: DigestV1,
         mint_finality_proof_binding_digest: DigestV1,
         peer_credit_id: DigestV1,
-        peer_recipient_lane_id: DigestV1,
+        recipient_encryption_key_binding: DigestV1,
         auxiliary: TransitionAuxiliaryBindingsV1,
         trusted_commit_time_ms: u64,
         transport_semantic_digest: F,
@@ -3955,20 +4083,19 @@ where
             return Err(KagemushaStateErrorV1::InvalidMintCredit);
         }
         let is_send = kind == KagemushaTransitionKindV1::SendSplit;
-        if is_send != (peer_credit_id != [0; 32]) || is_send != (peer_recipient_lane_id != [0; 32])
+        if is_send != (peer_credit_id != [0; 32])
+            || is_send != (recipient_encryption_key_binding != [0; 32])
         {
             return Err(KagemushaStateErrorV1::InvalidPeerCredit);
         }
         let is_receive = kind == KagemushaTransitionKindV1::ReceiveFold;
-        if is_receive != (auxiliary.receive_credit_binding_digest != [0; 32])
-        {
+        if is_receive != (auxiliary.receive_credit_binding_digest != [0; 32]) {
             return Err(KagemushaStateErrorV1::InvalidPeerCredit);
         }
         let suite_changed = self.state.suite_id != successor.suite_id;
         let vk_changed = self.state.vk_digest != successor.vk_digest;
         let release_changed = self.state.release_id != successor.release_id;
-        if suite_changed || vk_changed || release_changed
-        {
+        if suite_changed || vk_changed || release_changed {
             return Err(KagemushaStateErrorV1::StateInvariant);
         }
         let is_terminal = matches!(
@@ -3996,7 +4123,7 @@ where
                 auxiliary.lifecycle_binding_digest
             };
         if lifecycle_binding_digest == [0; 32]
-            || is_terminal != (auxiliary.precommit_binding_digest != [0; 32])
+            || is_terminal != (auxiliary.prepared_transition_binding_digest != [0; 32])
         {
             return Err(KagemushaStateErrorV1::StateInvariant);
         }
@@ -4016,11 +4143,12 @@ where
             successor_vk_digest: successor.vk_digest,
             kind,
             amount: match kind {
-                KagemushaTransitionKindV1::MintFold
-                | KagemushaTransitionKindV1::ReceiveFold => successor
-                    .balance
-                    .checked_sub(self.state.balance)
-                    .ok_or(KagemushaStateErrorV1::StateInvariant)?,
+                KagemushaTransitionKindV1::MintFold | KagemushaTransitionKindV1::ReceiveFold => {
+                    successor
+                        .balance
+                        .checked_sub(self.state.balance)
+                        .ok_or(KagemushaStateErrorV1::StateInvariant)?
+                }
                 KagemushaTransitionKindV1::SendSplit | KagemushaTransitionKindV1::RedeemSplit => {
                     self.state
                         .balance
@@ -4032,9 +4160,9 @@ where
             mint_finality_semantic_digest,
             mint_finality_proof_binding_digest,
             peer_credit_id,
-            peer_recipient_lane_id,
+            recipient_encryption_key_binding,
             lifecycle_binding_digest,
-            precommit_binding_digest: auxiliary.precommit_binding_digest,
+            prepared_transition_binding_digest: auxiliary.prepared_transition_binding_digest,
             receive_credit_binding_digest: auxiliary.receive_credit_binding_digest,
             predecessor_release_id: self.state.release_id,
             release_id: successor.release_id,
@@ -4344,7 +4472,7 @@ fn bootstrap_guard_context(
         release_id: artifacts.release_id,
         liability_pool_id: statement.liability_pool_id,
         lifecycle_binding_digest: canonical_sha256_digest(TRANSITION_LIFECYCLE_DOMAIN, statement)?,
-        precommit_binding_digest: [0; 32],
+        prepared_transition_binding_digest: [0; 32],
         receive_credit_binding_digest: [0; 32],
         terminal_commit_binding_digest: [0; 32],
         sender_one_time_authorization_digest: [0; 32],
@@ -4407,7 +4535,7 @@ fn transition_guard_context(
         release_id: artifacts.release_id,
         liability_pool_id: derive_liability_pool_id(&statement.lane, statement.asset_incarnation)?,
         lifecycle_binding_digest: statement.lifecycle_binding_digest,
-        precommit_binding_digest: statement.precommit_binding_digest,
+        prepared_transition_binding_digest: statement.prepared_transition_binding_digest,
         receive_credit_binding_digest: statement.receive_credit_binding_digest,
         terminal_commit_binding_digest: [0; 32],
         sender_one_time_authorization_digest: [0; 32],
@@ -4452,10 +4580,10 @@ fn bootstrap_state_public_inputs(
         mint_finality_semantic_digest: [0; 32],
         mint_finality_proof_binding_digest: [0; 32],
         peer_credit_id: [0; 32],
-        peer_recipient_lane_id: [0; 32],
+        recipient_encryption_key_binding: [0; 32],
         receive_credit_binding_digest: [0; 32],
         lifecycle_binding_digest: guard.lifecycle_binding_digest,
-        precommit_binding_digest: [0; 32],
+        prepared_transition_binding_digest: [0; 32],
         transport_semantic_digest: preview.transport_semantic_digest,
         guard_statement_digest: guard
             .canonical_digest()
@@ -4478,6 +4606,8 @@ fn bootstrap_state_public_inputs(
                 super::kagemusha_v1_recursion::KagemushaPastaParityV1::Ep,
             )
             .map_err(|error| KagemushaStateErrorV1::ProofRejected(error.to_string()))?,
+        mint_authorization_eq_protocol_digest: artifacts.mint_authorization_eq_protocol_digest,
+        mint_authorization_ep_protocol_digest: artifacts.mint_authorization_ep_protocol_digest,
         commit_wrapper_eq_protocol_digest: artifacts.commit_wrapper_eq_protocol_digest,
         commit_wrapper_ep_protocol_digest: artifacts.commit_wrapper_ep_protocol_digest,
         guard_eq_credential_audit: proof.guard_eq_credential_audit,
@@ -4509,10 +4639,10 @@ fn transition_state_public_inputs(
         mint_finality_semantic_digest: statement.mint_finality_semantic_digest,
         mint_finality_proof_binding_digest: statement.mint_finality_proof_binding_digest,
         peer_credit_id: statement.peer_credit_id,
-        peer_recipient_lane_id: statement.peer_recipient_lane_id,
+        recipient_encryption_key_binding: statement.recipient_encryption_key_binding,
         receive_credit_binding_digest: statement.receive_credit_binding_digest,
         lifecycle_binding_digest: statement.lifecycle_binding_digest,
-        precommit_binding_digest: statement.precommit_binding_digest,
+        prepared_transition_binding_digest: statement.prepared_transition_binding_digest,
         transport_semantic_digest: preview.transport_semantic_digest,
         guard_statement_digest: guard_digest,
         eq_protocol_digest: artifacts.eq_protocol_digest,
@@ -4533,6 +4663,8 @@ fn transition_state_public_inputs(
                 super::kagemusha_v1_recursion::KagemushaPastaParityV1::Ep,
             )
             .map_err(|error| KagemushaStateErrorV1::ProofRejected(error.to_string()))?,
+        mint_authorization_eq_protocol_digest: artifacts.mint_authorization_eq_protocol_digest,
+        mint_authorization_ep_protocol_digest: artifacts.mint_authorization_ep_protocol_digest,
         commit_wrapper_eq_protocol_digest: artifacts.commit_wrapper_eq_protocol_digest,
         commit_wrapper_ep_protocol_digest: artifacts.commit_wrapper_ep_protocol_digest,
         guard_eq_credential_audit: proof.guard_eq_credential_audit,

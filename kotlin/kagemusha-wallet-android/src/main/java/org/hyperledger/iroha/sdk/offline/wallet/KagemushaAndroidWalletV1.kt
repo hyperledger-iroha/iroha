@@ -63,7 +63,7 @@ object KagemushaAndroidWalletV1 {
         ) { "OEM provider hardware policy does not match the native device service" }
         require(
             qualification.profile.qualificationReportDigest()
-                .contentEquals(bridgeCapabilities.attestationDigest()),
+                .contentEquals(bridgeCapabilities.qualificationReportDigest()),
         ) { "OEM provider attestation does not match the native device service" }
         return KagemushaWalletV1.open(provider)
     }

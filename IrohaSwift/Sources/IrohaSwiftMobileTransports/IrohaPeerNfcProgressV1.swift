@@ -249,18 +249,15 @@ final class IrohaPeerNfcAsyncSignalV1: @unchecked Sendable {
 
 /// Stable progress stages for a first-release IPM1 NFC exchange.
 public enum IrohaPeerNfcProgressStageV1: String, CaseIterable, Sendable {
-    case phase1SessionActive = "phase1_session_active"
+    case sessionActive = "session_active"
     case tagDetected = "tag_detected"
     case requestRead = "request_read"
-    case intentPrepared = "intent_prepared"
-    case acceptanceTicketReceived = "acceptance_ticket_received"
-    case readerEnded = "reader_ended"
     case ownerAuthRequested = "owner_auth_requested"
     case ownerAuthSucceeded = "owner_auth_succeeded"
     case paymentPrepared = "payment_prepared"
-    case phase2SessionActive = "phase2_session_active"
-    case paymentCommitted = "payment_committed"
-    case ackPersisted = "ack_persisted"
+    case paymentStaged = "payment_staged"
+    case acknowledgementReceived = "acknowledgement_received"
+    case acknowledgementPersisted = "acknowledgement_persisted"
     case complete = "complete"
 }
 

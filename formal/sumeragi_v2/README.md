@@ -1694,9 +1694,13 @@ The eligible-only sealed Ready-Proposal-Sign preemption regression produced the
 863-test checkpoint; retaining the exact failed-pre-handshake dial backoff
 owner brought the inventory to 864 tests across 44 modules. The two sealed
 Certified-Serve storage regressions and the CompleteTip payload-before-ledger
-repair regression bring the current inventory to 867 tests across 44 modules.
+repair regression brought the historical inventory to 867 tests across 44
+modules. The Kagemusha clean-break then retired the separate finality and
+offline compact-QC rows and their module legs, replacing them with one
+consensus-signature-envelope regression in the existing context-identity
+module. That consolidation brings the current inventory to 866 tests across 42 modules.
 Together with the source-sealed command and tooling legs, the pre-network
-corridor contains 85 legs. The
+corridor contains 83 legs. The
 G-SCALE runner/validator preflight remains part of that sealed corridor. The
 fence rows prove that an exact lifecycle dequeue serializes both same-wire and
 unrelated producers until publication, and that abandoning an unpublished
@@ -1772,7 +1776,7 @@ generation and preserves retained responder state. A new same-roster requester
 against a full table, an unauthorized active-state replacement, or overflow
 returns `Capacity` atomically.
 The canonical module/test TSV inventory SHA-256 is
-`49312043ca34bd4a1857ef64d21bd858c4f9af1e4f39d02e5338e57bc6494a8a`.
+`47a818de4cc0793664977d5e0f4b7e56dda943580b647f15671c3b8aa8a5cd20`.
 The six boundaries preserve the predecessor CommitQC through wire-to-core
 conversion, block rollover until the decided lane session is durable, reopen a
 globally finalized tip whose lane evidence is incomplete, filter terminal
@@ -1809,15 +1813,14 @@ through an authenticated non-validator hop, and retains the capacity-negative
 boundary. It
 also retains one four-validator exact PrepareQC count-and-power quorum
 regression. The four integration names execute under one module-filtered leg;
-the complete pre-network corridor now spans 85 legs, including the governance-
+the complete pre-network corridor now spans 83 legs, including the governance-
 unlock audit module, the autonomous lifecycle-recovery module, and separate exact
 data-model status and atomic lane-certificate decode contracts, the two
 `iroha_config` geometry modules, three P2P geometry modules, and source-sealed
-command-success legs. Its finality, offline compact-QC,
-and height-context proposal-origin modules each use a dedicated
-`iroha_data_model` leg. The inventory executes the `iroha_p2p` library with its
+command-success legs. Its finality and height-context proposal-origin modules
+each use a dedicated `iroha_data_model` leg. The inventory executes the `iroha_p2p` library with its
 empty default feature set. It does not claim the feature-gated QUIC first-packet
-geometry tests as part of the 44 modules or 85 legs. The
+geometry tests as part of the 42 modules or 83 legs. The
 inventory includes five native-AMX lane-work
 capacity regressions, adapter/runner/watchdog successor-activation boundaries,
 exact recovery-derived successor identity, authenticated exact historical
@@ -1967,8 +1970,8 @@ manifest. Manifest modes cover enumerated file/symlink entries; a separate seal
 walk checks directories and rejects source symlink escapes, writable-output
 targets, and hard-linked regular files. Child builds and evidence bind the
 sealed manifest actually compiled. The canonical aggregate receipt additionally
-binds original HEAD/tree/`Cargo.lock`, all 85 pre-network legs and the exact
-867-test inventory, the pinned harness lock and resolved toolchain, the formal
+binds original HEAD/tree/`Cargo.lock`, all 83 pre-network legs and the exact
+866-test inventory, the pinned harness lock and resolved toolchain, the formal
 ledger/evidence/log, all matrix logs, chaos log, and exact-identity soak
 evidence. Its no-clobber, file/directory-`fsync` publication has no mutable
 pointer. The protected archived validator first publishes a no-clobber

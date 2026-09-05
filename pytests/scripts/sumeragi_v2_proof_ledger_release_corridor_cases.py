@@ -6,12 +6,12 @@ def test_release_inventory_constants_match_current_source_seal(
     """Every release consumer binds the current production and focus seals."""
 
     module = load_checker()
-    assert module._PRODUCTION_LIVENESS_RELEASE_COUNT == 867
+    assert module._PRODUCTION_LIVENESS_RELEASE_COUNT == 866
     assert module._PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 == (
-        "49312043ca34bd4a1857ef64d21bd858c4f9af1e4f39d02e5338e57bc6494a8a"
+        "47a818de4cc0793664977d5e0f4b7e56dda943580b647f15671c3b8aa8a5cd20"
     )
     assert module._PRODUCTION_LIVENESS_INVENTORY_GUARD_SHA256 == (
-        "229230acff7fe96a45a5ab7e607c0c9c7c5eec0f7c75ae4974b95bc4846dddac"
+        "7d459864dd96825152e4d1dc75c7c66e6216127cc2e296e380554b969bc04851"
     )
     assert module._SUMERAGI_V2_PACKAGE_LAYOUT_GUARD_SHA256 == (
         "e99da2c824b86930b76c741d2f7aa47ab16092c2f84e43550fb6362a36133268"
@@ -246,9 +246,9 @@ def test_release_inventory_constants_match_current_source_seal(
     receipt_module = importlib.util.module_from_spec(receipt_spec)
     sys.modules[receipt_spec.name] = receipt_module
     receipt_spec.loader.exec_module(receipt_module)
-    assert receipt_module._PRODUCTION_TEST_COUNT == 867
+    assert receipt_module._PRODUCTION_TEST_COUNT == 866
     assert receipt_module._G_UNIT_TEST_COUNT == 522
-    assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 867
+    assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 866
     receipt_module_counts = {
         module_name: count
         for _leg_id, module_name, count in receipt_module._PRODUCTION_MODULES
@@ -266,6 +266,7 @@ def test_release_inventory_constants_match_current_source_seal(
     assert receipt_module_counts["network::tests"] == 84
     assert receipt_module_counts["sumeragi::v2_runner::lifecycle_height_driver::tests"] == 2
     assert receipt_module_counts["sumeragi::v2_worker::tests"] == 90
+    assert receipt_module_counts["block::consensus_v2::tests"] == 3
     assert "sumeragi::v2_core::network_simulation" not in receipt_module_counts
     assert (
         sum(count for _, _, _, count, _ in receipt_module._G_UNIT_GROUPS)
@@ -2146,8 +2147,8 @@ kura.claim_autonomous_lifecycle_process_generation(
             )
         )
     )
-    assert len(production_inventory) == 867
-    assert len(set(production_inventory)) == 867
+    assert len(production_inventory) == 866
+    assert len(set(production_inventory)) == 866
     native_merge_projection_regressions = {
         "sumeragi::v2_lane_work::tests::native_amx_manifest_projects_finality_bound_merge_batch_in_canonical_order",
         "sumeragi::v2_lane_work::tests::native_amx_merge_projection_rejects_multiple_participant_heights_in_one_carrier",
@@ -2302,7 +2303,7 @@ kura.claim_autonomous_lifecycle_process_generation(
     assert replica_disposition_regression in production_inventory
     assert replica_disposition_regression in module._PRODUCTION_LIVENESS_NEW_REGRESSIONS
     assert len(module._PRODUCTION_LIVENESS_NEW_REGRESSIONS) == 453
-    assert "readonly expected_production_liveness_test_count=867" in release_source
+    assert "readonly expected_production_liveness_test_count=866" in release_source
     assert (
         "readonly expected_typed_rollover_formal_mutation_count=45"
         in release_source
@@ -2312,7 +2313,7 @@ kura.claim_autonomous_lifecycle_process_generation(
         'root-anchored V3 matrix passed"'
         in release_source
     )
-    assert "_PRODUCTION_TEST_COUNT = 867" in receipt_source
+    assert "_PRODUCTION_TEST_COUNT = 866" in receipt_source
     receipt_spec = importlib.util.spec_from_file_location(
         "sumeragi_v2_release_receipt_inventory",
         ROOT_DIR / "scripts" / "write_sumeragi_v2_release_receipt.py",
@@ -2322,7 +2323,7 @@ kura.claim_autonomous_lifecycle_process_generation(
     receipt_module = importlib.util.module_from_spec(receipt_spec)
     sys.modules[receipt_spec.name] = receipt_module
     receipt_spec.loader.exec_module(receipt_module)
-    assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 867
+    assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 866
     assert (
         receipt_module._PRODUCTION_MODULES
         == module._PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS
@@ -2334,7 +2335,7 @@ kura.claim_autonomous_lifecycle_process_generation(
     assert (
         len(receipt_module._corridor_legs())
         == module._PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT
-        == 85
+        == 83
     )
     assert receipt_module._production_module_command(
         "parameters::actual::tests"
@@ -2488,8 +2489,8 @@ kura.claim_autonomous_lifecycle_process_generation(
             )
         )
     )
-    assert len(production_modules) == 44
-    assert len(set(production_modules)) == 44
+    assert len(production_modules) == 42
+    assert len(set(production_modules)) == 42
     assert "kura::tests" in production_modules
     assert "kura::lane_geometry::tests" in production_modules
     assert "sumeragi::authoritative_runtime_gate_tests" in production_modules
@@ -3514,7 +3515,9 @@ def test_multilane_inventory_checker_rejects_weakened_production_count(
     helper_start = checker_source.index("require_exact_token() {")
     helper_end = checker_source.index("\n}\n", helper_start) + 3
     helper = checker_source[helper_start:helper_end]
-    canonical_declaration = "readonly canonical_production_test_count=867"
+    canonical_declaration = "readonly canonical_production_test_count=866"
+    canonical_module_declaration = "readonly canonical_production_module_count=42"
+    canonical_corridor_declaration = "readonly canonical_corridor_leg_count=83"
     count_guard = (
         "require_exact_token \\\n"
         '  "$release_runner" \\\n'
@@ -3522,6 +3525,15 @@ def test_multilane_inventory_checker_rejects_weakened_production_count(
         '${canonical_production_test_count}"'
     )
     assert checker_source.count(canonical_declaration) == 1
+    assert checker_source.count(canonical_module_declaration) == 1
+    assert checker_source.count(canonical_corridor_declaration) == 1
+    assert checker_source.count("def static_corridor_leg_count() -> int:") == 1
+    assert (
+        checker_source.count(
+            "derived_corridor_leg_count = static_corridor_leg_count()"
+        )
+        == 1
+    )
     assert checker_source.count(count_guard) == 1
 
     probe = "\n".join(
@@ -3536,7 +3548,7 @@ def test_multilane_inventory_checker_rejects_weakened_production_count(
     bash = shutil.which("bash")
     assert bash is not None
     runner = tmp_path / "run_sumeragi_v2_release_gates.sh"
-    canonical = "readonly expected_production_liveness_test_count=867"
+    canonical = "readonly expected_production_liveness_test_count=866"
     weakened = "readonly expected_production_liveness_test_count=860"
     runner.write_text(f"{canonical}\n", encoding="utf-8")
 
@@ -3588,7 +3600,17 @@ def test_multilane_inventory_checker_rejects_weakened_production_count(
         (
             canonical_declaration,
             "readonly canonical_production_test_count=860",
-            "must seal exactly 867 production tests",
+            "must seal exactly 866 production tests",
+        ),
+        (
+            canonical_module_declaration,
+            "readonly canonical_production_module_count=41",
+            "must seal the exact production module count",
+        ),
+        (
+            canonical_corridor_declaration,
+            "readonly canonical_corridor_leg_count=82",
+            "must seal the exact source-derived corridor leg count",
         ),
         (
             '    "sumeragi::v2_effects::tests": 66,',
@@ -3611,7 +3633,7 @@ def test_multilane_inventory_checker_rejects_weakened_production_count(
             "changed-module counts must equal the exact reviewed release inventory",
         ),
         (
-            '    "49312043ca34bd4a1857ef64d21bd858"',
+            '    "47a818de4cc0793664977d5e0f4b7e56"',
             '    "00000000000000000000000000000000"',
             "canonical production TSV SHA-256 must equal",
         ),

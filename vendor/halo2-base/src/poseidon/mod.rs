@@ -1,9 +1,9 @@
 use crate::{
-    AssignedValue, Context,
     gates::{RangeChip, RangeInstructions},
-    poseidon::hasher::{PoseidonHasher, spec::OptimizedPoseidonSpec},
+    poseidon::hasher::{spec::OptimizedPoseidonSpec, PoseidonHasher},
     safe_types::{FixLenBytes, VarLenBytes, VarLenBytesVec},
     utils::{BigPrimeField, ScalarField},
+    AssignedValue, Context,
 };
 
 use itertools::Itertools;

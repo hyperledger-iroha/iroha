@@ -8641,8 +8641,6 @@ pub struct ToriiFaucet {
 pub struct ToriiKagemushaV1Commands {
     /// Optional issuer used only for server-signed redemption transactions.
     pub redemption_issuer: Option<ToriiKagemushaV1RedemptionIssuer>,
-    /// Maximum value accepted for one KAGEMUSHA V1 command.
-    pub max_tx_value: Quantity,
     /// Maximum number of accepted bindings plus in-flight reservations retained in memory.
     pub operation_registry_max_entries: NonZeroUsize,
     /// Maximum canonical bytes reserved by accepted bindings and in-flight operations.

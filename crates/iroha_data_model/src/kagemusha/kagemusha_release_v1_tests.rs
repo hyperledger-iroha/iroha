@@ -24,10 +24,18 @@ const GUARD_EQ_PROTOCOL_DIGEST: [u8; 32] = [0x39; 32];
 const GUARD_EP_PROTOCOL_DIGEST: [u8; 32] = [0x3A; 32];
 const COMMIT_WRAPPER_EQ_PROTOCOL_DIGEST: [u8; 32] = [0x3D; 32];
 const COMMIT_WRAPPER_EP_PROTOCOL_DIGEST: [u8; 32] = [0x3E; 32];
+const MINT_HASH_SHARD_EQ_PROTOCOL_DIGEST: [u8; 32] = [0x41; 32];
+const MINT_HASH_SHARD_EP_PROTOCOL_DIGEST: [u8; 32] = [0x42; 32];
+const MINT_HASH_CLAIM_EQ_PROTOCOL_DIGEST: [u8; 32] = [0x43; 32];
+const MINT_HASH_CLAIM_EP_PROTOCOL_DIGEST: [u8; 32] = [0x44; 32];
 const CREDENTIAL_EQ_PROOF_BYTES: u32 = 8_000;
 const CREDENTIAL_EP_PROOF_BYTES: u32 = 8_032;
 const GUARD_EQ_PROOF_BYTES: u32 = 12_000;
 const GUARD_EP_PROOF_BYTES: u32 = 12_032;
+const MINT_HASH_SHARD_EQ_PROOF_BYTES: u32 = 4_000;
+const MINT_HASH_SHARD_EP_PROOF_BYTES: u32 = 4_032;
+const MINT_HASH_CLAIM_EQ_PROOF_BYTES: u32 = 6_016;
+const MINT_HASH_CLAIM_EP_PROOF_BYTES: u32 = 6_048;
 
 fn helper_protocols() -> Vec<KagemushaHelperProtocolV1> {
     vec![
@@ -58,6 +66,20 @@ fn helper_protocols() -> Vec<KagemushaHelperProtocolV1> {
             ep_protocol_digest: GUARD_EP_PROTOCOL_DIGEST,
             eq_proof_bytes: GUARD_EQ_PROOF_BYTES,
             ep_proof_bytes: GUARD_EP_PROOF_BYTES,
+        },
+        KagemushaHelperProtocolV1 {
+            helper: KagemushaQualifiedHelperCircuitV1::MintHashShard,
+            eq_protocol_digest: MINT_HASH_SHARD_EQ_PROTOCOL_DIGEST,
+            ep_protocol_digest: MINT_HASH_SHARD_EP_PROTOCOL_DIGEST,
+            eq_proof_bytes: MINT_HASH_SHARD_EQ_PROOF_BYTES,
+            ep_proof_bytes: MINT_HASH_SHARD_EP_PROOF_BYTES,
+        },
+        KagemushaHelperProtocolV1 {
+            helper: KagemushaQualifiedHelperCircuitV1::MintHashClaim,
+            eq_protocol_digest: MINT_HASH_CLAIM_EQ_PROTOCOL_DIGEST,
+            ep_protocol_digest: MINT_HASH_CLAIM_EP_PROTOCOL_DIGEST,
+            eq_proof_bytes: MINT_HASH_CLAIM_EQ_PROOF_BYTES,
+            ep_proof_bytes: MINT_HASH_CLAIM_EP_PROOF_BYTES,
         },
     ]
 }
@@ -173,9 +195,8 @@ fn profile_qualification(
                 KagemushaQualifiedRelationV1::Bootstrap
                 | KagemushaQualifiedRelationV1::MintFold
                 | KagemushaQualifiedRelationV1::SendSplit
-                | KagemushaQualifiedRelationV1::ReceiveFoldBatch
+                | KagemushaQualifiedRelationV1::ReceiveFold
                 | KagemushaQualifiedRelationV1::RedeemSplit
-                | KagemushaQualifiedRelationV1::SuiteUpgrade
                 | KagemushaQualifiedRelationV1::Rotate => {
                     (STATE_EQ_PROTOCOL_DIGEST, STATE_EP_PROTOCOL_DIGEST)
                 }
@@ -219,6 +240,8 @@ fn profile_qualification(
                     protocol.helper,
                     KagemushaQualifiedHelperCircuitV1::PlatformCredential
                         | KagemushaQualifiedHelperCircuitV1::GuardBundle
+                        | KagemushaQualifiedHelperCircuitV1::MintHashShard
+                        | KagemushaQualifiedHelperCircuitV1::MintHashClaim
                 ) {
                     protocol
                         .eq_proof_bytes
@@ -251,18 +274,6 @@ fn profile_qualification(
             ),
         })
         .collect();
-    let receive_fold_occupancies = (1..=KAGEMUSHA_RECEIVE_FOLD_BATCH_WIDTH_V1)
-        .enumerate()
-        .map(|(index, occupancy)| KagemushaReceiveFoldOccupancyV1 {
-            occupancy,
-            complete_proof_bytes: 6_000,
-            report: evidence(
-                report_seed
-                    .wrapping_add(0x20)
-                    .wrapping_add(u8::try_from(index).expect("sixteen occupancy indexes fit u8")),
-            ),
-        })
-        .collect();
     let acceptance_cases = KagemushaAcceptanceCaseV1::ALL
         .iter()
         .copied()
@@ -288,7 +299,6 @@ fn profile_qualification(
         profile,
         relations,
         helper_circuits,
-        receive_fold_occupancies,
         recursive_depths,
         aggregate_balance: KagemushaAggregateBalanceQualificationV1 {
             independent_payments: KAGEMUSHA_MIN_QUALIFIED_AGGREGATED_CREDITS_V1,
@@ -895,7 +905,7 @@ fn relations_are_closed_ordered_and_bind_exact_verifier_artifacts() {
 
 #[test]
 fn artifact_and_relation_inventories_are_frozen() {
-    assert_eq!(KagemushaArtifactRoleV1::ALL.len(), 42);
+    assert_eq!(KagemushaArtifactRoleV1::ALL.len(), 50);
     assert_eq!(
         KagemushaArtifactRoleV1::ALL
             .into_iter()
@@ -994,12 +1004,32 @@ fn artifact_and_relation_inventories_are_frozen() {
         ]
     );
     assert_eq!(
+        &KagemushaArtifactRoleV1::ALL[42..46],
+        &[
+            KagemushaArtifactRoleV1::MintHashShardPkEq,
+            KagemushaArtifactRoleV1::MintHashShardVkEq,
+            KagemushaArtifactRoleV1::MintHashShardPkEp,
+            KagemushaArtifactRoleV1::MintHashShardVkEp,
+        ]
+    );
+    assert_eq!(
+        &KagemushaArtifactRoleV1::ALL[46..50],
+        &[
+            KagemushaArtifactRoleV1::MintHashClaimPkEq,
+            KagemushaArtifactRoleV1::MintHashClaimVkEq,
+            KagemushaArtifactRoleV1::MintHashClaimPkEp,
+            KagemushaArtifactRoleV1::MintHashClaimVkEp,
+        ]
+    );
+    assert_eq!(
         KagemushaQualifiedHelperCircuitV1::ALL,
         [
             KagemushaQualifiedHelperCircuitV1::MintAuthorization,
             KagemushaQualifiedHelperCircuitV1::MintCredit,
             KagemushaQualifiedHelperCircuitV1::PlatformCredential,
             KagemushaQualifiedHelperCircuitV1::GuardBundle,
+            KagemushaQualifiedHelperCircuitV1::MintHashShard,
+            KagemushaQualifiedHelperCircuitV1::MintHashClaim,
         ]
     );
     assert_eq!(
@@ -1008,9 +1038,8 @@ fn artifact_and_relation_inventories_are_frozen() {
             KagemushaQualifiedRelationV1::Bootstrap,
             KagemushaQualifiedRelationV1::MintFold,
             KagemushaQualifiedRelationV1::SendSplit,
-            KagemushaQualifiedRelationV1::ReceiveFoldBatch,
+            KagemushaQualifiedRelationV1::ReceiveFold,
             KagemushaQualifiedRelationV1::RedeemSplit,
-            KagemushaQualifiedRelationV1::SuiteUpgrade,
             KagemushaQualifiedRelationV1::Rotate,
             KagemushaQualifiedRelationV1::TerminalAuthorization,
             KagemushaQualifiedRelationV1::CommitWrapper,
@@ -1018,6 +1047,8 @@ fn artifact_and_relation_inventories_are_frozen() {
     );
     assert!(KagemushaQualifiedHelperCircuitV1::GuardBundle.uses_internal_proof_evidence());
     assert!(KagemushaQualifiedHelperCircuitV1::PlatformCredential.uses_internal_proof_evidence());
+    assert!(KagemushaQualifiedHelperCircuitV1::MintHashShard.uses_internal_proof_evidence());
+    assert!(KagemushaQualifiedHelperCircuitV1::MintHashClaim.uses_internal_proof_evidence());
     assert!(!KagemushaQualifiedHelperCircuitV1::MintAuthorization.uses_internal_proof_evidence());
 
     let artifacts = artifacts();
@@ -1047,9 +1078,8 @@ fn artifact_and_relation_inventories_are_frozen() {
                 KagemushaQualifiedRelationV1::Bootstrap
                 | KagemushaQualifiedRelationV1::MintFold
                 | KagemushaQualifiedRelationV1::SendSplit
-                | KagemushaQualifiedRelationV1::ReceiveFoldBatch
+                | KagemushaQualifiedRelationV1::ReceiveFold
                 | KagemushaQualifiedRelationV1::RedeemSplit
-                | KagemushaQualifiedRelationV1::SuiteUpgrade
                 | KagemushaQualifiedRelationV1::Rotate => (
                     STATE_EQ_PROTOCOL_DIGEST,
                     STATE_EP_PROTOCOL_DIGEST,
@@ -1239,40 +1269,6 @@ fn internal_helper_protocol_lengths_are_exact_authenticated_profiles() {
 }
 
 #[test]
-fn receive_fold_batch_occupancies_are_exact_and_bounded() {
-    let artifacts = artifacts();
-    let base = receipt(&artifacts);
-    assert_eq!(
-        base.profile_qualifications[0]
-            .receive_fold_occupancies
-            .iter()
-            .map(|entry| entry.occupancy)
-            .collect::<Vec<_>>(),
-        (1..=KAGEMUSHA_RECEIVE_FOLD_BATCH_WIDTH_V1).collect::<Vec<_>>()
-    );
-
-    let mut missing = base.clone();
-    missing.profile_qualifications[0]
-        .receive_fold_occupancies
-        .pop();
-    reseal_profile_qualification(&mut missing, 0);
-    assert!(missing.validate().is_err());
-
-    let mut unordered = base.clone();
-    unordered.profile_qualifications[0]
-        .receive_fold_occupancies
-        .swap(0, 1);
-    reseal_profile_qualification(&mut unordered, 0);
-    assert!(unordered.validate().is_err());
-
-    let mut oversized = base;
-    oversized.profile_qualifications[0].receive_fold_occupancies[15].complete_proof_bytes =
-        u32::try_from(KAGEMUSHA_PAIRED_PROOF_MAX_BYTES_V1).expect("proof cap fits u32") + 1;
-    reseal_profile_qualification(&mut oversized, 0);
-    assert!(oversized.validate().is_err());
-}
-
-#[test]
 fn recursive_depths_are_exact() {
     let artifacts = artifacts();
     let base = receipt(&artifacts);
@@ -1430,18 +1426,18 @@ fn acceptance_cases_and_reproducible_builds_are_closed() {
         KagemushaAcceptanceCaseV1::ForgedMintAuthorization,
         KagemushaAcceptanceCaseV1::ReplayedMintAuthorization,
         KagemushaAcceptanceCaseV1::CrossReleaseMintAuthorization,
-        KagemushaAcceptanceCaseV1::AcceptanceTicketSingleExact,
-        KagemushaAcceptanceCaseV1::AcceptanceTicketPartialUntilTotal,
-        KagemushaAcceptanceCaseV1::AcceptanceTicketBoundedMultiPayment,
-        KagemushaAcceptanceCaseV1::AcceptanceTicketOpenReceive,
-        KagemushaAcceptanceCaseV1::AcceptanceTicketReplay,
-        KagemushaAcceptanceCaseV1::AcceptanceTicketMismatch,
+        KagemushaAcceptanceCaseV1::PositiveExactRequest,
+        KagemushaAcceptanceCaseV1::RecipientKeyBinding,
+        KagemushaAcceptanceCaseV1::RequestAmountMismatchRejection,
+        KagemushaAcceptanceCaseV1::CommittedPaymentAfterRequestExpiry,
         KagemushaAcceptanceCaseV1::DistinctPaymentsSameRequest,
         KagemushaAcceptanceCaseV1::ShuffledConcurrentPaymentsSameRequest,
         KagemushaAcceptanceCaseV1::DelayedDeliveryAfterRequestExpiry,
         KagemushaAcceptanceCaseV1::DelayedDeliveryAcrossOrdinarySuiteRotation,
         KagemushaAcceptanceCaseV1::DelayedDeliveryAcrossCredentialRotation,
         KagemushaAcceptanceCaseV1::DuplicateTransport,
+        KagemushaAcceptanceCaseV1::ExactDuplicateDurableAck,
+        KagemushaAcceptanceCaseV1::ConflictingCreditIdBytes,
         KagemushaAcceptanceCaseV1::SameCreditReplay,
         KagemushaAcceptanceCaseV1::TwoSuccessorsFromOnePredecessor,
         KagemushaAcceptanceCaseV1::MonotonicLeaseExpiry,
@@ -1454,9 +1450,9 @@ fn acceptance_cases_and_reproducible_builds_are_closed() {
         KagemushaAcceptanceCaseV1::AeadCiphertextSubstitution,
         KagemushaAcceptanceCaseV1::AeadAssociatedDataSubstitution,
         KagemushaAcceptanceCaseV1::DeterministicEncryptionInjectedRandomnessKat,
-        KagemushaAcceptanceCaseV1::ReceiveFoldBatchOccupancyOneThroughSixteen,
-        KagemushaAcceptanceCaseV1::ReceiveFoldBatchPadding,
-        KagemushaAcceptanceCaseV1::ReceiveFoldBatchReplayAtomicity,
+        KagemushaAcceptanceCaseV1::ReceiveFoldSingleCredit,
+        KagemushaAcceptanceCaseV1::ReceiveFoldReplayAtomicity,
+        KagemushaAcceptanceCaseV1::PendingCreditBacklogNoCountRejection,
     ] {
         assert!(cases.contains(&required));
     }

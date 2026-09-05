@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-09-04
+Last updated: 2026-09-05
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
@@ -20,6 +20,17 @@ This provider-neutral policy covers ordinary node, client, and consensus
 signing. The optional KAGEMUSHA monetary device service is deliberately
 separate: offline spending requires a governed, qualified non-forking hardware
 profile and never permits software fallback.
+
+## KAGEMUSHA product coordinator and durable recovery
+
+- Connect the concrete authenticated-history disk store and hardware-bound restore
+  constructor to the product coordinator's private state/snapshot lifecycle.
+  Reconcile retained speculative operations against current authenticated hardware
+  state before resolving them; retained journal evidence is not monetary authority.
+- Complete sealed sender preparation, real recursive witness/proof generation,
+  candidate persistence, hardware commit authorization, and mint/redemption finality
+  coordination. Rebuild and qualify mobile native artifacts after that integration;
+  disk/process tests alone do not qualify physical hardware or offline money flows.
 
 ## Android native device integration
 
@@ -2383,13 +2394,13 @@ green at that checkpoint. That historical checkpoint did not include a Cargo
 result against its split source; newer receipts above supersede it, without
 replacing the complete release gates.
 
-The static release inventory contract now enumerates `867/867` production tests
-across 44 modules and `522/522` focused `G-UNIT` entries. Its canonical 523-line
+The static release inventory contract now enumerates `866/866` production tests
+across 42 modules and `522/522` focused `G-UNIT` entries. Its canonical 523-line
 TSV has
 SHA-256
 `5e8b82b400b438eabb7733adbccae15b5aa212a98a89161a586cbce686e2f6e9`.
 The separate canonical production module/test TSV has SHA-256
-`49312043ca34bd4a1857ef64d21bd858c4f9af1e4f39d02e5338e57bc6494a8a`;
+`47a818de4cc0793664977d5e0f4b7e56dda943580b647f15671c3b8aa8a5cd20`;
 the newest inventoried rows bind stale exact `TimeoutVote` retransmission
 coalescing without reply-route regression, Ready local Proposal Sign plus
 its exact output taking precedence over a pending Timeout Certificate, the
@@ -2425,7 +2436,7 @@ symbols, three ordered checks, and 14 mutations with no pending structural
 source check. The reviewed Rust include topology contains 70 parents and 425
 direct entries; its canonical payload SHA-256 is
 `0e92b92181eb915d6b70f2ec963fb721ebdd6c0519446a1c5bc7ef1d5013635f`.
-The release-inventory contract is statically reconciled at 85/864/522, and the
+The release-inventory contract is statically reconciled at 83/866/522, and the
 structural model/source contract suite passes. The aggregate proof-ledger
 checker discharges its current Rust/model/mutation/source obligations except
 for the separately recorded task-start `Cargo.lock` mismatch; the static
@@ -2459,7 +2470,7 @@ source/distribution `88`, Swift `34`, Kotlin `43`, and Java `42` tests. Its
 Swift/Kotlin/Java wire consumers are runner- and receipt-bound; the Rust wire
 consumer is bound directly by the release runner and receipt. The
 receipt-required unsupported-version-before-signing regression preserves the exact
-867-production-test and 522-G-UNIT-test counts. Rust's separated client test
+866-production-test and 522-G-UNIT-test counts. Rust's separated client test
 module covers both complete endpoint-payload swaps while retaining its
 14-test count, so the API-separation source gap is closed. This is
 mutable-source inventory consistency, not deterministic regeneration, SDK
@@ -2517,8 +2528,8 @@ The remaining work is evidence-driven and must stay in order:
   merge-sidecar/lane/runner/worker/core tests, formatting, clippy, codec guard,
   proof-ledger and TLAPS-sharding tests, proof checker, and source-fidelity
   mutations before release evidence is accepted, then finish the remaining
-  864-test,
-  44-module production inventory legs and archived G-UNIT execution.
+  866-test,
+  42-module production inventory legs and archived G-UNIT execution.
   The asynchronous reply-route product assigns all 54 structural TLAPS
   projection rows; that is source inventory only. Its V2 inductive-safety,
   successor-isolation, and temporal-product obligations remain in the formal
@@ -24668,8 +24679,8 @@ rejects escaping or writable-output symlinks plus hard-linked source files.
 
 The original checkout manifest and sealed manifest are both retained; every
 child completion uses the latter. One canonical aggregate receipt binds
-original HEAD/tree/`Cargo.lock`, all 85 pre-network legs and their exact
-864-test inventory plus the separate exact 522-test G-UNIT inventory, the
+original HEAD/tree/`Cargo.lock`, all 83 pre-network legs and their exact
+866-test inventory plus the separate exact 522-test G-UNIT inventory, the
 formal harness lock/toolchain, matrix, chaos, and soak
 evidence. The formal leg archives a tee-captured all-legs log plus
 `proof_coverage.json` and `proof_evidence.json`; receipt publication reruns the

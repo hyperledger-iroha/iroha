@@ -717,88 +717,14 @@ public struct KagemushaRedemptionProofV1: Equatable, Sendable {
   }
 }
 
-/// One active 144-byte slot in the fixed-shape receive-fold batch.
-public struct KagemushaReceiveFoldBatchSlotV1: Equatable, Sendable {
-  public let amount: KagemushaUInt128V1
-  public let creditID: Data
-  public let recipientLaneID: Data
-  public let incomingProofBindingDigest: Data
-  public let envelopeDigest: Data
-
-  public init(
-    amount: KagemushaUInt128V1, creditID: Data, recipientLaneID: Data,
-    incomingProofBindingDigest: Data, envelopeDigest: Data
-  ) throws {
-    guard !amount.isZero else { throw kagemushaInvalid("receiveFoldBatch.amount") }
-    self.amount = amount
-    self.creditID = try kagemushaDigest(creditID, "creditID")
-    self.recipientLaneID = try kagemushaDigest(recipientLaneID, "recipientLaneID")
-    self.incomingProofBindingDigest = try kagemushaDigest(
-      incomingProofBindingDigest, "incomingProofBindingDigest")
-    self.envelopeDigest = try kagemushaDigest(envelopeDigest, "envelopeDigest")
-  }
-
-  private init(padding: Void) {
-    amount = .zero
-    creditID = Data(repeating: 0, count: 32)
-    recipientLaneID = Data(repeating: 0, count: 32)
-    incomingProofBindingDigest = Data(repeating: 0, count: 32)
-    envelopeDigest = Data(repeating: 0, count: 32)
-  }
-
-  static let padding = KagemushaReceiveFoldBatchSlotV1(padding: ())
-
-  var isPadding: Bool { self == .padding }
-
-  public var canonicalTranscript: Data {
-    var bytes = amount.littleEndianBytes
-    bytes.append(creditID)
-    bytes.append(recipientLaneID)
-    bytes.append(incomingProofBindingDigest)
-    bytes.append(envelopeDigest)
-    return bytes
-  }
-}
-
-/// An active prefix of 1...16 receive credits followed by canonical all-zero padding.
-public struct KagemushaReceiveFoldBatchV1: Equatable, Sendable {
-  public static let slotCount = 16
-  public static let slotBytes = 144
-  public static let bodyBytes = 1 + slotCount * slotBytes
-
-  public let activeCount: UInt8
-  public let paddedSlots: [KagemushaReceiveFoldBatchSlotV1]
-  public let aggregateAmount: KagemushaUInt128V1
-
-  public init(activeSlots: [KagemushaReceiveFoldBatchSlotV1]) throws {
-    guard (1...Self.slotCount).contains(activeSlots.count),
-      Set(activeSlots.map(\.creditID)).count == activeSlots.count
-    else { throw kagemushaInvalid("receiveFoldBatch.activeSlots") }
-    var total = KagemushaUInt128V1.zero
-    for slot in activeSlots { total = try total.adding(slot.amount) }
-    activeCount = UInt8(activeSlots.count)
-    paddedSlots =
-      activeSlots
-      + Array(repeating: .padding, count: Self.slotCount - activeSlots.count)
-    aggregateAmount = total
-  }
-
-  public var canonicalBody: Data {
-    var bytes = Data([activeCount])
-    for slot in paddedSlots { bytes.append(slot.canonicalTranscript) }
-    return bytes
-  }
-}
-
 /// Monetary operation bound by a released V1 transition.
 public enum KagemushaOperationKindV1: UInt32, CaseIterable, Sendable {
   case bootstrap = 0
   case mintFold = 1
   case sendSplit = 2
-  case receiveFoldBatch = 3
+  case receiveFold = 3
   case redeemSplit = 4
-  case suiteUpgrade = 5
-  case rotate = 6
+  case rotate = 5
 }
 
 /// Complete public lifecycle context, without history or private state links.
@@ -840,7 +766,7 @@ public struct KagemushaLifecycleBindingV1: Equatable, Sendable {
       validOperationFields =
         requestID == zero && receiverLaneCommitment == zero
         && kagemushaIsDigest(creditID) && kagemushaIsDigest(ciphertextDigest)
-    case .bootstrap, .receiveFoldBatch, .redeemSplit, .suiteUpgrade, .rotate:
+    case .bootstrap, .receiveFold, .redeemSplit, .rotate:
       validOperationFields = [requestID, receiverLaneCommitment, creditID, ciphertextDigest]
         .allSatisfy { $0 == zero }
     }

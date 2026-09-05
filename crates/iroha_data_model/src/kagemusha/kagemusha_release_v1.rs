@@ -183,11 +183,27 @@ pub enum KagemushaArtifactRoleV1 {
     InnerMintCreditPkEp = 40,
     /// Ep/Fq inner finalized mint-credit and consensus-finality verifying key.
     InnerMintCreditVkEp = 41,
+    /// Eq/Fp one-block mint-certificate SHA-256 shard proving key.
+    MintHashShardPkEq = 42,
+    /// Eq/Fp one-block mint-certificate SHA-256 shard verifying key.
+    MintHashShardVkEq = 43,
+    /// Ep/Fq one-block mint-certificate SHA-256 shard proving key.
+    MintHashShardPkEp = 44,
+    /// Ep/Fq one-block mint-certificate SHA-256 shard verifying key.
+    MintHashShardVkEp = 45,
+    /// Eq/Fp ordered recursive mint-hash claim proving key.
+    MintHashClaimPkEq = 46,
+    /// Eq/Fp ordered recursive mint-hash claim verifying key.
+    MintHashClaimVkEq = 47,
+    /// Ep/Fq ordered recursive mint-hash claim proving key.
+    MintHashClaimPkEp = 48,
+    /// Ep/Fq ordered recursive mint-hash claim verifying key.
+    MintHashClaimVkEp = 49,
 }
 
 impl KagemushaArtifactRoleV1 {
     /// Exact canonically ordered release inventory.
-    pub const ALL: [Self; 42] = [
+    pub const ALL: [Self; 50] = [
         Self::ParamsEq,
         Self::ParamsEp,
         Self::InnerStatePkEq,
@@ -230,6 +246,14 @@ impl KagemushaArtifactRoleV1 {
         Self::InnerMintCreditVkEq,
         Self::InnerMintCreditPkEp,
         Self::InnerMintCreditVkEp,
+        Self::MintHashShardPkEq,
+        Self::MintHashShardVkEq,
+        Self::MintHashShardPkEp,
+        Self::MintHashShardVkEp,
+        Self::MintHashClaimPkEq,
+        Self::MintHashClaimVkEq,
+        Self::MintHashClaimPkEp,
+        Self::MintHashClaimVkEp,
     ];
 
     const fn is_params(self) -> bool {
@@ -262,6 +286,10 @@ impl KagemushaArtifactRoleV1 {
                 | Self::InnerMintAuthorizationPkEp
                 | Self::InnerMintCreditPkEq
                 | Self::InnerMintCreditPkEp
+                | Self::MintHashShardPkEq
+                | Self::MintHashShardPkEp
+                | Self::MintHashClaimPkEq
+                | Self::MintHashClaimPkEp
         )
     }
 
@@ -288,6 +316,10 @@ impl KagemushaArtifactRoleV1 {
                 | Self::InnerMintAuthorizationVkEp
                 | Self::InnerMintCreditVkEq
                 | Self::InnerMintCreditVkEp
+                | Self::MintHashShardVkEq
+                | Self::MintHashShardVkEp
+                | Self::MintHashClaimVkEq
+                | Self::MintHashClaimVkEp
         )
     }
 }
@@ -370,7 +402,7 @@ pub enum KagemushaQualifiedRelationV1 {
     Rotate,
     /// Bind a prepared transition to the terminal hardware commit certificate.
     TerminalAuthorization,
-    /// Bind a payment's aggregate candidate, exact ticket and hardware commit after commitment.
+    /// Bind a payment's prepared transition, direct request, and hardware commit after commitment.
     CommitWrapper,
 }
 
@@ -389,15 +421,21 @@ pub enum KagemushaQualifiedHelperCircuitV1 {
     PlatformCredential,
     /// Verify the complete non-forking hardware guard bundle.
     GuardBundle,
+    /// Prove one exact SHA-256 compression from the canonical mint transcript.
+    MintHashShard,
+    /// Prove the ordered, complete fold of every mint-transcript hash shard.
+    MintHashClaim,
 }
 
 impl KagemushaQualifiedHelperCircuitV1 {
     /// Exact canonically ordered helper-circuit set.
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 6] = [
         Self::MintAuthorization,
         Self::MintCredit,
         Self::PlatformCredential,
         Self::GuardBundle,
+        Self::MintHashShard,
+        Self::MintHashClaim,
     ];
 
     const fn expected_vk_roles(self) -> (KagemushaArtifactRoleV1, KagemushaArtifactRoleV1) {
@@ -418,11 +456,25 @@ impl KagemushaQualifiedHelperCircuitV1 {
                 KagemushaArtifactRoleV1::GuardBundleVkEq,
                 KagemushaArtifactRoleV1::GuardBundleVkEp,
             ),
+            Self::MintHashShard => (
+                KagemushaArtifactRoleV1::MintHashShardVkEq,
+                KagemushaArtifactRoleV1::MintHashShardVkEp,
+            ),
+            Self::MintHashClaim => (
+                KagemushaArtifactRoleV1::MintHashClaimVkEq,
+                KagemushaArtifactRoleV1::MintHashClaimVkEp,
+            ),
         }
     }
 
     const fn uses_internal_proof_evidence(self) -> bool {
-        matches!(self, Self::PlatformCredential | Self::GuardBundle)
+        matches!(
+            self,
+            Self::PlatformCredential
+                | Self::GuardBundle
+                | Self::MintHashShard
+                | Self::MintHashClaim
+        )
     }
 }
 
@@ -598,9 +650,9 @@ pub struct KagemushaRecursiveDepthQualificationV1 {
     pub verified_handoffs: u32,
     /// Exact complete paired-proof bytes at this depth.
     pub complete_proof_bytes: u32,
-    /// Exact complete five-message exchange bytes at this depth.
+    /// Exact complete three-message exchange bytes at this depth.
     pub raw_complete_exchange_bytes: u32,
-    /// Exact complete text-encoded five-message exchange bytes at this depth.
+    /// Exact complete text-encoded three-message exchange bytes at this depth.
     pub text_complete_exchange_bytes: u32,
     /// Exact depth-run report.
     pub report: KagemushaEvidenceFileV1,
@@ -638,14 +690,14 @@ pub struct KagemushaThermalQualificationV1 {
     pub report: KagemushaEvidenceFileV1,
 }
 
-/// Complete five-message exchange-size and handoff measurement for one profile.
+/// Complete three-message exchange-size and handoff measurement for one profile.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct KagemushaEnvelopeQualificationV1 {
-    /// Largest complete raw five-message exchange.
+    /// Largest complete raw three-message exchange.
     pub raw_complete_exchange_bytes: u32,
-    /// Largest complete text-encoded five-message exchange.
+    /// Largest complete text-encoded three-message exchange.
     pub text_complete_exchange_bytes: u32,
     /// Slowest qualifying p95 complete handoff, in milliseconds.
     pub handoff_p95_ms: u32,
@@ -763,28 +815,16 @@ pub enum KagemushaAcceptanceCaseV1 {
     DelayedDeliveryAcrossOrdinarySuiteRotation,
     /// A delayed committed credit remains valid across a hardware-credential rotation.
     DelayedDeliveryAcrossCredentialRotation,
-    /// `SingleExact` tickets permit exactly one payment of the requested amount.
-    AcceptanceTicketSingleExact,
-    /// `PartialUntilTotal` tickets admit partial payments only up to the signed total.
-    AcceptanceTicketPartialUntilTotal,
-    /// `BoundedMultiPayment` tickets enforce both the signed amount and payment-count bounds.
-    AcceptanceTicketBoundedMultiPayment,
-    /// `OpenReceive` admits arbitrarily many distinct payments with distinct one-use tickets.
-    AcceptanceTicketOpenReceive,
-    /// Reuse of a one-use acceptance ticket fails closed.
-    AcceptanceTicketReplay,
-    /// Any request, mode, amount, key, capacity, policy, or authorization ticket mismatch fails closed.
-    AcceptanceTicketMismatch,
-    /// An acceptance ticket cannot authorize a sender commit after its deadline.
-    AcceptanceTicketExpiryBeforeCommit,
-    /// A payment committed before the ticket deadline remains receivable after ticket expiry.
-    CommittedPaymentAfterAcceptanceTicketExpiry,
+    /// A positive payment matching the signed exact request succeeds.
+    PositiveExactRequest,
+    /// Request, payment, opening, and proof bind the same recipient encryption key.
+    RecipientKeyBinding,
+    /// Any amount differing from the signed exact request fails closed.
+    RequestAmountMismatchRejection,
+    /// A payment committed within the request window remains receivable after expiry.
+    CommittedPaymentAfterRequestExpiry,
     /// Request, payment, opening, and proof bind the same positive exact amount.
     ExactAmountBinding,
-    /// Any amount that violates the signed request mode fails closed.
-    RequestModeAmountMismatchRejection,
-    /// Invoice overpayment, including cumulative overpayment, fails closed.
-    InvoiceOverpaymentRejection,
     /// Distinct valid payments against the same reusable request are all accepted.
     DistinctPaymentsSameRequest,
     /// Shuffled concurrent payments against one reusable request remain independently valid.
@@ -793,6 +833,10 @@ pub enum KagemushaAcceptanceCaseV1 {
     InvoiceDeduplicationApplicationPolicy,
     /// Exact duplicate delivery returns the same durable acknowledgement.
     DuplicateTransport,
+    /// Exact duplicate delivery reproduces the same durable acknowledgement bytes.
+    ExactDuplicateDurableAck,
+    /// Reuse of a credit ID with different canonical payment bytes fails closed.
+    ConflictingCreditIdBytes,
     /// Reuse of a credit ID with different bytes fails closed.
     SameCreditReplay,
     /// A transition from a stale aggregate state fails closed.
@@ -833,6 +877,12 @@ pub enum KagemushaAcceptanceCaseV1 {
     AeadAssociatedDataSubstitution,
     /// Injected explicit randomness yields deterministic seal/open known-answer vectors.
     DeterministicEncryptionInjectedRandomnessKat,
+    /// Each ReceiveFold consumes exactly one valid staged credit.
+    ReceiveFoldSingleCredit,
+    /// ReceiveFold replay insertion and balance addition commit atomically.
+    ReceiveFoldReplayAtomicity,
+    /// Pending-credit backlog size never causes a count-based rejection.
+    PendingCreditBacklogNoCountRejection,
     /// Reserve underflow fails atomically.
     ReserveUnderflow,
     /// Duplicate redemption is idempotent and never debits twice.
@@ -937,21 +987,17 @@ impl KagemushaAcceptanceCaseV1 {
         Self::DelayedDeliveryAfterRequestExpiry,
         Self::DelayedDeliveryAcrossOrdinarySuiteRotation,
         Self::DelayedDeliveryAcrossCredentialRotation,
-        Self::AcceptanceTicketSingleExact,
-        Self::AcceptanceTicketPartialUntilTotal,
-        Self::AcceptanceTicketBoundedMultiPayment,
-        Self::AcceptanceTicketOpenReceive,
-        Self::AcceptanceTicketReplay,
-        Self::AcceptanceTicketMismatch,
-        Self::AcceptanceTicketExpiryBeforeCommit,
-        Self::CommittedPaymentAfterAcceptanceTicketExpiry,
+        Self::PositiveExactRequest,
+        Self::RecipientKeyBinding,
+        Self::RequestAmountMismatchRejection,
+        Self::CommittedPaymentAfterRequestExpiry,
         Self::ExactAmountBinding,
-        Self::RequestModeAmountMismatchRejection,
-        Self::InvoiceOverpaymentRejection,
         Self::DistinctPaymentsSameRequest,
         Self::ShuffledConcurrentPaymentsSameRequest,
         Self::InvoiceDeduplicationApplicationPolicy,
         Self::DuplicateTransport,
+        Self::ExactDuplicateDurableAck,
+        Self::ConflictingCreditIdBytes,
         Self::SameCreditReplay,
         Self::StaleState,
         Self::TwoSuccessorsFromOnePredecessor,
@@ -972,6 +1018,9 @@ impl KagemushaAcceptanceCaseV1 {
         Self::AeadCiphertextSubstitution,
         Self::AeadAssociatedDataSubstitution,
         Self::DeterministicEncryptionInjectedRandomnessKat,
+        Self::ReceiveFoldSingleCredit,
+        Self::ReceiveFoldReplayAtomicity,
+        Self::PendingCreditBacklogNoCountRejection,
         Self::ReserveUnderflow,
         Self::DuplicateRedemption,
         Self::ConcurrentRedemption,
@@ -2640,6 +2689,16 @@ mod inner_mint_artifact_tests {
         KagemushaArtifactRoleV1::InnerMintCreditPkEp,
         KagemushaArtifactRoleV1::InnerMintCreditVkEp,
     ];
+    const MINT_HASH_ROLES: [KagemushaArtifactRoleV1; 8] = [
+        KagemushaArtifactRoleV1::MintHashShardPkEq,
+        KagemushaArtifactRoleV1::MintHashShardVkEq,
+        KagemushaArtifactRoleV1::MintHashShardPkEp,
+        KagemushaArtifactRoleV1::MintHashShardVkEp,
+        KagemushaArtifactRoleV1::MintHashClaimPkEq,
+        KagemushaArtifactRoleV1::MintHashClaimVkEq,
+        KagemushaArtifactRoleV1::MintHashClaimPkEp,
+        KagemushaArtifactRoleV1::MintHashClaimVkEp,
+    ];
 
     fn inventory() -> Vec<KagemushaArtifactBindingV1> {
         KagemushaArtifactRoleV1::ALL
@@ -2684,7 +2743,8 @@ mod inner_mint_artifact_tests {
 
     #[test]
     fn inner_mint_roles_append_without_renumbering_and_roundtrip_norito() {
-        assert_eq!(&KagemushaArtifactRoleV1::ALL[34..], &INNER_ROLES);
+        assert_eq!(&KagemushaArtifactRoleV1::ALL[34..42], &INNER_ROLES);
+        assert_eq!(&KagemushaArtifactRoleV1::ALL[42..], &MINT_HASH_ROLES);
         for (index, role) in KagemushaArtifactRoleV1::ALL.into_iter().enumerate() {
             assert_eq!(usize::from(role as u8), index);
         }
@@ -2712,6 +2772,30 @@ mod inner_mint_artifact_tests {
             .expect("decode complete role inventory");
         assert_eq!(decoded, bindings);
         assert!(validate_artifacts(&decoded).is_ok());
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn mint_hash_roles_roundtrip_json_with_distinct_canonical_names() {
+        let names = [
+            "mint_hash_shard_pk_eq",
+            "mint_hash_shard_vk_eq",
+            "mint_hash_shard_pk_ep",
+            "mint_hash_shard_vk_ep",
+            "mint_hash_claim_pk_eq",
+            "mint_hash_claim_vk_eq",
+            "mint_hash_claim_pk_ep",
+            "mint_hash_claim_vk_ep",
+        ];
+        for (role, name) in MINT_HASH_ROLES.into_iter().zip(names) {
+            let encoded = norito::json::to_json(&role).expect("encode mint-hash role JSON");
+            assert!(encoded.contains(&format!("\"{name}\"")));
+            assert_eq!(
+                norito::json::from_str::<KagemushaArtifactRoleV1>(&encoded)
+                    .expect("decode mint-hash role JSON"),
+                role
+            );
+        }
     }
 
     #[cfg(feature = "json")]

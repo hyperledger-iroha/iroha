@@ -7,8 +7,12 @@ import XCTest
 final class KagemushaSecureElementAPDUV1Tests: XCTestCase {
   #if !OFFLINE_SECURE_ELEMENT_CREDENTIAL
     func testAppleCredentialBoundaryIsUnavailableWithoutExplicitCompileGate() async throws {
-      let configuration = KagemushaSecureElementCredentialConfigurationV1.foundation(
-        credentialIdentifier: UUID(uuidString: "00112233-4455-6677-8899-AABBCCDDEEFF")!
+      let configuration = try KagemushaSecureElementCredentialConfigurationV1.foundation(
+        productConfigurationIdentifier: UUID(
+          uuidString: "00112233-4455-6677-8899-AABBCCDDEEFF"
+        )!,
+        displayName: "KAGEMUSHA",
+        releaseID: Data(repeating: 0x44, count: 32)
       )
       let opened = await KagemushaSecureElementCredentialSessionV1.openIfAvailable(
         configuration: configuration

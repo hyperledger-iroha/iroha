@@ -1,4 +1,4 @@
-"""Canonical Rust-generated operation-21 public-body parity, not hardware qualification."""
+"""Canonical Rust-generated operation-16 public-body parity, not hardware qualification."""
 
 from __future__ import annotations
 
