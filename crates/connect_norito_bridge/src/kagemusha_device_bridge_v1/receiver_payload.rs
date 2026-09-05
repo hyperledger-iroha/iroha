@@ -377,10 +377,38 @@ pub(super) fn dispatch_unavailable_receiver_v1(
     )
 }
 
-/// Construct simple recovery command bodies for outer-frame tests.
+/// Construct canonical receiver command bodies and their bound outer IDs for tests.
 #[cfg(test)]
-pub(super) fn canonical_command_body_for_tests(operation: u8) -> Option<Vec<u8>> {
+pub(super) fn canonical_command_body_for_tests(operation: u8) -> Option<([u8; 32], Vec<u8>)> {
     match operation {
+        STAGE => {
+            let fixture: norito::json::Value = norito::json::from_str(include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../fixtures/offline/kagemusha_v1.json"
+            )))
+            .ok()?;
+            let fixture_bytes = |name: &str| {
+                fixture[name]["norito_hex"]
+                    .as_str()
+                    .and_then(|value| hex::decode(value).ok())
+            };
+            let canonical_request = fixture_bytes("payment_request")?;
+            let canonical_payment = fixture_bytes("payment")?;
+            let (_, payment) = decode_exchange(&canonical_request, &canonical_payment).ok()?;
+            let request_id = payment.output.credit_id;
+            encode(
+                &StagePayloadV1 {
+                    version: VERSION,
+                    operation,
+                    canonical_request,
+                    canonical_payment,
+                    staging_metadata: Vec::new(),
+                },
+                COMMAND_MAX,
+            )
+            .ok()
+            .map(|body| (request_id, body))
+        }
         RECOVER_STAGED => encode(
             &RecoverStagedPayloadV1 {
                 version: VERSION,
@@ -389,7 +417,8 @@ pub(super) fn canonical_command_body_for_tests(operation: u8) -> Option<Vec<u8>>
             },
             COMMAND_MAX,
         )
-        .ok(),
+        .ok()
+        .map(|body| ([7; 32], body)),
         PAGE => encode(
             &PagePayloadV1 {
                 version: VERSION,
@@ -400,7 +429,8 @@ pub(super) fn canonical_command_body_for_tests(operation: u8) -> Option<Vec<u8>>
             },
             COMMAND_MAX,
         )
-        .ok(),
+        .ok()
+        .map(|body| ([7; 32], body)),
         _ => None,
     }
 }
@@ -425,7 +455,7 @@ mod tests {
 
     #[test]
     fn recovery_selector_is_bound_to_outer_credit_id() {
-        let bytes = canonical_command_body_for_tests(RECOVER_STAGED).unwrap();
+        let (_, bytes) = canonical_command_body_for_tests(RECOVER_STAGED).unwrap();
         assert!(decode_receiver_command_v1(RECOVER_STAGED, [7; 32], &bytes).is_ok());
         assert_eq!(
             decode_receiver_command_v1(RECOVER_STAGED, [8; 32], &bytes),

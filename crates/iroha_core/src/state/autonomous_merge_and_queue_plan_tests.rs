@@ -3101,6 +3101,10 @@ fn autonomous_execution_requires_exact_pre_carrier_queue_plan_admission() {
         view: 0,
         carrier_height,
         carrier_parent_hash: parent.hash(),
+        lane_authority_catalog: state
+            .merge_active_lane_authority_snapshot(carrier_height)
+            .expect("fixture exact lane authority")
+            .2,
         lane_catalog_hash: merge_lane_catalog_hash(&lifecycle.nexus.lane_catalog),
         active_lanes: active_lanes.clone(),
         incarnation_root: LaneLifecycleParameterV1::incarnation_root(&incarnation_entries),
@@ -3353,7 +3357,9 @@ fn assert_stale_historical_queue_plan_admission_is_not_retained_or_carried(
     assert_eq!(
         state
             .classify_pending_queue_plan_admission(certificate, carrier_height)
-            .unwrap_or_else(|error| panic!("{label} must remain structurally classifiable: {error}"))
+            .unwrap_or_else(|error| panic!(
+                "{label} must remain structurally classifiable: {error}"
+            ))
             .1,
         PendingQueuePlanAdmissionDisposition::Stale,
         "{label} must be stale"
@@ -3381,10 +3387,7 @@ fn assert_stale_historical_queue_plan_admission_is_not_retained_or_carried(
     );
     assert!(
         state
-            .block_with_queue_plan_admissions(
-                carrier.header().clone(),
-                &[certificate.to_vec()],
-            )
+            .block_with_queue_plan_admissions(carrier.header().clone(), &[certificate.to_vec()],)
             .is_err(),
         "a direct carrier must reject {label}"
     );
@@ -3419,10 +3422,7 @@ fn assert_invalid_historical_queue_plan_admission_is_not_retained_or_carried(
     );
     assert!(
         state
-            .block_with_queue_plan_admissions(
-                carrier.header().clone(),
-                &[certificate.to_vec()],
-            )
+            .block_with_queue_plan_admissions(carrier.header().clone(), &[certificate.to_vec()],)
             .is_err(),
         "a direct carrier must reject {label}"
     );
@@ -3446,9 +3446,7 @@ fn pending_queue_plan_admission_checks_historical_predecessor_roster_and_incarna
     let forged_predecessor = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
         b"mutated-pending-queue-plan-predecessor",
     ));
-    predecessor_binding
-        .admission_context
-        .predecessor_block_hash = Some(forged_predecessor);
+    predecessor_binding.admission_context.predecessor_block_hash = Some(forged_predecessor);
     let predecessor_certificate = queue_plan_admission_certificate_bytes_for_state_test(
         &predecessor_binding,
         &validator_keypairs,
@@ -3688,12 +3686,11 @@ fn pending_queue_plan_persistence_serializes_alternate_quorum_subsets() {
         queue_plan_authority_height_for_state_test(&state),
         0x68,
     );
-    let second_certificate =
-        queue_plan_admission_certificate_bytes_for_signer_indices_state_test(
-            &binding,
-            &validator_keypairs,
-            &[2, 3],
-        );
+    let second_certificate = queue_plan_admission_certificate_bytes_for_signer_indices_state_test(
+        &binding,
+        &validator_keypairs,
+        &[2, 3],
+    );
     assert_ne!(first_certificate, second_certificate);
 
     let state = Arc::new(state);
@@ -3748,12 +3745,14 @@ fn pending_queue_plan_persistence_serializes_alternate_quorum_subsets() {
     );
     drop(commit_guard);
 
-    let first = first.join().expect("join first persistence writer").expect(
-        "first persistence writer retains one exact certificate",
-    );
-    let second = second.join().expect("join second persistence writer").expect(
-        "alternate signer subset reuses the first logical certificate",
-    );
+    let first = first
+        .join()
+        .expect("join first persistence writer")
+        .expect("first persistence writer retains one exact certificate");
+    let second = second
+        .join()
+        .expect("join second persistence writer")
+        .expect("alternate signer subset reuses the first logical certificate");
     let durable_projection = |outcome: PendingQueuePlanAdmissionPersistenceOutcome| {
         let PendingQueuePlanAdmissionPersistenceOutcome::Durable {
             certificate_hash,

@@ -158,7 +158,7 @@ fn fixture_values_v1() -> FixtureValuesV1 {
     );
     request.validate_shape().expect("valid signed request");
 
-    let mut output = KagemushaPaymentOutputV1 {
+    let output = KagemushaPaymentOutputV1 {
         version: KAGEMUSHA_WIRE_VERSION_V1,
         request_digest: request.canonical_digest().expect("request digest"),
         amount: request.amount,
@@ -337,10 +337,19 @@ fn canonical_fixture_v1() -> Value {
         .encode_text_against(&values.request, &values.payment)
         .expect("encode acknowledgement text");
     let request_digest = values.request.canonical_digest().expect("request digest");
+    let request_signing_bytes = values
+        .request
+        .canonical_signing_bytes()
+        .expect("request signing bytes");
     let payment_digest = values
         .payment
         .canonical_digest_against(&values.request)
         .expect("payment digest");
+    let commit_certificate_digest = values
+        .payment
+        .commit_certificate
+        .canonical_digest()
+        .expect("commit certificate digest");
     let prepared_transfer_digest = kagemusha_prepared_transfer_digest_v1(
         &values.request,
         values.payment.output.sender_before_commitment,
@@ -359,6 +368,10 @@ fn canonical_fixture_v1() -> Value {
         kagemusha_payment_body_digest_v1(&values.payment.output, &values.payment.encrypted_credit)
             .expect("payment body digest");
     let acknowledgement_digest = sha256(&acknowledgement_raw);
+    let acknowledgement_signing_bytes = values
+        .acknowledgement
+        .canonical_signing_bytes()
+        .expect("acknowledgement signing bytes");
     let raw_bytes = validate_kagemusha_complete_exchange_shape_v1(
         &values.request,
         &values.payment,
@@ -401,15 +414,57 @@ fn canonical_fixture_v1() -> Value {
             "hex": (hex::encode(values.payment.output.credit_id)),
         },
         "identity_vectors": {
+            "acknowledgement_digest_hex": (hex::encode(acknowledgement_digest)),
             "payment_request_digest_hex": (hex::encode(request_digest)),
             "payment_digest_hex": (hex::encode(payment_digest)),
             "payment_output_digest_hex": (hex::encode(payment_output_digest)),
-            "ciphertext_digest_hex": (hex::encode(ciphertext_digest)),
             "payment_body_digest_hex": (hex::encode(payment_body_digest)),
-            "acknowledgement_digest_hex": (hex::encode(acknowledgement_digest)),
+            "ciphertext_digest_hex": (hex::encode(ciphertext_digest)),
+            "commit_certificate_digest_hex": (hex::encode(commit_certificate_digest)),
             "prepared_transfer_digest_hex": (hex::encode(prepared_transfer_digest)),
-            "transition_nullifier_hex": (hex::encode(values.payment.output.transition_nullifier)),
             "credit_id_hex": (hex::encode(values.payment.output.credit_id)),
+            "transition_nullifier_hex": (hex::encode(values.payment.output.transition_nullifier)),
+            "inbox_receipt_commitment_hex": (hex::encode(
+                values.acknowledgement.inbox_receipt.receipt_commitment,
+            )),
+            "hardware_terminal_commitment_hex": (hex::encode(
+                values.payment.commit_certificate.hardware_terminal_commitment,
+            )),
+        },
+        "semantic_transcripts": {
+            "payment_request": {
+                "signing_domain": "iroha:kagemusha:v1:payment-request-signing",
+                "signing_bytes_hex": (hex::encode(request_signing_bytes)),
+                "canonical_digest_hex": (hex::encode(request_digest)),
+            },
+            "payment_body": {
+                "digest_domain": "iroha:kagemusha:v1:payment-body",
+                "output_digest_hex": (hex::encode(payment_output_digest)),
+                "ciphertext_digest_hex": (hex::encode(ciphertext_digest)),
+                "canonical_digest_hex": (hex::encode(payment_body_digest)),
+            },
+            "prepared_transfer": {
+                "digest_domain": "iroha:kagemusha:v1:prepared-transfer",
+                "request_digest_hex": (hex::encode(request_digest)),
+                "sender_before_commitment_hex": (hex::encode(
+                    values.payment.output.sender_before_commitment,
+                )),
+                "sender_after_commitment_hex": (hex::encode(
+                    values.payment.output.sender_after_commitment,
+                )),
+                "transition_nullifier_hex": (hex::encode(
+                    values.payment.output.transition_nullifier,
+                )),
+                "ciphertext_commitment_hex": (hex::encode(
+                    values.payment.output.ciphertext_commitment,
+                )),
+                "canonical_digest_hex": (hex::encode(prepared_transfer_digest)),
+            },
+            "acknowledgement": {
+                "signing_domain": "iroha:kagemusha:v1:acknowledgement-signing",
+                "signing_bytes_hex": (hex::encode(acknowledgement_signing_bytes)),
+                "canonical_sha256_hex": (hex::encode(acknowledgement_digest)),
+            },
         },
         "hardware_terminal_commitment": {
             "domain": "iroha:kagemusha:v1:hardware-terminal-body",
@@ -437,7 +492,19 @@ fn shared_kagemusha_v1_fixture_matches_rust_authority() {
         "{}\n",
         json::to_string_pretty(&expected).expect("render canonical fixture")
     );
-    if std::env::var_os("PRINT_KAGEMUSHA_FIXTURE_V1").is_some() {
+    if let Some(destination) = std::env::var_os("PRINT_KAGEMUSHA_FIXTURE_V1") {
+        if destination != "1" {
+            let destination = std::path::PathBuf::from(destination);
+            let destination = if destination.is_absolute() {
+                destination
+            } else {
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../..")
+                    .join(destination)
+            };
+            std::fs::write(&destination, &rendered)
+                .expect("write requested canonical KAGEMUSHA V1 fixture");
+        }
         print!("{rendered}");
         return;
     }
@@ -448,4 +515,126 @@ fn shared_kagemusha_v1_fixture_matches_rust_authority() {
         "regenerate fixtures/offline/kagemusha_v1.json from this Rust authority"
     );
     assert_eq!(rendered, SHARED_FIXTURE, "fixture JSON bytes are canonical");
+}
+
+#[test]
+fn distinct_payments_against_one_request_are_independently_valid() {
+    let first = fixture_values_v1();
+    let request = &first.request;
+
+    let mut output = first.payment.output.clone();
+    output.sender_before_commitment = digest(0x73);
+    output.sender_after_commitment = digest(0x74);
+    output.transition_nullifier = digest(0x87);
+    output.credit_id = [0; 32];
+    let output = output
+        .seal_credit_id_against(request)
+        .expect("second request-bound credit identity");
+
+    let encrypted_credit = KagemushaEncryptedCreditEnvelopeV1 {
+        version: KAGEMUSHA_WIRE_VERSION_V1,
+        ephemeral_x25519_public_key: x25519_public_key(0x88),
+        nonce: [0x89; KAGEMUSHA_XCHACHA20POLY1305_NONCE_BYTES_V1],
+        ciphertext_and_tag: vec![
+            0x8A;
+            kagemusha_credit_opening_canonical_len_v1()
+                .expect("credit opening length")
+                + KAGEMUSHA_XCHACHA20POLY1305_TAG_BYTES_V1
+        ],
+    }
+    .canonical_bytes_against_recipient_key(request.recipient_encryption_key)
+    .expect("second canonical encrypted credit envelope");
+
+    let terminal_body = KagemushaHardwareTerminalBodyV1 {
+        version: KAGEMUSHA_WIRE_VERSION_V1,
+        candidate_envelope_digest: digest(0xA2),
+        lifecycle_binding_digest: digest(0xA3),
+        transition_nullifier: output.transition_nullifier,
+        outbox_reservation_commitment: digest(0xA4),
+        commit_evidence: output.commit_evidence,
+        hardware_profile_id: digest(0xA5),
+        policy_epoch: 7,
+        private_successor_commitment: digest(0xA6),
+        private_journal_commitment: digest(0xA7),
+        private_recovery_commitment: digest(0xA8),
+    };
+    let commit_certificate = KagemushaCommitCertificateV1 {
+        version: KAGEMUSHA_WIRE_VERSION_V1,
+        certificate_id: [0; 32],
+        candidate_envelope_digest: terminal_body.candidate_envelope_digest,
+        lifecycle_binding_digest: terminal_body.lifecycle_binding_digest,
+        transition_nullifier: terminal_body.transition_nullifier,
+        outbox_reservation_commitment: terminal_body.outbox_reservation_commitment,
+        commit_evidence: terminal_body.commit_evidence,
+        hardware_profile_id: terminal_body.hardware_profile_id,
+        policy_epoch: terminal_body.policy_epoch,
+        hardware_terminal_commitment: [0; 32],
+    }
+    .seal_with_terminal_body(&terminal_body)
+    .expect("second terminal-bound commit certificate");
+
+    let mut proof = first.payment.proof.clone();
+    proof.semantic_digest =
+        kagemusha_payment_body_digest_v1(&output, &encrypted_credit).expect("payment body digest");
+    proof.candidate_envelope_digest = commit_certificate.candidate_envelope_digest;
+    proof.commit_certificate_digest = commit_certificate
+        .canonical_digest()
+        .expect("second commit certificate digest");
+    let second_payment = KagemushaPaymentV1 {
+        version: KAGEMUSHA_WIRE_VERSION_V1,
+        output,
+        encrypted_credit,
+        commit_certificate,
+        proof,
+    };
+    second_payment
+        .validate_shape_against(request)
+        .expect("second independent payment against the same request");
+
+    let payment_digest = second_payment
+        .canonical_digest_against(request)
+        .expect("second payment digest");
+    let receiver_key = p256_signing_key(7);
+    let inbox_receipt = KagemushaInboxReceiptV1 {
+        version: KAGEMUSHA_WIRE_VERSION_V1,
+        credit_id: second_payment.output.credit_id,
+        receipt_commitment: kagemusha_inbox_receipt_commitment_v1(
+            digest(0xA9),
+            request.hardware_credential.hardware_epoch_id,
+            2,
+            second_payment.output.credit_id,
+            payment_digest,
+        )
+        .expect("second durable inbox receipt commitment"),
+    };
+    let mut second_acknowledgement = KagemushaAcknowledgementV1 {
+        version: KAGEMUSHA_WIRE_VERSION_V1,
+        request_digest: request.canonical_digest().expect("request digest"),
+        payment_digest,
+        inbox_receipt,
+        signature: sign(&receiver_key, b"second-acknowledgement-placeholder"),
+    };
+    second_acknowledgement.signature = sign(
+        &receiver_key,
+        &second_acknowledgement
+            .canonical_signing_bytes()
+            .expect("second acknowledgement signing bytes"),
+    );
+
+    validate_kagemusha_complete_exchange_shape_v1(request, &first.payment, &first.acknowledgement)
+        .expect("first valid payment remains accepted");
+    validate_kagemusha_complete_exchange_shape_v1(
+        request,
+        &second_payment,
+        &second_acknowledgement,
+    )
+    .expect("second valid payment against the same request is accepted");
+    assert_ne!(
+        first.payment.output.credit_id,
+        second_payment.output.credit_id
+    );
+    assert_eq!(
+        first.payment.output.request_digest,
+        second_payment.output.request_digest
+    );
 }

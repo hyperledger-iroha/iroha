@@ -2528,11 +2528,6 @@ pub mod torii {
     }
     /// KAGEMUSHA V1 command-submission defaults.
     pub mod kagemusha_v1_commands {
-        use iroha_primitives::numeric::Quantity;
-        /// Maximum authorized value for one offline transaction.
-        pub fn max_tx_value() -> Quantity {
-            Quantity::from(100_000_u64)
-        }
         /// Maximum number of accepted bindings plus in-flight reservations retained in memory.
         pub const OPERATION_REGISTRY_MAX_ENTRIES: usize = 4_096;
         /// Canonical bytes charged for operation id, request-authority digest, kind,

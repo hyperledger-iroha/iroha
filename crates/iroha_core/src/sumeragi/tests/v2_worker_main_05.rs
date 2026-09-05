@@ -774,6 +774,8 @@ fn manifest_bound_duplicate_promotes_proofless_orphan_to_runtime_owner() {
             phase: super::super::FairV2IngressLeaderWirePhase::Chunk,
             semantic_origin: sender.clone(),
             canonical_wire_hash: Hash::new(envelope.encode()),
+            vote_statement_hash: None,
+            timeout_prepare_view: None,
         },
         slot: super::super::FairV2IngressLeaderWireSlot {
             semantic_origin: sender.clone(),
@@ -2438,7 +2440,7 @@ fn durable_decision_advances_live_leader_wire_recovery_cut() {
     let _command_rx = attach_locked_candidate_io(&mut service, 4);
     let decided_subject = locked_candidate_subject(b"live leader-wire Decision cut");
     service
-        .finish_runtime_step_reconciliation(Some(decided_subject))
+        .finish_runtime_step_reconciliation(Some(decided_subject), Some(service.leader_wire_recovery_authority.with_durable_decision()))
         .expect("publish Decision and close live leader-wire admission");
     for view in [service.active_tag.view(), service.active_tag.view() + 1] {
         let (_, _, proposal, _, sender) = productive_chunk_at_view(&service, &keys, view);
@@ -2582,13 +2584,14 @@ fn pipeline_release_tracks_only_successfully_queued_durable_prepare_intent() {
         height: service.context.height,
         view: 0,
     };
-    let execution_commitment = wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
-        Hash::new(b"worker prepared parent state"),
-        Hash::new(b"worker prepared post state"),
-        Hash::new(b"worker prepared ordinary writes"),
-        1,
-        Hash::new(b"worker prepared executed block wire"),
-    );
+    let execution_commitment =
+        wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+            Hash::new(b"worker prepared parent state"),
+            Hash::new(b"worker prepared post state"),
+            Hash::new(b"worker prepared ordinary writes"),
+            1,
+            Hash::new(b"worker prepared executed block wire"),
+        );
     let vote = |phase| wire::Vote {
         round,
         proposal_round: round,

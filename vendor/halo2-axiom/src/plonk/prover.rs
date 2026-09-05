@@ -72,6 +72,13 @@ where
             return Err(Error::InvalidInstances);
         }
     }
+    if (!P::QUERY_INSTANCE && P::PROOF_SUPPLIED_INSTANCE_COMMITMENT_MASK != 0)
+        || (pk.vk.cs.num_instance_columns < u64::BITS as usize
+            && P::PROOF_SUPPLIED_INSTANCE_COMMITMENT_MASK >> pk.vk.cs.num_instance_columns != 0)
+        || (P::PROOF_SUPPLIED_INSTANCE_COMMITMENT_MASK != 0 && circuits.len() != 1)
+    {
+        return Err(Error::InvalidInstances);
+    }
 
     // Hash verification key into transcript
     pk.vk.hash_into(transcript)?;
@@ -321,10 +328,16 @@ where
                     let instance_commitments = instance_commitments;
                     drop(instance_commitments_projective);
 
-                    for commitment in &instance_commitments {
-                        self.transcript
-                            .common_point(*commitment)
-                            .expect("Absorbing instance commitment to transcript failed");
+                    for (column, commitment) in instance_commitments.iter().enumerate() {
+                        if P::proof_supplied_instance_commitment(column) {
+                            self.transcript
+                                .write_point(*commitment)
+                                .expect("Writing instance commitment to transcript failed");
+                        } else {
+                            self.transcript
+                                .common_point(*commitment)
+                                .expect("Absorbing instance commitment to transcript failed");
+                        }
                     }
                 }
             }
@@ -982,6 +995,12 @@ where
             return Err(Error::InvalidInstances);
         }
     }
+    if (!P::QUERY_INSTANCE && P::PROOF_SUPPLIED_INSTANCE_COMMITMENT_MASK != 0)
+        || (pk.vk.cs.num_instance_columns < u64::BITS as usize
+            && P::PROOF_SUPPLIED_INSTANCE_COMMITMENT_MASK >> pk.vk.cs.num_instance_columns != 0)
+    {
+        return Err(Error::InvalidInstances);
+    }
 
     // Hash verification key into transcript
     pk.vk.hash_into(transcript)?;
@@ -1266,10 +1285,16 @@ where
                     let instance_commitments = instance_commitments;
                     drop(instance_commitments_projective);
 
-                    for commitment in &instance_commitments {
-                        self.transcript
-                            .common_point(*commitment)
-                            .expect("Absorbing instance commitment to transcript failed");
+                    for (column, commitment) in instance_commitments.iter().enumerate() {
+                        if P::proof_supplied_instance_commitment(column) {
+                            self.transcript
+                                .write_point(*commitment)
+                                .expect("Writing instance commitment to transcript failed");
+                        } else {
+                            self.transcript
+                                .common_point(*commitment)
+                                .expect("Absorbing instance commitment to transcript failed");
+                        }
                     }
                 }
             }

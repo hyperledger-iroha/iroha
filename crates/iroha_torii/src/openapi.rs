@@ -729,7 +729,6 @@ mod tests {
         "idempotency_key_invalid",
         "idempotency_key_missing",
         "operation_id_invalid",
-        "kagemusha_amount_exceeds_limit",
         "kagemusha_asset_not_found",
         "kagemusha_asset_scale_invalid",
         "kagemusha_asset_scale_mismatch",

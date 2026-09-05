@@ -8,6 +8,11 @@
 #[path = "real_payment_corridor.rs"]
 mod real_payment_corridor;
 
+#[cfg(feature = "kagemusha-real-proof-harness")]
+pub(super) fn run_guarded_real_mint_authority_proof_v1() {
+    real_payment_corridor::run_guarded_real_mint_authority_proof_v1();
+}
+
 use std::io::Cursor;
 
 use halo2_base::gates::circuit::BaseCircuitParams;
@@ -18,7 +23,7 @@ use halo2_proofs::{
         group::{GroupEncoding as _, prime::PrimeCurveAffine as _},
         pasta::{EpAffine, EqAffine, Fp, Fq},
     },
-    plonk::{Circuit, ProvingKey, VerifyingKey, create_proof, keygen_pk, keygen_vk},
+    plonk::{Circuit, ProvingKey, VerifyingKey, create_proof, keygen_vk},
     poly::{
         commitment::ParamsProver as _,
         ipa::{
@@ -35,8 +40,9 @@ use iroha_data_model::{
     domain::DomainId,
     kagemusha::{
         KAGEMUSHA_HALO2_K_V1, KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1,
-        KAGEMUSHA_PAIRED_PROOF_MAX_BYTES_V1, KAGEMUSHA_WIRE_VERSION_V1, KagemushaDevicePublicKeyV1,
-        KagemushaPairedProofV1, KagemushaPastaStateCommitmentV1,
+        KAGEMUSHA_PAIRED_PROOF_MAX_BYTES_V1, KAGEMUSHA_PAYMENT_MAX_BYTES_V1,
+        KAGEMUSHA_WIRE_VERSION_V1, KagemushaDevicePublicKeyV1, KagemushaPairedProofV1,
+        KagemushaPastaStateCommitmentV1, KagemushaPaymentRequestV1, KagemushaPaymentV1,
         kagemusha_asset_identity_digest_v1, kagemusha_device_key_reference_v1,
         kagemusha_liability_pool_id_v1, kagemusha_pasta_state_commitment_v1,
     },
@@ -54,6 +60,10 @@ use snark_verifier::{
     verifier::plonk::PlonkProtocol,
 };
 
+use super::generation::{
+    canonical_kagemusha_ep_parameters_v1, canonical_kagemusha_eq_parameters_v1,
+    keygen_pk_with_helper_resource_preflight_consuming_v1,
+};
 use super::{
     KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1, KAGEMUSHA_IPA_FOLD_PROOF_BYTES_V1,
     KAGEMUSHA_IPA_POSEIDON_FULL_ROUNDS_V1, KAGEMUSHA_IPA_POSEIDON_PARTIAL_ROUNDS_V1,
@@ -63,8 +73,9 @@ use super::{
     KagemushaGeneratedRecursiveStateProofV1, KagemushaGuardBundleRelationWitnessV1,
     KagemushaLoadedEpRecursiveStateArtifactsV1, KagemushaLoadedEqRecursiveStateArtifactsV1,
     KagemushaNormalizedGuardStatementV1, KagemushaOperationV1, KagemushaPastaParityV1,
-    KagemushaPlatformCredentialRelationCircuitV1, KagemushaPlatformCredentialRelationWitnessV1,
-    KagemushaPlatformCredentialStatementV1, KagemushaStateRelationWitnessV1,
+    KagemushaPlatformCredentialRelationWitnessV1, KagemushaPlatformCredentialStatementV1,
+    KagemushaRecursionArtifactsV1, KagemushaRecursiveVerifierV1,
+    KagemushaStateRelationPublicInputsV1, KagemushaStateRelationWitnessV1,
     composite::{
         KagemushaRecursiveStateEpCircuitV1, KagemushaRecursiveStateEqCircuitV1, ep_succinct_vk,
         eq_succinct_vk,
@@ -74,10 +85,19 @@ use super::{
         accumulator_limb_count, native_parent_protocol_digest_v1, ordinary_ipa_proof_profile_v1,
     },
     fold_kagemusha_ep_accumulators_v1, fold_kagemusha_eq_accumulators_v1,
-    generation::{KagemushaRawHalo2IpaProofV1, augment_halo2_ipa_proof_v1},
+    generation::{
+        KagemushaGeneratedMintHashClaimV1, KagemushaLoadedEpMintHashArtifactsV1,
+        KagemushaLoadedEqMintHashArtifactsV1, KagemushaRawHalo2IpaProofV1,
+        augment_halo2_ipa_proof_v1, preflight_kagemusha_platform_credential_key_configuration_v1,
+        prove_kagemusha_platform_credential_hash_claim_v1,
+    },
     guard_bundle::{
-        GUARD_RECURSIVE_PUBLIC_INSTANCE_COUNT_V1, KagemushaGuardBundleRecursiveWitnessV1,
-        build_kagemusha_guard_bundle_pair_v1, device_authority_commitment_v1,
+        GUARD_RECURSIVE_PUBLIC_INSTANCE_COUNT_V1,
+        KAGEMUSHA_PLATFORM_CREDENTIAL_PUBLIC_INSTANCE_COUNT_V1,
+        KagemushaGuardBundleRecursiveWitnessV1, KagemushaPlatformCredentialHashClaimPairWitnessV1,
+        KagemushaPlatformCredentialHashClaimParityWitnessV1, build_kagemusha_guard_bundle_pair_v1,
+        build_kagemusha_platform_credential_ep_v1, build_kagemusha_platform_credential_eq_v1,
+        device_authority_commitment_v1, discover_kagemusha_platform_credential_audits_v1,
     },
     initial_kagemusha_ep_accumulator_v1, initial_kagemusha_eq_accumulator_v1,
     mint_authority::KAGEMUSHA_MINT_AUTHORITY_PUBLIC_INSTANCE_COUNT_V1,
@@ -96,7 +116,8 @@ use crate::zk::{
     },
     kagemusha_v1_state::{
         DevicePolicyBindingV1, DigestV1, HardwareEpochV1, KAGEMUSHA_STATE_VERSION_V1,
-        KagemushaLaneIdV1, KagemushaStateV1,
+        KagemushaHandoffEvidenceV1, KagemushaHandoffSequenceVerificationV1, KagemushaLaneIdV1,
+        KagemushaStateV1, ReceiveFoldCreditV1, verify_kagemusha_handoff_evidence_sequence_v1,
     },
 };
 
@@ -105,6 +126,70 @@ const POLICY_LEAF_DOMAIN: &[u8] = b"iroha:kagemusha:v1:hardware-policy-leaf";
 const POLICY_NODE_DOMAIN: &[u8] = b"iroha:kagemusha:v1:hardware-policy-node";
 const RECURSIVE_PUBLIC_INSTANCE_COUNT: usize =
     PUBLIC_INSTANCE_COUNT + KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1 / 16;
+
+/// Owned output required from the real handoff generator before evidence qualification.
+///
+/// This record deliberately has no constructor that fabricates proofs. The real corridor must
+/// populate it from generated SendSplit, post-commit payment, and ReceiveFold artifacts.
+struct GeneratedHandoffEvidenceV1 {
+    sender_public_inputs: KagemushaStateRelationPublicInputsV1,
+    sender_state_proof: KagemushaPairedProofV1,
+    payment_request: KagemushaPaymentRequestV1,
+    payment: KagemushaPaymentV1,
+    receive_credit: ReceiveFoldCreditV1,
+    receiver_public_inputs: KagemushaStateRelationPublicInputsV1,
+    receiver_state_proof: KagemushaPairedProofV1,
+}
+
+impl GeneratedHandoffEvidenceV1 {
+    fn evidence(&self) -> KagemushaHandoffEvidenceV1<'_> {
+        KagemushaHandoffEvidenceV1 {
+            sender_public_inputs: &self.sender_public_inputs,
+            sender_state_proof: &self.sender_state_proof,
+            payment_request: &self.payment_request,
+            payment: &self.payment,
+            receive_credit: self.receive_credit,
+            receiver_public_inputs: &self.receiver_public_inputs,
+            receiver_state_proof: &self.receiver_state_proof,
+        }
+    }
+}
+
+/// Apply the production fail-closed verifier to every generated proof in the qualification run.
+///
+/// This is the only acceptance path for the pending real 1,024-handoff generator. It prevents a
+/// rotation-only loop, a relation-model loop, or unchecked proof-size samples from being reported
+/// as payment handoffs.
+fn verify_real_handoff_qualification_v1<V: KagemushaRecursiveVerifierV1>(
+    verifier: &V,
+    artifacts: KagemushaRecursionArtifactsV1,
+    generated: &[GeneratedHandoffEvidenceV1],
+) -> KagemushaHandoffSequenceVerificationV1 {
+    assert!(
+        generated.len() >= 1_024,
+        "real payment qualification requires at least 1,024 generated handoffs"
+    );
+    let evidence = generated
+        .iter()
+        .map(GeneratedHandoffEvidenceV1::evidence)
+        .collect::<Vec<_>>();
+    let verified = verify_kagemusha_handoff_evidence_sequence_v1(verifier, artifacts, &evidence)
+        .expect("every real generated handoff must pass terminal evidence verification");
+    assert_eq!(verified.verified_handoffs, generated.len());
+    assert!(
+        verified.constant_sizes.sender_state_proof_bytes <= KAGEMUSHA_PAIRED_PROOF_MAX_BYTES_V1,
+        "sender state proof exceeded the compact paired-proof envelope"
+    );
+    assert!(
+        verified.constant_sizes.receiver_state_proof_bytes <= KAGEMUSHA_PAIRED_PROOF_MAX_BYTES_V1,
+        "receiver state proof exceeded the compact paired-proof envelope"
+    );
+    assert!(
+        verified.constant_sizes.payment_bytes <= KAGEMUSHA_PAYMENT_MAX_BYTES_V1,
+        "committed payment exceeded the compact transport envelope"
+    );
+    verified
+}
 
 /// Predictable entropy for fixture replay only, never a qualified provider seed.
 fn test_only_recovery_seed() -> KagemushaRecoverySeedV1 {
@@ -561,48 +646,175 @@ struct CredentialKeys {
     ep_proving_key: ProvingKey<EpAffine>,
     eq_protocol: PlonkProtocol<EqAffine>,
     ep_protocol: PlonkProtocol<EpAffine>,
+    eq_protocol_digest: DigestV1,
+    ep_protocol_digest: DigestV1,
+    eq_circuit_params: BaseCircuitParams,
+    ep_circuit_params: BaseCircuitParams,
+    hash_claim: KagemushaGeneratedMintHashClaimV1,
 }
 
 struct CredentialProof {
     relation: KagemushaPlatformCredentialRelationWitnessV1,
     device_secret: DigestV1,
+    eq_instances: Vec<Vec<Fp>>,
+    ep_instances: Vec<Vec<Fq>>,
     eq_proof: Vec<u8>,
     ep_proof: Vec<u8>,
+    eq_claim_history: KagemushaEqAccumulatorV1,
+    ep_claim_history: KagemushaEpAccumulatorV1,
     eq_current: KagemushaEqAccumulatorV1,
     ep_current: KagemushaEpAccumulatorV1,
+}
+
+fn with_claim_backed_credential_witness<R>(
+    eq_hash: &KagemushaLoadedEqMintHashArtifactsV1,
+    ep_hash: &KagemushaLoadedEpMintHashArtifactsV1,
+    relation: &KagemushaPlatformCredentialRelationWitnessV1,
+    claim: &KagemushaGeneratedMintHashClaimV1,
+    build: impl FnOnce(&KagemushaPlatformCredentialHashClaimPairWitnessV1<'_>) -> R,
+) -> R {
+    let eq_claim_instances = claim.eq_inner_instances.clone();
+    let ep_claim_instances = claim.ep_inner_instances.clone();
+    let eq_claim_history = claim
+        .eq_history
+        .to_native()
+        .expect("decode Eq PlatformCredential claim history");
+    let ep_claim_history = claim
+        .ep_history
+        .to_native()
+        .expect("decode Ep PlatformCredential claim history");
+    let witness = KagemushaPlatformCredentialHashClaimPairWitnessV1 {
+        relation: relation.clone(),
+        eq_claim_protocol_digest: eq_hash.claim_protocol_digest,
+        ep_claim_protocol_digest: ep_hash.claim_protocol_digest,
+        eq_shard_protocol_digest: eq_hash.shard_protocol_digest,
+        ep_shard_protocol_digest: ep_hash.shard_protocol_digest,
+        eq: KagemushaPlatformCredentialHashClaimParityWitnessV1 {
+            claim_protocol: &eq_hash.claim_protocol,
+            claim_instances: &eq_claim_instances,
+            claim_proof: &claim.eq_proof,
+            claim_history: &eq_claim_history,
+            claim_history_fold_proof: claim.eq_history_fold_proof.as_bytes(),
+            successor_history: claim.eq_complete_history.as_bytes(),
+        },
+        ep: KagemushaPlatformCredentialHashClaimParityWitnessV1 {
+            claim_protocol: &ep_hash.claim_protocol,
+            claim_instances: &ep_claim_instances,
+            claim_proof: &claim.ep_proof,
+            claim_history: &ep_claim_history,
+            claim_history_fold_proof: claim.ep_history_fold_proof.as_bytes(),
+            successor_history: claim.ep_complete_history.as_bytes(),
+        },
+    };
+    build(&witness)
 }
 
 impl CredentialKeys {
     fn generate(
         eq_params: &ParamsIPA<EqAffine>,
         ep_params: &ParamsIPA<EpAffine>,
+        eq_hash: &KagemushaLoadedEqMintHashArtifactsV1,
+        ep_hash: &KagemushaLoadedEpMintHashArtifactsV1,
         witness: &KagemushaPlatformCredentialRelationWitnessV1,
     ) -> Self {
-        let eq_circuit = KagemushaPlatformCredentialRelationCircuitV1::<Fp>::new(witness.clone())
-            .expect("Eq credential circuit");
-        let ep_circuit = KagemushaPlatformCredentialRelationCircuitV1::<Fq>::new(witness.clone())
-            .expect("Ep credential circuit");
-        let eq_verifying_key = keygen_vk(eq_params, &eq_circuit).expect("Eq credential VK");
-        let eq_proving_key =
-            keygen_pk(eq_params, eq_verifying_key.clone(), &eq_circuit).expect("Eq credential PK");
-        let ep_verifying_key = keygen_vk(ep_params, &ep_circuit).expect("Ep credential VK");
-        let ep_proving_key =
-            keygen_pk(ep_params, ep_verifying_key.clone(), &ep_circuit).expect("Ep credential PK");
-        let eq_protocol = compile(
-            eq_params,
-            &eq_verifying_key,
-            snark_verifier::system::halo2::Config::ipa().with_num_instance(vec![2]),
+        preflight_kagemusha_platform_credential_key_configuration_v1().expect(
+            "PlatformCredential fixed auxiliary geometry must fit immutable helper-key limits",
         );
-        let ep_protocol = compile(
-            ep_params,
-            &ep_verifying_key,
-            snark_verifier::system::halo2::Config::ipa().with_num_instance(vec![2]),
+        let hash_claim = prove_kagemusha_platform_credential_hash_claim_v1(
+            eq_hash,
+            ep_hash,
+            witness,
+            &test_only_recovery_seed(),
+        )
+        .expect("prove reusable PlatformCredential typed SHA claim");
+        let (
+            eq_proving_key,
+            ep_proving_key,
+            eq_protocol,
+            ep_protocol,
+            eq_protocol_digest,
+            ep_protocol_digest,
+            eq_circuit_params,
+            ep_circuit_params,
+        ) = with_claim_backed_credential_witness(
+            eq_hash,
+            ep_hash,
+            witness,
+            &hash_claim,
+            |witness| {
+                let discovery =
+                    discover_kagemusha_platform_credential_audits_v1(eq_params, ep_params, witness)
+                        .expect("discover PlatformCredential reciprocal audits");
+                let eq_circuit =
+                    build_kagemusha_platform_credential_eq_v1(eq_params, witness, &discovery)
+                        .expect("build exact Eq PlatformCredential circuit");
+                let eq_circuit_params = eq_circuit.params();
+                let eq_proving_key = keygen_pk_with_helper_resource_preflight_consuming_v1(
+                    eq_params,
+                    eq_circuit,
+                    KagemushaPastaParityV1::Eq,
+                    "PlatformCredential",
+                    "PlatformCredential proving key",
+                )
+                .expect("Eq credential PK");
+                halo2_proofs::release_allocator_slack();
+
+                let ep_circuit =
+                    build_kagemusha_platform_credential_ep_v1(ep_params, witness, &discovery)
+                        .expect("build exact Ep PlatformCredential circuit");
+                let ep_circuit_params = ep_circuit.params();
+                let ep_proving_key = keygen_pk_with_helper_resource_preflight_consuming_v1(
+                    ep_params,
+                    ep_circuit,
+                    KagemushaPastaParityV1::Ep,
+                    "PlatformCredential",
+                    "PlatformCredential proving key",
+                )
+                .expect("Ep credential PK");
+                halo2_proofs::release_allocator_slack();
+
+                let eq_protocol = compile(
+                    eq_params,
+                    eq_proving_key.get_vk(),
+                    snark_verifier::system::halo2::Config::ipa().with_num_instance(vec![
+                        KAGEMUSHA_PLATFORM_CREDENTIAL_PUBLIC_INSTANCE_COUNT_V1,
+                    ]),
+                );
+                let ep_protocol = compile(
+                    ep_params,
+                    ep_proving_key.get_vk(),
+                    snark_verifier::system::halo2::Config::ipa().with_num_instance(vec![
+                        KAGEMUSHA_PLATFORM_CREDENTIAL_PUBLIC_INSTANCE_COUNT_V1,
+                    ]),
+                );
+                let eq_protocol_digest =
+                    native_parent_protocol_digest_v1(&eq_protocol, KagemushaPastaParityV1::Eq)
+                        .expect("Eq PlatformCredential protocol digest");
+                let ep_protocol_digest =
+                    native_parent_protocol_digest_v1(&ep_protocol, KagemushaPastaParityV1::Ep)
+                        .expect("Ep PlatformCredential protocol digest");
+                (
+                    eq_proving_key,
+                    ep_proving_key,
+                    eq_protocol,
+                    ep_protocol,
+                    eq_protocol_digest,
+                    ep_protocol_digest,
+                    eq_circuit_params,
+                    ep_circuit_params,
+                )
+            },
         );
         Self {
             eq_proving_key,
             ep_proving_key,
             eq_protocol,
             ep_protocol,
+            eq_protocol_digest,
+            ep_protocol_digest,
+            eq_circuit_params,
+            ep_circuit_params,
+            hash_claim,
         }
     }
 
@@ -610,36 +822,102 @@ impl CredentialKeys {
         &self,
         eq_params: &ParamsIPA<EqAffine>,
         ep_params: &ParamsIPA<EpAffine>,
+        eq_hash: &KagemushaLoadedEqMintHashArtifactsV1,
+        ep_hash: &KagemushaLoadedEpMintHashArtifactsV1,
         relation: KagemushaPlatformCredentialRelationWitnessV1,
         device_secret: DigestV1,
     ) -> CredentialProof {
-        let eq_circuit = KagemushaPlatformCredentialRelationCircuitV1::<Fp>::new(relation.clone())
-            .expect("Eq credential circuit");
-        let ep_circuit = KagemushaPlatformCredentialRelationCircuitV1::<Fq>::new(relation.clone())
-            .expect("Ep credential circuit");
-        let eq_instances = eq_circuit
-            .public_instances()
-            .expect("Eq credential instances");
-        let ep_instances = ep_circuit
-            .public_instances()
-            .expect("Ep credential instances");
-        let eq_proof = create_eq_proof(eq_params, &self.eq_proving_key, eq_circuit, &eq_instances);
-        let ep_proof = create_ep_proof(ep_params, &self.ep_proving_key, ep_circuit, &ep_instances);
-        let eq_current = KagemushaEqAccumulatorV1::from_native(
-            &verify_eq_succinct_protocol(eq_params, &self.eq_protocol, &eq_proof, &eq_instances)
-                .expect("verify real Eq credential proof"),
-        )
-        .expect("encode Eq credential accumulator");
-        let ep_current = KagemushaEpAccumulatorV1::from_native(
-            &verify_ep_succinct_protocol(ep_params, &self.ep_protocol, &ep_proof, &ep_instances)
-                .expect("verify real Ep credential proof"),
-        )
-        .expect("encode Ep credential accumulator");
+        let (
+            eq_instances,
+            ep_instances,
+            eq_proof,
+            ep_proof,
+            eq_claim_history,
+            ep_claim_history,
+            eq_current,
+            ep_current,
+        ) = with_claim_backed_credential_witness(
+            eq_hash,
+            ep_hash,
+            &relation,
+            &self.hash_claim,
+            |witness| {
+                let discovery =
+                    discover_kagemusha_platform_credential_audits_v1(eq_params, ep_params, witness)
+                        .expect("discover PlatformCredential proof audits");
+                let eq_circuit =
+                    build_kagemusha_platform_credential_eq_v1(eq_params, witness, &discovery)
+                        .expect("build exact Eq PlatformCredential proof circuit");
+                assert_base_circuit_params_eq(&eq_circuit.params(), &self.eq_circuit_params);
+                let eq_column = eq_circuit
+                    .public_instances()
+                    .expect("Eq PlatformCredential instances");
+                assert_eq!(
+                    eq_column.len(),
+                    KAGEMUSHA_PLATFORM_CREDENTIAL_PUBLIC_INSTANCE_COUNT_V1
+                );
+                let eq_proof =
+                    create_eq_proof(eq_params, &self.eq_proving_key, eq_circuit, &eq_column);
+                let eq_instances = vec![eq_column];
+                let eq_current = KagemushaEqAccumulatorV1::from_native(
+                    &verify_eq_succinct_protocol(
+                        eq_params,
+                        &self.eq_protocol,
+                        &eq_proof,
+                        &eq_instances[0],
+                    )
+                    .expect("verify real Eq PlatformCredential proof"),
+                )
+                .expect("encode Eq PlatformCredential accumulator");
+                halo2_proofs::release_allocator_slack();
+
+                let ep_circuit =
+                    build_kagemusha_platform_credential_ep_v1(ep_params, witness, &discovery)
+                        .expect("build exact Ep PlatformCredential proof circuit");
+                assert_base_circuit_params_eq(&ep_circuit.params(), &self.ep_circuit_params);
+                let ep_column = ep_circuit
+                    .public_instances()
+                    .expect("Ep PlatformCredential instances");
+                assert_eq!(
+                    ep_column.len(),
+                    KAGEMUSHA_PLATFORM_CREDENTIAL_PUBLIC_INSTANCE_COUNT_V1
+                );
+                let ep_proof =
+                    create_ep_proof(ep_params, &self.ep_proving_key, ep_circuit, &ep_column);
+                let ep_instances = vec![ep_column];
+                let ep_current = KagemushaEpAccumulatorV1::from_native(
+                    &verify_ep_succinct_protocol(
+                        ep_params,
+                        &self.ep_protocol,
+                        &ep_proof,
+                        &ep_instances[0],
+                    )
+                    .expect("verify real Ep PlatformCredential proof"),
+                )
+                .expect("encode Ep PlatformCredential accumulator");
+                halo2_proofs::release_allocator_slack();
+
+                (
+                    eq_instances,
+                    ep_instances,
+                    eq_proof,
+                    ep_proof,
+                    self.hash_claim.eq_complete_history.clone(),
+                    self.hash_claim.ep_complete_history.clone(),
+                    eq_current,
+                    ep_current,
+                )
+            },
+        );
         CredentialProof {
             relation,
             device_secret,
+            eq_instances,
+            ep_instances,
             eq_proof,
             ep_proof,
+            eq_claim_history,
+            ep_claim_history,
             eq_current,
             ep_current,
         }
@@ -652,28 +930,20 @@ fn assert_augmented_credential_proof_rejections(
     keys: &CredentialKeys,
     credential: &CredentialProof,
 ) {
-    let eq_instances =
-        KagemushaPlatformCredentialRelationCircuitV1::<Fp>::new(credential.relation.clone())
-            .expect("Eq credential circuit for augmented-proof rejection")
-            .public_instances()
-            .expect("Eq credential instances for augmented-proof rejection");
-    let ep_instances =
-        KagemushaPlatformCredentialRelationCircuitV1::<Fq>::new(credential.relation.clone())
-            .expect("Ep credential circuit for augmented-proof rejection")
-            .public_instances()
-            .expect("Ep credential instances for augmented-proof rejection");
+    let eq_instances = &credential.eq_instances[0];
+    let ep_instances = &credential.ep_instances[0];
 
     let mut eq_truncated = credential.eq_proof.clone();
     eq_truncated.pop();
     assert!(
-        verify_eq_succinct_protocol(eq_params, &keys.eq_protocol, &eq_truncated, &eq_instances)
+        verify_eq_succinct_protocol(eq_params, &keys.eq_protocol, &eq_truncated, eq_instances)
             .is_err(),
         "truncated Eq folded-generator encoding must fail closed",
     );
     let mut eq_padded = credential.eq_proof.clone();
     eq_padded.push(0);
     assert!(
-        verify_eq_succinct_protocol(eq_params, &keys.eq_protocol, &eq_padded, &eq_instances)
+        verify_eq_succinct_protocol(eq_params, &keys.eq_protocol, &eq_padded, eq_instances)
             .is_err(),
         "padded Eq augmented proof must fail closed",
     );
@@ -687,7 +957,7 @@ fn assert_augmented_credential_proof_rejections(
     let eq_point_offset = eq_mutated.len() - 32;
     eq_mutated[eq_point_offset..].copy_from_slice(eq_replacement.as_ref());
     assert!(
-        verify_eq_succinct_protocol(eq_params, &keys.eq_protocol, &eq_mutated, &eq_instances)
+        verify_eq_succinct_protocol(eq_params, &keys.eq_protocol, &eq_mutated, eq_instances)
             .is_err(),
         "substituted Eq folded generator must fail the succinct equation",
     );
@@ -706,14 +976,14 @@ fn assert_augmented_credential_proof_rejections(
     let mut ep_truncated = credential.ep_proof.clone();
     ep_truncated.pop();
     assert!(
-        verify_ep_succinct_protocol(ep_params, &keys.ep_protocol, &ep_truncated, &ep_instances)
+        verify_ep_succinct_protocol(ep_params, &keys.ep_protocol, &ep_truncated, ep_instances)
             .is_err(),
         "truncated Ep folded-generator encoding must fail closed",
     );
     let mut ep_padded = credential.ep_proof.clone();
     ep_padded.push(0);
     assert!(
-        verify_ep_succinct_protocol(ep_params, &keys.ep_protocol, &ep_padded, &ep_instances)
+        verify_ep_succinct_protocol(ep_params, &keys.ep_protocol, &ep_padded, ep_instances)
             .is_err(),
         "padded Ep augmented proof must fail closed",
     );
@@ -727,7 +997,7 @@ fn assert_augmented_credential_proof_rejections(
     let ep_point_offset = ep_mutated.len() - 32;
     ep_mutated[ep_point_offset..].copy_from_slice(ep_replacement.as_ref());
     assert!(
-        verify_ep_succinct_protocol(ep_params, &keys.ep_protocol, &ep_mutated, &ep_instances)
+        verify_ep_succinct_protocol(ep_params, &keys.ep_protocol, &ep_mutated, ep_instances)
             .is_err(),
         "substituted Ep folded generator must fail the succinct equation",
     );
@@ -760,7 +1030,7 @@ fn bootstrap_guard_relation(
         operation: KagemushaOperationV1::Bootstrap,
         amount: 0,
         peer_credit_id: [0; 32],
-        peer_recipient_lane_id: [0; 32],
+        recipient_encryption_key_binding: [0; 32],
         mint_finality_proof_binding_digest: [0; 32],
         predecessor_release_id: [0; 32],
         release_id: state.release_id,
@@ -790,7 +1060,7 @@ fn bootstrap_guard_relation(
         journal_revision_before: 0,
         journal_revision_after: 0,
         lifecycle_binding_digest: digest(b"bootstrap-lifecycle", 0),
-        precommit_binding_digest: [0; 32],
+        prepared_transition_binding_digest: [0; 32],
         terminal_commit_binding_digest: [0; 32],
         sender_one_time_authorization_digest: [0; 32],
         receive_credit_binding_digest: [0; 32],
@@ -933,7 +1203,7 @@ fn prove_guard(
         ),
     )
     .expect("derive GuardBundle audits");
-    let (eq_circuit, ep_circuit, rebuilt_eq_audit, rebuilt_ep_audit) =
+    let build_proof_pair = || {
         build_kagemusha_guard_bundle_pair_v1(
             &eq_succinct_vk(eq_params),
             &ep_succinct_vk(ep_params),
@@ -948,19 +1218,35 @@ fn prove_guard(
                 ep_audit,
             ),
         )
-        .expect("build GuardBundle proof pair");
+        .expect("build GuardBundle proof pair")
+    };
+    let (mut eq_circuit, mut ep_circuit, rebuilt_eq_audit, rebuilt_ep_audit) = build_proof_pair();
     assert_eq!(rebuilt_eq_audit, eq_audit);
     assert_eq!(rebuilt_ep_audit, ep_audit);
 
     if guard_keys.is_none() {
         let eq_circuit_params = eq_circuit.params();
         let ep_circuit_params = ep_circuit.params();
-        let eq_verifying_key = keygen_vk(eq_params, &eq_circuit).expect("Eq GuardBundle VK");
-        let eq_proving_key =
-            keygen_pk(eq_params, eq_verifying_key.clone(), &eq_circuit).expect("Eq GuardBundle PK");
-        let ep_verifying_key = keygen_vk(ep_params, &ep_circuit).expect("Ep GuardBundle VK");
-        let ep_proving_key =
-            keygen_pk(ep_params, ep_verifying_key.clone(), &ep_circuit).expect("Ep GuardBundle PK");
+        let eq_proving_key = keygen_pk_with_helper_resource_preflight_consuming_v1(
+            eq_params,
+            eq_circuit,
+            KagemushaPastaParityV1::Eq,
+            "GuardBundle",
+            "GuardBundle proving key",
+        )
+        .expect("Eq GuardBundle PK");
+        halo2_proofs::release_allocator_slack();
+        let eq_verifying_key = eq_proving_key.get_vk().clone();
+        let ep_proving_key = keygen_pk_with_helper_resource_preflight_consuming_v1(
+            ep_params,
+            ep_circuit,
+            KagemushaPastaParityV1::Ep,
+            "GuardBundle",
+            "GuardBundle proving key",
+        )
+        .expect("Ep GuardBundle PK");
+        halo2_proofs::release_allocator_slack();
+        let ep_verifying_key = ep_proving_key.get_vk().clone();
         let eq_protocol = compile(
             eq_params,
             &eq_verifying_key,
@@ -991,6 +1277,16 @@ fn prove_guard(
             eq_protocol_digest,
             ep_protocol_digest,
         });
+
+        // Consuming key generation intentionally releases the large witness/configuration
+        // graphs before expanding each proving key. Rebuild fresh proving circuits instead of
+        // cloning and retaining those graphs across key generation.
+        let (rebuilt_eq_circuit, rebuilt_ep_circuit, proof_eq_audit, proof_ep_audit) =
+            build_proof_pair();
+        assert_eq!(proof_eq_audit, eq_audit);
+        assert_eq!(proof_ep_audit, ep_audit);
+        eq_circuit = rebuilt_eq_circuit;
+        ep_circuit = rebuilt_ep_circuit;
     }
     let keys = guard_keys.as_ref().expect("GuardBundle keys installed");
     assert_base_circuit_params_eq(&eq_circuit.params(), &keys.eq_circuit_params);
@@ -1037,6 +1333,8 @@ struct DisabledMint {
     ep_protocol: PlonkProtocol<EpAffine>,
     eq_protocol_digest: DigestV1,
     ep_protocol_digest: DigestV1,
+    mint_authorization_eq_protocol_digest: DigestV1,
+    mint_authorization_ep_protocol_digest: DigestV1,
     eq_instances: Vec<Vec<Fp>>,
     ep_instances: Vec<Vec<Fq>>,
     eq_proof: Vec<u8>,
@@ -1087,6 +1385,8 @@ impl DisabledMint {
             ep_protocol,
             eq_protocol_digest,
             ep_protocol_digest,
+            mint_authorization_eq_protocol_digest: encode_pasta(Fp::from(0x19)),
+            mint_authorization_ep_protocol_digest: encode_pasta(Fq::from(0x1a)),
             eq_history,
             ep_history,
             eq_fold: dummy_eq_fold(),
@@ -1116,11 +1416,11 @@ fn bootstrap_state_relation(
         mint_finality_semantic_digest: [0; 32],
         mint_finality_proof_binding_digest: [0; 32],
         peer_credit_id: [0; 32],
-        peer_recipient_lane_id: [0; 32],
+        recipient_encryption_key_binding: [0; 32],
         receive_credit: None,
         receive_credit_binding_digest: [0; 32],
         lifecycle_binding_digest: guard.relation.statement.lifecycle_binding_digest,
-        precommit_binding_digest: [0; 32],
+        prepared_transition_binding_digest: [0; 32],
         transport_semantic_digest: digest(b"bootstrap-transport", 0),
         guard_statement_digest: guard.relation.statement_digest(),
         eq_protocol_digest,
@@ -1129,6 +1429,8 @@ fn bootstrap_state_relation(
         guard_ep_protocol_digest: guard_keys.ep_protocol_digest,
         mint_eq_protocol_digest: mint.eq_protocol_digest,
         mint_ep_protocol_digest: mint.ep_protocol_digest,
+        mint_authorization_eq_protocol_digest: mint.mint_authorization_eq_protocol_digest,
+        mint_authorization_ep_protocol_digest: mint.mint_authorization_ep_protocol_digest,
         commit_wrapper_eq_protocol_digest: incoming_eq_protocol_digest,
         commit_wrapper_ep_protocol_digest: incoming_ep_protocol_digest,
         guard_eq_credential_audit: guard.eq_credential_audit,
@@ -1910,4 +2212,20 @@ fn bootstrap_guard_shape_preflight_needs_no_halo2_proof() {
     let relation =
         bootstrap_guard_relation(&state, &credential.statement, device_secret, empty_effect);
     relation.validate().expect("valid bootstrap GuardBundle");
+}
+
+#[test]
+#[ignore = "blocked until the real funded SendSplit and ReceiveFold generator is complete"]
+fn real_1024_payment_handoffs_must_pass_the_fail_closed_evidence_corridor() {
+    // TODO: Replace this explicit failure with the real positive-balance alternating-device
+    // generator once MintFold exposes its funded recursive state output to SendSplit. Keeping the
+    // gate fail-closed prevents a model loop or Rotate proof from satisfying this qualification.
+    let generated: Result<Vec<GeneratedHandoffEvidenceV1>, &str> = Err(
+        "real positive-value MintFold -> SendSplit -> PaymentV1 -> ReceiveFold generation is not yet wired",
+    );
+    let generated = generated.expect("real 1,024-handoff generator must be installed");
+    let verifier = super::RejectAllKagemushaRecursiveVerifierV1;
+    let artifacts = super::tests::artifacts();
+    let verified = verify_real_handoff_qualification_v1(&verifier, artifacts, &generated);
+    assert_eq!(verified.verified_handoffs, 1_024);
 }

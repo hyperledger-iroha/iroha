@@ -6,8 +6,17 @@
 use super::*;
 
 pub(super) struct KagemushaPreparedMintAuthorityTransportV1 {
-    pub(super) eq_circuit: KagemushaMintAuthorityTransportEqCircuitV1,
-    pub(super) ep_circuit: KagemushaMintAuthorityTransportEpCircuitV1,
+    pub(super) audits: KagemushaMintTransportDeferredAuditsV1,
+    pub(super) eq_inner_protocol: PlonkProtocol<EqAffine>,
+    pub(super) ep_inner_protocol: PlonkProtocol<EpAffine>,
+    pub(super) eq_inner_instances: Vec<Vec<Fp>>,
+    pub(super) ep_inner_instances: Vec<Vec<Fq>>,
+    pub(super) eq_inner_proof: Vec<u8>,
+    pub(super) ep_inner_proof: Vec<u8>,
+    pub(super) eq_inner_history: IpaAccumulator<EqAffine, NativeLoader>,
+    pub(super) ep_inner_history: IpaAccumulator<EpAffine, NativeLoader>,
+    pub(super) eq_inner_history_fold_proof: Vec<u8>,
+    pub(super) ep_inner_history_fold_proof: Vec<u8>,
     pub(super) eq_instances: Vec<Fp>,
     pub(super) ep_instances: Vec<Fq>,
     pub(super) eq_history: KagemushaEqAccumulatorV1,
@@ -20,6 +29,252 @@ pub(super) struct KagemushaPreparedMintAuthorityTransportV1 {
     pub(super) release_id: [u8; 32],
     pub(super) genesis_roster_id: [u8; 32],
     pub(super) proof_binding_digest: [u8; 32],
+}
+
+impl KagemushaPreparedMintAuthorityTransportV1 {
+    fn witness(&self) -> KagemushaMintTransportDeciderWitnessV1<'_> {
+        KagemushaMintTransportDeciderWitnessV1 {
+            eq: KagemushaMintTransportParityWitnessV1 {
+                inner_protocol: &self.eq_inner_protocol,
+                inner_instances: &self.eq_inner_instances,
+                inner_proof: &self.eq_inner_proof,
+                inner_history: &self.eq_inner_history,
+                inner_history_fold_proof: &self.eq_inner_history_fold_proof,
+                outer_instances: &self.eq_instances,
+            },
+            ep: KagemushaMintTransportParityWitnessV1 {
+                inner_protocol: &self.ep_inner_protocol,
+                inner_instances: &self.ep_inner_instances,
+                inner_proof: &self.ep_inner_proof,
+                inner_history: &self.ep_inner_history,
+                inner_history_fold_proof: &self.ep_inner_history_fold_proof,
+                outer_instances: &self.ep_instances,
+            },
+        }
+    }
+
+    fn build_eq(
+        &self,
+        eq: &ParamsIPA<EqAffine>,
+        ep: &ParamsIPA<EpAffine>,
+    ) -> Result<KagemushaMintAuthorityTransportEqCircuitV1, KagemushaArtifactGenerationErrorV1>
+    {
+        let (circuit, instances) =
+            build_kagemusha_mint_authority_transport_eq_v1(eq, ep, self.witness(), &self.audits)
+                .map_err(KagemushaArtifactGenerationErrorV1::CircuitBuild)?;
+        if instances != self.eq_instances {
+            return Err(KagemushaArtifactGenerationErrorV1::CircuitBuild(
+                "Eq mint-authority transport rebuilt different public instances".to_owned(),
+            ));
+        }
+        Ok(circuit)
+    }
+
+    fn build_ep(
+        &self,
+        eq: &ParamsIPA<EqAffine>,
+        ep: &ParamsIPA<EpAffine>,
+    ) -> Result<KagemushaMintAuthorityTransportEpCircuitV1, KagemushaArtifactGenerationErrorV1>
+    {
+        let (circuit, instances) =
+            build_kagemusha_mint_authority_transport_ep_v1(eq, ep, self.witness(), &self.audits)
+                .map_err(KagemushaArtifactGenerationErrorV1::CircuitBuild)?;
+        if instances != self.ep_instances {
+            return Err(KagemushaArtifactGenerationErrorV1::CircuitBuild(
+                "Ep mint-authority transport rebuilt different public instances".to_owned(),
+            ));
+        }
+        Ok(circuit)
+    }
+}
+
+/// Unsatisfied, exact-shape transport carrier used only to derive verifier keys.
+///
+/// Every proof, fold, accumulator, and public value below is loaded as a witness by the
+/// transport circuit. The inner protocols are the only constant-bearing inputs. Keeping this
+/// type separate from [`KagemushaPreparedMintAuthorityTransportV1`] makes it impossible to pass
+/// the parser material to proof creation or native finalization by accident.
+struct MintAuthorityTransportVkBlueprintV1 {
+    audits: KagemushaMintTransportDeferredAuditsV1,
+    eq_inner_protocol: PlonkProtocol<EqAffine>,
+    ep_inner_protocol: PlonkProtocol<EpAffine>,
+    eq_inner_instances: Vec<Vec<Fp>>,
+    ep_inner_instances: Vec<Vec<Fq>>,
+    eq_inner_proof: Vec<u8>,
+    ep_inner_proof: Vec<u8>,
+    eq_inner_history: IpaAccumulator<EqAffine, NativeLoader>,
+    ep_inner_history: IpaAccumulator<EpAffine, NativeLoader>,
+    eq_inner_history_fold_proof: Vec<u8>,
+    ep_inner_history_fold_proof: Vec<u8>,
+    eq_instances: Vec<Fp>,
+    ep_instances: Vec<Fq>,
+}
+
+impl MintAuthorityTransportVkBlueprintV1 {
+    fn new(
+        eq: &ParamsIPA<EqAffine>,
+        ep: &ParamsIPA<EpAffine>,
+        eq_inner_vk: &VerifyingKey<EqAffine>,
+        ep_inner_vk: &VerifyingKey<EpAffine>,
+    ) -> Result<Self, KagemushaArtifactGenerationErrorV1> {
+        let eq_inner_protocol = compile(
+            eq,
+            eq_inner_vk,
+            snark_verifier::system::halo2::Config::ipa()
+                .with_num_instance(vec![KAGEMUSHA_MINT_AUTHORITY_PUBLIC_INSTANCE_COUNT_V1]),
+        );
+        let ep_inner_protocol = compile(
+            ep,
+            ep_inner_vk,
+            snark_verifier::system::halo2::Config::ipa()
+                .with_num_instance(vec![KAGEMUSHA_MINT_AUTHORITY_PUBLIC_INSTANCE_COUNT_V1]),
+        );
+        let eq_history = initial_kagemusha_eq_accumulator_v1(eq)
+            .map_err(|error| KagemushaArtifactGenerationErrorV1::CircuitBuild(error.to_string()))?;
+        let ep_history = initial_kagemusha_ep_accumulator_v1(ep)
+            .map_err(|error| KagemushaArtifactGenerationErrorV1::CircuitBuild(error.to_string()))?;
+        let eq_inner_history = eq_history
+            .to_native()
+            .map_err(|error| KagemushaArtifactGenerationErrorV1::CircuitBuild(error.to_string()))?;
+        let ep_inner_history = ep_history
+            .to_native()
+            .map_err(|error| KagemushaArtifactGenerationErrorV1::CircuitBuild(error.to_string()))?;
+        let eq_inner_instances = bootstrap_parent_instances::<Fp>(eq_history.as_bytes());
+        let ep_inner_instances = bootstrap_parent_instances::<Fq>(ep_history.as_bytes());
+        let eq_point = EqAffine::generator().to_bytes();
+        let ep_point = EpAffine::generator().to_bytes();
+        let eq_inner_proof = dummy_ordinary_proof_bytes(
+            &eq_inner_protocol,
+            eq_point.as_ref(),
+            KagemushaPastaParityV1::Eq,
+        )?;
+        let ep_inner_proof = dummy_ordinary_proof_bytes(
+            &ep_inner_protocol,
+            ep_point.as_ref(),
+            KagemushaPastaParityV1::Ep,
+        )?;
+        let eq_inner_history_fold_proof = dummy_fold_proof_bytes(eq_point.as_ref());
+        let ep_inner_history_fold_proof = dummy_fold_proof_bytes(ep_point.as_ref());
+        let mut eq_instances = eq_inner_instances[0].clone();
+        let mut ep_instances = ep_inner_instances[0].clone();
+
+        let audits = derive_kagemusha_mint_authority_transport_deferred_audits_v1(
+            eq,
+            ep,
+            KagemushaMintTransportDeciderWitnessV1 {
+                eq: KagemushaMintTransportParityWitnessV1 {
+                    inner_protocol: &eq_inner_protocol,
+                    inner_instances: &eq_inner_instances,
+                    inner_proof: &eq_inner_proof,
+                    inner_history: &eq_inner_history,
+                    inner_history_fold_proof: &eq_inner_history_fold_proof,
+                    outer_instances: &eq_instances,
+                },
+                ep: KagemushaMintTransportParityWitnessV1 {
+                    inner_protocol: &ep_inner_protocol,
+                    inner_instances: &ep_inner_instances,
+                    inner_proof: &ep_inner_proof,
+                    inner_history: &ep_inner_history,
+                    inner_history_fold_proof: &ep_inner_history_fold_proof,
+                    outer_instances: &ep_instances,
+                },
+            },
+        )
+        .map_err(KagemushaArtifactGenerationErrorV1::CircuitBuild)?;
+        let eq_audit = audits.eq_digest();
+        let ep_audit = audits.ep_digest();
+        eq_instances[mint_authority_public_instance::EQ_AUDIT_LO
+            ..=mint_authority_public_instance::EQ_AUDIT_HI]
+            .copy_from_slice(&crate::zk::kagemusha_v1_poseidon::digest_limbs::<Fp>(
+                eq_audit,
+            ));
+        eq_instances[mint_authority_public_instance::EP_AUDIT_LO
+            ..=mint_authority_public_instance::EP_AUDIT_HI]
+            .copy_from_slice(&crate::zk::kagemusha_v1_poseidon::digest_limbs::<Fp>(
+                ep_audit,
+            ));
+        ep_instances[mint_authority_public_instance::EQ_AUDIT_LO
+            ..=mint_authority_public_instance::EQ_AUDIT_HI]
+            .copy_from_slice(&crate::zk::kagemusha_v1_poseidon::digest_limbs::<Fq>(
+                eq_audit,
+            ));
+        ep_instances[mint_authority_public_instance::EP_AUDIT_LO
+            ..=mint_authority_public_instance::EP_AUDIT_HI]
+            .copy_from_slice(&crate::zk::kagemusha_v1_poseidon::digest_limbs::<Fq>(
+                ep_audit,
+            ));
+
+        Ok(Self {
+            audits,
+            eq_inner_protocol,
+            ep_inner_protocol,
+            eq_inner_instances,
+            ep_inner_instances,
+            eq_inner_proof,
+            ep_inner_proof,
+            eq_inner_history,
+            ep_inner_history,
+            eq_inner_history_fold_proof,
+            ep_inner_history_fold_proof,
+            eq_instances,
+            ep_instances,
+        })
+    }
+
+    fn witness(&self) -> KagemushaMintTransportDeciderWitnessV1<'_> {
+        KagemushaMintTransportDeciderWitnessV1 {
+            eq: KagemushaMintTransportParityWitnessV1 {
+                inner_protocol: &self.eq_inner_protocol,
+                inner_instances: &self.eq_inner_instances,
+                inner_proof: &self.eq_inner_proof,
+                inner_history: &self.eq_inner_history,
+                inner_history_fold_proof: &self.eq_inner_history_fold_proof,
+                outer_instances: &self.eq_instances,
+            },
+            ep: KagemushaMintTransportParityWitnessV1 {
+                inner_protocol: &self.ep_inner_protocol,
+                inner_instances: &self.ep_inner_instances,
+                inner_proof: &self.ep_inner_proof,
+                inner_history: &self.ep_inner_history,
+                inner_history_fold_proof: &self.ep_inner_history_fold_proof,
+                outer_instances: &self.ep_instances,
+            },
+        }
+    }
+
+    fn build_eq(
+        &self,
+        eq: &ParamsIPA<EqAffine>,
+        ep: &ParamsIPA<EpAffine>,
+    ) -> Result<KagemushaMintAuthorityTransportEqCircuitV1, KagemushaArtifactGenerationErrorV1>
+    {
+        let (circuit, instances) =
+            build_kagemusha_mint_authority_transport_eq_v1(eq, ep, self.witness(), &self.audits)
+                .map_err(KagemushaArtifactGenerationErrorV1::CircuitBuild)?;
+        if instances != self.eq_instances {
+            return Err(KagemushaArtifactGenerationErrorV1::CircuitBuild(
+                "Eq mint-authority VK blueprint rebuilt different public instances".to_owned(),
+            ));
+        }
+        Ok(circuit)
+    }
+
+    fn build_ep(
+        &self,
+        eq: &ParamsIPA<EqAffine>,
+        ep: &ParamsIPA<EpAffine>,
+    ) -> Result<KagemushaMintAuthorityTransportEpCircuitV1, KagemushaArtifactGenerationErrorV1>
+    {
+        let (circuit, instances) =
+            build_kagemusha_mint_authority_transport_ep_v1(eq, ep, self.witness(), &self.audits)
+                .map_err(KagemushaArtifactGenerationErrorV1::CircuitBuild)?;
+        if instances != self.ep_instances {
+            return Err(KagemushaArtifactGenerationErrorV1::CircuitBuild(
+                "Ep mint-authority VK blueprint rebuilt different public instances".to_owned(),
+            ));
+        }
+        Ok(circuit)
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -186,9 +441,43 @@ fn finish_transport(
     ep_protocol: &PlonkProtocol<EpAffine>,
     prepared: KagemushaPreparedMintAuthorityTransportV1,
 ) -> Result<KagemushaGeneratedMintAuthorityProofV1, KagemushaArtifactGenerationErrorV1> {
+    let eq_circuit = prepared.build_eq(eq, ep)?;
+    if !same_base_params(&eq_circuit.params(), eq_layout) {
+        return Err(KagemushaArtifactGenerationErrorV1::CircuitProfileMismatch(
+            KagemushaPastaParityV1::Eq,
+        ));
+    }
+    let eq_proof = create_mint_eq_proof(eq, eq_pk, eq_circuit, &prepared.eq_instances)?;
+    halo2_proofs::release_allocator_slack();
+    let ep_circuit = prepared.build_ep(eq, ep)?;
+    if !same_base_params(&ep_circuit.params(), ep_layout) {
+        return Err(KagemushaArtifactGenerationErrorV1::CircuitProfileMismatch(
+            KagemushaPastaParityV1::Ep,
+        ));
+    }
+    let ep_proof = create_mint_ep_proof(ep, ep_pk, ep_circuit, &prepared.ep_instances)?;
+    finish_transport_from_proofs(
+        eq,
+        ep,
+        eq_protocol,
+        ep_protocol,
+        prepared,
+        eq_proof,
+        ep_proof,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn finish_transport_from_proofs(
+    eq: &ParamsIPA<EqAffine>,
+    ep: &ParamsIPA<EpAffine>,
+    eq_protocol: &PlonkProtocol<EqAffine>,
+    ep_protocol: &PlonkProtocol<EpAffine>,
+    prepared: KagemushaPreparedMintAuthorityTransportV1,
+    eq_proof: Vec<u8>,
+    ep_proof: Vec<u8>,
+) -> Result<KagemushaGeneratedMintAuthorityProofV1, KagemushaArtifactGenerationErrorV1> {
     let KagemushaPreparedMintAuthorityTransportV1 {
-        eq_circuit,
-        ep_circuit,
         eq_instances,
         ep_instances,
         eq_history,
@@ -201,19 +490,8 @@ fn finish_transport(
         release_id,
         genesis_roster_id,
         proof_binding_digest,
+        ..
     } = prepared;
-    if !same_base_params(&eq_circuit.params(), eq_layout) {
-        return Err(KagemushaArtifactGenerationErrorV1::CircuitProfileMismatch(
-            KagemushaPastaParityV1::Eq,
-        ));
-    }
-    if !same_base_params(&ep_circuit.params(), ep_layout) {
-        return Err(KagemushaArtifactGenerationErrorV1::CircuitProfileMismatch(
-            KagemushaPastaParityV1::Ep,
-        ));
-    }
-    let eq_proof = create_mint_eq_proof(eq, eq_pk, eq_circuit, &eq_instances)?;
-    let ep_proof = create_mint_ep_proof(ep, ep_pk, ep_circuit, &ep_instances)?;
     validate_recursive_proof_length(KagemushaPastaParityV1::Eq, &eq_proof)?;
     validate_recursive_proof_length(KagemushaPastaParityV1::Ep, &ep_proof)?;
     let eq_current_accumulator = KagemushaEqAccumulatorV1::from_native(
@@ -324,7 +602,7 @@ impl BootstrapInputs {
 
     fn witness<'a>(
         &'a self,
-        template: &KagemushaMintAuthorityGenerationWitnessV1<'_>,
+        template: &KagemushaMintAuthorityGenerationWitnessV1<'a>,
         eq: &'a PlonkProtocol<EqAffine>,
         ep: &'a PlonkProtocol<EpAffine>,
     ) -> Result<KagemushaMintAuthorityGenerationWitnessV1<'a>, KagemushaArtifactGenerationErrorV1>
@@ -334,6 +612,7 @@ impl BootstrapInputs {
             release_id: template.release_id,
             genesis_roster_id: template.genesis_roster_id,
             certificate: template.certificate.clone(),
+            mint_hash_claim: template.mint_hash_claim.clone(),
             eq_protocol_digest: native_parent_protocol_digest_v1(eq, KagemushaPastaParityV1::Eq)
                 .map_err(KagemushaArtifactGenerationErrorV1::CircuitBuild)?,
             ep_protocol_digest: native_parent_protocol_digest_v1(ep, KagemushaPastaParityV1::Ep)
@@ -350,8 +629,11 @@ impl BootstrapInputs {
             ep_parent_history: &self.ep_history,
             eq_parent_fold_proof: &self.eq_fold,
             ep_parent_fold_proof: &self.ep_fold,
-            eq_successor_history: &self.eq_history,
-            ep_successor_history: &self.ep_history,
+            // The terminal mint-hash claim is always merged into the empty bootstrap ancestry.
+            // Preserve the caller's proved merge successors; substituting the seed histories
+            // makes the real convergence proof unsatisfied even though its column shape matches.
+            eq_successor_history: template.eq_successor_history,
+            ep_successor_history: template.ep_successor_history,
         })
     }
 }
@@ -389,38 +671,71 @@ pub(super) fn generate(
             "MintAuthority bootstrap certificate differs from release or genesis roster".to_owned(),
         ));
     }
-    let eq = ParamsIPA::<EqAffine>::new(KAGEMUSHA_HALO2_K_V1);
-    let ep = ParamsIPA::<EpAffine>::new(KAGEMUSHA_HALO2_K_V1);
+    // Configure the fixed auxiliary geometry before either witness graph exists. This catches the
+    // exact class of SHA/dense column explosion that previously let one ignored proof test grow to
+    // tens of gigabytes before the ordinary key-size preflight could run.
+    let auxiliary_params = BaseCircuitParams {
+        k: KAGEMUSHA_HALO2_K_V1 as usize,
+        num_advice_per_phase: Vec::new(),
+        num_fixed: 0,
+        num_lookup_advice_per_phase: Vec::new(),
+        lookup_bits: None,
+        num_instance_columns: 0,
+    };
+    preflight_helper_key_configuration_v1::<EqAffine, KagemushaMintAuthorityEqCircuitV1>(
+        KAGEMUSHA_HALO2_K_V1 as usize,
+        auxiliary_params.clone(),
+        KagemushaPastaParityV1::Eq,
+        "inner mint authority auxiliary geometry",
+    )?;
+    preflight_helper_key_configuration_v1::<EpAffine, KagemushaMintAuthorityEpCircuitV1>(
+        KAGEMUSHA_HALO2_K_V1 as usize,
+        auxiliary_params,
+        KagemushaPastaParityV1::Ep,
+        "inner mint authority auxiliary geometry",
+    )?;
+    let eq = canonical_kagemusha_eq_parameters_v1();
+    let ep = canonical_kagemusha_ep_parameters_v1();
     let mut eq_seed = template.eq_parent_protocol.clone();
     let mut ep_seed = template.ep_parent_protocol.clone();
     macro_rules! key {
         ($params:expr, $circuit:expr, $parity:expr, $label:literal) => {{
-            let layout = $circuit.params();
+            let circuit = $circuit;
+            let layout = circuit.params();
             validate_recursive_profile($parity, &layout)?;
-            let vk = keygen_vk_with_helper_resource_preflight_v1(
+            let pk = keygen_pk_with_helper_resource_preflight_consuming_v1(
                 $params,
-                &$circuit,
+                circuit,
+                $parity,
+                $label,
+                concat!($label, " proving key"),
+            )?;
+            (pk, layout)
+        }};
+    }
+    macro_rules! vk {
+        ($params:expr, $circuit:expr, $parity:expr, $label:literal) => {{
+            let circuit = $circuit;
+            let layout = circuit.params();
+            validate_recursive_profile($parity, &layout)?;
+            let vk = keygen_vk_with_helper_resource_preflight_consuming_v1(
+                $params,
+                circuit,
                 $parity,
                 $label,
                 concat!($label, " verifying key"),
             )?;
-            let pk = keygen_pk($params, vk.clone(), &$circuit).map_err(|e| {
-                KagemushaArtifactGenerationErrorV1::KeyGeneration {
-                    parity: $parity,
-                    kind: concat!($label, " proving key"),
-                    reason: e.to_string(),
-                }
-            })?;
-            (pk, vk, layout)
+            (vk, layout)
         }};
     }
     macro_rules! assert_vk {
         ($params:expr, $circuit:expr, $vk:expr, $parity:expr, $label:literal) => {{
-            let layout = $circuit.params();
+            let circuit = $circuit;
+            let layout = circuit.params();
             validate_recursive_profile($parity, &layout)?;
-            let rebuilt = keygen_vk_with_helper_resource_preflight_v1(
+            let rebuilt = keygen_vk_with_helper_resource_preflight_consuming_v1(
                 $params,
-                &$circuit,
+                circuit,
                 $parity,
                 $label,
                 "final mint key stability",
@@ -435,69 +750,49 @@ pub(super) fn generate(
     }
     // This bounds offline release construction only, never a monetary or recursive history.
     for _ in 0..8 {
+        // Locals from the previous convergence round have been dropped at this boundary.
+        halo2_proofs::release_allocator_slack();
         let input = BootstrapInputs::new(&eq, &ep, &eq_seed, &ep_seed)?;
         let witness = input.witness(&template, &eq_seed, &ep_seed)?;
-        let (inner_eq, inner_ep, _, _) =
-            build_mint_authority_generation_pair(&eq, &ep, witness.clone())?;
-        let (inner_eq_pk, inner_eq_vk, inner_eq_layout) = key!(
+        let inner_discovery = discover_mint_authority_generation_audits(&eq, &ep, witness.clone())?;
+        let inner_eq = build_mint_authority_generation_eq(&eq, witness.clone(), &inner_discovery)?;
+        let (inner_eq_vk, inner_eq_layout) = vk!(
             &eq,
             inner_eq,
             KagemushaPastaParityV1::Eq,
-            "inner mint authority"
+            "inner mint-authority convergence"
         );
-        let (inner_ep_pk, inner_ep_vk, inner_ep_layout) = key!(
+        halo2_proofs::release_allocator_slack();
+        let inner_ep = build_mint_authority_generation_ep(&ep, witness.clone(), &inner_discovery)?;
+        let (inner_ep_vk, inner_ep_layout) = vk!(
             &ep,
             inner_ep,
             KagemushaPastaParityV1::Ep,
-            "inner mint authority"
+            "inner mint-authority convergence"
         );
-        drop(inner_eq);
-        drop(inner_ep);
-        let (_, inner_eq_proving_key, inner_eq_verifying_key) = build_generated_helper_parity(
-            KagemushaPastaParityV1::Eq,
-            "inner mint authority proving key",
+        drop(inner_discovery);
+        drop(witness);
+        drop(input);
+        halo2_proofs::release_allocator_slack();
+        let vk_blueprint =
+            MintAuthorityTransportVkBlueprintV1::new(&eq, &ep, &inner_eq_vk, &inner_ep_vk)?;
+        let eq_circuit = vk_blueprint.build_eq(&eq, &ep)?;
+        let (eq_vk, eq_layout) = vk!(
             &eq,
-            &inner_eq_pk,
-            &inner_eq_vk,
-        )?;
-        let (_, inner_ep_proving_key, inner_ep_verifying_key) = build_generated_helper_parity(
-            KagemushaPastaParityV1::Ep,
-            "inner mint authority proving key",
-            &ep,
-            &inner_ep_pk,
-            &inner_ep_vk,
-        )?;
-        let prepare = |witness| {
-            prepare_mint_authority_transport_v1(
-                KagemushaMintAuthorizationInnerKeysV1 {
-                    parameters: &eq,
-                    proving_key: &inner_eq_pk,
-                    verifying_key: &inner_eq_vk,
-                    circuit_params: &inner_eq_layout,
-                },
-                KagemushaMintAuthorizationInnerKeysV1 {
-                    parameters: &ep,
-                    proving_key: &inner_ep_pk,
-                    verifying_key: &inner_ep_vk,
-                    circuit_params: &inner_ep_layout,
-                },
-                witness,
-            )
-        };
-        let prepared = prepare(witness)?;
-        let (eq_pk, eq_vk, eq_layout) = key!(
-            &eq,
-            prepared.eq_circuit,
+            eq_circuit,
             KagemushaPastaParityV1::Eq,
-            "compact mint authority"
+            "compact mint-authority convergence"
         );
-        let (ep_pk, ep_vk, ep_layout) = key!(
+        halo2_proofs::release_allocator_slack();
+        let ep_circuit = vk_blueprint.build_ep(&eq, &ep)?;
+        let (ep_vk, ep_layout) = vk!(
             &ep,
-            prepared.ep_circuit,
+            ep_circuit,
             KagemushaPastaParityV1::Ep,
-            "compact mint authority"
+            "compact mint-authority convergence"
         );
-        drop(prepared);
+        drop(vk_blueprint);
+        halo2_proofs::release_allocator_slack();
         let eq_protocol = compile(
             &eq,
             &eq_vk,
@@ -533,6 +828,11 @@ pub(super) fn generate(
                 })
                 .map_err(KagemushaArtifactGenerationErrorV1::CircuitBuild)?;
         if !eq_stable || !ep_stable {
+            drop(inner_eq_vk);
+            drop(inner_ep_vk);
+            drop(eq_vk);
+            drop(ep_vk);
+            halo2_proofs::release_allocator_slack();
             eq_seed = eq_protocol;
             ep_seed = ep_protocol;
             continue;
@@ -541,8 +841,10 @@ pub(super) fn generate(
         // actual VK commitments. Rebuild against FINAL (unsanitized) outer protocol values.
         let final_input = BootstrapInputs::new(&eq, &ep, &eq_protocol, &ep_protocol)?;
         let final_witness = final_input.witness(&template, &eq_protocol, &ep_protocol)?;
-        let (final_inner_eq, final_inner_ep, _, _) =
-            build_mint_authority_generation_pair(&eq, &ep, final_witness.clone())?;
+        let final_inner_discovery =
+            discover_mint_authority_generation_audits(&eq, &ep, final_witness.clone())?;
+        let final_inner_eq =
+            build_mint_authority_generation_eq(&eq, final_witness.clone(), &final_inner_discovery)?;
         assert_vk!(
             &eq,
             final_inner_eq,
@@ -550,6 +852,9 @@ pub(super) fn generate(
             KagemushaPastaParityV1::Eq,
             "final inner mint authority"
         );
+        halo2_proofs::release_allocator_slack();
+        let final_inner_ep =
+            build_mint_authority_generation_ep(&ep, final_witness.clone(), &final_inner_discovery)?;
         assert_vk!(
             &ep,
             final_inner_ep,
@@ -557,45 +862,193 @@ pub(super) fn generate(
             KagemushaPastaParityV1::Ep,
             "final inner mint authority"
         );
-        drop(final_inner_eq);
-        drop(final_inner_ep);
-        let final_prepared = prepare(final_witness)?;
+        halo2_proofs::release_allocator_slack();
+
+        // No unstable round expands a proving key. After the independently rebuilt final VKs
+        // agree, generate each inner PK exactly once and require its embedded VK and layout to
+        // match the converged key before it can create a genuine private proof.
+        let final_inner_eq =
+            build_mint_authority_generation_eq(&eq, final_witness.clone(), &final_inner_discovery)?;
+        let (inner_eq_pk, rebuilt_inner_eq_layout) = key!(
+            &eq,
+            final_inner_eq,
+            KagemushaPastaParityV1::Eq,
+            "final inner mint authority"
+        );
+        if !same_base_params(&rebuilt_inner_eq_layout, &inner_eq_layout)
+            || inner_eq_pk.get_vk().to_bytes(SerdeFormat::Processed)
+                != inner_eq_vk.to_bytes(SerdeFormat::Processed)
+        {
+            return Err(KagemushaArtifactGenerationErrorV1::CircuitBuild(
+                "final Eq inner mint-authority proving key differs from its stabilized verifier"
+                    .to_owned(),
+            ));
+        }
+        halo2_proofs::release_allocator_slack();
+        let final_inner_ep =
+            build_mint_authority_generation_ep(&ep, final_witness.clone(), &final_inner_discovery)?;
+        let (inner_ep_pk, rebuilt_inner_ep_layout) = key!(
+            &ep,
+            final_inner_ep,
+            KagemushaPastaParityV1::Ep,
+            "final inner mint authority"
+        );
+        if !same_base_params(&rebuilt_inner_ep_layout, &inner_ep_layout)
+            || inner_ep_pk.get_vk().to_bytes(SerdeFormat::Processed)
+                != inner_ep_vk.to_bytes(SerdeFormat::Processed)
+        {
+            return Err(KagemushaArtifactGenerationErrorV1::CircuitBuild(
+                "final Ep inner mint-authority proving key differs from its stabilized verifier"
+                    .to_owned(),
+            ));
+        }
+        drop(final_inner_discovery);
+        drop(inner_eq_vk);
+        drop(inner_ep_vk);
+        halo2_proofs::release_allocator_slack();
+
+        let prepare = |witness| {
+            prepare_mint_authority_transport_v1(
+                KagemushaMintAuthorizationInnerKeysV1 {
+                    parameters: &eq,
+                    proving_key: &inner_eq_pk,
+                    verifying_key: inner_eq_pk.get_vk(),
+                    circuit_params: &inner_eq_layout,
+                },
+                KagemushaMintAuthorizationInnerKeysV1 {
+                    parameters: &ep,
+                    proving_key: &inner_ep_pk,
+                    verifying_key: inner_ep_pk.get_vk(),
+                    circuit_params: &inner_ep_layout,
+                },
+                witness,
+            )
+        };
+        // Check the converged outer VKs against one genuine inner proof/fold witness, then prove
+        // with a second independently randomized carrier. Both prepared values are small compared
+        // with a k=16 PK and let the inner keys leave memory before either outer key is expanded.
+        let vk_prepared = prepare(final_witness.clone())?;
+        let final_eq_circuit = vk_prepared.build_eq(&eq, &ep)?;
         assert_vk!(
             &eq,
-            final_prepared.eq_circuit,
+            final_eq_circuit,
             eq_vk,
             KagemushaPastaParityV1::Eq,
             "final compact mint authority"
         );
+        halo2_proofs::release_allocator_slack();
+        let final_ep_circuit = vk_prepared.build_ep(&eq, &ep)?;
         assert_vk!(
             &ep,
-            final_prepared.ep_circuit,
+            final_ep_circuit,
             ep_vk,
             KagemushaPastaParityV1::Ep,
             "final compact mint authority"
         );
+        halo2_proofs::release_allocator_slack();
+        let proof_prepared = prepare(final_witness)?;
         // The generator itself must produce/decide a real final compact bootstrap before
         // exporting keys. Dummy or unchecked inner proofs cannot qualify this artifact path.
-        finish_transport(
-            &eq,
-            &ep,
-            &eq_pk,
-            &ep_pk,
-            &eq_layout,
-            &ep_layout,
-            &eq_protocol,
-            &ep_protocol,
-            final_prepared,
-        )?;
         if eq_protocol_digest == ep_protocol_digest {
             return Err(KagemushaArtifactGenerationErrorV1::CircuitBuild(
                 "mint parity identities alias".to_owned(),
             ));
         }
+
+        // The prepared carriers own the genuine inner proofs and compiled protocols. The native
+        // inner proving keys are no longer needed by either outer circuit, so serialize and release
+        // them before constructing a transport proof graph.
+        let (_, inner_eq_proving_key, inner_eq_verifying_key) = build_generated_helper_parity(
+            KagemushaPastaParityV1::Eq,
+            "inner mint authority proving key",
+            &eq,
+            inner_eq_pk,
+        )?;
+        halo2_proofs::release_allocator_slack();
+        let (_, inner_ep_proving_key, inner_ep_verifying_key) = build_generated_helper_parity(
+            KagemushaPastaParityV1::Ep,
+            "inner mint authority proving key",
+            &ep,
+            inner_ep_pk,
+        )?;
+        halo2_proofs::release_allocator_slack();
+
+        // Expand, qualify, prove, serialize, and drop Eq before allocating the Ep PK. Exact
+        // Processed VK equality is mandatory because witness-dependent loader branches can share
+        // a Base layout while changing the actual selector/constant commitments.
+        let eq_key_circuit = vk_prepared.build_eq(&eq, &ep)?;
+        let (eq_pk, rebuilt_eq_layout) = key!(
+            &eq,
+            eq_key_circuit,
+            KagemushaPastaParityV1::Eq,
+            "final compact mint authority"
+        );
+        if !same_base_params(&rebuilt_eq_layout, &eq_layout)
+            || eq_pk.get_vk().to_bytes(SerdeFormat::Processed)
+                != eq_vk.to_bytes(SerdeFormat::Processed)
+        {
+            return Err(KagemushaArtifactGenerationErrorV1::CircuitBuild(
+                "final Eq compact mint-authority proving key differs from its stabilized verifier"
+                    .to_owned(),
+            ));
+        }
+        drop(eq_vk);
+        halo2_proofs::release_allocator_slack();
+        let eq_circuit = proof_prepared.build_eq(&eq, &ep)?;
+        if !same_base_params(&eq_circuit.params(), &eq_layout) {
+            return Err(KagemushaArtifactGenerationErrorV1::CircuitProfileMismatch(
+                KagemushaPastaParityV1::Eq,
+            ));
+        }
+        let eq_proof = create_mint_eq_proof(&eq, &eq_pk, eq_circuit, &proof_prepared.eq_instances)?;
+        halo2_proofs::release_allocator_slack();
         let (eq_parameters, eq_proving_key, eq_verifying_key) =
-            build_generated_mint_parity(KagemushaPastaParityV1::Eq, &eq, &eq_pk, &eq_vk)?;
+            build_generated_mint_parity(KagemushaPastaParityV1::Eq, &eq, eq_pk)?;
+        halo2_proofs::release_allocator_slack();
+
+        let ep_key_circuit = vk_prepared.build_ep(&eq, &ep)?;
+        let (ep_pk, rebuilt_ep_layout) = key!(
+            &ep,
+            ep_key_circuit,
+            KagemushaPastaParityV1::Ep,
+            "final compact mint authority"
+        );
+        if !same_base_params(&rebuilt_ep_layout, &ep_layout)
+            || ep_pk.get_vk().to_bytes(SerdeFormat::Processed)
+                != ep_vk.to_bytes(SerdeFormat::Processed)
+        {
+            return Err(KagemushaArtifactGenerationErrorV1::CircuitBuild(
+                "final Ep compact mint-authority proving key differs from its stabilized verifier"
+                    .to_owned(),
+            ));
+        }
+        drop(ep_vk);
+        drop(vk_prepared);
+        halo2_proofs::release_allocator_slack();
+        let ep_circuit = proof_prepared.build_ep(&eq, &ep)?;
+        if !same_base_params(&ep_circuit.params(), &ep_layout) {
+            return Err(KagemushaArtifactGenerationErrorV1::CircuitProfileMismatch(
+                KagemushaPastaParityV1::Ep,
+            ));
+        }
+        let ep_proof = create_mint_ep_proof(&ep, &ep_pk, ep_circuit, &proof_prepared.ep_instances)?;
+        halo2_proofs::release_allocator_slack();
         let (ep_parameters, ep_proving_key, ep_verifying_key) =
-            build_generated_mint_parity(KagemushaPastaParityV1::Ep, &ep, &ep_pk, &ep_vk)?;
+            build_generated_mint_parity(KagemushaPastaParityV1::Ep, &ep, ep_pk)?;
+        halo2_proofs::release_allocator_slack();
+
+        finish_transport_from_proofs(
+            &eq,
+            &ep,
+            &eq_protocol,
+            &ep_protocol,
+            proof_prepared,
+            eq_proof,
+            ep_proof,
+        )?;
+        drop(eq_protocol);
+        drop(ep_protocol);
+        halo2_proofs::release_allocator_slack();
         return Ok(KagemushaGeneratedMintAuthorityArtifactsV1 {
             eq_parameters,
             ep_parameters,

@@ -1,6 +1,6 @@
 use rayon::prelude::*;
 
-use crate::{Context, utils::ScalarField};
+use crate::{utils::ScalarField, Context};
 
 use super::SinglePhaseCoreManager;
 

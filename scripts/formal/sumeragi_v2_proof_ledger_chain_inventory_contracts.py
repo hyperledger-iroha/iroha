@@ -3629,6 +3629,35 @@ def _production_liveness_release_inventory_guard_errors(
             f"seal exactly {_PRODUCTION_LIVENESS_RELEASE_COUNT} production tests"
         )
 
+    expected_module_count_line = (
+        "readonly canonical_production_module_count="
+        f"{len(_PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS)}"
+    )
+    if guard_source.splitlines().count(expected_module_count_line) != 1:
+        errors.append(
+            f"{guard_path}: independent multilane release inventory guard must "
+            "seal the exact production module count"
+        )
+    expected_corridor_count_line = (
+        "readonly canonical_corridor_leg_count="
+        f"{_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT}"
+    )
+    if guard_source.splitlines().count(expected_corridor_count_line) != 1:
+        errors.append(
+            f"{guard_path}: independent multilane release inventory guard must "
+            "seal the exact source-derived corridor leg count"
+        )
+    for fragment in (
+        "def static_corridor_leg_count() -> int:",
+        "derived_corridor_leg_count = static_corridor_leg_count()",
+        "if derived_corridor_leg_count != canonical_corridor_leg_count:",
+    ):
+        if guard_source.count(fragment) != 1:
+            errors.append(
+                f"{guard_path}: independent inventory guard must derive the "
+                f"receipt corridor cardinality exactly: {fragment!r}"
+            )
+
     guarded_modules = (
         "kura::tests",
         "sumeragi::authoritative_runtime_gate_tests",

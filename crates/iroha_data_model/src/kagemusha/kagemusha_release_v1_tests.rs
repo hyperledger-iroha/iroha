@@ -24,10 +24,18 @@ const GUARD_EQ_PROTOCOL_DIGEST: [u8; 32] = [0x39; 32];
 const GUARD_EP_PROTOCOL_DIGEST: [u8; 32] = [0x3A; 32];
 const COMMIT_WRAPPER_EQ_PROTOCOL_DIGEST: [u8; 32] = [0x3D; 32];
 const COMMIT_WRAPPER_EP_PROTOCOL_DIGEST: [u8; 32] = [0x3E; 32];
+const MINT_HASH_SHARD_EQ_PROTOCOL_DIGEST: [u8; 32] = [0x41; 32];
+const MINT_HASH_SHARD_EP_PROTOCOL_DIGEST: [u8; 32] = [0x42; 32];
+const MINT_HASH_CLAIM_EQ_PROTOCOL_DIGEST: [u8; 32] = [0x43; 32];
+const MINT_HASH_CLAIM_EP_PROTOCOL_DIGEST: [u8; 32] = [0x44; 32];
 const CREDENTIAL_EQ_PROOF_BYTES: u32 = 8_000;
 const CREDENTIAL_EP_PROOF_BYTES: u32 = 8_032;
 const GUARD_EQ_PROOF_BYTES: u32 = 12_000;
 const GUARD_EP_PROOF_BYTES: u32 = 12_032;
+const MINT_HASH_SHARD_EQ_PROOF_BYTES: u32 = 4_000;
+const MINT_HASH_SHARD_EP_PROOF_BYTES: u32 = 4_032;
+const MINT_HASH_CLAIM_EQ_PROOF_BYTES: u32 = 6_016;
+const MINT_HASH_CLAIM_EP_PROOF_BYTES: u32 = 6_048;
 
 fn helper_protocols() -> Vec<KagemushaHelperProtocolV1> {
     vec![
@@ -58,6 +66,20 @@ fn helper_protocols() -> Vec<KagemushaHelperProtocolV1> {
             ep_protocol_digest: GUARD_EP_PROTOCOL_DIGEST,
             eq_proof_bytes: GUARD_EQ_PROOF_BYTES,
             ep_proof_bytes: GUARD_EP_PROOF_BYTES,
+        },
+        KagemushaHelperProtocolV1 {
+            helper: KagemushaQualifiedHelperCircuitV1::MintHashShard,
+            eq_protocol_digest: MINT_HASH_SHARD_EQ_PROTOCOL_DIGEST,
+            ep_protocol_digest: MINT_HASH_SHARD_EP_PROTOCOL_DIGEST,
+            eq_proof_bytes: MINT_HASH_SHARD_EQ_PROOF_BYTES,
+            ep_proof_bytes: MINT_HASH_SHARD_EP_PROOF_BYTES,
+        },
+        KagemushaHelperProtocolV1 {
+            helper: KagemushaQualifiedHelperCircuitV1::MintHashClaim,
+            eq_protocol_digest: MINT_HASH_CLAIM_EQ_PROTOCOL_DIGEST,
+            ep_protocol_digest: MINT_HASH_CLAIM_EP_PROTOCOL_DIGEST,
+            eq_proof_bytes: MINT_HASH_CLAIM_EQ_PROOF_BYTES,
+            ep_proof_bytes: MINT_HASH_CLAIM_EP_PROOF_BYTES,
         },
     ]
 }
@@ -218,6 +240,8 @@ fn profile_qualification(
                     protocol.helper,
                     KagemushaQualifiedHelperCircuitV1::PlatformCredential
                         | KagemushaQualifiedHelperCircuitV1::GuardBundle
+                        | KagemushaQualifiedHelperCircuitV1::MintHashShard
+                        | KagemushaQualifiedHelperCircuitV1::MintHashClaim
                 ) {
                     protocol
                         .eq_proof_bytes
@@ -881,7 +905,7 @@ fn relations_are_closed_ordered_and_bind_exact_verifier_artifacts() {
 
 #[test]
 fn artifact_and_relation_inventories_are_frozen() {
-    assert_eq!(KagemushaArtifactRoleV1::ALL.len(), 42);
+    assert_eq!(KagemushaArtifactRoleV1::ALL.len(), 50);
     assert_eq!(
         KagemushaArtifactRoleV1::ALL
             .into_iter()
@@ -980,12 +1004,32 @@ fn artifact_and_relation_inventories_are_frozen() {
         ]
     );
     assert_eq!(
+        &KagemushaArtifactRoleV1::ALL[42..46],
+        &[
+            KagemushaArtifactRoleV1::MintHashShardPkEq,
+            KagemushaArtifactRoleV1::MintHashShardVkEq,
+            KagemushaArtifactRoleV1::MintHashShardPkEp,
+            KagemushaArtifactRoleV1::MintHashShardVkEp,
+        ]
+    );
+    assert_eq!(
+        &KagemushaArtifactRoleV1::ALL[46..50],
+        &[
+            KagemushaArtifactRoleV1::MintHashClaimPkEq,
+            KagemushaArtifactRoleV1::MintHashClaimVkEq,
+            KagemushaArtifactRoleV1::MintHashClaimPkEp,
+            KagemushaArtifactRoleV1::MintHashClaimVkEp,
+        ]
+    );
+    assert_eq!(
         KagemushaQualifiedHelperCircuitV1::ALL,
         [
             KagemushaQualifiedHelperCircuitV1::MintAuthorization,
             KagemushaQualifiedHelperCircuitV1::MintCredit,
             KagemushaQualifiedHelperCircuitV1::PlatformCredential,
             KagemushaQualifiedHelperCircuitV1::GuardBundle,
+            KagemushaQualifiedHelperCircuitV1::MintHashShard,
+            KagemushaQualifiedHelperCircuitV1::MintHashClaim,
         ]
     );
     assert_eq!(
@@ -1003,6 +1047,8 @@ fn artifact_and_relation_inventories_are_frozen() {
     );
     assert!(KagemushaQualifiedHelperCircuitV1::GuardBundle.uses_internal_proof_evidence());
     assert!(KagemushaQualifiedHelperCircuitV1::PlatformCredential.uses_internal_proof_evidence());
+    assert!(KagemushaQualifiedHelperCircuitV1::MintHashShard.uses_internal_proof_evidence());
+    assert!(KagemushaQualifiedHelperCircuitV1::MintHashClaim.uses_internal_proof_evidence());
     assert!(!KagemushaQualifiedHelperCircuitV1::MintAuthorization.uses_internal_proof_evidence());
 
     let artifacts = artifacts();
@@ -1380,13 +1426,18 @@ fn acceptance_cases_and_reproducible_builds_are_closed() {
         KagemushaAcceptanceCaseV1::ForgedMintAuthorization,
         KagemushaAcceptanceCaseV1::ReplayedMintAuthorization,
         KagemushaAcceptanceCaseV1::CrossReleaseMintAuthorization,
-        KagemushaAcceptanceCaseV1::ExactAmountBinding,
+        KagemushaAcceptanceCaseV1::PositiveExactRequest,
+        KagemushaAcceptanceCaseV1::RecipientKeyBinding,
+        KagemushaAcceptanceCaseV1::RequestAmountMismatchRejection,
+        KagemushaAcceptanceCaseV1::CommittedPaymentAfterRequestExpiry,
         KagemushaAcceptanceCaseV1::DistinctPaymentsSameRequest,
         KagemushaAcceptanceCaseV1::ShuffledConcurrentPaymentsSameRequest,
         KagemushaAcceptanceCaseV1::DelayedDeliveryAfterRequestExpiry,
         KagemushaAcceptanceCaseV1::DelayedDeliveryAcrossOrdinarySuiteRotation,
         KagemushaAcceptanceCaseV1::DelayedDeliveryAcrossCredentialRotation,
         KagemushaAcceptanceCaseV1::DuplicateTransport,
+        KagemushaAcceptanceCaseV1::ExactDuplicateDurableAck,
+        KagemushaAcceptanceCaseV1::ConflictingCreditIdBytes,
         KagemushaAcceptanceCaseV1::SameCreditReplay,
         KagemushaAcceptanceCaseV1::TwoSuccessorsFromOnePredecessor,
         KagemushaAcceptanceCaseV1::MonotonicLeaseExpiry,
@@ -1399,6 +1450,9 @@ fn acceptance_cases_and_reproducible_builds_are_closed() {
         KagemushaAcceptanceCaseV1::AeadCiphertextSubstitution,
         KagemushaAcceptanceCaseV1::AeadAssociatedDataSubstitution,
         KagemushaAcceptanceCaseV1::DeterministicEncryptionInjectedRandomnessKat,
+        KagemushaAcceptanceCaseV1::ReceiveFoldSingleCredit,
+        KagemushaAcceptanceCaseV1::ReceiveFoldReplayAtomicity,
+        KagemushaAcceptanceCaseV1::PendingCreditBacklogNoCountRejection,
     ] {
         assert!(cases.contains(&required));
     }

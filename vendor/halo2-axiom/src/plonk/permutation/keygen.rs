@@ -58,9 +58,7 @@ impl CompactMapping {
     fn get(&self, column: usize, row: usize) -> (usize, usize) {
         let cell = column * self.col_len + row;
         decode_cell_id(
-            self.cells
-                .as_ref()
-                .map_or(cell, |mapping| mapping[cell]),
+            self.cells.as_ref().map_or(cell, |mapping| mapping[cell]),
             self.col_len,
         )
     }
@@ -125,9 +123,7 @@ impl Assembly {
             return Ok(());
         }
 
-        let (mapping, aux, sizes) = self
-            .mapping
-            .materialize(self.columns.len() * self.col_len);
+        let (mapping, aux, sizes) = self.mapping.materialize(self.columns.len() * self.col_len);
         let mut left_cycle = aux[left_cell];
         let mut right_cycle = aux[right_cell];
 
@@ -209,9 +205,7 @@ impl Assembly {
         let cell = column * self.col_len + row;
         match &self.mapping {
             MappingState::Identity => (column, row),
-            MappingState::Explicit { mapping, .. } => {
-                decode_cell_id(mapping[cell], self.col_len)
-            }
+            MappingState::Explicit { mapping, .. } => decode_cell_id(mapping[cell], self.col_len),
         }
     }
 
@@ -237,18 +231,14 @@ impl Assembly {
     #[cfg(not(feature = "multicore"))]
     /// Returns mappings of the copies.
     pub fn mapping(&self) -> impl Iterator<Item = impl Iterator<Item = (usize, usize)> + '_> {
-        (0..self.columns.len()).map(move |column| {
-            (0..self.col_len).map(move |row| self.mapping_at_idx(column, row))
-        })
+        (0..self.columns.len())
+            .map(move |column| (0..self.col_len).map(move |row| self.mapping_at_idx(column, row)))
     }
 }
 
 #[cfg(not(feature = "thread-safe-region"))]
 impl MappingState {
-    fn materialize(
-        &mut self,
-        cells: usize,
-    ) -> (&mut Vec<usize>, &mut Vec<usize>, &mut Vec<usize>) {
+    fn materialize(&mut self, cells: usize) -> (&mut Vec<usize>, &mut Vec<usize>, &mut Vec<usize>) {
         if matches!(self, Self::Identity) {
             let mapping: Vec<_> = (0..cells).collect();
             *self = Self::Explicit {
@@ -733,17 +723,14 @@ mod tests {
         let omega_powers = [Fp::from(1), Fp::from(2), Fp::from(4), Fp::from(8)];
         let delta_powers = [Fp::from(1), Fp::from(3), Fp::from(9)];
         let mapping = |column: usize, row: usize| {
-            ((column + row) % delta_powers.len(), (row + 1) % omega_powers.len())
+            (
+                (column + row) % delta_powers.len(),
+                (row + 1) % omega_powers.len(),
+            )
         };
         let mut actual = vec![Fp::ZERO; omega_powers.len()];
 
-        fill_permutation_column(
-            &mut actual,
-            1,
-            &omega_powers,
-            &delta_powers,
-            &mapping,
-        );
+        fill_permutation_column(&mut actual, 1, &omega_powers, &delta_powers, &mapping);
 
         let expected = (0..omega_powers.len())
             .map(|row| {
@@ -821,10 +808,7 @@ mod tests {
             expected.copy(left_column, left_row, right_column, right_row);
             assert_matches_reference(&actual, &expected);
         }
-        assert!(matches!(
-            &actual.mapping,
-            MappingState::Explicit { .. }
-        ));
+        assert!(matches!(&actual.mapping, MappingState::Explicit { .. }));
 
         let mut state = 0xd1b5_4a32_d192_ed03_u64;
         for _ in 0..1_000 {

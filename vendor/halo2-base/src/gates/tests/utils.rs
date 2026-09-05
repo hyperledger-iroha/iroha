@@ -1,11 +1,11 @@
 #![allow(clippy::type_complexity)]
 use num_integer::Integer;
 
-use crate::QuantumCell;
-use crate::utils::BigPrimeField;
-use crate::utils::ScalarField;
 use crate::utils::biguint_to_fe;
 use crate::utils::fe_to_biguint;
+use crate::utils::BigPrimeField;
+use crate::utils::ScalarField;
+use crate::QuantumCell;
 
 // Ground truth functions
 
@@ -148,7 +148,11 @@ pub fn select_from_idx_ground_truth<F: ScalarField>(
 }
 
 pub fn is_zero_ground_truth<F: ScalarField>(x: F) -> F {
-    if x.is_zero().into() { F::ONE } else { F::ZERO }
+    if x.is_zero().into() {
+        F::ONE
+    } else {
+        F::ZERO
+    }
 }
 
 pub fn is_equal_ground_truth<F: ScalarField>(inputs: &[QuantumCell<F>]) -> F {
@@ -167,7 +171,11 @@ pub fn lagrange_eval_ground_truth<F: ScalarField>(inputs: &[F]) -> (F, F) {
 // Range Chip Ground Truths
 
 pub fn is_less_than_ground_truth<F: ScalarField>(inputs: (F, F)) -> F {
-    if inputs.0 < inputs.1 { F::ONE } else { F::ZERO }
+    if inputs.0 < inputs.1 {
+        F::ONE
+    } else {
+        F::ZERO
+    }
 }
 
 pub fn div_mod_ground_truth<F: ScalarField + BigPrimeField>(inputs: (F, u64)) -> (F, F) {

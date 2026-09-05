@@ -690,11 +690,26 @@ impl fmt::Display for TransactionAlreadyCommitted {
     }
 }
 impl std::error::Error for TransactionAlreadyCommitted {}
+/// Validation identity of the complete signed envelope, including its signature.
+/// Canonical entrypoint identity alone cannot authorize signature-check reuse.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct StatelessValidationCacheKey(HashOf<SignedTransaction>);
+impl StatelessValidationCacheKey {
+    pub(crate) fn new(transaction: &SignedTransaction) -> Self {
+        Self(HashOf::new(transaction))
+    }
+    #[cfg(test)]
+    pub(crate) fn for_test(hash: HashOf<SignedTransaction>) -> Self {
+        Self(hash)
+    }
+}
 /// Reusable stateless transaction metadata derived once for block validation.
 #[derive(Debug, Clone)]
 pub(crate) struct PreparedTransactionMetadata {
     /// Canonical signed transaction hash.
     pub(crate) signed_hash: HashOf<SignedTransaction>,
+    /// Exact envelope identity used only for reusable stateless validation.
+    pub(crate) stateless_cache_key: StatelessValidationCacheKey,
     /// Canonical entrypoint hash used by block Merkle roots.
     pub(crate) entrypoint_hash: HashOf<TransactionEntrypoint>,
     /// Hash of the signed payload, used as the Ed25519 verification message.
@@ -1490,6 +1505,7 @@ impl<'tx> AcceptedTransaction<'tx> {
         let signed_hash = HashOf::from_untyped_unchecked(iroha_crypto::Hash::from(entrypoint_hash));
         PreparedTransactionMetadata {
             signed_hash,
+            stateless_cache_key: StatelessValidationCacheKey::new(tx),
             entrypoint_hash,
             payload_hash: HashOf::new(tx.payload()),
             encoded_len,
@@ -2426,6 +2442,7 @@ impl<'tx> AcceptedTransaction<'tx> {
             .get_or_init(|| self.external().and_then(Self::parsed_single_ed25519_key));
         Some(PreparedTransactionMetadata {
             signed_hash: self.hash(),
+            stateless_cache_key: StatelessValidationCacheKey::new(self.external()?),
             entrypoint_hash: self.hash_as_entrypoint(),
             payload_hash,
             encoded_len: self.encoded_len(),
@@ -2446,6 +2463,7 @@ impl<'tx> AcceptedTransaction<'tx> {
             .get_or_init(|| Self::parsed_single_ed25519_key(signed));
         Some(PreparedTransactionMetadata {
             signed_hash: self.hash(),
+            stateless_cache_key: StatelessValidationCacheKey::new(signed),
             entrypoint_hash: self.hash_as_entrypoint(),
             payload_hash,
             encoded_len: self.encoded_len(),

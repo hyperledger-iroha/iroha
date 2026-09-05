@@ -565,6 +565,53 @@ where
     /// Source-indexed scalar coefficients for every deferred equality.
     pub(super) equations: Vec<Vec<(usize, Inner<C>)>>,
 }
+impl<C> DeferredEquationWitness<C>
+where
+    C: CurveAffineExt,
+{
+    /// Exact source count, available without cloning the audit graph.
+    pub(super) fn source_count(&self) -> usize {
+        self.sources.len()
+    }
+
+    /// Exact equation count, available without cloning the audit graph.
+    pub(super) fn equation_count(&self) -> usize {
+        self.equations.len()
+    }
+
+    /// Exact deferred-term count, available without cloning the audit graph.
+    pub(super) fn term_count(&self) -> usize {
+        self.equations.iter().map(Vec::len).sum()
+    }
+}
+/// Compact output of a native-scalar deferred-equation batch.
+///
+/// The scalar half derives `challenge` from a commitment to the complete
+/// equation transcript and computes one aggregate coefficient for every
+/// source in canonical namespace order.  A reciprocal circuit must
+/// cryptographically bind this whole value before using it: the value alone
+/// has no authority.
+#[derive(Clone, Debug)]
+pub(super) struct DeferredBatchedEquationWitnessV1<C>
+where
+    C: CurveAffineExt,
+{
+    /// Complete source namespace in scalar-verifier order.
+    pub(super) sources: Vec<C>,
+    /// Nonzero Fiat-Shamir challenge committed by the compact audit.
+    pub(super) challenge: Inner<C>,
+    /// One aggregate coefficient per source, including explicit zeroes.
+    pub(super) aggregate_coefficients: Vec<Inner<C>>,
+}
+impl<C> DeferredBatchedEquationWitnessV1<C>
+where
+    C: CurveAffineExt,
+{
+    /// Exact compact source/coefficient count.
+    pub(super) fn source_count(&self) -> usize {
+        self.sources.len()
+    }
+}
 /// Assigned reciprocal-point view of one deferred verifier output.
 #[derive(Clone, Debug)]
 pub(super) struct AssignedDeferredPointAudit<C>
@@ -578,6 +625,22 @@ where
     pub(super) sources: Vec<Point<C>>,
     /// Canonical non-native scalar coefficients, grouped by equation.
     pub(super) equations: Vec<Vec<(usize, Integer<C>)>>,
+}
+/// Assigned reciprocal view of a scalar-half deferred-equation batch.
+#[derive(Clone, Debug)]
+pub(super) struct AssignedDeferredBatchedEquationV1<C>
+where
+    C: CurveAffineExt,
+    Outer<C>: BigPrimeField,
+{
+    /// Canonical host points used only to populate the dense trace witness.
+    source_values: Vec<C>,
+    /// On-curve source points in canonical source order.
+    pub(super) sources: Vec<Point<C>>,
+    /// Canonical non-native Fiat-Shamir challenge.
+    pub(super) challenge: Integer<C>,
+    /// Canonical non-native aggregate coefficients in source order.
+    pub(super) aggregate_coefficients: Vec<Integer<C>>,
 }
 /// Source-indexed reciprocal encodings shared by the V1 audit and protocol identity.
 #[derive(Clone, Debug)]
@@ -726,6 +789,91 @@ where
                 .collect(),
         }
     }
+    /// Batch every deferred equation natively into one coefficient per source.
+    ///
+    /// `challenge` must be the nonzero digest of the complete source, tag,
+    /// selector and equation transcript.  The challenge power advances for
+    /// every equation, including disabled equations, matching the reciprocal
+    /// V1 batching order.  Keeping this work in the scalar half avoids one
+    /// non-native multiplication per term in the reciprocal circuit.
+    pub(super) fn assigned_deferred_batch_coefficients_v1(
+        &self,
+        ctx: &mut ScalarContext<C>,
+        selectors: &[AssignedValue<Inner<C>>],
+        challenge: AssignedValue<Inner<C>>,
+    ) -> Result<Vec<AssignedValue<Inner<C>>>, Error> {
+        let state = self.state.borrow();
+        if state.sources.is_empty()
+            || state.equations.is_empty()
+            || selectors.len() != state.equations.len()
+            || state
+                .equations
+                .iter()
+                .any(|equation| equation.terms.is_empty())
+        {
+            return Err(Error::InvalidInstances);
+        }
+        let challenge_is_zero = self.scalar.is_zero(ctx.main(), challenge);
+        self.scalar
+            .assert_is_const(ctx.main(), &challenge_is_zero, &Inner::<C>::ZERO);
+        let mut aggregate_coefficients = (0..state.sources.len())
+            .map(|_| ctx.main().load_constant(Inner::<C>::ZERO))
+            .collect::<Vec<_>>();
+        let mut power = ctx.main().load_constant(Inner::<C>::ONE);
+        for (equation, selector) in state.equations.iter().zip(selectors.iter().copied()) {
+            self.scalar.assert_bit(ctx.main(), selector);
+            for term in &equation.terms {
+                if term.source_index >= aggregate_coefficients.len() {
+                    return Err(Error::InvalidInstances);
+                }
+                let enabled =
+                    self.scalar
+                        .mul(ctx.main(), Existing(term.coefficient), Existing(selector));
+                aggregate_coefficients[term.source_index] = self.scalar.mul_add(
+                    ctx.main(),
+                    Existing(enabled),
+                    Existing(power),
+                    Existing(aggregate_coefficients[term.source_index]),
+                );
+            }
+            power = self
+                .scalar
+                .mul(ctx.main(), Existing(power), Existing(challenge));
+        }
+        Ok(aggregate_coefficients)
+    }
+    /// Materialize the compact host witness for a constrained native batch.
+    pub(super) fn batched_witness_v1(
+        &self,
+        challenge: AssignedValue<Inner<C>>,
+        aggregate_coefficients: &[AssignedValue<Inner<C>>],
+    ) -> Result<DeferredBatchedEquationWitnessV1<C>, Error> {
+        let state = self.state.borrow();
+        if state.sources.is_empty() || aggregate_coefficients.len() != state.sources.len() {
+            return Err(Error::InvalidInstances);
+        }
+        Ok(DeferredBatchedEquationWitnessV1 {
+            sources: state.sources.iter().map(|source| source.point).collect(),
+            challenge: *challenge.value(),
+            aggregate_coefficients: aggregate_coefficients
+                .iter()
+                .map(|coefficient| *coefficient.value())
+                .collect(),
+        })
+    }
+    /// Return every canonical compressed source as two constrained `u128` cells.
+    ///
+    /// These cells are the compact scalar-side input to any cross-parity
+    /// binding gadget.  Their order is exactly the stable source namespace.
+    pub(super) fn assigned_source_commitments_v1(
+        &self,
+        ctx: &mut ScalarContext<C>,
+    ) -> Vec<[AssignedValue<Inner<C>>; 2]> {
+        let source_count = self.state.borrow().sources.len();
+        (0..source_count)
+            .map(|source_index| self.source_commitment_encoding(ctx, source_index))
+            .collect()
+    }
     /// Shared native-scalar range chip used by transcript and identity gadgets.
     pub(super) fn range(&self) -> &halo2_base::gates::RangeChip<Inner<C>> {
         self.scalar_integer.range
@@ -794,12 +942,12 @@ where
         }
         Ok(elements)
     }
-    /// Constrain the exact canonical bytes of one native scalar cell.
-    pub(super) fn assigned_scalar_bytes(
+    /// Constrain one native scalar as its canonical fixed-width integer representation.
+    fn assigned_canonical_scalar_integer(
         &self,
         ctx: &mut ScalarContext<C>,
         scalar: AssignedValue<Inner<C>>,
-    ) -> [PastaSha256ByteV1<Inner<C>>; 32] {
+    ) -> AssignedCoordinate<C> {
         let scalar_integer: AssignedCoordinate<C> = self
             .scalar_integer
             .load_private(ctx.main(), *scalar.value());
@@ -808,7 +956,72 @@ where
             .enforce_less_than(ctx.main(), scalar_integer)
             .into();
         ctx.main().constrain_equal(scalar_integer.native(), &scalar);
+        scalar_integer
+    }
+    /// Constrain the exact canonical bytes of one native scalar cell.
+    pub(super) fn assigned_scalar_bytes(
+        &self,
+        ctx: &mut ScalarContext<C>,
+        scalar: AssignedValue<Inner<C>>,
+    ) -> [PastaSha256ByteV1<Inner<C>>; 32] {
+        let scalar_integer = self.assigned_canonical_scalar_integer(ctx, scalar);
         proper_uint_le_bytes(ctx.main(), self.scalar_integer.range, &scalar_integer)
+    }
+    /// Return the canonical little-endian two-`u128` chunks of one native scalar.
+    ///
+    /// The integer is constrained below the scalar modulus and equal to `scalar` before its
+    /// existing 86-bit limbs are split at bit 128.  Every recomposition is below the native
+    /// Pasta modulus, so the two cells are an injective encoding without a 255-bit Boolean
+    /// decomposition.
+    pub(super) fn assigned_scalar_u128_limbs(
+        &self,
+        ctx: &mut ScalarContext<C>,
+        scalar: AssignedValue<Inner<C>>,
+    ) -> [AssignedValue<Inner<C>>; 2] {
+        let scalar_integer = self.assigned_canonical_scalar_integer(ctx, scalar);
+        let [limb_0, limb_1, limb_2] = scalar_integer.limbs() else {
+            panic!("canonical Pasta scalar must have three limbs");
+        };
+        debug_assert_eq!(LIMB_BITS, 86);
+
+        // Bit 128 lies 42 bits into limb 1:
+        //   scalar = limb_0 + limb_1 * 2^86 + limb_2 * 2^172.
+        let limb_1_value = fe_to_biguint(limb_1.value());
+        let low_mask = (BigUint::from(1_u64) << 42) - BigUint::from(1_u64);
+        let limb_1_low = ctx
+            .main()
+            .load_witness(biguint_to_fe::<Inner<C>>(&(&limb_1_value & &low_mask)));
+        let limb_1_high = ctx
+            .main()
+            .load_witness(biguint_to_fe::<Inner<C>>(&(limb_1_value >> 42)));
+        self.scalar_integer
+            .range
+            .range_check(ctx.main(), limb_1_low, 42);
+        self.scalar_integer
+            .range
+            .range_check(ctx.main(), limb_1_high, 44);
+
+        let recomposed_limb_1 = self.scalar.mul_add(
+            ctx.main(),
+            Existing(limb_1_high),
+            Constant(Inner::<C>::from_u128(1_u128 << 42)),
+            Existing(limb_1_low),
+        );
+        ctx.main().constrain_equal(&recomposed_limb_1, limb_1);
+
+        let low = self.scalar.mul_add(
+            ctx.main(),
+            Existing(limb_1_low),
+            Constant(Inner::<C>::from_u128(1_u128 << 86)),
+            Existing(*limb_0),
+        );
+        let high = self.scalar.mul_add(
+            ctx.main(),
+            Existing(*limb_2),
+            Constant(Inner::<C>::from_u128(1_u128 << 44)),
+            Existing(limb_1_high),
+        );
+        [low, high]
     }
     /// Return the stable deferred-source index carried by one assigned point.
     pub(super) fn assigned_point_source_index(
@@ -1649,6 +1862,63 @@ where
             equations,
         })
     }
+    /// Assign the compact source-major batch emitted by the scalar half.
+    ///
+    /// This method deliberately does not authenticate the compact witness.
+    /// Its caller must first bind the challenge, every canonical source and
+    /// every aggregate coefficient to the scalar half's public audit digest.
+    pub(super) fn assign_deferred_batched_equation_v1(
+        &self,
+        ctx: &mut SinglePhaseCoreManager<Outer<C>>,
+        witness: &DeferredBatchedEquationWitnessV1<C>,
+    ) -> Result<AssignedDeferredBatchedEquationV1<C>, String> {
+        if witness.sources.is_empty()
+            || witness.sources.len() != witness.aggregate_coefficients.len()
+            || witness
+                .sources
+                .iter()
+                .any(|point| bool::from(point.is_identity()))
+        {
+            return Err("Kagemusha deferred batch witness is empty or non-canonical".to_owned());
+        }
+        let sources = witness
+            .sources
+            .iter()
+            .copied()
+            .map(|point| self.curve().assign_point::<C>(ctx.main(), point))
+            .collect::<Vec<_>>();
+        let challenge = self
+            .scalar
+            .field
+            .load_private(ctx.main(), witness.challenge);
+        let challenge: Integer<C> = self
+            .scalar
+            .field
+            .enforce_less_than(ctx.main(), challenge)
+            .into();
+        let challenge_is_zero = self.scalar.field.is_zero(ctx.main(), challenge.clone());
+        self.base
+            .gate()
+            .assert_is_const(ctx.main(), &challenge_is_zero, &Outer::<C>::ZERO);
+        let aggregate_coefficients = witness
+            .aggregate_coefficients
+            .iter()
+            .copied()
+            .map(|coefficient| {
+                let coefficient = self.scalar.field.load_private(ctx.main(), coefficient);
+                self.scalar
+                    .field
+                    .enforce_less_than(ctx.main(), coefficient)
+                    .into()
+            })
+            .collect();
+        Ok(AssignedDeferredBatchedEquationV1 {
+            source_values: witness.sources.clone(),
+            sources,
+            challenge,
+            aggregate_coefficients,
+        })
+    }
     /// Validate and return the field-native V1 audit digest as the batch challenge.
     ///
     /// The digest is already a canonical non-native element of the proof curve's scalar field and
@@ -1751,6 +2021,138 @@ where
             })
             .collect::<Vec<_>>();
         dense_jobs.queue_constrained(ctx.main(), self.scalar.field, &sources)
+    }
+    /// Enforce a source-major batch whose coefficients were derived natively.
+    ///
+    /// Authentication is intentionally separate: callers must bind the exact
+    /// compact witness before invoking this method.  Once bound, this queues
+    /// the same dense identity check as the legacy reciprocal aggregation
+    /// path without retaining or re-evaluating individual equation terms.
+    pub(super) fn constrain_deferred_batched_equation_v1(
+        &self,
+        ctx: &mut SinglePhaseCoreManager<Outer<C>>,
+        batch: &AssignedDeferredBatchedEquationV1<C>,
+        dense_jobs: &mut PastaDenseMsmJobsV1<C>,
+    ) -> Result<(), String>
+    where
+        Outer<C>: ff::WithSmallOrderMulGroup<3>,
+        Inner<C>: ff::WithSmallOrderMulGroup<3>,
+    {
+        let sources = self.deferred_batched_sources_v1(batch)?;
+        dense_jobs.queue_constrained(ctx.main(), self.scalar.field, &sources)
+    }
+    /// Enforce a native deferred batch against the caller's configured dense-lane bound.
+    ///
+    /// This is the early-allocation counterpart to `validate_capacity_with_lanes`: scheduling is
+    /// rejected before normalized-GLV source constraints are added to the Base graph.
+    pub(super) fn constrain_deferred_batched_equation_with_lanes_v1(
+        &self,
+        ctx: &mut SinglePhaseCoreManager<Outer<C>>,
+        batch: &AssignedDeferredBatchedEquationV1<C>,
+        dense_jobs: &mut PastaDenseMsmJobsV1<C>,
+        configured_lanes: usize,
+    ) -> Result<(), String>
+    where
+        Outer<C>: ff::WithSmallOrderMulGroup<3>,
+        Inner<C>: ff::WithSmallOrderMulGroup<3>,
+    {
+        let sources = self.deferred_batched_sources_v1(batch)?;
+        dense_jobs.queue_constrained_with_lanes(
+            ctx.main(),
+            self.scalar.field,
+            &sources,
+            configured_lanes,
+        )
+    }
+    fn deferred_batched_sources_v1(
+        &self,
+        batch: &AssignedDeferredBatchedEquationV1<C>,
+    ) -> Result<Vec<PastaDenseMsmSourceV1<C>>, String> {
+        if batch.sources.is_empty()
+            || batch.sources.len() != batch.source_values.len()
+            || batch.sources.len() != batch.aggregate_coefficients.len()
+        {
+            return Err("Kagemusha deferred batch shape is invalid".to_owned());
+        }
+        let sources = batch
+            .sources
+            .iter()
+            .zip(&batch.source_values)
+            .zip(&batch.aggregate_coefficients)
+            .map(|((source, point), coefficient)| PastaDenseMsmSourceV1 {
+                point: *point,
+                x: source.x.assigned(),
+                y: source.y.assigned(),
+                coefficient: coefficient.clone(),
+            })
+            .collect::<Vec<_>>();
+        Ok(sources)
+    }
+    /// Authenticate a proof-supplied instance carrier against its canonical
+    /// IPA Lagrange commitment.
+    ///
+    /// `carrier_values` are exact `u128` limbs derived by this reciprocal
+    /// circuit from the compact deferred batch.  The queued identity is
+    ///
+    /// `sum(carrier[i] * lagrange_bases[i]) + blind_base - commitment = 0`,
+    ///
+    /// matching `commit_lagrange(_, Blind::default())` (whose default blind is
+    /// one).  Returning the assigned commitment lets the caller bind its
+    /// canonical compressed encoding to the small semantic instance column.
+    pub(super) fn constrain_canonical_lagrange_commitment_v1(
+        &self,
+        ctx: &mut SinglePhaseCoreManager<Outer<C>>,
+        carrier_values: &[AssignedValue<Outer<C>>],
+        lagrange_bases: &[C],
+        blind_base: C,
+        commitment: C,
+        dense_jobs: &mut PastaDenseMsmJobsV1<C>,
+    ) -> Result<Point<C>, String>
+    where
+        Outer<C>: ff::WithSmallOrderMulGroup<3>,
+        Inner<C>: ff::WithSmallOrderMulGroup<3>,
+    {
+        if carrier_values.is_empty()
+            || carrier_values.len() != lagrange_bases.len()
+            || lagrange_bases
+                .iter()
+                .any(|point| bool::from(point.is_identity()))
+            || bool::from(blind_base.is_identity())
+            || bool::from(commitment.is_identity())
+        {
+            return Err("Kagemusha IPA carrier commitment shape is invalid".to_owned());
+        }
+        let curve = self.curve();
+        let mut sources = Vec::with_capacity(carrier_values.len() + 2);
+        for (value, point) in carrier_values.iter().copied().zip(lagrange_bases) {
+            let assigned_point = curve.assign_point::<C>(ctx.main(), *point);
+            let coefficient = self.assigned_native_as_scalar_integer(ctx, value, 128)?;
+            sources.push(PastaDenseMsmSourceV1 {
+                point: *point,
+                x: assigned_point.x.assigned(),
+                y: assigned_point.y.assigned(),
+                coefficient,
+            });
+        }
+        let assigned_blind_base = curve.assign_point::<C>(ctx.main(), blind_base);
+        sources.push(PastaDenseMsmSourceV1 {
+            point: blind_base,
+            x: assigned_blind_base.x.assigned(),
+            y: assigned_blind_base.y.assigned(),
+            coefficient: self.scalar.field.load_constant(ctx.main(), Inner::<C>::ONE),
+        });
+        let assigned_commitment = curve.assign_point::<C>(ctx.main(), commitment);
+        sources.push(PastaDenseMsmSourceV1 {
+            point: commitment,
+            x: assigned_commitment.x.assigned(),
+            y: assigned_commitment.y.assigned(),
+            coefficient: self
+                .scalar
+                .field
+                .load_constant(ctx.main(), -Inner::<C>::ONE),
+        });
+        dense_jobs.queue_constrained(ctx.main(), self.scalar.field, &sources)?;
+        Ok(assigned_commitment)
     }
     /// Enforce all selector-gated equations through the Base graph's serialized
     /// variable-base MSM.
@@ -1940,6 +2342,21 @@ where
         let x = self.canonical_coordinate(ctx.main(), point.x);
         let y = self.canonical_coordinate(ctx.main(), point.y);
         compressed_point_bytes(ctx.main(), self.base.range, &x, &y)
+    }
+    /// Return the canonical compressed point as two constrained `u128` limbs.
+    pub(super) fn assigned_point_u128_limbs(
+        &self,
+        ctx: &mut SinglePhaseCoreManager<Outer<C>>,
+        point: &Point<C>,
+    ) -> [AssignedValue<Outer<C>>; 2] {
+        let bytes = self.assigned_point_bytes(ctx, point);
+        std::array::from_fn(|half| {
+            pack_constrained_bytes_u128(
+                ctx.main(),
+                self.base.gate(),
+                &bytes[half * 16..(half + 1) * 16],
+            )
+        })
     }
     /// Convert a canonical base-field coordinate to the exact residue used by the native Poseidon
     /// transcript. The quotient and every radix carry are boolean-constrained, so an outer-field
@@ -2941,6 +3358,56 @@ mod tests {
         check::<Fq, Fp>(-Fp::ONE);
     }
     #[test]
+    fn deferred_scalar_u128_limbs_match_both_pasta_canonical_encodings() {
+        fn check<C>()
+        where
+            C: CurveAffineExt,
+            Outer<C>: BigPrimeField,
+            Inner<C>: BigPrimeField,
+        {
+            let mut builder = BaseCircuitBuilder::<Inner<C>>::new(false)
+                .use_k(TEST_K)
+                .use_lookup_bits(TEST_K - 1)
+                .use_instance_columns(1);
+            let range = builder.range_chip();
+            let coordinate = FpChip::<Inner<C>, Outer<C>>::new(&range, LIMB_BITS, LIMBS);
+            let scalar_integer = FpChip::<Inner<C>, Inner<C>>::new(&range, LIMB_BITS, LIMBS);
+            let chip = DeferredScalarEccChip::<C>::new(&coordinate, &scalar_integer);
+            let mut ctx = mem::take(builder.pool(0));
+            let mut assigned_instances = Vec::with_capacity(6);
+            let mut expected_instances = Vec::with_capacity(6);
+            let low_mask = (BigUint::from(1_u64) << 128) - BigUint::from(1_u64);
+
+            for value in [Inner::<C>::ZERO, Inner::<C>::ONE, -Inner::<C>::ONE] {
+                let scalar = ctx.main().load_witness(value);
+                let chunks = chip.assigned_scalar_u128_limbs(&mut ctx, scalar);
+                let integer = fe_to_biguint(&value);
+                let expected = [
+                    biguint_to_fe::<Inner<C>>(&(&integer & &low_mask)),
+                    biguint_to_fe::<Inner<C>>(&(&integer >> 128)),
+                ];
+                assert_eq!(*chunks[0].value(), expected[0]);
+                assert_eq!(*chunks[1].value(), expected[1]);
+                assigned_instances.extend(chunks);
+                expected_instances.extend(expected);
+            }
+
+            *builder.pool(0) = ctx;
+            builder.assigned_instances = vec![assigned_instances];
+            builder.calculate_params(Some(9));
+            MockProver::run(
+                builder.config_params.k as u32,
+                &builder,
+                vec![expected_instances],
+            )
+            .expect("direct canonical Pasta scalar chunks mock prover")
+            .assert_satisfied();
+        }
+
+        check::<EpAffine>();
+        check::<EqAffine>();
+    }
+    #[test]
     fn reciprocal_residual_enforcement_supports_both_pasta_parities() {
         let eq_generator = EqAffine::generator();
         let eq_valid = DeferredEquationWitness {
@@ -3186,5 +3653,132 @@ mod tests {
                 .expect("symbolic selector mock prover")
                 .assert_satisfied();
         }
+    }
+    #[test]
+    fn native_deferred_batch_is_source_major_and_advances_disabled_powers() {
+        fn check<C>()
+        where
+            C: CurveAffineExt,
+            Outer<C>: BigPrimeField,
+            Inner<C>: BigPrimeField,
+        {
+            let mut builder = BaseCircuitBuilder::<Inner<C>>::new(false)
+                .use_k(TEST_K)
+                .use_lookup_bits(TEST_K - 1);
+            let range = builder.range_chip();
+            let coordinate = FpChip::<Inner<C>, Outer<C>>::new(&range, LIMB_BITS, LIMBS);
+            let scalar_integer = FpChip::<Inner<C>, Inner<C>>::new(&range, LIMB_BITS, LIMBS);
+            let chip = DeferredScalarEccChip::<C>::new(&coordinate, &scalar_integer);
+            let mut ctx = mem::take(builder.pool(0));
+            let generator = chip.assign_point(&mut ctx, C::generator());
+            let doubled_value = (C::generator().to_curve() + C::generator().to_curve()).to_affine();
+            let doubled = chip.assign_point(&mut ctx, doubled_value);
+            let generator_index = generator.source_index.expect("generator source index");
+            let doubled_index = doubled.source_index.expect("doubled source index");
+            let mut record = |terms: &[(usize, u64)]| {
+                let terms = terms
+                    .iter()
+                    .map(|(source_index, coefficient)| SymbolicTerm {
+                        source_index: *source_index,
+                        coefficient: ctx.main().load_constant(Inner::<C>::from(*coefficient)),
+                    })
+                    .collect::<Vec<_>>();
+                chip.record_equation(&mut ctx, terms);
+            };
+            record(&[(generator_index, 2), (doubled_index, 3)]);
+            record(&[(generator_index, 5), (doubled_index, 7)]);
+            record(&[(doubled_index, 11)]);
+            let selectors =
+                [1_u64, 0, 1].map(|selector| ctx.main().load_constant(Inner::<C>::from(selector)));
+            let challenge = ctx.main().load_constant(Inner::<C>::from(7));
+            let aggregate = chip
+                .assigned_deferred_batch_coefficients_v1(&mut ctx, &selectors, challenge)
+                .expect("valid native deferred batch");
+            assert_eq!(aggregate.len(), 2);
+            assert_eq!(*aggregate[generator_index].value(), Inner::<C>::from(2));
+            // The disabled middle equation still consumes H^1, so the final
+            // enabled equation is weighted by H^2 = 49.
+            assert_eq!(
+                *aggregate[doubled_index].value(),
+                Inner::<C>::from(3 + 11 * 49)
+            );
+            let compact = chip
+                .batched_witness_v1(challenge, &aggregate)
+                .expect("valid compact deferred witness");
+            assert_eq!(compact.source_count(), 2);
+            assert_eq!(compact.challenge, Inner::<C>::from(7));
+            assert_eq!(
+                compact.aggregate_coefficients,
+                [Inner::<C>::from(2), Inner::<C>::from(3 + 11 * 49),]
+            );
+            let full = chip.witness();
+            assert_eq!(full.source_count(), 2);
+            assert_eq!(full.equation_count(), 3);
+            assert_eq!(full.term_count(), 5);
+            *builder.pool(0) = ctx;
+            builder.calculate_params(Some(9));
+            MockProver::run(builder.config_params.k as u32, &builder, vec![])
+                .expect("native deferred-batch mock prover")
+                .assert_satisfied();
+        }
+        check::<EqAffine>();
+        check::<EpAffine>();
+    }
+    #[test]
+    fn reciprocal_compact_batch_assignment_is_canonical_in_both_parities() {
+        fn check<C>()
+        where
+            C: CurveAffineExt,
+            Outer<C>: BigPrimeField,
+            Inner<C>: BigPrimeField,
+        {
+            let mut builder = BaseCircuitBuilder::<Outer<C>>::new(false)
+                .use_k(TEST_K)
+                .use_lookup_bits(TEST_K - 1);
+            let range = builder.range_chip();
+            let base = FpChip::<Outer<C>, Outer<C>>::new(&range, LIMB_BITS, LIMBS);
+            let scalar = FpChip::<Outer<C>, Inner<C>>::new(&range, LIMB_BITS, LIMBS);
+            let chip = PastaCycleEccChip::<C>::new(&base, &scalar);
+            let mut ctx = mem::take(builder.pool(0));
+            let generator = C::generator();
+            let doubled = (generator.to_curve() + generator.to_curve()).to_affine();
+            let witness = DeferredBatchedEquationWitnessV1 {
+                sources: vec![generator, doubled],
+                challenge: Inner::<C>::from(13),
+                aggregate_coefficients: vec![Inner::<C>::from(2), -Inner::<C>::ONE],
+            };
+            let assigned = chip
+                .assign_deferred_batched_equation_v1(&mut ctx, &witness)
+                .expect("canonical reciprocal compact batch");
+            assert_eq!(assigned.sources.len(), 2);
+            assert_eq!(
+                assigned.challenge.value(),
+                fe_to_biguint(&witness.challenge)
+            );
+            assert_eq!(
+                assigned
+                    .aggregate_coefficients
+                    .iter()
+                    .map(|coefficient| coefficient.value().clone())
+                    .collect::<Vec<_>>(),
+                witness
+                    .aggregate_coefficients
+                    .iter()
+                    .map(fe_to_biguint)
+                    .collect::<Vec<_>>()
+            );
+            let mut dense_jobs = PastaDenseMsmJobsV1::default();
+            chip.constrain_deferred_batched_equation_v1(&mut ctx, &assigned, &mut dense_jobs)
+                .expect("queue canonical compact batch");
+            let (jobs, sources, _) = dense_jobs.capacity_profile().expect("dense batch geometry");
+            assert_eq!((jobs, sources), (1, 2));
+            *builder.pool(0) = ctx;
+            builder.calculate_params(Some(9));
+            MockProver::run(builder.config_params.k as u32, &builder, vec![])
+                .expect("reciprocal compact-batch assignment mock prover")
+                .assert_satisfied();
+        }
+        check::<EqAffine>();
+        check::<EpAffine>();
     }
 }

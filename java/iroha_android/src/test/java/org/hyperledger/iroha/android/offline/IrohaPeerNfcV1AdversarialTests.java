@@ -5,6 +5,7 @@ package org.hyperledger.iroha.android.offline;
 
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertThrows;
 
 import org.hyperledger.iroha.sdk.offline.IrohaPeerNfcCommandTypeV1;
@@ -45,5 +46,11 @@ public final class IrohaPeerNfcV1AdversarialTests {
     assertArrayEquals(
         new byte[] {(byte) 0x80, 0x10, 0, 0, 0, 0, 0},
         IrohaPeerNfcV1.encodeCommand(IrohaPeerNfcCommandV1.GET_INFO));
+  }
+  @Test
+  public void removedPublicMessageTagsAreRejected() {
+    assertNull(IrohaPeerPayloadKind.fromCode(0));
+    assertNull(IrohaPeerPayloadKind.fromCode(4));
+    assertNull(IrohaPeerPayloadKind.fromCode(5));
   }
 }

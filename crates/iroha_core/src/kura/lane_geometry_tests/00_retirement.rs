@@ -2317,6 +2317,11 @@ fn install_merge_applied_retirement_work(
         epoch_id: 1,
         lane_catalog_hash: Hash::new(b"geometry-durability-merge-catalog"),
         active_lanes,
+        lane_authority_catalog:
+            iroha_data_model::merge::MergeLaneAuthorityCatalogV1::from_lane_committees(
+                std::slice::from_ref(&certified.proposal.descriptor.validator_set),
+            )
+            .expect("catalog matches the certified retirement fixture lane authority"),
         incarnation_root: Hash::new(b"geometry-durability-merge-incarnations"),
         activation_root: Hash::new(b"geometry-durability-merge-activations"),
         lane_snapshots: Vec::new(),

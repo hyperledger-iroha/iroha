@@ -2008,6 +2008,49 @@ impl<F: Field> ConstraintSystem<F> {
         });
     }
 
+    fn selector_degrees(&self) -> Vec<usize> {
+        // We only consider expressions in gates, as lookup arguments cannot support simple
+        // selectors. Complex selectors and selectors that do not appear in any gate retain degree
+        // zero and are each materialized independently.
+        let mut degrees = vec![0; self.num_selectors];
+        for expr in self.gates.iter().flat_map(|gate| gate.polys.iter()) {
+            if let Some(selector) = expr.extract_simple_selector() {
+                degrees[selector.0] = max(degrees[selector.0], expr.degree());
+            }
+        }
+        degrees
+    }
+
+    pub(crate) fn compressed_selector_columns(&self, selectors: &[Vec<bool>]) -> usize {
+        assert_eq!(selectors.len(), self.num_selectors);
+        compress_selectors::combination_count(
+            &selectors
+                .iter()
+                .cloned()
+                .zip(self.selector_degrees())
+                .enumerate()
+                .map(|(selector, (activations, max_degree))| {
+                    compress_selectors::SelectorDescription {
+                        selector,
+                        activations,
+                        max_degree,
+                    }
+                })
+                .collect::<Vec<_>>(),
+            self.degree(),
+        )
+    }
+
+    /// Returns the smallest number of fixed columns selector compression can possibly produce for
+    /// this configured constraint system.
+    ///
+    /// The exact count additionally depends on synthesized activation overlap. Treating every
+    /// selector as inactive removes all overlap while preserving the configured degree limits and
+    /// complex-selector behavior, so this is a sound configure-only lower bound.
+    pub fn minimum_compressed_selector_columns(&self) -> usize {
+        self.compressed_selector_columns(&vec![vec![false]; self.num_selectors])
+    }
+
     /// This will compress selectors together depending on their provided
     /// assignments. This `ConstraintSystem` will then be modified to add new
     /// fixed columns (representing the actual selectors) and will return the
@@ -2020,16 +2063,7 @@ impl<F: Field> ConstraintSystem<F> {
         // counted for this constraint system.
         assert_eq!(selectors.len(), self.num_selectors);
 
-        // Compute the maximal degree of every selector. We only consider the
-        // expressions in gates, as lookup arguments cannot support simple
-        // selectors. Selectors that are complex or do not appear in any gates
-        // will have degree zero.
-        let mut degrees = vec![0; selectors.len()];
-        for expr in self.gates.iter().flat_map(|gate| gate.polys.iter()) {
-            if let Some(selector) = expr.extract_simple_selector() {
-                degrees[selector.0] = max(degrees[selector.0], expr.degree());
-            }
-        }
+        let degrees = self.selector_degrees();
 
         // We will not increase the degree of the constraint system, so we limit
         // ourselves to the largest existing degree constraint.

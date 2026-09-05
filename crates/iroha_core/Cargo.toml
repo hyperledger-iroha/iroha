@@ -32,6 +32,11 @@ name = "privacy_exact12_action_driver"
 path = "src/bin/privacy_exact12_action_driver.rs"
 required-features = ["privacy-release-evidence"]
 
+[[bin]]
+name = "kagemusha_real_proof"
+path = "src/bin/kagemusha_real_proof.rs"
+required-features = ["kagemusha-real-proof-harness"]
+
 [lints]
 workspace = true
 
@@ -135,6 +140,10 @@ circuit-params = ["halo2_proofs/circuit-params"]
 zk-preverify = []
 # Gate zk-heavy tests; enable with `--features zk-tests` when needed
 zk-tests = ["iroha-core-tests"]
+# Non-shipping entrypoint for the single externally memory-guarded Kagemusha real-proof
+# qualification. Keeping it out of `cfg(test)` avoids code-generating the full Core unit-test
+# harness merely to execute this one proof.
+kagemusha-real-proof-harness = ["zk-halo2-ipa"]
 # Enable developer Halo2 test vectors (heavy tooling, opt-in only).
 halo2-dev-tests = []
 # Compile the large private Sumeragi main-loop unit-test harness. This remains

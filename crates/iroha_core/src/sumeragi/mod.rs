@@ -1441,6 +1441,22 @@ fn fair_v2_ingress_leader_wire_identity(
         phase,
         semantic_origin: semantic_origin.clone(),
         canonical_wire_hash,
+        vote_statement_hash: match &message.payload {
+            ConsensusMessageV2Payload::Vote(vote) if vote.round == vote.proposal_round => {
+                Some(v2::leader_wire_vote_statement_hash(
+                    vote.proposal_round,
+                    vote.subject,
+                    &vote.execution_commitment,
+                ))
+            }
+            _ => None,
+        },
+        timeout_prepare_view: match &message.payload {
+            ConsensusMessageV2Payload::TimeoutCertificate(tc) => {
+                tc.highest_prepare_qc().map(|qc| qc.round.view)
+            }
+            _ => None,
+        },
     };
     FairV2IngressLeaderWireDerivation::Exact { identity, slot }
 }
@@ -4659,18 +4675,37 @@ impl FairV2Ingress {
             .leader_wire_lifecycles
             .iter()
             .filter_map(|(slot, record)| {
-                (record.status == FairV2IngressLeaderWireStatus::Dormant
-                    && next.retires(&record.token))
+                (matches!(
+                    record.status,
+                    FairV2IngressLeaderWireStatus::Dormant
+                        | FairV2IngressLeaderWireStatus::VolatileTerminal
+                ) && next.retires(&record.token))
                 .then(|| slot.clone())
             })
             .collect::<BTreeSet<_>>();
-        gate.advance_recovery_cut(next, &retiring)?;
+        let rearming = gate.advance_recovery_cut(next, &retiring)?;
         for slot in &retiring {
             let removed = state
                 .leader_wire_lifecycles
                 .remove(slot)
                 .expect("durably retired dormant leader-wire slot remains mirrored");
-            debug_assert_eq!(removed.status, FairV2IngressLeaderWireStatus::Dormant);
+            debug_assert!(matches!(
+                removed.status,
+                FairV2IngressLeaderWireStatus::Dormant
+                    | FairV2IngressLeaderWireStatus::VolatileTerminal
+            ));
+        }
+        for slot in &rearming {
+            let record = state
+                .leader_wire_lifecycles
+                .get_mut(slot)
+                .expect("durably rearmed terminal remains mirrored");
+            assert_eq!(
+                record.status,
+                FairV2IngressLeaderWireStatus::VolatileTerminal
+            );
+            record.status = FairV2IngressLeaderWireStatus::Dormant;
+            record.ingress_predecessors.clear();
         }
         self.debug_assert_consistent(&state);
         Ok(retiring.len())
@@ -5105,12 +5140,20 @@ impl FairV2Ingress {
                 "leader-wire obsolete terminal lacks durable recovery authority".to_owned(),
             );
         }
-        gate.mark_volatile_terminal(runtime)?;
+        let terminal_status = gate.mark_volatile_terminal(runtime)?;
         let record = state
             .leader_wire_lifecycles
             .get_mut(&token.slot)
             .expect("validated leader-wire runtime record remains bound");
-        record.status = FairV2IngressLeaderWireStatus::VolatileTerminal;
+        record.status = match terminal_status {
+            serviced_candidate_store::LeaderWireLifecycleStatus::Dormant => {
+                FairV2IngressLeaderWireStatus::Dormant
+            }
+            serviced_candidate_store::LeaderWireLifecycleStatus::VolatileTerminal => {
+                FairV2IngressLeaderWireStatus::VolatileTerminal
+            }
+            _ => return Err("leader-wire terminal returned a carrier-owning status".to_owned()),
+        };
         record.ingress_predecessors.clear();
         self.debug_assert_consistent(&state);
         Ok(())

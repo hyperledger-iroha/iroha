@@ -11,9 +11,9 @@
 //! One block per leaf is intentional.  It keeps the Table8 circuit at `k = 12`, does not widen the
 //! five-lane monetary circuits, and places no limit on the number of leaves a plan can fold.
 //!
-//! TODO: replace the monolithic mint SHA queues only after release-pinned leaf keys and the
-//! alternating claim fold constrain exact typed-plan completeness.  A leaf alone must never carry
-//! monetary authority.
+//! Release-pinned leaf keys and the alternating claim fold constrain exact typed-plan
+//! completeness before the monetary circuit accepts the terminal claim. A leaf alone never
+//! carries monetary authority.
 
 use ff::PrimeField;
 use halo2_base::{
@@ -170,7 +170,7 @@ impl KagemushaMintHashPlanV1 {
         Ok(plan)
     }
 
-    /// Return the exact ordered one-block statements consumed by the future claim fold.
+    /// Return the exact ordered one-block statements consumed by the claim fold.
     pub(crate) fn leaves(&self) -> &[KagemushaMintHashShardStatementV1] {
         &self.leaves
     }
@@ -526,6 +526,16 @@ impl<F: KagemushaPoseidonFieldV1> Circuit<F> for KagemushaMintHashShardCircuitV1
 
     fn configure(_: &mut ConstraintSystem<F>) -> Self::Config {
         unreachable!("KAGEMUSHA mint hash shard uses authenticated Base parameters")
+    }
+
+    fn synthesize_for_measurement(
+        &self,
+        config: Self::Config,
+        layouter: impl Layouter<F>,
+    ) -> Result<(), PlonkError> {
+        let result = self.synthesize(config, layouter);
+        self.builder.reset_synthesis_state();
+        result
     }
 
     fn synthesize(

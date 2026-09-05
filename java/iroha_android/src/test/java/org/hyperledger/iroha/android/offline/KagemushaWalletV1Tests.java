@@ -4,6 +4,7 @@
 package org.hyperledger.iroha.android.offline;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertArrayEquals;
 
 import java.lang.reflect.Method;
 import java.math.BigInteger;
@@ -15,6 +16,8 @@ import org.hyperledger.iroha.sdk.offline.KagemushaAcknowledgementV1;
 import org.hyperledger.iroha.sdk.offline.KagemushaAccountIdV1;
 import org.hyperledger.iroha.sdk.offline.KagemushaPaymentRequestV1;
 import org.hyperledger.iroha.sdk.offline.KagemushaPaymentV1;
+import org.hyperledger.iroha.sdk.offline.KagemushaOperationKindV1;
+import org.hyperledger.iroha.sdk.offline.KagemushaPendingCreditSelectorV1;
 import org.hyperledger.iroha.sdk.offline.KagemushaReceiveFoldResultV1;
 import org.hyperledger.iroha.sdk.offline.KagemushaStagedPaymentV1;
 import org.junit.Test;
@@ -40,7 +43,16 @@ public final class KagemushaWalletV1Tests {
                 "send",
                 "stagePayment",
                 "stageMintCredit",
-                "foldReceiveCredit",
+                "foldPendingCredit",
+                "reservePaymentRequestOperationId",
+                "reservePaymentOperationId",
+                "recoverPaymentByOperationId",
+                "reserveMintOperationId",
+                "prepareMintConstructionBundle",
+                "recoverMintConstructionBundle",
+                "prepareTopUpRequest",
+                "reserveRedemptionOperationId",
+                "recoverRedemptionByOperationId",
                 "drainPendingCredits",
                 "recoverPayment",
                 "recordAcknowledgement",
@@ -56,12 +68,13 @@ public final class KagemushaWalletV1Tests {
         KagemushaPaymentRequestV1.class,
         KagemushaWalletV1.class
             .getMethod(
-                "createPaymentRequest", KagemushaAccountIdV1.class, BigInteger.class, long.class)
+                "createPaymentRequest",
+                byte[].class, KagemushaAccountIdV1.class, BigInteger.class, long.class)
             .getReturnType());
     assertEquals(
         KagemushaPaymentV1.class,
         KagemushaWalletV1.class
-            .getMethod("send", KagemushaPaymentRequestV1.class)
+            .getMethod("send", KagemushaPaymentRequestV1.class, byte[].class)
             .getReturnType());
     assertEquals(
         KagemushaStagedPaymentV1.class,
@@ -71,7 +84,9 @@ public final class KagemushaWalletV1Tests {
             .getReturnType());
     assertEquals(
         KagemushaReceiveFoldResultV1.class,
-        KagemushaWalletV1.class.getMethod("foldReceiveCredit", byte[].class).getReturnType());
+        KagemushaWalletV1.class
+            .getMethod("foldPendingCredit", KagemushaPendingCreditSelectorV1.class)
+            .getReturnType());
     assertEquals(
         KagemushaPaymentV1.class,
         KagemushaWalletV1.class
@@ -86,5 +101,14 @@ public final class KagemushaWalletV1Tests {
                 KagemushaPaymentV1.class,
                 KagemushaAcknowledgementV1.class)
             .getReturnType());
+  }
+
+  @Test
+  public void monetaryOperationTagsAreTheSixAggregateBalanceTransitions() {
+    final int[] tags = new int[KagemushaOperationKindV1.values().length];
+    for (int index = 0; index < tags.length; index++) {
+      tags[index] = KagemushaOperationKindV1.values()[index].wireTag;
+    }
+    assertArrayEquals(new int[] {0, 1, 2, 3, 4, 5}, tags);
   }
 }

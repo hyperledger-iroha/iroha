@@ -342,9 +342,7 @@ fn persist_merge_carrier_finality_chain_for_state_test(
         );
         let network_id = *state.network_id_ref();
         let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
-            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
-                network_id, 0, &roster,
-            );
+            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(network_id, 0, &roster);
         let context = HeightContext {
             network_id,
             protocol_version: PROTOCOL_VERSION,
@@ -814,6 +812,10 @@ fn autonomous_merge_commit_authorization_fixture_inner(
         view: 0,
         carrier_height,
         carrier_parent_hash: parent.hash(),
+        lane_authority_catalog: state
+            .merge_active_lane_authority_snapshot(carrier_height)
+            .expect("fixture exact lane authority")
+            .2,
         lane_catalog_hash: merge_lane_catalog_hash(&lifecycle.nexus.lane_catalog),
         incarnation_root: LaneLifecycleParameterV1::incarnation_root(&incarnation_entries),
         activation_root: crate::merge::merge_activation_root(&active_lanes),

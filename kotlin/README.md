@@ -36,10 +36,10 @@ journal/inbox/outbox, trusted-time, atomic recovery, and hardware-epoch rotation
 payments are acknowledged only after durable staging; duplicate delivery returns the provider's
 same durable ACK. Sends and redemptions require the native provider to fold the staged credits
 needed to cover the amount; unrelated backlog must not delay an already-covered spend.
-`foldReceiveCredit()` and `drainPendingCredits()` expose exact single-credit folds and a
-stable-snapshot drain without a cumulative count limit. The drain releases the lane after each fold for queued
-foreground work. Concurrent epoch rotation interrupts the drain; start a new pass for the new
-epoch's watermark. Continuous background scheduling remains an integration
+`foldPendingCredit()` folds exactly one authenticated mint or peer credit, while
+`drainPendingCredits()` repeatedly folds a stable snapshot without a cumulative count limit.
+The drain releases the lane after each credit for queued foreground work. Concurrent epoch rotation interrupts the drain; start a new
+pass for the new epoch's watermark. Continuous background scheduling remains an integration
 requirement. `KagemushaAndroidWalletV1.openProduction(...)` additionally binds an OEM adapter to
 the native device service. Stock KeyMint and StrongBox remain online-only because signing keys do
 not supply the required non-forking persistence contract; there is no software fallback.
@@ -209,14 +209,30 @@ participant rows, and inconsistent carrier identities.
 ### KAGEMUSHA peer transports
 
 `KagemushaNoritoV1` is the canonical KAGEMUSHA wire codec. Kotlin/JVM and Android
-encode the same three-message payment exchange—signed exact-amount request with its
-recipient key, post-commit proof-bearing payment, and acknowledgement.
+encode the same three-message payment exchange—direct request, post-commit proof-bearing
+payment, and durable acknowledgement. Each request binds one exact amount and a fresh
+recipient encryption key; distinct valid payments against a reusable request are accepted.
 Mint authorization, mint credit, and redemption vouchers are separately framed;
-`kgm1:` is the sole text transport. There is no intent, ticket, request-mode, or
-alternate compatibility path. QR, NFC, and Nearby consume
+`kgm1:` is the sole text transport. Exposed credits cannot be cancelled. QR, NFC, and Nearby consume
 `../fixtures/offline/kagemusha_v1.json`. Public wire
 size and verification work are independent of balance history; no hop, input,
 origin, ancestry, fan-in, or proof-depth limit is encoded.
+
+Before requesting, sending, minting, or redeeming offline value, the app must durably
+save a fresh nonzero 32-byte operation identity and its exact action parameters, then
+pass that identity to the corresponding reservation and execution calls. An identical
+retry retains the same identity; a lost native return must never cause the app to
+allocate a replacement. The authenticated provider rejects a substituted reservation
+identity before executing a device operation. Payment and redemption reservations
+carry the canonical tagged `iroha.kagemusha.device.v1.sender-public-inputs` Norito
+archive, shared with the native outgoing-operation index.
+
+`KagemushaCoreCoordinatorBridgeV1.open(storagePath)` in `client-android` provides
+the strict schema-2 JNI transport, backed by the pure `core-jvm` frame codec.
+It checks the complete ABI-23 inventory and rejects substituted response bindings;
+missing JNI or an absent qualified native coordinator fails closed. Its opaque
+archives do not implement the typed wallet coordinator: the remaining native-owned
+archive schemas and integration are recorded in [the source contract](../specs/kagemusha_device_bridge_v1.md).
 
 Online reserve top-ups use the same payer authority as the debit. Build one
 `TopUpKagemushaV1Instruction` from the proof-bearing request, put that sole

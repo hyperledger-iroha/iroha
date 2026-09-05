@@ -919,7 +919,7 @@ object KagemushaNoritoV1 {
 
     private fun paymentRequestTranscript(value: KagemushaPaymentRequestV1): ByteArray =
         fixedTranscript(
-            388, u16Le(value.version), value.releaseId(), value.networkId.bytes(),
+            390, u16Le(value.version), value.releaseId(), value.networkId.bytes(),
             digestEncoded(ascii("iroha:kagemusha:v1:asset-identity"), assetIdentityCanonicalShape(value.asset)),
             value.assetIncarnation.bytes(), u32Le(value.scale), value.liabilityPoolId(),
             digestEncoded(ascii("iroha:kagemusha:v1:account-identity"), accountIdentityCanonicalShape(value.recipient)),

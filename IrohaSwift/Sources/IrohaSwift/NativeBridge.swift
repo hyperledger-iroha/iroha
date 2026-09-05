@@ -140,8 +140,13 @@ enum NoritoBridgeLoader {
         "connect_norito_kagemusha_v1_mint_credit_text_validate",
         "connect_norito_kagemusha_v1_mint_credit_against_authorization_text_validate",
         "connect_norito_kagemusha_v1_redemption_voucher_text_validate",
+        "connect_norito_kagemusha_contract_vector_v1",
+        "connect_norito_kagemusha_core_coordinator_contract_v1",
+        "connect_norito_kagemusha_core_coordinator_open_v1",
+        "connect_norito_kagemusha_core_coordinator_invoke_v1",
         "connect_norito_kagemusha_device_capabilities_v1",
         "connect_norito_kagemusha_device_execute_v1",
+        "connect_norito_kagemusha_device_response_authenticator_v1_verify",
         "connect_norito_kagemusha_device_mint_stage_command_v1_validate",
         "connect_norito_kagemusha_device_mint_stage_result_v1_validate"
     ] + parliamentTimedOvnWalletRequiredSymbols

@@ -4,6 +4,11 @@
 //! flushed, and synchronised before its exact persistence identifier is acknowledged. No caller
 //! can observe a causally later signing, broadcast, view-change, or apply effect before that point.
 use super::v2_core as reducer;
+#[path = "v2_leader_wire_consumer.rs"]
+mod leader_wire_consumer;
+pub(crate) use leader_wire_consumer::{
+    LeaderWireRecoveryAuthority, vote_statement_hash as leader_wire_vote_statement_hash,
+};
 #[path = "v2_pending_kura_recovery.rs"]
 mod pending_kura_recovery;
 pub(crate) use pending_kura_recovery::{
@@ -40,12 +45,12 @@ use super::{
         SafetyWalLeaderWireStoreAuthority,
     },
     serviced_candidate_store::{
-        LeaderWireLifecycleRestore, LeaderWireLifecycleStoreGate, LeaderWireRecoveryAuthority,
-        ProducerContinuationAddress, ProducerContinuationHandoffToken,
-        ProducerContinuationIdentity, ProducerContinuationRecord, ProducerContinuationReservation,
-        ProducerContinuationSourceClass, ProducerContinuationStatus,
-        ProducerContinuationTerminalToken, SERVICED_CANDIDATE_STAGES_PER_LIFECYCLE,
-        ServicedCandidateKey, ServicedCandidateStore, serviced_candidate_stage_for_kind_code,
+        LeaderWireLifecycleRestore, LeaderWireLifecycleStoreGate, ProducerContinuationAddress,
+        ProducerContinuationHandoffToken, ProducerContinuationIdentity, ProducerContinuationRecord,
+        ProducerContinuationReservation, ProducerContinuationSourceClass,
+        ProducerContinuationStatus, ProducerContinuationTerminalToken,
+        SERVICED_CANDIDATE_STAGES_PER_LIFECYCLE, ServicedCandidateKey, ServicedCandidateStore,
+        serviced_candidate_stage_for_kind_code,
     },
     v2_body_store::{
         DurableBodyReceipt, RecoveredDecisionApplyAdapterPreviewPermit,
@@ -11554,7 +11559,9 @@ impl SumeragiV2Adapter {
         let Some(locked) = durable.locked() else {
             return false;
         };
-        vote.proposal_round.height == locked.round().height()
+        (locked.round().view() == self.reducer.current_tag().view()
+            || durable.commit_intent_for_lock(locked).is_some())
+            && vote.proposal_round.height == locked.round().height()
             && vote.proposal_round.view == locked.round().view()
             && vote.round == vote.proposal_round
             && self
@@ -11840,15 +11847,6 @@ impl SumeragiV2Adapter {
         let current_tag = self.reducer.current_tag();
         let current_view = current_tag.view();
         self.prune_ingress_records();
-        let retained_vote_views = u64::try_from(self.wire_context.roster.len()).unwrap_or(u64::MAX);
-        let oldest_retained_view = current_view.saturating_sub(retained_vote_views);
-        // Retain arbitrary individual Commit/Prepare vote keys for one complete
-        // leader rotation. Older CommitQCs remain admissible without
-        // restriction. Exact durable locked-round CommitVotes are the sole old
-        // individual-vote exception while the height is undecided: timeout
-        // installation clears their volatile reducer pool, while replay keeps
-        // retransmitting the durable Commit intent. Their single round/subject
-        // cannot exhaust this table.
         let locked_commit_progress = match payload {
             wire::ConsensusMessageV2Payload::Vote(vote) => self.is_exact_locked_commit_vote(vote),
             _ => false,
@@ -11868,73 +11866,37 @@ impl SumeragiV2Adapter {
         } else {
             false
         };
-        match payload {
-            wire::ConsensusMessageV2Payload::Proposal(proposal) => {
-                if proposal.round.view > current_view {
-                    // A proposal can outrun the TimeoutCertificate which
-                    // installs its view. Keep the already-authenticated
-                    // runtime carrier at its exact FIFO position so certified
-                    // progress can install that view and the proposal can be
-                    // retried once. Treating it as terminally irrelevant lets
-                    // the generic leader-wire tombstone suppress every later
-                    // byte-identical retransmission after the view advances.
-                    return Ok((
-                        Some(Self::ignored_outcome(reducer::IgnoreReason::Busy)),
-                        None,
-                    ));
+        if !self
+            .leader_wire_recovery_authority()?
+            .admits_payload(payload)
+        {
+            // Already-owned future work remains retryable. Fresh ingress uses
+            // the same policy before it can reserve a token or FIFO position.
+            let future = match payload {
+                wire::ConsensusMessageV2Payload::Proposal(p) => p.round.view > current_view,
+                wire::ConsensusMessageV2Payload::Vote(v) => v.round.view > current_view,
+                wire::ConsensusMessageV2Payload::TimeoutVote(v) => v.round.view > current_view,
+                wire::ConsensusMessageV2Payload::QuorumCertificate(qc) => {
+                    qc.round.view > current_view
                 }
-                if proposal.round.view < current_view {
-                    return Ok((
-                        Some(Self::ignored_outcome(reducer::IgnoreReason::IrrelevantView)),
-                        None,
-                    ));
-                }
-            }
-            wire::ConsensusMessageV2Payload::Vote(vote) => {
-                if vote.round.view > current_view
-                    || (vote.round.view < oldest_retained_view && !locked_commit_progress)
-                {
-                    return Ok((
-                        Some(Self::ignored_outcome(reducer::IgnoreReason::IrrelevantView)),
-                        None,
-                    ));
-                }
-            }
-            wire::ConsensusMessageV2Payload::TimeoutVote(vote) => {
-                if !reducer::timeout_vote_view_is_admissible(current_view, vote.round.view) {
-                    return Ok((
-                        Some(Self::ignored_outcome(reducer::IgnoreReason::IrrelevantView)),
-                        None,
-                    ));
-                }
-            }
-            wire::ConsensusMessageV2Payload::QuorumCertificate(certificate) => {
-                if certificate.phase == wire::GlobalPhase::Prepare
-                    && certificate.round.view > current_view
-                {
-                    // A PrepareQC can outrun the TimeoutCertificate which
-                    // installs its view. Keep the authenticated runtime
-                    // carrier at its exact FIFO position, just like a future
-                    // Proposal above. Terminally classifying it as irrelevant
-                    // would leave the durable leader-wire gate coalescing the
-                    // exact retransmission after that view becomes current,
-                    // preventing this validator from supplying a Commit vote.
-                    return Ok((
-                        Some(Self::ignored_outcome(reducer::IgnoreReason::Busy)),
-                        None,
-                    ));
-                }
-                return Ok((None, None));
-            }
-            wire::ConsensusMessageV2Payload::TimeoutCertificate(_)
-            | wire::ConsensusMessageV2Payload::PayloadChunk(_)
-            | wire::ConsensusMessageV2Payload::CertifiedBodyRequest(_)
-            | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
-            | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
-            | wire::ConsensusMessageV2Payload::CommitCertificateResponse(_)
-            | wire::ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => {
-                return Ok((None, None));
-            }
+                _ => false,
+            };
+            return Ok((
+                Some(Self::ignored_outcome(if future {
+                    reducer::IgnoreReason::Busy
+                } else {
+                    reducer::IgnoreReason::IrrelevantView
+                })),
+                None,
+            ));
+        }
+        if !matches!(
+            payload,
+            wire::ConsensusMessageV2Payload::Proposal(_)
+                | wire::ConsensusMessageV2Payload::Vote(_)
+                | wire::ConsensusMessageV2Payload::TimeoutVote(_)
+        ) {
+            return Ok((None, None));
         }
         let (key, fingerprint) = ingress_equivocation_identity(payload)
             .ok_or(AdapterError::EquivocationArtifactMismatch)?;
@@ -11953,7 +11915,14 @@ impl SumeragiV2Adapter {
                         } else if locked_reproposal_prepare_progress {
                             !delivered.locked_commit_progress
                                 && delivered.locked_reproposal_prepare_progress
-                        } else if matches!(key, IngressSemanticKey::Proposal { .. }) {
+                        } else if matches!(
+                            key,
+                            IngressSemanticKey::Proposal { .. }
+                                | IngressSemanticKey::Vote {
+                                    phase: wire::GlobalPhase::Prepare,
+                                    ..
+                                }
+                        ) {
                             // A strict same-round TC upgrade can change the
                             // lock without changing the view, so re-evaluate
                             // one exact proposal in the new consumer epoch.
@@ -16426,28 +16395,7 @@ impl SumeragiV2Adapter {
     pub(crate) fn leader_wire_recovery_authority(
         &self,
     ) -> Result<LeaderWireRecoveryAuthority, AdapterError> {
-        self.ensure_ingress()?;
-        let owner: [u8; 32] = self.fingerprints.node.into();
-        let protected_lock = self
-            .reducer
-            .durable_state()
-            .locked()
-            .map(|certificate| -> Result<_, AdapterError> {
-                Ok((
-                    self.registry.round_to_wire(certificate.proposal_round()),
-                    self.registry.subject(certificate.subject())?,
-                ))
-            })
-            .transpose()?;
-        LeaderWireRecoveryAuthority::from_replayed_adapter(
-            self.wire_context.id(),
-            self.wire_context.height,
-            owner,
-            self.reducer.current_tag().view(),
-            self.reducer.durable_state().decision().is_some(),
-        )
-        .with_protected_lock(protected_lock)
-        .map_err(AdapterError::ServicedCandidateStore)
+        LeaderWireRecoveryAuthority::from_adapter(self)
     }
     /// Mint the sole fixed leader-wire sibling owner from this exact open WAL.
     pub(crate) fn mint_leader_wire_store_authority(
@@ -18766,6 +18714,7 @@ fn aggregate_core_shares(
 }
 #[cfg(test)]
 mod tests {
+    include!("tests/v2_adapter_leader_wire_consumer.rs");
     include!("tests/v2_adapter_main_00.rs");
     include!("tests/v2_adapter_main_01.rs");
     include!("tests/v2_adapter_main_02.rs");

@@ -32,7 +32,6 @@ use halo2_proofs::{
 };
 use iroha_data_model::kagemusha::{KagemushaMintCreditStatementV1, KagemushaPairedProofV1};
 use norito::codec::{Decode, Encode};
-use sha2::{Digest as _, Sha256};
 use snark_verifier::{
     loader::native::NativeLoader,
     pcs::ipa::{IpaAccumulator, IpaSuccinctVerifyingKey},
@@ -44,10 +43,19 @@ use super::{
     DigestV1, KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1, KagemushaPastaParityV1,
     deferred_parent::{
         DeferredLoader, DeferredScalar, KagemushaDeferredParentOutputV1, accumulator_limb_count,
-        bind_accumulator_limbs, constrain_reciprocal_audit_plan_v1, deferred_field_chips_v1,
-        deferred_loader_v1, finalize_deferred_audit_plan_v1,
-        kagemusha_protocol_structure_digest_v1, load_and_constrain_parent_protocol_if_v1,
+        bind_accumulator_limbs, constrain_reciprocal_output_with_u128_binding_v1,
+        deferred_field_chips_v1, deferred_loader_v1,
+        finalize_deferred_audit_plan_with_u128_binding_v1, kagemusha_protocol_structure_digest_v1,
+        load_and_constrain_parent_protocol_if_v1, load_and_constrain_parent_protocol_v1,
         load_native_accumulator, select_accumulator_v1, verify_fold, verify_ordinary_proof_v1,
+        verify_two_carrier_hybrid_ordinary_proof_and_stream_v1,
+    },
+    mint_hash_claim_fold::{
+        KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_INSTANCE_COUNT_V1,
+        KAGEMUSHA_MINT_HASH_CLAIM_INNER_SEMANTIC_INSTANCE_COUNT_V1,
+        KAGEMUSHA_MINT_HASH_CLAIM_PUBLIC_INSTANCE_COUNT_V1,
+        canonical_claim_carrier_binding_tail_v1, constrain_complete_claim_against_sha_jobs_v1,
+        public_instance as hash_claim_public,
     },
     mint_helper::{
         KagemushaMintAuthorityStepV1, KagemushaMintCertificateJobsV1,
@@ -58,12 +66,18 @@ use super::{
 use crate::zk::{
     kagemusha_v1_poseidon::{KagemushaPoseidonFieldV1, digest_limbs},
     pasta_dense_msm::{PastaDenseMsmConfigV1, PastaDenseMsmJobsV1},
-    pasta_sha256::{PastaSha256BitV1, PastaSha256ByteV1, PastaSha256ConfigV1, PastaSha256JobsV1},
 };
 
 const MINIMUM_UNUSABLE_ROWS: usize = 9;
 const MINT_PARENT_EQUATION_TAG_V1: u32 = 5;
-const MINT_PAIR_BINDING_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:mint-authority-pair";
+const MINT_HASH_CLAIM_EQUATION_TAG_V1: u32 = 13;
+const MINT_PAIR_BASE_BOUND_U128_COUNT_V1: usize = 92;
+const MINT_HASH_CLAIM_BOUND_TAIL_U128_COUNT_V1: usize =
+    KAGEMUSHA_MINT_HASH_CLAIM_INNER_SEMANTIC_INSTANCE_COUNT_V1
+        - KAGEMUSHA_MINT_HASH_CLAIM_PUBLIC_INSTANCE_COUNT_V1;
+const MINT_PAIR_BOUND_U128_COUNT_V1: usize =
+    MINT_PAIR_BASE_BOUND_U128_COUNT_V1 + MINT_HASH_CLAIM_BOUND_TAIL_U128_COUNT_V1;
+const MINT_EQ_AUDIT_BOUND_U128_COUNT_V1: usize = MINT_PAIR_BOUND_U128_COUNT_V1 + 2;
 
 /// Release-authenticated bootstrap or epoch-rotation proof used as a finalized-mint parent.
 ///
@@ -83,7 +97,8 @@ pub struct KagemushaMintAuthorityCheckpointV1 {
     pub release_id: DigestV1,
     /// Release-pinned genesis roster identifier.
     pub genesis_roster_id: DigestV1,
-    /// SHA commitment to the inner paired authority metadata, proved in outer cells 20..21.
+    /// Inner Eq deferred-audit commitment to the paired authority metadata, proved in outer
+    /// cells 20..21.
     ///
     /// Its inner audit/history inputs differ from the transported outer metadata. Shape
     /// validation cannot recompute this commitment; both outer proofs must authenticate it.
@@ -187,70 +202,8 @@ pub(super) mod public_instance {
 pub(super) const KAGEMUSHA_MINT_AUTHORITY_PUBLIC_INSTANCE_COUNT_V1: usize =
     public_instance::HISTORY_START + accumulator_limb_count();
 
-/// Canonical inner public material shared by both halves of one mint-authority proof.
-///
-/// The digest includes both complete history accumulators. A state proof therefore cannot splice
-/// an Eq helper from one certificate/authority chain with an Ep helper from another. The compact
-/// outer decider preserves the proved digest, not these inner audit/history inputs.
-#[derive(Clone, Copy, Debug)]
-pub struct KagemushaMintAuthorityPairBindingV1<'a> {
-    /// Explicit helper branch.
-    pub step: KagemushaMintAuthorityStepV1,
-    /// Common semantic statement digest.
-    pub semantic_digest: DigestV1,
-    /// Exact semantic amount.
-    pub amount: u128,
-    /// Exact paired certificate binding.
-    pub certificate_binding: DigestV1,
-    /// Recursively authenticated current roster.
-    pub authority_head: DigestV1,
-    /// Authenticated proof release.
-    pub release_id: DigestV1,
-    /// Release-pinned genesis roster.
-    pub genesis_roster_id: DigestV1,
-    /// Eq helper protocol identity.
-    pub eq_protocol_digest: DigestV1,
-    /// Ep helper protocol identity.
-    pub ep_protocol_digest: DigestV1,
-    /// Eq deferred-equation audit.
-    pub eq_deferred_audit: DigestV1,
-    /// Ep deferred-equation audit.
-    pub ep_deferred_audit: DigestV1,
-    /// Complete Eq helper history.
-    pub eq_history: &'a [u8; KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1],
-    /// Complete Ep helper history.
-    pub ep_history: &'a [u8; KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1],
-}
-
-impl KagemushaMintAuthorityPairBindingV1<'_> {
-    /// Hash the exact fixed-width public pair transcript constrained by both circuits.
-    #[must_use]
-    pub fn canonical_digest(self) -> DigestV1 {
-        let mut hasher = Sha256::new();
-        hasher.update(MINT_PAIR_BINDING_DOMAIN_V1);
-        hasher.update([0]);
-        hasher.update(u128::from(self.step as u64).to_le_bytes());
-        hasher.update(self.semantic_digest);
-        hasher.update(self.amount.to_le_bytes());
-        for value in [
-            self.certificate_binding,
-            self.authority_head,
-            self.release_id,
-            self.genesis_roster_id,
-            self.eq_protocol_digest,
-            self.ep_protocol_digest,
-            self.eq_deferred_audit,
-            self.ep_deferred_audit,
-        ] {
-            hasher.update(value);
-        }
-        hasher.update(self.eq_history);
-        hasher.update(self.ep_history);
-        hasher.finalize().into()
-    }
-}
-
 /// Same-parity predecessor material consumed by one mint-authority half.
+#[derive(Clone, Copy)]
 pub(super) struct KagemushaMintAuthorityParityWitnessV1<'a, C>
 where
     C: CurveAffineExt,
@@ -261,6 +214,12 @@ where
     pub(super) parent_history: &'a IpaAccumulator<C, NativeLoader>,
     pub(super) parent_fold_proof: &'a [u8],
     pub(super) successor_history: &'a [u8; KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1],
+    pub(super) hash_claim_protocol: &'a PlonkProtocol<C>,
+    pub(super) hash_claim_instances: &'a [Vec<C::ScalarExt>],
+    pub(super) hash_claim_proof: &'a [u8],
+    pub(super) hash_claim_history: &'a IpaAccumulator<C, NativeLoader>,
+    pub(super) hash_claim_history_fold_proof: &'a [u8],
+    pub(super) hash_claim_merge_fold_proof: &'a [u8],
 }
 
 /// Complete shared witness used to build the mutually audited helper pair.
@@ -270,6 +229,10 @@ pub(super) struct KagemushaMintAuthorityPairWitnessV1<'a> {
     pub(super) genesis_roster_id: DigestV1,
     pub(super) eq_protocol_digest: DigestV1,
     pub(super) ep_protocol_digest: DigestV1,
+    pub(super) eq_hash_claim_protocol_digest: DigestV1,
+    pub(super) ep_hash_claim_protocol_digest: DigestV1,
+    pub(super) eq_hash_shard_protocol_digest: DigestV1,
+    pub(super) ep_hash_shard_protocol_digest: DigestV1,
     pub(super) eq_deferred_audit: DigestV1,
     pub(super) ep_deferred_audit: DigestV1,
     pub(super) certificate: KagemushaMintCertificateWitnessV1,
@@ -277,11 +240,22 @@ pub(super) struct KagemushaMintAuthorityPairWitnessV1<'a> {
     pub(super) ep: KagemushaMintAuthorityParityWitnessV1<'a, EpAffine>,
 }
 
-/// Base/Table16/dense-MSM configuration shared by both authority parities.
+/// Detached reciprocal plans and canonical audits discovered without retaining either Base graph.
+///
+/// The two deferred outputs own only native points, coefficients, selectors, and transcript
+/// values. Their `AssignedValue` digest handles are fixed-size value/location records; they do not
+/// retain the builders from which the values were read.
+pub(super) struct KagemushaMintAuthorityAuditDiscoveryV1 {
+    eq_output: KagemushaDeferredParentOutputV1<EqAffine>,
+    ep_output: KagemushaDeferredParentOutputV1<EpAffine>,
+    pub(super) eq_deferred_audit: DigestV1,
+    pub(super) ep_deferred_audit: DigestV1,
+}
+
+/// Base/dense-MSM configuration shared by both authority parities.
 #[derive(Clone, Debug)]
 pub(super) struct KagemushaMintAuthorityCircuitConfigV1<F: halo2_base::utils::ScalarField> {
     base: BaseConfig<F>,
-    sha: PastaSha256ConfigV1,
     dense: PastaDenseMsmConfigV1,
 }
 
@@ -289,7 +263,6 @@ pub(super) struct KagemushaMintAuthorityCircuitConfigV1<F: halo2_base::utils::Sc
 #[derive(Clone)]
 pub(super) struct KagemushaMintAuthorityEqCircuitV1 {
     pub(super) builder: BaseCircuitBuilder<Fp>,
-    sha_jobs: PastaSha256JobsV1<Fp>,
     dense_jobs: PastaDenseMsmJobsV1<EpAffine>,
 }
 
@@ -297,7 +270,6 @@ pub(super) struct KagemushaMintAuthorityEqCircuitV1 {
 #[derive(Clone)]
 pub(super) struct KagemushaMintAuthorityEpCircuitV1 {
     pub(super) builder: BaseCircuitBuilder<Fq>,
-    sha_jobs: PastaSha256JobsV1<Fq>,
     dense_jobs: PastaDenseMsmJobsV1<EqAffine>,
 }
 
@@ -315,7 +287,6 @@ macro_rules! impl_mint_authority_circuit {
             fn without_witnesses(&self) -> Self {
                 Self {
                     builder: self.builder.deep_clone().unknown(true),
-                    sha_jobs: self.sha_jobs.unknown(),
                     dense_jobs: self.dense_jobs.unknown(),
                 }
             }
@@ -329,13 +300,22 @@ macro_rules! impl_mint_authority_circuit {
                 base.set_usable_rows(usable_rows);
                 KagemushaMintAuthorityCircuitConfigV1 {
                     base,
-                    sha: PastaSha256ConfigV1::configure(meta),
                     dense: PastaDenseMsmConfigV1::configure::<$opposite>(meta),
                 }
             }
 
             fn configure(_: &mut ConstraintSystem<$field>) -> Self::Config {
                 unreachable!(concat!($label, " uses authenticated Base parameters"))
+            }
+
+            fn synthesize_for_measurement(
+                &self,
+                config: Self::Config,
+                layouter: impl Layouter<$field>,
+            ) -> Result<(), PlonkError> {
+                let result = self.synthesize(config, layouter);
+                self.builder.reset_synthesis_state();
+                result
             }
 
             fn synthesize(
@@ -348,12 +328,6 @@ macro_rules! impl_mint_authority_circuit {
                     &self.builder,
                     config.base,
                     layouter.namespace(|| concat!($label, " Base")),
-                )?;
-                self.sha_jobs.synthesize(
-                    &config.sha,
-                    &mut layouter,
-                    &self.builder.core().copy_manager,
-                    usable_rows,
                 )?;
                 self.dense_jobs.synthesize(
                     &config.dense,
@@ -380,51 +354,51 @@ impl_mint_authority_circuit!(
     "Kagemusha Ep mint authority"
 );
 
-/// Build the stable mutually audited authority pair.
-pub(super) fn build_kagemusha_mint_authority_pair_v1(
-    eq_params: &ParamsIPA<EqAffine>,
-    ep_params: &ParamsIPA<EpAffine>,
-    witness: KagemushaMintAuthorityPairWitnessV1<'_>,
-) -> Result<
-    (
-        KagemushaMintAuthorityEqCircuitV1,
-        KagemushaMintAuthorityEpCircuitV1,
-        DigestV1,
-        DigestV1,
-    ),
-    String,
-> {
+fn validate_pair_witness_v1(
+    witness: &KagemushaMintAuthorityPairWitnessV1<'_>,
+) -> Result<(), String> {
     if witness.release_id == [0; 32]
         || witness.genesis_roster_id == [0; 32]
         || witness.eq_protocol_digest == [0; 32]
         || witness.ep_protocol_digest == [0; 32]
         || witness.eq_protocol_digest == witness.ep_protocol_digest
+        || witness.eq_hash_claim_protocol_digest == [0; 32]
+        || witness.ep_hash_claim_protocol_digest == [0; 32]
+        || witness.eq_hash_shard_protocol_digest == [0; 32]
+        || witness.ep_hash_shard_protocol_digest == [0; 32]
+        || witness.eq_hash_claim_protocol_digest == witness.ep_hash_claim_protocol_digest
+        || witness.eq_hash_shard_protocol_digest == witness.ep_hash_shard_protocol_digest
         || witness.eq_deferred_audit == [0; 32]
         || witness.ep_deferred_audit == [0; 32]
     {
         return Err("mint-authority public binding is absent or aliased".to_owned());
     }
-    witness.certificate.validate_for_step(witness.step)?;
-    let eq_svk = eq_succinct_vk(eq_params);
+    let eq_claim_tail = canonical_claim_carrier_binding_tail_v1(witness.eq.hash_claim_instances)?;
+    let ep_claim_tail = canonical_claim_carrier_binding_tail_v1(witness.ep.hash_claim_instances)?;
+    if eq_claim_tail != ep_claim_tail {
+        return Err(
+            "mint-authority paired claim carrier-binding tails are not canonical and identical"
+                .to_owned(),
+        );
+    }
+    witness.certificate.validate_for_step(witness.step)
+}
+
+/// Discover the stable audit pair while keeping at most one scalar-half Base graph alive.
+///
+/// Ep commits only the common transcript, so it is discovered first. Eq is then discovered with
+/// that exact Ep audit in its bound tail. Each builder and its certificate jobs are dropped before
+/// the other parity is constructed; only the compact native reciprocal plans survive.
+pub(super) fn discover_kagemusha_mint_authority_audits_v1(
+    eq_params: &ParamsIPA<EqAffine>,
+    ep_params: &ParamsIPA<EpAffine>,
+    witness: &KagemushaMintAuthorityPairWitnessV1<'_>,
+) -> Result<KagemushaMintAuthorityAuditDiscoveryV1, String> {
+    validate_pair_witness_v1(witness)?;
     let ep_svk = ep_succinct_vk(ep_params);
     let eq_successor_history = witness.eq.successor_history;
     let ep_successor_history = witness.ep.successor_history;
-    let (mut eq_builder, eq_jobs, eq_output) = build_scalar_half::<EqAffine, EpAffine>(
-        &eq_svk,
-        KagemushaPastaParityV1::Eq,
-        witness.step,
-        witness.release_id,
-        witness.genesis_roster_id,
-        witness.eq_protocol_digest,
-        witness.ep_protocol_digest,
-        witness.eq_deferred_audit,
-        witness.ep_deferred_audit,
-        &witness.certificate,
-        eq_successor_history,
-        ep_successor_history,
-        witness.eq,
-    )?;
-    let (mut ep_builder, ep_jobs, ep_output) = build_scalar_half::<EpAffine, EqAffine>(
+    let (ep_builder, ep_jobs, ep_output, ep_pair_binding) = build_scalar_half::<EpAffine, EqAffine>(
         &ep_svk,
         KagemushaPastaParityV1::Ep,
         witness.step,
@@ -432,6 +406,10 @@ pub(super) fn build_kagemusha_mint_authority_pair_v1(
         witness.genesis_roster_id,
         witness.eq_protocol_digest,
         witness.ep_protocol_digest,
+        witness.eq_hash_claim_protocol_digest,
+        witness.ep_hash_claim_protocol_digest,
+        witness.eq_hash_shard_protocol_digest,
+        witness.ep_hash_shard_protocol_digest,
         witness.eq_deferred_audit,
         witness.ep_deferred_audit,
         &witness.certificate,
@@ -439,63 +417,163 @@ pub(super) fn build_kagemusha_mint_authority_pair_v1(
         ep_successor_history,
         witness.ep,
     )?;
+    let ep_deferred_audit = assigned_digest_bytes(&ep_output.audit_digest_limbs)?;
+    drop(ep_builder);
+    drop(ep_jobs);
+    drop(ep_pair_binding);
+    halo2_proofs::release_allocator_slack();
 
+    let eq_svk = eq_succinct_vk(eq_params);
+    let (eq_builder, eq_jobs, eq_output, eq_pair_binding) = build_scalar_half::<EqAffine, EpAffine>(
+        &eq_svk,
+        KagemushaPastaParityV1::Eq,
+        witness.step,
+        witness.release_id,
+        witness.genesis_roster_id,
+        witness.eq_protocol_digest,
+        witness.ep_protocol_digest,
+        witness.eq_hash_claim_protocol_digest,
+        witness.ep_hash_claim_protocol_digest,
+        witness.eq_hash_shard_protocol_digest,
+        witness.ep_hash_shard_protocol_digest,
+        witness.eq_deferred_audit,
+        ep_deferred_audit,
+        &witness.certificate,
+        eq_successor_history,
+        ep_successor_history,
+        witness.eq,
+    )?;
+    let eq_deferred_audit = assigned_digest_bytes(&eq_output.audit_digest_limbs)?;
+    drop(eq_builder);
+    drop(eq_jobs);
+    drop(eq_pair_binding);
+    halo2_proofs::release_allocator_slack();
+
+    Ok(KagemushaMintAuthorityAuditDiscoveryV1 {
+        eq_output,
+        ep_output,
+        eq_deferred_audit,
+        ep_deferred_audit,
+    })
+}
+
+/// Build the exact Eq half from the detached Ep reciprocal plan.
+pub(super) fn build_kagemusha_mint_authority_eq_v1(
+    eq_params: &ParamsIPA<EqAffine>,
+    witness: &KagemushaMintAuthorityPairWitnessV1<'_>,
+    discovery: &KagemushaMintAuthorityAuditDiscoveryV1,
+) -> Result<KagemushaMintAuthorityEqCircuitV1, String> {
+    validate_pair_witness_v1(witness)?;
+    let eq_svk = eq_succinct_vk(eq_params);
+    let (mut eq_builder, eq_jobs, eq_output, eq_pair_binding) =
+        build_scalar_half::<EqAffine, EpAffine>(
+            &eq_svk,
+            KagemushaPastaParityV1::Eq,
+            witness.step,
+            witness.release_id,
+            witness.genesis_roster_id,
+            witness.eq_protocol_digest,
+            witness.ep_protocol_digest,
+            witness.eq_hash_claim_protocol_digest,
+            witness.ep_hash_claim_protocol_digest,
+            witness.eq_hash_shard_protocol_digest,
+            witness.ep_hash_shard_protocol_digest,
+            discovery.eq_deferred_audit,
+            discovery.ep_deferred_audit,
+            &witness.certificate,
+            witness.eq.successor_history,
+            witness.ep.successor_history,
+            witness.eq,
+        )?;
+    if assigned_digest_bytes(&eq_output.audit_digest_limbs)? != discovery.eq_deferred_audit {
+        return Err("mint-authority Eq audit changed after compact discovery".to_owned());
+    }
+    drop(eq_output);
     let mut eq_dense = eq_jobs.dense;
     let eq_expected_ep_audit = public_digest_cells(
         &eq_builder,
         public_instance::EP_AUDIT_LO,
         "Eq helper Ep audit",
     )?;
-    constrain_reciprocal_audit_plan_v1::<EpAffine>(
+    constrain_reciprocal_output_with_u128_binding_v1::<EpAffine>(
         &mut eq_builder,
-        &ep_output.audit,
-        &ep_output.equation_tags,
-        &ep_output.equation_selectors,
+        &discovery.ep_output,
         &eq_expected_ep_audit,
+        &eq_pair_binding,
         &mut eq_dense,
     )?;
+
+    eq_builder.calculate_params(Some(MINIMUM_UNUSABLE_ROWS));
+    let usable_rows = (1_usize << 16) - MINIMUM_UNUSABLE_ROWS;
+    eq_dense.validate_capacity(usable_rows)?;
+    Ok(KagemushaMintAuthorityEqCircuitV1 {
+        builder: eq_builder,
+        dense_jobs: eq_dense,
+    })
+}
+
+/// Build the exact Ep half from the detached Eq reciprocal plan.
+pub(super) fn build_kagemusha_mint_authority_ep_v1(
+    ep_params: &ParamsIPA<EpAffine>,
+    witness: &KagemushaMintAuthorityPairWitnessV1<'_>,
+    discovery: &KagemushaMintAuthorityAuditDiscoveryV1,
+) -> Result<KagemushaMintAuthorityEpCircuitV1, String> {
+    validate_pair_witness_v1(witness)?;
+    let ep_svk = ep_succinct_vk(ep_params);
+    let (mut ep_builder, ep_jobs, ep_output, ep_pair_binding) =
+        build_scalar_half::<EpAffine, EqAffine>(
+            &ep_svk,
+            KagemushaPastaParityV1::Ep,
+            witness.step,
+            witness.release_id,
+            witness.genesis_roster_id,
+            witness.eq_protocol_digest,
+            witness.ep_protocol_digest,
+            witness.eq_hash_claim_protocol_digest,
+            witness.ep_hash_claim_protocol_digest,
+            witness.eq_hash_shard_protocol_digest,
+            witness.ep_hash_shard_protocol_digest,
+            discovery.eq_deferred_audit,
+            discovery.ep_deferred_audit,
+            &witness.certificate,
+            witness.eq.successor_history,
+            witness.ep.successor_history,
+            witness.ep,
+        )?;
+    if assigned_digest_bytes(&ep_output.audit_digest_limbs)? != discovery.ep_deferred_audit {
+        return Err("mint-authority Ep audit changed after compact discovery".to_owned());
+    }
+    drop(ep_output);
     let mut ep_dense = ep_jobs.dense;
     let ep_expected_eq_audit = public_digest_cells(
         &ep_builder,
         public_instance::EQ_AUDIT_LO,
         "Ep helper Eq audit",
     )?;
-    constrain_reciprocal_audit_plan_v1::<EqAffine>(
+    let mut ep_eq_pair_binding = ep_pair_binding;
+    ep_eq_pair_binding.extend(public_digest_cells(
+        &ep_builder,
+        public_instance::EP_AUDIT_LO,
+        "Ep helper own audit",
+    )?);
+    if ep_eq_pair_binding.len() != MINT_EQ_AUDIT_BOUND_U128_COUNT_V1 {
+        return Err("mint-authority Eq audit binding shape drifted".to_owned());
+    }
+    constrain_reciprocal_output_with_u128_binding_v1::<EqAffine>(
         &mut ep_builder,
-        &eq_output.audit,
-        &eq_output.equation_tags,
-        &eq_output.equation_selectors,
+        &discovery.eq_output,
         &ep_expected_eq_audit,
+        &ep_eq_pair_binding,
         &mut ep_dense,
     )?;
 
-    // These are witness values, not host-authorized assertions.  The returned bytes let the
-    // production prover rebuild the same fixed circuit with the exact public audit cells; both
-    // circuits still recompute and constrain them, including the reciprocal point equations.
-    let eq_audit = assigned_digest_bytes(&eq_output.audit_digest_limbs)?;
-    let ep_audit = assigned_digest_bytes(&ep_output.audit_digest_limbs)?;
-
-    eq_builder.calculate_params(Some(MINIMUM_UNUSABLE_ROWS));
     ep_builder.calculate_params(Some(MINIMUM_UNUSABLE_ROWS));
     let usable_rows = (1_usize << 16) - MINIMUM_UNUSABLE_ROWS;
-    eq_jobs.sha.validate_capacity(usable_rows)?;
-    ep_jobs.sha.validate_capacity(usable_rows)?;
-    eq_dense.validate_capacity(usable_rows)?;
     ep_dense.validate_capacity(usable_rows)?;
-    Ok((
-        KagemushaMintAuthorityEqCircuitV1 {
-            builder: eq_builder,
-            sha_jobs: eq_jobs.sha,
-            dense_jobs: eq_dense,
-        },
-        KagemushaMintAuthorityEpCircuitV1 {
-            builder: ep_builder,
-            sha_jobs: ep_jobs.sha,
-            dense_jobs: ep_dense,
-        },
-        eq_audit,
-        ep_audit,
-    ))
+    Ok(KagemushaMintAuthorityEpCircuitV1 {
+        builder: ep_builder,
+        dense_jobs: ep_dense,
+    })
 }
 
 fn assigned_digest_bytes<F: halo2_base::utils::ScalarField>(
@@ -525,6 +603,10 @@ fn build_scalar_half<C, S>(
     genesis_roster_id: DigestV1,
     eq_protocol_digest: DigestV1,
     ep_protocol_digest: DigestV1,
+    eq_hash_claim_protocol_digest: DigestV1,
+    ep_hash_claim_protocol_digest: DigestV1,
+    eq_hash_shard_protocol_digest: DigestV1,
+    ep_hash_shard_protocol_digest: DigestV1,
     eq_deferred_audit: DigestV1,
     ep_deferred_audit: DigestV1,
     certificate: &KagemushaMintCertificateWitnessV1,
@@ -536,6 +618,7 @@ fn build_scalar_half<C, S>(
         BaseCircuitBuilder<C::ScalarExt>,
         KagemushaMintCertificateJobsV1<S>,
         KagemushaDeferredParentOutputV1<C>,
+        Vec<AssignedValue<C::ScalarExt>>,
     ),
     String,
 >
@@ -549,6 +632,10 @@ where
     let mut builder = authority_builder::<C::ScalarExt>();
     let (assigned, mut jobs) =
         constrain_kagemusha_mint_certificate_v1::<S>(&mut builder, certificate, parity, step)?;
+    // The fixed certificate transcript is authorized by the recursively verified ordered claim
+    // below. The remaining pair transcript is absorbed into both deferred-audit sponges instead
+    // of instantiating a five-lane Table8 gadget for one local digest.
+    let claimed_sha = core::mem::take(&mut jobs.sha);
     let range = builder.range_chip();
     let gate = range.gate();
     let ctx = builder.main(0);
@@ -556,6 +643,14 @@ where
     let genesis = assign_digest(ctx, &range, genesis_roster_id);
     let eq_protocol = assign_digest(ctx, &range, eq_protocol_digest);
     let ep_protocol = assign_digest(ctx, &range, ep_protocol_digest);
+    // These internal protocol identities have no direct state-public cells.  Put them in fixed
+    // columns so the release-authenticated MintAuthority VK, rather than a prover-selected
+    // witness or host preflight, owns the exact claim/shard verifier suite.  The recursively
+    // verified claim still exposes the same four digests and is equality-bound to these cells.
+    let eq_hash_claim_protocol = constant_digest(ctx, eq_hash_claim_protocol_digest);
+    let ep_hash_claim_protocol = constant_digest(ctx, ep_hash_claim_protocol_digest);
+    let eq_hash_shard_protocol = constant_digest(ctx, eq_hash_shard_protocol_digest);
+    let ep_hash_shard_protocol = constant_digest(ctx, ep_hash_shard_protocol_digest);
     let eq_audit = assign_digest(ctx, &range, eq_deferred_audit);
     let ep_audit = assign_digest(ctx, &range, ep_deferred_audit);
 
@@ -576,9 +671,7 @@ where
         KagemushaPastaParityV1::Eq => &eq_history,
         KagemushaPastaParityV1::Ep => &ep_history,
     };
-    let mut pair_preimage = super::mint_helper::constant_bytes(MINT_PAIR_BINDING_DOMAIN_V1);
-    pair_preimage.push(PastaSha256ByteV1::constant(0));
-    for value in [assigned.step]
+    let mut pair_binding_values = [assigned.step]
         .into_iter()
         .chain(assigned.mint_instances)
         .chain(assigned.certificate_binding_digest)
@@ -587,15 +680,21 @@ where
         .chain(genesis)
         .chain(eq_protocol)
         .chain(ep_protocol)
-        .chain(eq_audit)
-        .chain(ep_audit)
+        .chain(eq_hash_claim_protocol)
+        .chain(ep_hash_claim_protocol)
+        .chain(eq_hash_shard_protocol)
+        .chain(ep_hash_shard_protocol)
         .chain(eq_history.iter().copied())
         .chain(ep_history.iter().copied())
-    {
-        pair_preimage.extend(assigned_u128_bytes(ctx, gate, value));
+        .collect::<Vec<_>>();
+    if pair_binding_values.len() != MINT_PAIR_BASE_BOUND_U128_COUNT_V1 {
+        return Err("mint-authority base paired transcript shape drifted".to_owned());
     }
-    let pair_binding_bytes = super::mint_helper::sha_digest(ctx, &mut jobs.sha, pair_preimage)?;
-    let pair_binding = super::mint_helper::sha_digest_limbs(ctx, gate, &pair_binding_bytes);
+    if jobs.sha.compression_blocks()? != 0 {
+        return Err(
+            "mint-authority local SHA queue must remain empty after claim offload".to_owned(),
+        );
+    }
     builder.assigned_instances = vec![
         [assigned.step]
             .into_iter()
@@ -609,7 +708,10 @@ where
             .chain(ep_protocol)
             .chain(eq_audit)
             .chain(ep_audit)
-            .chain(pair_binding)
+            // The Eq audit is a constrained 255-bit Poseidon commitment to the complete paired
+            // transcript above. Reusing its canonical limbs avoids an unconstrained host digest
+            // and lets native/state consumers retain the existing two-limb binding ABI.
+            .chain(eq_audit)
             .chain(history.iter().copied())
             .collect(),
     ];
@@ -698,25 +800,173 @@ where
     .map_err(|error| format!("failed to fold mint-authority predecessor: {error:?}"))?;
     let successor = select_accumulator_v1(&loader, &folded, &parent_history, parent_enabled)
         .map_err(|error| format!("failed to select mint-authority successor history: {error:?}"))?;
+    let parent_equation_count = loader.ecc_chip().equation_count();
+    if parent_equation_count == 0 {
+        return Err("mint-authority predecessor verifier emitted no equations".to_owned());
+    }
+
+    let expected_hash_claim_protocol = match parity {
+        KagemushaPastaParityV1::Eq => eq_hash_claim_protocol,
+        KagemushaPastaParityV1::Ep => ep_hash_claim_protocol,
+    };
+    let claim_structure =
+        kagemusha_protocol_structure_digest_v1(witness.hash_claim_protocol, parity)?;
+    let loaded_claim = load_and_constrain_parent_protocol_v1(
+        &loader,
+        witness.hash_claim_protocol,
+        parity,
+        claim_structure,
+        &expected_hash_claim_protocol,
+    )
+    .map_err(|error| format!("failed to bind mint-authority hash-claim protocol: {error:?}"))?;
+    if loaded_claim.protocol.num_instance
+        != [
+            KAGEMUSHA_MINT_HASH_CLAIM_INNER_SEMANTIC_INSTANCE_COUNT_V1,
+            KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_INSTANCE_COUNT_V1,
+            KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_INSTANCE_COUNT_V1,
+        ]
+        || witness.hash_claim_instances.len() != 3
+        || witness.hash_claim_instances[0].len()
+            != KAGEMUSHA_MINT_HASH_CLAIM_INNER_SEMANTIC_INSTANCE_COUNT_V1
+        || witness.hash_claim_instances[1].len()
+            != KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_INSTANCE_COUNT_V1
+        || witness.hash_claim_instances[2].len()
+            != KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_INSTANCE_COUNT_V1
+    {
+        return Err("mint-authority terminal hash claim public shape is not fixed".to_owned());
+    }
+    let claim_semantic = witness.hash_claim_instances[0]
+        .iter()
+        .map(|value| loader.assign_scalar(*value))
+        .collect::<Vec<_>>();
+    pair_binding_values.extend(
+        claim_semantic[KAGEMUSHA_MINT_HASH_CLAIM_PUBLIC_INSTANCE_COUNT_V1
+            ..KAGEMUSHA_MINT_HASH_CLAIM_INNER_SEMANTIC_INSTANCE_COUNT_V1]
+            .iter()
+            .map(|value| *value.assigned()),
+    );
+    if pair_binding_values.len() != MINT_PAIR_BOUND_U128_COUNT_V1 {
+        return Err("mint-authority claim-bound paired transcript shape drifted".to_owned());
+    }
+    let claim_current = verify_two_carrier_hybrid_ordinary_proof_and_stream_v1(
+        &loader,
+        succinct_vk,
+        &loaded_claim.protocol,
+        &claim_semantic,
+        match parity {
+            KagemushaPastaParityV1::Eq => [
+                [
+                    KAGEMUSHA_MINT_HASH_CLAIM_PUBLIC_INSTANCE_COUNT_V1,
+                    KAGEMUSHA_MINT_HASH_CLAIM_PUBLIC_INSTANCE_COUNT_V1 + 1,
+                ],
+                [
+                    KAGEMUSHA_MINT_HASH_CLAIM_PUBLIC_INSTANCE_COUNT_V1 + 2,
+                    KAGEMUSHA_MINT_HASH_CLAIM_PUBLIC_INSTANCE_COUNT_V1 + 3,
+                ],
+            ],
+            KagemushaPastaParityV1::Ep => [
+                [
+                    KAGEMUSHA_MINT_HASH_CLAIM_PUBLIC_INSTANCE_COUNT_V1 + 4,
+                    KAGEMUSHA_MINT_HASH_CLAIM_PUBLIC_INSTANCE_COUNT_V1 + 5,
+                ],
+                [
+                    KAGEMUSHA_MINT_HASH_CLAIM_PUBLIC_INSTANCE_COUNT_V1 + 6,
+                    KAGEMUSHA_MINT_HASH_CLAIM_PUBLIC_INSTANCE_COUNT_V1 + 7,
+                ],
+            ],
+        },
+        witness.hash_claim_proof,
+    )
+    .map_err(|error| format!("failed to verify terminal mint hash claim: {error:?}"))?;
+    let claim_column = &claim_semantic[..KAGEMUSHA_MINT_HASH_CLAIM_PUBLIC_INSTANCE_COUNT_V1];
+    {
+        let chip = loader.ecc_chip();
+        let mut loader_ctx = loader.ctx_mut();
+        let assigned_claim = claim_column
+            .iter()
+            .map(|value| *value.assigned())
+            .collect::<Vec<_>>();
+        constrain_complete_claim_against_sha_jobs_v1(
+            loader_ctx.main(),
+            chip.range(),
+            &claimed_sha,
+            &assigned_claim,
+            parity,
+            release,
+            eq_hash_claim_protocol,
+            ep_hash_claim_protocol,
+            eq_hash_shard_protocol,
+            ep_hash_shard_protocol,
+        )?;
+    }
+    let claim_history = load_native_accumulator(&loader, witness.hash_claim_history)
+        .map_err(|error| format!("failed to load terminal mint hash claim history: {error:?}"))?;
+    let claim_history_cells = claim_column
+        .get(hash_claim_public::HISTORY_START..)
+        .ok_or_else(|| "terminal mint hash claim history is absent".to_owned())?
+        .iter()
+        .map(|value| *value.assigned())
+        .collect::<Vec<_>>();
+    bind_accumulator_limbs(&loader, &claim_history, &claim_history_cells)
+        .map_err(|error| format!("failed to bind terminal mint hash claim history: {error:?}"))?;
+    let complete_claim = verify_fold(
+        &loader,
+        succinct_vk,
+        &[claim_current.accumulator, claim_history],
+        witness.hash_claim_history_fold_proof,
+    )
+    .map_err(|error| format!("failed to fold terminal mint hash claim history: {error:?}"))?;
+    let successor = verify_fold(
+        &loader,
+        succinct_vk,
+        &[successor, complete_claim],
+        witness.hash_claim_merge_fold_proof,
+    )
+    .map_err(|error| format!("failed to merge terminal mint hash claim authority: {error:?}"))?;
     bind_accumulator_limbs(&loader, &successor, history)
         .map_err(|error| format!("failed to bind mint-authority successor history: {error:?}"))?;
 
     let equation_count = loader.ecc_chip().equation_count();
-    if equation_count == 0 {
-        return Err("mint-authority predecessor verifier emitted no equations".to_owned());
+    if equation_count <= parent_equation_count {
+        return Err("mint-authority hash-claim verifier emitted no equations".to_owned());
     }
-    let output = finalize_deferred_audit_plan_v1(
+    let mut equation_tags = vec![MINT_PARENT_EQUATION_TAG_V1; parent_equation_count];
+    equation_tags.resize(equation_count, MINT_HASH_CLAIM_EQUATION_TAG_V1);
+    let mut assigned_selectors = vec![parent_enabled; parent_equation_count];
+    assigned_selectors.extend(
+        (parent_equation_count..equation_count)
+            .map(|_| loader.ctx_mut().main().load_constant(C::ScalarExt::ONE)),
+    );
+    let mut selectors =
+        vec![step != KagemushaMintAuthorityStepV1::Bootstrap; parent_equation_count];
+    selectors.resize(equation_count, true);
+    // Acyclic exact-pair binding: Ep commits the shared transcript first; Eq additionally
+    // absorbs the Ep audit. The canonical Eq audit therefore commits both equation transcripts
+    // without asking either circuit to solve a self-referential hash fixed point.
+    let mut audit_bound_values = pair_binding_values.clone();
+    if parity == KagemushaPastaParityV1::Eq {
+        audit_bound_values.extend(ep_audit);
+    }
+    let expected_bound_values = match parity {
+        KagemushaPastaParityV1::Eq => MINT_EQ_AUDIT_BOUND_U128_COUNT_V1,
+        KagemushaPastaParityV1::Ep => MINT_PAIR_BOUND_U128_COUNT_V1,
+    };
+    if audit_bound_values.len() != expected_bound_values {
+        return Err("mint-authority deferred-audit binding shape drifted".to_owned());
+    }
+    let output = finalize_deferred_audit_plan_with_u128_binding_v1(
         &mut builder,
         loader,
-        vec![MINT_PARENT_EQUATION_TAG_V1; equation_count],
-        vec![parent_enabled; equation_count],
-        vec![step != KagemushaMintAuthorityStepV1::Bootstrap; equation_count],
+        equation_tags,
+        assigned_selectors,
+        selectors,
+        &audit_bound_values,
     )
     .map_err(|error| format!("failed to finalize mint-authority audit: {error:?}"))?;
     for (actual, expected) in output.audit_digest_limbs.iter().zip(expected_audit) {
         builder.main(0).constrain_equal(actual, &expected);
     }
-    Ok((builder, jobs, output))
+    Ok((builder, jobs, output, pair_binding_values))
 }
 
 fn constrain_authority_parent<'chip, C>(
@@ -795,6 +1045,13 @@ fn assign_digest<F: KagemushaPoseidonFieldV1>(
     })
 }
 
+fn constant_digest<F: KagemushaPoseidonFieldV1>(
+    ctx: &mut halo2_base::Context<F>,
+    digest: DigestV1,
+) -> [AssignedValue<F>; 2] {
+    digest_limbs::<F>(digest).map(|limb| ctx.load_constant(limb))
+}
+
 fn assign_history_limbs<F: KagemushaPoseidonFieldV1>(
     ctx: &mut halo2_base::Context<F>,
     range: &halo2_base::gates::RangeChip<F>,
@@ -814,17 +1071,6 @@ fn assign_history_limbs<F: KagemushaPoseidonFieldV1>(
         return Err("mint-authority history limb count is not fixed".to_owned());
     }
     Ok(limbs)
-}
-
-fn assigned_u128_bytes<F: KagemushaPoseidonFieldV1>(
-    ctx: &mut halo2_base::Context<F>,
-    gate: &halo2_base::gates::GateChip<F>,
-    value: AssignedValue<F>,
-) -> Vec<PastaSha256ByteV1<F>> {
-    PastaSha256BitV1::decompose(ctx, gate, value, 128)
-        .chunks_exact(8)
-        .map(|bits| PastaSha256ByteV1::from_bits_le(ctx, gate, bits))
-        .collect()
 }
 
 fn public_digest_cells<F: KagemushaPoseidonFieldV1>(
@@ -875,52 +1121,48 @@ fn ep_succinct_vk(params: &ParamsIPA<EpAffine>) -> IpaSuccinctVerifyingKey<EpAff
 
 const _: () = {
     assert!(KAGEMUSHA_MINT_AUTHORITY_PUBLIC_INSTANCE_COUNT_V1 == 56);
+    assert!(MINT_PAIR_BASE_BOUND_U128_COUNT_V1 == 92);
+    assert!(MINT_PAIR_BOUND_U128_COUNT_V1 == 106);
+    assert!(MINT_EQ_AUDIT_BOUND_U128_COUNT_V1 == 108);
 };
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn binding<'a>(
-        eq_history: &'a [u8; KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1],
-        ep_history: &'a [u8; KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1],
-    ) -> KagemushaMintAuthorityPairBindingV1<'a> {
-        KagemushaMintAuthorityPairBindingV1 {
-            step: KagemushaMintAuthorityStepV1::FinalizedMint,
-            semantic_digest: [1; 32],
-            amount: u128::MAX,
-            certificate_binding: [2; 32],
-            authority_head: [3; 32],
-            release_id: [4; 32],
-            genesis_roster_id: [5; 32],
-            eq_protocol_digest: [6; 32],
-            ep_protocol_digest: [7; 32],
-            eq_deferred_audit: [8; 32],
-            ep_deferred_audit: [9; 32],
-            eq_history,
-            ep_history,
-        }
-    }
-
     #[test]
-    fn pair_binding_rejects_cross_parity_history_and_audit_splicing() {
-        let eq_history = [0x11; KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1];
-        let ep_history = [0x22; KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1];
-        let expected = binding(&eq_history, &ep_history).canonical_digest();
-
-        let mut substituted_eq = eq_history;
-        substituted_eq[0] ^= 1;
-        assert_ne!(
-            expected,
-            binding(&substituted_eq, &ep_history).canonical_digest()
+    fn pair_audit_binding_covers_the_complete_fixed_u128_transcript() {
+        let common_scalars = 1; // step
+        let semantic_and_amount = 3;
+        let six_public_digests = 6 * 2;
+        let four_release_fixed_hash_protocol_digests = 4 * 2;
+        let paired_histories = 2 * accumulator_limb_count();
+        assert_eq!(
+            MINT_PAIR_BASE_BOUND_U128_COUNT_V1,
+            common_scalars
+                + semantic_and_amount
+                + six_public_digests
+                + four_release_fixed_hash_protocol_digests
+                + paired_histories
         );
-
-        let mut substituted = binding(&eq_history, &ep_history);
-        substituted.ep_deferred_audit[31] ^= 0x80;
-        assert_ne!(expected, substituted.canonical_digest());
-        substituted = binding(&eq_history, &ep_history);
-        substituted.amount = u128::MAX - 1;
-        assert_ne!(expected, substituted.canonical_digest());
+        let claim_carrier_binding_tail = KAGEMUSHA_MINT_HASH_CLAIM_INNER_SEMANTIC_INSTANCE_COUNT_V1
+            - KAGEMUSHA_MINT_HASH_CLAIM_PUBLIC_INSTANCE_COUNT_V1;
+        assert_eq!(claim_carrier_binding_tail, 14);
+        assert_eq!(
+            MINT_HASH_CLAIM_BOUND_TAIL_U128_COUNT_V1,
+            claim_carrier_binding_tail
+        );
+        assert_eq!(MINT_PAIR_BASE_BOUND_U128_COUNT_V1, 92);
+        assert_eq!(MINT_PAIR_BOUND_U128_COUNT_V1, 106);
+        assert_eq!(
+            MINT_PAIR_BOUND_U128_COUNT_V1,
+            MINT_PAIR_BASE_BOUND_U128_COUNT_V1 + claim_carrier_binding_tail
+        );
+        assert_eq!(
+            MINT_EQ_AUDIT_BOUND_U128_COUNT_V1,
+            MINT_PAIR_BOUND_U128_COUNT_V1 + 2
+        );
+        assert_eq!(MINT_EQ_AUDIT_BOUND_U128_COUNT_V1, 108);
     }
 
     #[test]
@@ -950,10 +1192,9 @@ mod tests {
             .validate_shape()
             .expect("compact bootstrap framing");
         checkpoint.step = KagemushaMintAuthorityStepV1::Rotate;
-        checkpoint.proof_binding_digest = [0xB1; 32];
         checkpoint
             .validate_shape()
-            .expect("nonzero inner commitment remains opaque to shape");
+            .expect("the constrained Eq audit remains the pair binding");
         for index in 0..10 {
             let mut changed = checkpoint.clone();
             match index {

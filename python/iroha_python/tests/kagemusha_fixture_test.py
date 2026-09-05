@@ -82,5 +82,7 @@ def test_rust_generated_three_message_fixture_is_byte_identical() -> None:
     assert Kagemusha.validate_complete_exchange(
         request, payment, acknowledgement
     ) == expected_raw
-    if "complete_three_message" in fixture:
-        assert fixture["complete_three_message"]["raw_bytes"] == expected_raw
+    assert fixture["complete_exchange"]["messages"] == [
+        "request", "payment", "acknowledgement"
+    ]
+    assert fixture["complete_exchange"]["raw_bytes"] == expected_raw

@@ -21,6 +21,7 @@ use halo2_proofs::halo2curves::pasta::{EpAffine, EqAffine, Fp, Fq};
 use halo2_proofs::{
     circuit::{Layouter, V1},
     plonk::{Circuit, ConstraintSystem, Error as PlonkError},
+    poly::ipa::commitment::ParamsIPA,
 };
 use iroha_data_model::kagemusha::{
     KAGEMUSHA_ASSET_SCALE_MAX_V1, KAGEMUSHA_HALO2_K_V1,
@@ -45,14 +46,21 @@ use crate::zk::{
 #[cfg(feature = "zk-halo2-ipa")]
 use halo2_base::utils::{BigPrimeField, CurveAffineExt};
 #[cfg(feature = "zk-halo2-ipa")]
-use snark_verifier::{pcs::ipa::IpaSuccinctVerifyingKey, verifier::plonk::PlonkProtocol};
+use snark_verifier::{
+    loader::native::NativeLoader,
+    pcs::ipa::{IpaAccumulator, IpaSuccinctVerifyingKey},
+    verifier::plonk::PlonkProtocol,
+};
 
 #[cfg(feature = "zk-halo2-ipa")]
 use super::deferred_parent::{
-    DeferredAccumulator, accumulator_limb_count, bind_accumulator_limbs,
+    DeferredAccumulator, KagemushaDeferredParentOutputV1, accumulator_limb_count,
+    bind_accumulator_limbs, constrain_reciprocal_output_with_u128_binding_v1,
     constrain_reciprocal_tagged_audit_v1, deferred_field_chips_v1, deferred_loader_v1,
-    finalize_tagged_deferred_audit_v1, ordinary_ipa_proof_profile_v1, verify_fold,
-    verify_ordinary_proof_v1,
+    finalize_tagged_deferred_audit_v1, finalize_tagged_deferred_audit_with_u128_binding_v1,
+    kagemusha_protocol_structure_digest_v1, load_and_constrain_parent_protocol_v1,
+    load_native_accumulator, native_parent_protocol_digest_v1, ordinary_ipa_proof_profile_v1,
+    verify_fold, verify_ordinary_proof_v1, verify_two_carrier_hybrid_ordinary_proof_and_stream_v1,
 };
 
 /// Fixed provider-profile registry depth.
@@ -139,7 +147,7 @@ fn normalized_guard_statement_payload_v1(
     bytes.push(operation_tag(statement.operation));
     bytes.extend_from_slice(&statement.amount.to_le_bytes());
     bytes.extend_from_slice(&statement.peer_credit_id);
-    bytes.extend_from_slice(&statement.peer_recipient_lane_id);
+    bytes.extend_from_slice(&statement.recipient_encryption_key_binding);
     bytes.extend_from_slice(&statement.mint_finality_proof_binding_digest);
     bytes.extend_from_slice(&statement.predecessor_release_id);
     bytes.extend_from_slice(&statement.release_id);
@@ -172,7 +180,7 @@ fn normalized_guard_statement_payload_v1(
     bytes.extend_from_slice(&statement.journal_revision_before.to_le_bytes());
     bytes.extend_from_slice(&statement.journal_revision_after.to_le_bytes());
     bytes.extend_from_slice(&statement.lifecycle_binding_digest);
-    bytes.extend_from_slice(&statement.precommit_binding_digest);
+    bytes.extend_from_slice(&statement.prepared_transition_binding_digest);
     bytes.extend_from_slice(&statement.terminal_commit_binding_digest);
     bytes.extend_from_slice(&statement.sender_one_time_authorization_digest);
     bytes.extend_from_slice(&statement.receive_credit_binding_digest);
@@ -517,118 +525,177 @@ fn validate_successor_credential_binding(
     Ok(())
 }
 
-/// Fixed paired-Pasta provider credential relation.
+/// Public PlatformCredential layout: statement, mutually authenticated audits, then the complete
+/// claim history which a monetary consumer must carry and ultimately decide.
+#[cfg(feature = "zk-halo2-ipa")]
+pub(crate) mod platform_credential_public_instance {
+    pub(crate) const CREDENTIAL_LO: usize = 0;
+    pub(crate) const EQ_AUDIT_LO: usize = 2;
+    pub(crate) const EP_AUDIT_LO: usize = 4;
+    pub(crate) const HISTORY_START: usize = 6;
+}
+
+/// Exact PlatformCredential public width for one parity.
+#[cfg(feature = "zk-halo2-ipa")]
+pub(crate) const KAGEMUSHA_PLATFORM_CREDENTIAL_PUBLIC_INSTANCE_COUNT_V1: usize =
+    platform_credential_public_instance::HISTORY_START + accumulator_limb_count();
+
+#[cfg(feature = "zk-halo2-ipa")]
 #[derive(Clone, Debug)]
-pub struct KagemushaPlatformCredentialRelationCircuitV1<F> {
-    witness: Option<KagemushaPlatformCredentialRelationWitnessV1>,
-    marker: core::marker::PhantomData<F>,
+enum KagemushaPlatformCredentialDenseJobsV1 {
+    Eq(PastaDenseMsmJobsV1<EpAffine>),
+    Ep(PastaDenseMsmJobsV1<EqAffine>),
 }
 
-impl<F> Default for KagemushaPlatformCredentialRelationCircuitV1<F> {
-    fn default() -> Self {
-        Self {
-            witness: None,
-            marker: core::marker::PhantomData,
-        }
-    }
+/// Fixed paired-Pasta provider credential relation.
+///
+/// Construction is intentionally restricted to the paired hash-claim builders below. A semantic
+/// credential witness alone no longer creates a circuit, because that would silently reintroduce
+/// either the infeasible k=16 SHA machine or an unauthenticated host digest.
+#[cfg(feature = "zk-halo2-ipa")]
+#[derive(Clone)]
+pub struct KagemushaPlatformCredentialRelationCircuitV1<F: halo2_base::utils::ScalarField> {
+    builder: BaseCircuitBuilder<F>,
+    dense_jobs: KagemushaPlatformCredentialDenseJobsV1,
 }
 
+#[cfg(feature = "zk-halo2-ipa")]
 impl<F> KagemushaPlatformCredentialRelationCircuitV1<F>
 where
     F: KagemushaPoseidonFieldV1,
 {
-    /// Construct a witnessed credential circuit after complete structural validation.
+    /// Reject the obsolete relation-only constructor. A completed, release-bound hash claim is
+    /// mandatory and is accepted only by [`build_kagemusha_platform_credential_eq_v1`] and
+    /// [`build_kagemusha_platform_credential_ep_v1`].
     pub fn new(witness: KagemushaPlatformCredentialRelationWitnessV1) -> Result<Self, String> {
         witness.validate()?;
-        Ok(Self {
-            witness: Some(witness),
-            marker: core::marker::PhantomData,
-        })
+        Err(
+            "Kagemusha PlatformCredential requires a completed paired SHA claim and carried history"
+                .to_owned(),
+        )
     }
 
-    /// Return the sole public instance column for this parity.
+    /// Return the exact public column built by the authenticated paired constructor.
     pub fn public_instances(&self) -> Result<Vec<F>, String> {
-        let witness = self
-            .witness
-            .as_ref()
-            .ok_or_else(|| "Kagemusha credential circuit has no witness".to_owned())?;
-        witness.validate()?;
-        let digest = witness.statement.canonical_digest();
-        Ok(vec![
-            from_u128(u128::from_le_bytes(
-                digest[..16].try_into().expect("digest half"),
-            )),
-            from_u128(u128::from_le_bytes(
-                digest[16..].try_into().expect("digest half"),
-            )),
-        ])
+        let column = self
+            .builder
+            .assigned_instances
+            .first()
+            .ok_or_else(|| "Kagemusha PlatformCredential public column is absent".to_owned())?;
+        if column.len() != KAGEMUSHA_PLATFORM_CREDENTIAL_PUBLIC_INSTANCE_COUNT_V1 {
+            return Err("Kagemusha PlatformCredential public column has wrong shape".to_owned());
+        }
+        Ok(column.iter().map(|value| *value.value()).collect())
     }
 }
 
-/// Halo2 configuration for the fixed provider credential relation.
+/// Base and reciprocal dense-MSM configuration. SHA compression lives only in k=12 shard proofs.
+#[cfg(feature = "zk-halo2-ipa")]
 #[derive(Clone, Debug)]
 pub struct KagemushaPlatformCredentialCircuitConfigV1<F: KagemushaPoseidonFieldV1> {
     base: BaseConfig<F>,
-    sha: PastaSha256ConfigV1,
+    dense: PastaDenseMsmConfigV1,
 }
 
-impl<F> Circuit<F> for KagemushaPlatformCredentialRelationCircuitV1<F>
-where
-    F: KagemushaPoseidonFieldV1,
-{
-    type Config = KagemushaPlatformCredentialCircuitConfigV1<F>;
-    type FloorPlanner = V1;
-    type Params = BaseCircuitParams;
+#[cfg(feature = "zk-halo2-ipa")]
+macro_rules! impl_platform_credential_circuit {
+    ($field:ty, $opposite:ty, $variant:ident, $label:literal) => {
+        impl Circuit<$field> for KagemushaPlatformCredentialRelationCircuitV1<$field> {
+            type Config = KagemushaPlatformCredentialCircuitConfigV1<$field>;
+            type FloorPlanner = V1;
+            type Params = BaseCircuitParams;
 
-    fn without_witnesses(&self) -> Self {
-        Self::default()
-    }
+            fn without_witnesses(&self) -> Self {
+                let dense_jobs = match &self.dense_jobs {
+                    KagemushaPlatformCredentialDenseJobsV1::$variant(jobs) => {
+                        KagemushaPlatformCredentialDenseJobsV1::$variant(jobs.unknown())
+                    }
+                    _ => unreachable!(concat!($label, " has the wrong reciprocal job parity")),
+                };
+                Self {
+                    builder: self.builder.deep_clone().unknown(true),
+                    dense_jobs,
+                }
+            }
 
-    fn params(&self) -> Self::Params {
-        credential_builder::<F>(self.witness.as_ref())
-            .expect("validated Kagemusha credential witness")
-            .0
-            .config_params
-    }
+            fn params(&self) -> Self::Params {
+                self.builder.config_params.clone()
+            }
 
-    fn configure_with_params(meta: &mut ConstraintSystem<F>, params: Self::Params) -> Self::Config {
-        let usable_rows = (1_usize << params.k) - MINIMUM_UNUSABLE_ROWS;
-        let mut base = BaseConfig::configure(meta, params);
-        base.set_usable_rows(usable_rows);
-        KagemushaPlatformCredentialCircuitConfigV1 {
-            base,
-            sha: PastaSha256ConfigV1::configure(meta),
+            fn configure_with_params(
+                meta: &mut ConstraintSystem<$field>,
+                params: Self::Params,
+            ) -> Self::Config {
+                let usable_rows = (1_usize << params.k) - MINIMUM_UNUSABLE_ROWS;
+                let mut base = BaseConfig::configure(meta, params);
+                base.set_usable_rows(usable_rows);
+                KagemushaPlatformCredentialCircuitConfigV1 {
+                    base,
+                    dense: PastaDenseMsmConfigV1::configure::<$opposite>(meta),
+                }
+            }
+
+            fn configure(_: &mut ConstraintSystem<$field>) -> Self::Config {
+                unreachable!(concat!($label, " uses authenticated Base parameters"))
+            }
+
+            fn synthesize_for_measurement(
+                &self,
+                config: Self::Config,
+                layouter: impl Layouter<$field>,
+            ) -> Result<(), PlonkError> {
+                let result = self.synthesize(config, layouter);
+                self.builder.reset_synthesis_state();
+                result
+            }
+
+            fn synthesize(
+                &self,
+                config: Self::Config,
+                mut layouter: impl Layouter<$field>,
+            ) -> Result<(), PlonkError> {
+                let usable_rows = (1_usize << self.builder.config_params.k) - MINIMUM_UNUSABLE_ROWS;
+                <BaseCircuitBuilder<$field> as Circuit<$field>>::synthesize(
+                    &self.builder,
+                    config.base,
+                    layouter.namespace(|| concat!($label, " Base relation")),
+                )?;
+                let jobs = match &self.dense_jobs {
+                    KagemushaPlatformCredentialDenseJobsV1::$variant(jobs) => jobs,
+                    _ => unreachable!(concat!($label, " has the wrong reciprocal job parity")),
+                };
+                jobs.synthesize(
+                    &config.dense,
+                    &mut layouter,
+                    &self.builder.core().copy_manager,
+                    self.builder.witness_gen_only(),
+                    usable_rows,
+                )
+            }
         }
-    }
+    };
+}
 
-    fn configure(_: &mut ConstraintSystem<F>) -> Self::Config {
-        unreachable!("Kagemusha credential circuit uses authenticated Base parameters")
-    }
+#[cfg(feature = "zk-halo2-ipa")]
+impl_platform_credential_circuit!(Fp, EpAffine, Eq, "Kagemusha Eq PlatformCredential");
+#[cfg(feature = "zk-halo2-ipa")]
+impl_platform_credential_circuit!(Fq, EqAffine, Ep, "Kagemusha Ep PlatformCredential");
 
-    fn synthesize(
-        &self,
-        config: Self::Config,
-        mut layouter: impl Layouter<F>,
-    ) -> Result<(), PlonkError> {
-        let (builder, jobs) =
-            credential_builder::<F>(self.witness.as_ref()).map_err(|_| PlonkError::Synthesis)?;
-        <BaseCircuitBuilder<F> as Circuit<F>>::synthesize(
-            &builder,
-            config.base,
-            layouter.namespace(|| "Kagemusha credential base relation"),
-        )?;
-        jobs.synthesize(
-            &config.sha,
-            &mut layouter,
-            &builder.core().copy_manager,
-            (1_usize << KAGEMUSHA_HALO2_K_V1) - MINIMUM_UNUSABLE_ROWS,
-        )
-    }
+struct KagemushaAssignedPlatformCredentialV1<F: KagemushaPoseidonFieldV1> {
+    credential_digest: [PastaSha256ByteV1<F>; 32],
+    release_id: [AssignedValue<F>; 2],
 }
 
 fn credential_builder<F>(
     witness: Option<&KagemushaPlatformCredentialRelationWitnessV1>,
-) -> Result<(BaseCircuitBuilder<F>, PastaSha256JobsV1<F>), String>
+) -> Result<
+    (
+        BaseCircuitBuilder<F>,
+        PastaSha256JobsV1<F>,
+        KagemushaAssignedPlatformCredentialV1<F>,
+    ),
+    String,
+>
 where
     F: KagemushaPoseidonFieldV1,
 {
@@ -832,10 +899,685 @@ where
         ]
         .concat(),
     )?;
-    builder.assigned_instances = vec![digest_limbs_assigned(ctx, &credential_digest).to_vec()];
+    let release_id = digest_limbs_assigned(ctx, &release);
+    Ok((
+        builder,
+        jobs,
+        KagemushaAssignedPlatformCredentialV1 {
+            credential_digest,
+            release_id,
+        },
+    ))
+}
+
+/// Extract the exact typed SHA queue emitted by the production credential relation.
+///
+/// The helper deliberately invokes `credential_builder` instead of duplicating its host
+/// encodings. The returned bytes are only a private shard/claim proof plan; the paired producer
+/// below separately constrains the same assigned queue against the completed recursive claim.
+#[cfg(feature = "zk-halo2-ipa")]
+pub(super) fn platform_credential_sha_messages_v1<F>(
+    witness: &KagemushaPlatformCredentialRelationWitnessV1,
+) -> Result<Vec<Vec<u8>>, String>
+where
+    F: KagemushaPoseidonFieldV1,
+{
+    let (builder, jobs, assigned) = credential_builder::<F>(Some(witness))?;
+    let messages = jobs.canonical_messages()?;
+    drop(assigned);
+    drop(jobs);
+    drop(builder);
+    Ok(messages)
+}
+
+/// One parity's terminal ordered-hash claim consumed by a PlatformCredential proof.
+#[cfg(feature = "zk-halo2-ipa")]
+#[derive(Clone, Copy)]
+pub(crate) struct KagemushaPlatformCredentialHashClaimParityWitnessV1<'a, C>
+where
+    C: CurveAffineExt,
+{
+    pub(crate) claim_protocol: &'a PlonkProtocol<C>,
+    pub(crate) claim_instances: &'a [Vec<C::ScalarExt>],
+    pub(crate) claim_proof: &'a [u8],
+    pub(crate) claim_history: &'a IpaAccumulator<C, NativeLoader>,
+    pub(crate) claim_history_fold_proof: &'a [u8],
+    pub(crate) successor_history: &'a [u8; super::KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1],
+}
+
+/// Complete paired claim material required to create one provider credential proof pair.
+#[cfg(feature = "zk-halo2-ipa")]
+pub(crate) struct KagemushaPlatformCredentialHashClaimPairWitnessV1<'a> {
+    pub(crate) relation: KagemushaPlatformCredentialRelationWitnessV1,
+    pub(crate) eq_claim_protocol_digest: DigestV1,
+    pub(crate) ep_claim_protocol_digest: DigestV1,
+    pub(crate) eq_shard_protocol_digest: DigestV1,
+    pub(crate) ep_shard_protocol_digest: DigestV1,
+    pub(crate) eq: KagemushaPlatformCredentialHashClaimParityWitnessV1<'a, EqAffine>,
+    pub(crate) ep: KagemushaPlatformCredentialHashClaimParityWitnessV1<'a, EpAffine>,
+}
+
+/// Detached reciprocal plans discovered without retaining either PlatformCredential Base graph.
+#[cfg(feature = "zk-halo2-ipa")]
+pub(crate) struct KagemushaPlatformCredentialAuditDiscoveryV1 {
+    eq_output: KagemushaDeferredParentOutputV1<EqAffine>,
+    ep_output: KagemushaDeferredParentOutputV1<EpAffine>,
+    eq_digest: DigestV1,
+    ep_digest: DigestV1,
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+impl KagemushaPlatformCredentialAuditDiscoveryV1 {
+    #[must_use]
+    pub(crate) const fn eq_digest(&self) -> DigestV1 {
+        self.eq_digest
+    }
+
+    #[must_use]
+    pub(crate) const fn ep_digest(&self) -> DigestV1 {
+        self.ep_digest
+    }
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+const PLATFORM_CREDENTIAL_HASH_CLAIM_EQUATION_TAG_V1: u32 = 13;
+#[cfg(feature = "zk-halo2-ipa")]
+const PLATFORM_CREDENTIAL_BASE_BOUND_U128_COUNT_V1: usize =
+    2 + 2 + 8 + 2 * accumulator_limb_count();
+#[cfg(feature = "zk-halo2-ipa")]
+const PLATFORM_CREDENTIAL_PAIR_BOUND_U128_COUNT_V1: usize =
+    PLATFORM_CREDENTIAL_BASE_BOUND_U128_COUNT_V1
+        + super::mint_hash_claim_fold::KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_BINDING_COUNT_V1;
+#[cfg(feature = "zk-halo2-ipa")]
+const PLATFORM_CREDENTIAL_EQ_BOUND_U128_COUNT_V1: usize =
+    PLATFORM_CREDENTIAL_PAIR_BOUND_U128_COUNT_V1 + 2;
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn validate_platform_credential_claim_pair_v1(
+    witness: &KagemushaPlatformCredentialHashClaimPairWitnessV1<'_>,
+) -> Result<(), String> {
+    witness.relation.validate()?;
+    let identities = [
+        witness.eq_claim_protocol_digest,
+        witness.ep_claim_protocol_digest,
+        witness.eq_shard_protocol_digest,
+        witness.ep_shard_protocol_digest,
+    ];
+    if identities.contains(&[0; 32])
+        || identities
+            .iter()
+            .enumerate()
+            .any(|(index, value)| identities[index + 1..].contains(value))
+    {
+        return Err(
+            "Kagemusha PlatformCredential hash-claim protocols are absent or aliased".to_owned(),
+        );
+    }
+    if witness.eq.claim_protocol.num_instance
+        != [
+            super::mint_hash_claim_fold::KAGEMUSHA_MINT_HASH_CLAIM_INNER_SEMANTIC_INSTANCE_COUNT_V1,
+            super::mint_hash_claim_fold::KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_INSTANCE_COUNT_V1,
+            super::mint_hash_claim_fold::KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_INSTANCE_COUNT_V1,
+        ]
+        || witness.ep.claim_protocol.num_instance
+            != [
+                super::mint_hash_claim_fold::KAGEMUSHA_MINT_HASH_CLAIM_INNER_SEMANTIC_INSTANCE_COUNT_V1,
+                super::mint_hash_claim_fold::KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_INSTANCE_COUNT_V1,
+                super::mint_hash_claim_fold::KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_INSTANCE_COUNT_V1,
+            ]
+        || witness.eq.claim_instances.len() != 3
+        || witness.ep.claim_instances.len() != 3
+        || witness.eq.claim_instances[0].len()
+            != super::mint_hash_claim_fold::KAGEMUSHA_MINT_HASH_CLAIM_INNER_SEMANTIC_INSTANCE_COUNT_V1
+        || witness.ep.claim_instances[0].len()
+            != super::mint_hash_claim_fold::KAGEMUSHA_MINT_HASH_CLAIM_INNER_SEMANTIC_INSTANCE_COUNT_V1
+        || witness.eq.claim_instances[1].len()
+            != super::mint_hash_claim_fold::KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_INSTANCE_COUNT_V1
+        || witness.ep.claim_instances[1].len()
+            != super::mint_hash_claim_fold::KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_INSTANCE_COUNT_V1
+        || witness.eq.claim_instances[2].len()
+            != super::mint_hash_claim_fold::KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_INSTANCE_COUNT_V1
+        || witness.ep.claim_instances[2].len()
+            != super::mint_hash_claim_fold::KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_INSTANCE_COUNT_V1
+    {
+        return Err("Kagemusha PlatformCredential hash-claim public shape is not fixed".to_owned());
+    }
+    let eq_claim_tail = super::mint_hash_claim_fold::canonical_claim_carrier_binding_tail_v1(
+        witness.eq.claim_instances,
+    )?;
+    let ep_claim_tail = super::mint_hash_claim_fold::canonical_claim_carrier_binding_tail_v1(
+        witness.ep.claim_instances,
+    )?;
+    if eq_claim_tail != ep_claim_tail {
+        return Err(
+            "Kagemusha PlatformCredential paired claim carrier-binding tails are not canonical and identical"
+                .to_owned(),
+        );
+    }
+    if native_parent_protocol_digest_v1(witness.eq.claim_protocol, KagemushaPastaParityV1::Eq)?
+        != witness.eq_claim_protocol_digest
+        || native_parent_protocol_digest_v1(witness.ep.claim_protocol, KagemushaPastaParityV1::Ep)?
+            != witness.ep_claim_protocol_digest
+    {
+        return Err(
+            "Kagemusha PlatformCredential hash-claim protocol differs from its authenticated identity"
+                .to_owned(),
+        );
+    }
+    Ok(())
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn assign_platform_credential_history_v1<F: KagemushaPoseidonFieldV1>(
+    ctx: &mut Context<F>,
+    range: &RangeChip<F>,
+    history: &[u8; super::KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1],
+) -> Result<Vec<AssignedValue<F>>, String> {
+    let limbs = history
+        .chunks_exact(16)
+        .map(|chunk| {
+            let value = F::from_u128(u128::from_le_bytes(
+                chunk.try_into().expect("history limb is sixteen bytes"),
+            ));
+            let assigned = ctx.load_witness(value);
+            range.range_check(ctx, assigned, 128);
+            assigned
+        })
+        .collect::<Vec<_>>();
+    if limbs.len() != accumulator_limb_count() {
+        return Err("Kagemusha PlatformCredential history has wrong shape".to_owned());
+    }
+    Ok(limbs)
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn constant_platform_credential_digest_v1<F: KagemushaPoseidonFieldV1>(
+    ctx: &mut Context<F>,
+    digest: DigestV1,
+) -> [AssignedValue<F>; 2] {
+    crate::zk::kagemusha_v1_poseidon::digest_limbs::<F>(digest).map(|limb| ctx.load_constant(limb))
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn assigned_platform_credential_digest_v1<F: KagemushaPoseidonFieldV1>(
+    limbs: &[AssignedValue<F>; 2],
+) -> Result<DigestV1, String> {
+    let mut digest = [0_u8; 32];
+    for (index, limb) in limbs.iter().enumerate() {
+        let bytes = halo2_base::utils::fe_to_biguint(limb.value()).to_bytes_le();
+        if bytes.len() > 16 {
+            return Err("Kagemusha PlatformCredential audit limb exceeds u128".to_owned());
+        }
+        digest[index * 16..index * 16 + bytes.len()].copy_from_slice(&bytes);
+    }
+    if digest == [0; 32] {
+        return Err("Kagemusha PlatformCredential audit is zero".to_owned());
+    }
+    Ok(digest)
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn platform_credential_audit_cells_v1<F: KagemushaPoseidonFieldV1>(
+    builder: &BaseCircuitBuilder<F>,
+    offset: usize,
+) -> Result<[AssignedValue<F>; 2], String> {
+    let column = builder
+        .assigned_instances
+        .first()
+        .ok_or_else(|| "Kagemusha PlatformCredential public column is absent".to_owned())?;
+    if column.len() != KAGEMUSHA_PLATFORM_CREDENTIAL_PUBLIC_INSTANCE_COUNT_V1 {
+        return Err("Kagemusha PlatformCredential public column has wrong shape".to_owned());
+    }
+    column[offset..offset + 2]
+        .try_into()
+        .map_err(|_| "Kagemusha PlatformCredential audit cells have wrong shape".to_owned())
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+struct KagemushaPlatformCredentialScalarHalfV1<C>
+where
+    C: CurveAffineExt,
+    C::Base: BigPrimeField,
+    C::ScalarExt: BigPrimeField + halo2_base::utils::ScalarField,
+{
+    builder: BaseCircuitBuilder<C::ScalarExt>,
+    output: KagemushaDeferredParentOutputV1<C>,
+    pair_binding: Vec<AssignedValue<C::ScalarExt>>,
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+fn build_platform_credential_scalar_half_v1<C>(
+    succinct_vk: &IpaSuccinctVerifyingKey<C>,
+    parity: KagemushaPastaParityV1,
+    relation: &KagemushaPlatformCredentialRelationWitnessV1,
+    eq_claim_protocol_digest: DigestV1,
+    ep_claim_protocol_digest: DigestV1,
+    eq_shard_protocol_digest: DigestV1,
+    ep_shard_protocol_digest: DigestV1,
+    eq_audit: DigestV1,
+    ep_audit: DigestV1,
+    eq_successor_history: &[u8; super::KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1],
+    ep_successor_history: &[u8; super::KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1],
+    claim: KagemushaPlatformCredentialHashClaimParityWitnessV1<'_, C>,
+) -> Result<KagemushaPlatformCredentialScalarHalfV1<C>, String>
+where
+    C: CurveAffineExt,
+    C::Base: BigPrimeField,
+    C::ScalarExt: KagemushaPoseidonFieldV1,
+{
+    let (mut builder, claimed_sha, assigned) = credential_builder(Some(relation))?;
+    if claimed_sha.compression_blocks()? == 0 {
+        return Err("Kagemusha PlatformCredential emitted an empty typed SHA queue".to_owned());
+    }
+    let range = builder.range_chip();
+    let credential_digest = digest_limbs_assigned(builder.main(0), &assigned.credential_digest);
+    let eq_claim_protocol =
+        constant_platform_credential_digest_v1(builder.main(0), eq_claim_protocol_digest);
+    let ep_claim_protocol =
+        constant_platform_credential_digest_v1(builder.main(0), ep_claim_protocol_digest);
+    let eq_shard_protocol =
+        constant_platform_credential_digest_v1(builder.main(0), eq_shard_protocol_digest);
+    let ep_shard_protocol =
+        constant_platform_credential_digest_v1(builder.main(0), ep_shard_protocol_digest);
+    let eq_audit = assign_digest(builder.main(0), &range, eq_audit);
+    let eq_audit = digest_limbs_assigned(builder.main(0), &eq_audit);
+    let ep_audit = assign_digest(builder.main(0), &range, ep_audit);
+    let ep_audit = digest_limbs_assigned(builder.main(0), &ep_audit);
+    let eq_history =
+        assign_platform_credential_history_v1(builder.main(0), &range, eq_successor_history)?;
+    let ep_history =
+        assign_platform_credential_history_v1(builder.main(0), &range, ep_successor_history)?;
+    let own_history = match parity {
+        KagemushaPastaParityV1::Eq => &eq_history,
+        KagemushaPastaParityV1::Ep => &ep_history,
+    };
+    builder.assigned_instances = vec![
+        credential_digest
+            .into_iter()
+            .chain(eq_audit)
+            .chain(ep_audit)
+            .chain(own_history.iter().copied())
+            .collect(),
+    ];
+    if builder.assigned_instances[0].len() != KAGEMUSHA_PLATFORM_CREDENTIAL_PUBLIC_INSTANCE_COUNT_V1
+    {
+        return Err("Kagemusha PlatformCredential public ABI drifted".to_owned());
+    }
+
+    let mut pair_binding = credential_digest
+        .into_iter()
+        .chain(assigned.release_id)
+        .chain(eq_claim_protocol)
+        .chain(ep_claim_protocol)
+        .chain(eq_shard_protocol)
+        .chain(ep_shard_protocol)
+        .chain(eq_history.iter().copied())
+        .chain(ep_history.iter().copied())
+        .collect::<Vec<_>>();
+    if pair_binding.len() != PLATFORM_CREDENTIAL_BASE_BOUND_U128_COUNT_V1 {
+        return Err("Kagemusha PlatformCredential base pair binding shape drifted".to_owned());
+    }
+
+    let (coordinate, scalar_integer) = deferred_field_chips_v1::<C>(&range);
+    let loader = deferred_loader_v1(&mut builder, &coordinate, &scalar_integer);
+    let structure = kagemusha_protocol_structure_digest_v1(claim.claim_protocol, parity)?;
+    let expected_claim_protocol = match parity {
+        KagemushaPastaParityV1::Eq => eq_claim_protocol,
+        KagemushaPastaParityV1::Ep => ep_claim_protocol,
+    };
+    let loaded_claim = load_and_constrain_parent_protocol_v1(
+        &loader,
+        claim.claim_protocol,
+        parity,
+        structure,
+        &expected_claim_protocol,
+    )
+    .map_err(|error| {
+        format!("failed to bind Kagemusha PlatformCredential hash-claim protocol: {error:?}")
+    })?;
+    if loaded_claim.protocol.num_instance
+        != [
+            super::mint_hash_claim_fold::KAGEMUSHA_MINT_HASH_CLAIM_INNER_SEMANTIC_INSTANCE_COUNT_V1,
+            super::mint_hash_claim_fold::KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_INSTANCE_COUNT_V1,
+            super::mint_hash_claim_fold::KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_INSTANCE_COUNT_V1,
+        ]
+        || claim.claim_instances.len() != 3
+        || claim.claim_instances[0].len()
+            != super::mint_hash_claim_fold::KAGEMUSHA_MINT_HASH_CLAIM_INNER_SEMANTIC_INSTANCE_COUNT_V1
+        || claim.claim_instances[1].len()
+            != super::mint_hash_claim_fold::KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_INSTANCE_COUNT_V1
+        || claim.claim_instances[2].len()
+            != super::mint_hash_claim_fold::KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_INSTANCE_COUNT_V1
+    {
+        return Err("Kagemusha PlatformCredential hash-claim public shape changed".to_owned());
+    }
+    let claim_semantic = claim.claim_instances[0]
+        .iter()
+        .map(|value| loader.assign_scalar(*value))
+        .collect::<Vec<_>>();
+    // Carry the proof-supplied commitment limbs, shared challenges, and both cross-carrier RLCs
+    // into the reciprocal audit. The host check above guarantees one canonical u128 tail across
+    // Pasta fields; the existing Ep-then-Eq reciprocal topology enforces it in both proofs.
+    pair_binding.extend(
+        claim_semantic[super::mint_hash_claim_fold::KAGEMUSHA_MINT_HASH_CLAIM_PUBLIC_INSTANCE_COUNT_V1
+            ..super::mint_hash_claim_fold::KAGEMUSHA_MINT_HASH_CLAIM_INNER_SEMANTIC_INSTANCE_COUNT_V1]
+            .iter()
+            .map(|value| *value.assigned()),
+    );
+    if pair_binding.len() != PLATFORM_CREDENTIAL_PAIR_BOUND_U128_COUNT_V1 {
+        return Err("Kagemusha PlatformCredential claim-bound pair shape drifted".to_owned());
+    }
+    let claim_current = verify_two_carrier_hybrid_ordinary_proof_and_stream_v1(
+        &loader,
+        succinct_vk,
+        &loaded_claim.protocol,
+        &claim_semantic,
+        match parity {
+            KagemushaPastaParityV1::Eq => [
+                [
+                    super::mint_hash_claim_fold::public_instance::EQ_PROOF_EQ_CARRIER_COMMITMENT_LO,
+                    super::mint_hash_claim_fold::public_instance::EQ_PROOF_EQ_CARRIER_COMMITMENT_LO
+                        + 1,
+                ],
+                [
+                    super::mint_hash_claim_fold::public_instance::EQ_PROOF_EP_CARRIER_COMMITMENT_LO,
+                    super::mint_hash_claim_fold::public_instance::EQ_PROOF_EP_CARRIER_COMMITMENT_LO
+                        + 1,
+                ],
+            ],
+            KagemushaPastaParityV1::Ep => [
+                [
+                    super::mint_hash_claim_fold::public_instance::EP_PROOF_EQ_CARRIER_COMMITMENT_LO,
+                    super::mint_hash_claim_fold::public_instance::EP_PROOF_EQ_CARRIER_COMMITMENT_LO
+                        + 1,
+                ],
+                [
+                    super::mint_hash_claim_fold::public_instance::EP_PROOF_EP_CARRIER_COMMITMENT_LO,
+                    super::mint_hash_claim_fold::public_instance::EP_PROOF_EP_CARRIER_COMMITMENT_LO
+                        + 1,
+                ],
+            ],
+        },
+        claim.claim_proof,
+    )
+    .map_err(|error| {
+        format!("failed to verify Kagemusha PlatformCredential terminal hash claim: {error:?}")
+    })?;
+    let claim_current_accumulator = claim_current.accumulator;
+    drop(claim_current.loaded_stream);
+    let claim_equation_count = loader.ecc_chip().equation_count();
+    if claim_equation_count == 0 {
+        return Err(
+            "Kagemusha PlatformCredential hash-claim verifier emitted no equations".to_owned(),
+        );
+    }
+    let claim_column = &claim_semantic
+        [..super::mint_hash_claim_fold::KAGEMUSHA_MINT_HASH_CLAIM_PUBLIC_INSTANCE_COUNT_V1];
+    {
+        let chip = loader.ecc_chip();
+        let mut loader_ctx = loader.ctx_mut();
+        let assigned_claim = claim_column
+            .iter()
+            .map(|value| *value.assigned())
+            .collect::<Vec<_>>();
+        super::mint_hash_claim_fold::constrain_complete_claim_against_sha_jobs_v1(
+            loader_ctx.main(),
+            chip.range(),
+            &claimed_sha,
+            &assigned_claim,
+            parity,
+            assigned.release_id,
+            eq_claim_protocol,
+            ep_claim_protocol,
+            eq_shard_protocol,
+            ep_shard_protocol,
+        )?;
+    }
+    drop(claimed_sha);
+    let claim_history = load_native_accumulator(&loader, claim.claim_history)
+        .map_err(|error| format!("failed to load PlatformCredential claim history: {error:?}"))?;
+    let claim_history_cells = claim_column
+        .get(super::mint_hash_claim_fold::public_instance::HISTORY_START..)
+        .ok_or_else(|| "Kagemusha PlatformCredential claim history is absent".to_owned())?
+        .iter()
+        .map(|value| *value.assigned())
+        .collect::<Vec<_>>();
+    bind_accumulator_limbs(&loader, &claim_history, &claim_history_cells).map_err(|error| {
+        format!("failed to bind Kagemusha PlatformCredential claim history: {error:?}")
+    })?;
+    drop(claim_history_cells);
+    drop(claim_semantic);
+    let complete_claim = verify_fold(
+        &loader,
+        succinct_vk,
+        &[claim_current_accumulator, claim_history],
+        claim.claim_history_fold_proof,
+    )
+    .map_err(|error| {
+        format!("failed to fold Kagemusha PlatformCredential claim history: {error:?}")
+    })?;
+    bind_accumulator_limbs(&loader, &complete_claim, own_history).map_err(|error| {
+        format!("failed to bind Kagemusha PlatformCredential successor history: {error:?}")
+    })?;
+    if loader.ecc_chip().equation_count() <= claim_equation_count {
+        return Err(
+            "Kagemusha PlatformCredential claim-history fold emitted no equation".to_owned(),
+        );
+    }
+    let mut audit_binding = pair_binding.clone();
+    if parity == KagemushaPastaParityV1::Eq {
+        audit_binding.extend(ep_audit);
+    }
+    let expected_bound_count = match parity {
+        KagemushaPastaParityV1::Eq => PLATFORM_CREDENTIAL_EQ_BOUND_U128_COUNT_V1,
+        KagemushaPastaParityV1::Ep => PLATFORM_CREDENTIAL_PAIR_BOUND_U128_COUNT_V1,
+    };
+    if audit_binding.len() != expected_bound_count {
+        return Err("Kagemusha PlatformCredential audit binding shape drifted".to_owned());
+    }
+    let output = finalize_tagged_deferred_audit_with_u128_binding_v1(
+        &mut builder,
+        loader,
+        PLATFORM_CREDENTIAL_HASH_CLAIM_EQUATION_TAG_V1,
+        &audit_binding,
+    )
+    .map_err(|error| {
+        format!("failed to finalize Kagemusha PlatformCredential claim audit: {error:?}")
+    })?;
+    Ok(KagemushaPlatformCredentialScalarHalfV1 {
+        builder,
+        output,
+        pair_binding,
+    })
+}
+
+/// Discover the paired PlatformCredential claim audits while retaining no complete Base graph.
+#[cfg(feature = "zk-halo2-ipa")]
+pub(crate) fn discover_kagemusha_platform_credential_audits_v1(
+    eq_params: &ParamsIPA<EqAffine>,
+    ep_params: &ParamsIPA<EpAffine>,
+    witness: &KagemushaPlatformCredentialHashClaimPairWitnessV1<'_>,
+) -> Result<KagemushaPlatformCredentialAuditDiscoveryV1, String> {
+    validate_platform_credential_claim_pair_v1(witness)?;
+    let placeholder_eq = [1_u8; 32];
+    let placeholder_ep = [2_u8; 32];
+    let ep_svk = super::composite::ep_succinct_vk(ep_params);
+    let ep = build_platform_credential_scalar_half_v1::<EpAffine>(
+        &ep_svk,
+        KagemushaPastaParityV1::Ep,
+        &witness.relation,
+        witness.eq_claim_protocol_digest,
+        witness.ep_claim_protocol_digest,
+        witness.eq_shard_protocol_digest,
+        witness.ep_shard_protocol_digest,
+        placeholder_eq,
+        placeholder_ep,
+        witness.eq.successor_history,
+        witness.ep.successor_history,
+        witness.ep,
+    )?;
+    let ep_digest = assigned_platform_credential_digest_v1(&ep.output.audit_digest_limbs)?;
+    let ep_output = ep.output;
+    drop(ep.builder);
+    drop(ep.pair_binding);
+    halo2_proofs::release_allocator_slack();
+
+    let eq_svk = super::composite::eq_succinct_vk(eq_params);
+    let eq = build_platform_credential_scalar_half_v1::<EqAffine>(
+        &eq_svk,
+        KagemushaPastaParityV1::Eq,
+        &witness.relation,
+        witness.eq_claim_protocol_digest,
+        witness.ep_claim_protocol_digest,
+        witness.eq_shard_protocol_digest,
+        witness.ep_shard_protocol_digest,
+        placeholder_eq,
+        ep_digest,
+        witness.eq.successor_history,
+        witness.ep.successor_history,
+        witness.eq,
+    )?;
+    let eq_digest = assigned_platform_credential_digest_v1(&eq.output.audit_digest_limbs)?;
+    let eq_output = eq.output;
+    drop(eq.builder);
+    drop(eq.pair_binding);
+    halo2_proofs::release_allocator_slack();
+    Ok(KagemushaPlatformCredentialAuditDiscoveryV1 {
+        eq_output,
+        ep_output,
+        eq_digest,
+        ep_digest,
+    })
+}
+
+/// Build the exact Eq PlatformCredential producer from detached reciprocal audit material.
+#[cfg(feature = "zk-halo2-ipa")]
+pub(crate) fn build_kagemusha_platform_credential_eq_v1(
+    eq_params: &ParamsIPA<EqAffine>,
+    witness: &KagemushaPlatformCredentialHashClaimPairWitnessV1<'_>,
+    discovery: &KagemushaPlatformCredentialAuditDiscoveryV1,
+) -> Result<KagemushaPlatformCredentialRelationCircuitV1<Fp>, String> {
+    validate_platform_credential_claim_pair_v1(witness)?;
+    let eq_svk = super::composite::eq_succinct_vk(eq_params);
+    let KagemushaPlatformCredentialScalarHalfV1 {
+        builder: mut builder,
+        output,
+        pair_binding,
+    } = build_platform_credential_scalar_half_v1::<EqAffine>(
+        &eq_svk,
+        KagemushaPastaParityV1::Eq,
+        &witness.relation,
+        witness.eq_claim_protocol_digest,
+        witness.ep_claim_protocol_digest,
+        witness.eq_shard_protocol_digest,
+        witness.ep_shard_protocol_digest,
+        discovery.eq_digest,
+        discovery.ep_digest,
+        witness.eq.successor_history,
+        witness.ep.successor_history,
+        witness.eq,
+    )?;
+    if assigned_platform_credential_digest_v1(&output.audit_digest_limbs)? != discovery.eq_digest {
+        return Err("Kagemusha Eq PlatformCredential audit changed after discovery".to_owned());
+    }
+    for (actual, expected) in
+        output
+            .audit_digest_limbs
+            .iter()
+            .zip(platform_credential_audit_cells_v1(
+                &builder,
+                platform_credential_public_instance::EQ_AUDIT_LO,
+            )?)
+    {
+        builder.main(0).constrain_equal(actual, &expected);
+    }
+    let expected_ep = platform_credential_audit_cells_v1(
+        &builder,
+        platform_credential_public_instance::EP_AUDIT_LO,
+    )?;
+    let mut dense = PastaDenseMsmJobsV1::default();
+    constrain_reciprocal_output_with_u128_binding_v1::<EpAffine>(
+        &mut builder,
+        &discovery.ep_output,
+        &expected_ep,
+        &pair_binding,
+        &mut dense,
+    )?;
     builder.calculate_params(Some(MINIMUM_UNUSABLE_ROWS));
-    jobs.validate_capacity((1_usize << KAGEMUSHA_HALO2_K_V1) - MINIMUM_UNUSABLE_ROWS)?;
-    Ok((builder, jobs))
+    dense.validate_capacity((1_usize << KAGEMUSHA_HALO2_K_V1) - MINIMUM_UNUSABLE_ROWS)?;
+    Ok(KagemushaPlatformCredentialRelationCircuitV1 {
+        builder,
+        dense_jobs: KagemushaPlatformCredentialDenseJobsV1::Eq(dense),
+    })
+}
+
+/// Build the exact Ep PlatformCredential producer from detached reciprocal audit material.
+#[cfg(feature = "zk-halo2-ipa")]
+pub(crate) fn build_kagemusha_platform_credential_ep_v1(
+    ep_params: &ParamsIPA<EpAffine>,
+    witness: &KagemushaPlatformCredentialHashClaimPairWitnessV1<'_>,
+    discovery: &KagemushaPlatformCredentialAuditDiscoveryV1,
+) -> Result<KagemushaPlatformCredentialRelationCircuitV1<Fq>, String> {
+    validate_platform_credential_claim_pair_v1(witness)?;
+    let ep_svk = super::composite::ep_succinct_vk(ep_params);
+    let KagemushaPlatformCredentialScalarHalfV1 {
+        builder: mut builder,
+        output,
+        mut pair_binding,
+    } = build_platform_credential_scalar_half_v1::<EpAffine>(
+        &ep_svk,
+        KagemushaPastaParityV1::Ep,
+        &witness.relation,
+        witness.eq_claim_protocol_digest,
+        witness.ep_claim_protocol_digest,
+        witness.eq_shard_protocol_digest,
+        witness.ep_shard_protocol_digest,
+        discovery.eq_digest,
+        discovery.ep_digest,
+        witness.eq.successor_history,
+        witness.ep.successor_history,
+        witness.ep,
+    )?;
+    if assigned_platform_credential_digest_v1(&output.audit_digest_limbs)? != discovery.ep_digest {
+        return Err("Kagemusha Ep PlatformCredential audit changed after discovery".to_owned());
+    }
+    for (actual, expected) in
+        output
+            .audit_digest_limbs
+            .iter()
+            .zip(platform_credential_audit_cells_v1(
+                &builder,
+                platform_credential_public_instance::EP_AUDIT_LO,
+            )?)
+    {
+        builder.main(0).constrain_equal(actual, &expected);
+    }
+    let expected_eq = platform_credential_audit_cells_v1(
+        &builder,
+        platform_credential_public_instance::EQ_AUDIT_LO,
+    )?;
+    pair_binding.extend(platform_credential_audit_cells_v1(
+        &builder,
+        platform_credential_public_instance::EP_AUDIT_LO,
+    )?);
+    if pair_binding.len() != PLATFORM_CREDENTIAL_EQ_BOUND_U128_COUNT_V1 {
+        return Err("Kagemusha Eq PlatformCredential reciprocal binding drifted".to_owned());
+    }
+    let mut dense = PastaDenseMsmJobsV1::default();
+    constrain_reciprocal_output_with_u128_binding_v1::<EqAffine>(
+        &mut builder,
+        &discovery.eq_output,
+        &expected_eq,
+        &pair_binding,
+        &mut dense,
+    )?;
+    builder.calculate_params(Some(MINIMUM_UNUSABLE_ROWS));
+    dense.validate_capacity((1_usize << KAGEMUSHA_HALO2_K_V1) - MINIMUM_UNUSABLE_ROWS)?;
+    Ok(KagemushaPlatformCredentialRelationCircuitV1 {
+        builder,
+        dense_jobs: KagemushaPlatformCredentialDenseJobsV1::Ep(dense),
+    })
 }
 
 /// Assigned semantic outputs consumed by the aggregate recursion circuit.
@@ -852,7 +1594,7 @@ pub(super) struct KagemushaAssignedGuardBundleV1<F: KagemushaPoseidonFieldV1> {
     pub(super) operation: AssignedValue<F>,
     pub(super) amount: AssignedValue<F>,
     pub(super) peer_credit_id: [AssignedValue<F>; 2],
-    pub(super) peer_recipient_lane_id: [AssignedValue<F>; 2],
+    pub(super) recipient_encryption_key_binding: [AssignedValue<F>; 2],
     pub(super) mint_finality_proof_binding_digest: [AssignedValue<F>; 2],
     pub(super) predecessor_release_id: [AssignedValue<F>; 2],
     pub(super) release_id: [AssignedValue<F>; 2],
@@ -881,7 +1623,7 @@ pub(super) struct KagemushaAssignedGuardBundleV1<F: KagemushaPoseidonFieldV1> {
     pub(super) journal_before: AssignedValue<F>,
     pub(super) journal_after: AssignedValue<F>,
     pub(super) lifecycle_binding_digest: [AssignedValue<F>; 2],
-    pub(super) precommit_binding_digest: [AssignedValue<F>; 2],
+    pub(super) prepared_transition_binding_digest: [AssignedValue<F>; 2],
     pub(super) terminal_commit_binding_digest: [AssignedValue<F>; 2],
     pub(super) sender_one_time_authorization_digest: [AssignedValue<F>; 2],
     pub(super) receive_credit_binding_digest: [AssignedValue<F>; 2],
@@ -961,36 +1703,26 @@ where
     let selector_sum = gate.sum(ctx, selectors);
     gate.assert_is_const(ctx, &selector_sum, &F::ONE);
     let amount = assign_uint_le(ctx, &range, statement.amount, 128);
-    let amount_zero = gate.is_zero(ctx, amount.value);
     let bootstrap = selectors[0];
-    let no_commit_closure = gate.and(ctx, selectors[2], amount_zero);
-    let amount_nonzero = gate.not(ctx, amount_zero);
-    let regular_send = gate.and(ctx, selectors[2], amount_nonzero);
     let inbound = gate.add(ctx, selectors[1], selectors[3]);
-    let outbound = gate.add(ctx, regular_send, selectors[4]);
+    let outbound = gate.add(ctx, selectors[2], selectors[4]);
     let uses_outbox = gate.add(ctx, selectors[2], selectors[4]);
     let rotate = selectors[5];
-    let exact_next = gate.sum(
-        ctx,
-        [selectors[1], regular_send, selectors[3], selectors[4]],
-    );
+    let exact_next = gate.sum(ctx, selectors[1..5].iter().copied());
     let journal_next = gate.sum(ctx, selectors[1..5].iter().copied());
     let non_bootstrap = gate.not(ctx, bootstrap);
     let empty_effect_operation = gate.add(ctx, bootstrap, rotate);
-    let monetary = gate.sum(
-        ctx,
-        [selectors[1], regular_send, selectors[3], selectors[4]],
-    );
+    let monetary = gate.sum(ctx, selectors[1..5].iter().copied());
     assert_if_zero(ctx, &range, empty_effect_operation, amount.value);
-    assert_if_zero(ctx, &range, no_commit_closure, amount.value);
     assert_if_nonzero(ctx, &range, monetary, amount.value);
     let peer_credit_id = assign_digest(ctx, &range, statement.peer_credit_id);
-    let peer_recipient_lane_id = assign_digest(ctx, &range, statement.peer_recipient_lane_id);
+    let recipient_encryption_key_binding =
+        assign_digest(ctx, &range, statement.recipient_encryption_key_binding);
     let mint_finality_proof_binding_digest =
         assign_digest(ctx, &range, statement.mint_finality_proof_binding_digest);
-    let peer = regular_send;
+    let peer = selectors[2];
     let not_peer = gate.not(ctx, peer);
-    for digest in [&peer_credit_id, &peer_recipient_lane_id] {
+    for digest in [&peer_credit_id, &recipient_encryption_key_binding] {
         assert_if_digest_nonzero(ctx, &range, peer, digest);
         assert_if_digest_zero(ctx, &range, not_peer, digest);
     }
@@ -1048,7 +1780,8 @@ where
     let journal_before = assign_uint_le(ctx, &range, statement.journal_revision_before, 128);
     let journal_after = assign_uint_le(ctx, &range, statement.journal_revision_after, 128);
     let lifecycle = assign_digest(ctx, &range, statement.lifecycle_binding_digest);
-    let precommit = assign_digest(ctx, &range, statement.precommit_binding_digest);
+    let prepared_transition =
+        assign_digest(ctx, &range, statement.prepared_transition_binding_digest);
     let terminal_commit = assign_digest(ctx, &range, statement.terminal_commit_binding_digest);
     let sender_authorization =
         assign_digest(ctx, &range, statement.sender_one_time_authorization_digest);
@@ -1121,20 +1854,19 @@ where
     ] {
         assert_if_digest_nonzero(ctx, &range, non_bootstrap, digest);
     }
-    let same_suite = gate.sum(ctx, [monetary, rotate, no_commit_closure]);
-    assert_if_digest_equal(ctx, &range, same_suite, &predecessor_release, &release);
+    assert_if_digest_equal(ctx, &range, non_bootstrap, &predecessor_release, &release);
     assert_if_digest_equal(
         ctx,
         &range,
-        same_suite,
+        non_bootstrap,
         &predecessor_suite,
         &successor_suite,
     );
-    assert_if_digest_equal(ctx, &range, same_suite, &predecessor_vk, &successor_vk);
+    assert_if_digest_equal(ctx, &range, non_bootstrap, &predecessor_vk, &successor_vk);
 
-    assert_if_digest_nonzero(ctx, &range, uses_outbox, &precommit);
+    assert_if_digest_nonzero(ctx, &range, uses_outbox, &prepared_transition);
     let no_outbox = gate.not(ctx, uses_outbox);
-    assert_if_digest_zero(ctx, &range, no_outbox, &precommit);
+    assert_if_digest_zero(ctx, &range, no_outbox, &prepared_transition);
     let not_outbound = gate.not(ctx, outbound);
     assert_if_digest_zero(ctx, &range, not_outbound, &terminal_commit);
     let not_send = gate.not(ctx, selectors[2]);
@@ -1150,8 +1882,6 @@ where
     let sender_absent = gate.and(ctx, sender_low_zero, sender_high_zero);
     let sender_present = gate.not(ctx, sender_absent);
     assert_if_equal_value(ctx, &range, peer, terminal_present, sender_present);
-    assert_if_digest_zero(ctx, &range, no_commit_closure, &terminal_commit);
-    assert_if_digest_nonzero(ctx, &range, no_commit_closure, &sender_authorization);
     let receive = selectors[3];
     let not_receive = gate.not(ctx, receive);
     assert_if_digest_nonzero(ctx, &range, receive, &receive_credit_binding);
@@ -1171,20 +1901,6 @@ where
         &predecessor_nonce,
         &successor_nonce,
     );
-    assert_if_digest_equal(
-        ctx,
-        &range,
-        no_commit_closure,
-        &predecessor_state,
-        &successor_state,
-    );
-    assert_if_digest_equal(
-        ctx,
-        &range,
-        no_commit_closure,
-        &predecessor_nonce,
-        &successor_nonce,
-    );
     assert_if_increment(
         ctx,
         &range,
@@ -1198,13 +1914,6 @@ where
         journal_next,
         journal_before.value,
         journal_after.value,
-    );
-    assert_if_equal_value(
-        ctx,
-        &range,
-        no_commit_closure,
-        predecessor_sequence.value,
-        successor_sequence.value,
     );
     assert_if_zero(ctx, &range, rotate, successor_sequence.value);
     assert_if_zero(ctx, &range, rotate, journal_after.value);
@@ -1337,7 +2046,7 @@ where
         predecessor_credential.epoch_generation.value,
         predecessor_generation.value,
     );
-    let same_credential = gate.sum(ctx, [bootstrap, monetary, no_commit_closure]);
+    let same_credential = gate.add(ctx, bootstrap, monetary);
     assert_if_digest_equal(
         ctx,
         &range,
@@ -1408,7 +2117,7 @@ where
             operation.bytes,
             amount.bytes,
             peer_credit_id.to_vec(),
-            peer_recipient_lane_id.to_vec(),
+            recipient_encryption_key_binding.to_vec(),
             mint_finality_proof_binding_digest.to_vec(),
             predecessor_release.to_vec(),
             release.to_vec(),
@@ -1437,7 +2146,7 @@ where
             journal_before.bytes,
             journal_after.bytes,
             lifecycle.to_vec(),
-            precommit.to_vec(),
+            prepared_transition.to_vec(),
             terminal_commit.to_vec(),
             sender_authorization.to_vec(),
             receive_credit_binding.to_vec(),
@@ -1460,7 +2169,10 @@ where
         operation: operation.value,
         amount: amount.value,
         peer_credit_id: digest_limbs_assigned(ctx, &peer_credit_id),
-        peer_recipient_lane_id: digest_limbs_assigned(ctx, &peer_recipient_lane_id),
+        recipient_encryption_key_binding: digest_limbs_assigned(
+            ctx,
+            &recipient_encryption_key_binding,
+        ),
         mint_finality_proof_binding_digest: digest_limbs_assigned(
             ctx,
             &mint_finality_proof_binding_digest,
@@ -1492,7 +2204,7 @@ where
         journal_before: journal_before.value,
         journal_after: journal_after.value,
         lifecycle_binding_digest: digest_limbs_assigned(ctx, &lifecycle),
-        precommit_binding_digest: digest_limbs_assigned(ctx, &precommit),
+        prepared_transition_binding_digest: digest_limbs_assigned(ctx, &prepared_transition),
         terminal_commit_binding_digest: digest_limbs_assigned(ctx, &terminal_commit),
         sender_one_time_authorization_digest: digest_limbs_assigned(ctx, &sender_authorization),
         receive_credit_binding_digest: digest_limbs_assigned(ctx, &receive_credit_binding),
@@ -1704,6 +2416,16 @@ macro_rules! impl_guard_bundle_circuit {
 
             fn configure(_: &mut ConstraintSystem<$field>) -> Self::Config {
                 unreachable!(concat!($label, " uses authenticated Base parameters"))
+            }
+
+            fn synthesize_for_measurement(
+                &self,
+                config: Self::Config,
+                layouter: impl Layouter<$field>,
+            ) -> Result<(), PlonkError> {
+                let result = self.synthesize(config, layouter);
+                self.builder.reset_synthesis_state();
+                result
             }
 
             fn synthesize(
@@ -2449,7 +3171,7 @@ mod tests {
                 operation: KagemushaOperationV1::SendSplit,
                 amount: 7,
                 peer_credit_id: [20; 32],
-                peer_recipient_lane_id: [21; 32],
+                recipient_encryption_key_binding: [21; 32],
                 mint_finality_proof_binding_digest: [0; 32],
                 predecessor_release_id: credential.release_id,
                 release_id: credential.release_id,
@@ -2478,7 +3200,7 @@ mod tests {
                 journal_revision_before: 20,
                 journal_revision_after: 21,
                 lifecycle_binding_digest: [0x33; 32],
-                precommit_binding_digest: [0x34; 32],
+                prepared_transition_binding_digest: [0x34; 32],
                 terminal_commit_binding_digest: [0; 32],
                 sender_one_time_authorization_digest: [0; 32],
                 receive_credit_binding_digest: [0; 32],
@@ -2529,38 +3251,90 @@ mod tests {
         let digest = witness.statement.canonical_digest();
         let expected_fp = digest_limbs::<Fp>(digest).to_vec();
         let expected_fq = digest_limbs::<Fq>(digest).to_vec();
+        assert_eq!(expected_fp.len(), 2);
+        assert_eq!(expected_fq.len(), 2);
+        assert!(KagemushaPlatformCredentialRelationCircuitV1::<Fp>::new(witness.clone()).is_err());
+        assert!(KagemushaPlatformCredentialRelationCircuitV1::<Fq>::new(witness).is_err());
+    }
+
+    #[cfg(feature = "zk-halo2-ipa")]
+    #[test]
+    fn platform_credential_sha_queue_has_exact_job_and_block_profile() {
+        let witness = credential_witness();
+        let eq = platform_credential_sha_messages_v1::<Fp>(&witness).expect("Eq SHA queue");
+        let ep = platform_credential_sha_messages_v1::<Fq>(&witness).expect("Ep SHA queue");
+        let expected_lengths = [105, 76, 139]
+            .into_iter()
+            .chain(core::iter::repeat_n(
+                104,
+                KAGEMUSHA_HARDWARE_POLICY_TREE_DEPTH_V1,
+            ))
+            .chain([663])
+            .collect::<Vec<_>>();
+
         assert_eq!(
-            KagemushaPlatformCredentialRelationCircuitV1::<Fp>::new(witness.clone())
-                .expect("Fp credential circuit")
-                .public_instances()
-                .expect("Fp instances"),
-            expected_fp
+            eq.iter().map(Vec::len).collect::<Vec<_>>(),
+            expected_lengths
         );
         assert_eq!(
-            KagemushaPlatformCredentialRelationCircuitV1::<Fq>::new(witness)
-                .expect("Fq credential circuit")
-                .public_instances()
-                .expect("Fq instances"),
-            expected_fq
+            ep.iter().map(Vec::len).collect::<Vec<_>>(),
+            expected_lengths
+        );
+        let blocks = |messages: &[Vec<u8>]| {
+            messages
+                .iter()
+                .map(|message| (message.len() + 9).div_ceil(64))
+                .sum::<usize>()
+        };
+        assert_eq!((eq.len(), blocks(&eq)), (20, 50));
+        assert_eq!((ep.len(), blocks(&ep)), (20, 50));
+    }
+
+    #[cfg(feature = "zk-halo2-ipa")]
+    #[test]
+    fn platform_credential_pair_audit_binding_covers_the_claim_carrier_tail() {
+        let credential_and_release_digests = 2 + 2;
+        let four_hash_protocol_digests = 4 * 2;
+        let paired_histories = 2 * accumulator_limb_count();
+        assert_eq!(
+            PLATFORM_CREDENTIAL_BASE_BOUND_U128_COUNT_V1,
+            credential_and_release_digests + four_hash_protocol_digests + paired_histories
+        );
+        let claim_carrier_binding_tail =
+            super::super::mint_hash_claim_fold::KAGEMUSHA_MINT_HASH_CLAIM_INNER_SEMANTIC_INSTANCE_COUNT_V1
+                - super::super::mint_hash_claim_fold::KAGEMUSHA_MINT_HASH_CLAIM_PUBLIC_INSTANCE_COUNT_V1;
+        assert_eq!(claim_carrier_binding_tail, 14);
+        assert_eq!(PLATFORM_CREDENTIAL_BASE_BOUND_U128_COUNT_V1, 80);
+        assert_eq!(PLATFORM_CREDENTIAL_PAIR_BOUND_U128_COUNT_V1, 94);
+        assert_eq!(
+            PLATFORM_CREDENTIAL_PAIR_BOUND_U128_COUNT_V1,
+            PLATFORM_CREDENTIAL_BASE_BOUND_U128_COUNT_V1 + claim_carrier_binding_tail
+        );
+        assert_eq!(PLATFORM_CREDENTIAL_EQ_BOUND_U128_COUNT_V1, 96);
+        assert_eq!(
+            PLATFORM_CREDENTIAL_EQ_BOUND_U128_COUNT_V1,
+            PLATFORM_CREDENTIAL_PAIR_BOUND_U128_COUNT_V1 + 2
         );
     }
 
     #[test]
-    fn credential_relation_is_satisfied_in_both_pasta_fields() {
+    fn credential_relation_without_completed_hash_claim_fails_closed() {
         let witness = credential_witness();
-        let fp = KagemushaPlatformCredentialRelationCircuitV1::<Fp>::new(witness.clone())
-            .expect("Fp credential circuit");
-        let fp_instances = fp.public_instances().expect("Fp public instances");
-        MockProver::run(KAGEMUSHA_HALO2_K_V1, &fp, vec![fp_instances])
-            .expect("Fp credential prover")
-            .assert_satisfied();
-
-        let fq = KagemushaPlatformCredentialRelationCircuitV1::<Fq>::new(witness)
-            .expect("Fq credential circuit");
-        let fq_instances = fq.public_instances().expect("Fq public instances");
-        MockProver::run(KAGEMUSHA_HALO2_K_V1, &fq, vec![fq_instances])
-            .expect("Fq credential prover")
-            .assert_satisfied();
+        for result in [
+            KagemushaPlatformCredentialRelationCircuitV1::<Fp>::new(witness.clone()).map(|_| ()),
+            KagemushaPlatformCredentialRelationCircuitV1::<Fq>::new(witness).map(|_| ()),
+        ] {
+            assert!(
+                result
+                    .expect_err("relation-only PlatformCredential construction must fail closed")
+                    .contains("completed paired SHA claim")
+            );
+        }
+        assert_eq!(platform_credential_public_instance::CREDENTIAL_LO, 0);
+        assert_eq!(platform_credential_public_instance::EQ_AUDIT_LO, 2);
+        assert_eq!(platform_credential_public_instance::EP_AUDIT_LO, 4);
+        assert_eq!(platform_credential_public_instance::HISTORY_START, 6);
+        assert_eq!(KAGEMUSHA_PLATFORM_CREDENTIAL_PUBLIC_INSTANCE_COUNT_V1, 40);
     }
 
     #[test]

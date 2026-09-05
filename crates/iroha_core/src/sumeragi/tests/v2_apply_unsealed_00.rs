@@ -426,9 +426,7 @@ impl ApplyFixture {
             .collect::<Vec<_>>();
         let network_id = crate::sumeragi::synthetic_network_id("sumeragi-v2-apply-crash-test");
         let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
-            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
-                network_id, 0, &roster,
-            );
+            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(network_id, 0, &roster);
         let mut context = wire::HeightContext {
             network_id,
             protocol_version: wire::PROTOCOL_VERSION,
@@ -1440,6 +1438,7 @@ fn pending_merge_entry(
         epoch_id: context.epoch,
         lane_catalog_hash: Hash::new(b"v2 apply decided-sidecar catalog"),
         active_lanes: Vec::new(),
+        lane_authority_catalog: iroha_data_model::merge::MergeLaneAuthorityCatalogV1::default(),
         incarnation_root: Hash::new(b"v2 apply decided-sidecar incarnations"),
         activation_root: Hash::new(b"v2 apply decided-sidecar activations"),
         lane_snapshots: Vec::new(),

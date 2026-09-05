@@ -6,11 +6,13 @@
 //! private inner audit tuple and evaluates all deferred curve equations. No
 //! host-side certificate check or supplied accumulator replaces these steps.
 //!
-//! Mint authorization preserves semantic cells 0..46. Mint authority preserves
-//! cells 0..16, including the *outer* protocol identities, and cells 20..22,
-//! containing the SHA pair commitment already proved by the inner relation.
-//! That commitment is not recomputed from outer audit/history metadata.
-//! Only the four audit cells and 34 history cells acquire an outer meaning.
+//! Mint authorization preserves transport cells 0..46 and privately cross-binds
+//! the appended carrier-commitment limbs from both inner semantic columns.
+//! Mint authority preserves cells 0..16, including the *outer* protocol
+//! identities, and cells 20..22, containing the Eq audit pair commitment
+//! already proved by the inner relation. That audit absorbs the complete inner
+//! semantic/protocol/history transcript and the Ep audit. Only the four audit
+//! cells and 34 history cells acquire an outer meaning.
 //!
 //! TODO: Validate the integrated generation, native-verifier, checkpoint, and artifact paths
 //! with actual K16 mint proofs, splice tests, and resource/transport measurements. Source
@@ -37,20 +39,22 @@ use snark_verifier::{
 };
 
 use super::{
-    KAGEMUSHA_IPA_FOLD_PROOF_BYTES_V1, KAGEMUSHA_RECURSION_IPA_K_V1,
+    KAGEMUSHA_IPA_FOLD_PROOF_BYTES_V1, KAGEMUSHA_RECURSION_IPA_K_V1, KagemushaPastaParityV1,
     composite::{assigned_digest_bytes, ep_succinct_vk, eq_succinct_vk},
     deferred_parent::{
         DeferredLoader, KagemushaDeferredParentOutputV1, accumulator_limb_count,
         bind_accumulator_limbs, constrain_reciprocal_output_with_u128_binding_serialized_v1,
         deferred_field_chips_v1, deferred_loader_v1,
         finalize_tagged_deferred_audit_with_u128_binding_v1, load_native_accumulator,
-        ordinary_ipa_proof_profile_v1, verify_fold, verify_ordinary_proof_v1,
+        ordinary_ipa_proof_profile_v1, verify_fold, verify_hybrid_ordinary_proof_and_stream_v1,
+        verify_ordinary_proof_v1,
     },
     mint_authority::{
         KAGEMUSHA_MINT_AUTHORITY_PUBLIC_INSTANCE_COUNT_V1,
         public_instance as authority_public_instance,
     },
     mint_authorization::{
+        MINT_AUTHORIZATION_INNER_SEMANTIC_INSTANCE_COUNT_V1,
         MINT_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1,
         public_instance as authorization_public_instance,
     },
@@ -59,6 +63,10 @@ use super::{
 const MINIMUM_UNUSABLE_ROWS: usize = 9;
 const MINT_AUTHORIZATION_TRANSPORT_EQUATION_TAG_V1: u32 = 7;
 const MINT_AUTHORITY_TRANSPORT_EQUATION_TAG_V1: u32 = 8;
+const MINT_AUTHORIZATION_EQ_CARRIER_COMMITMENT_LO_V1: usize =
+    MINT_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1;
+const MINT_AUTHORIZATION_EP_CARRIER_COMMITMENT_LO_V1: usize =
+    MINT_AUTHORIZATION_EQ_CARRIER_COMMITMENT_LO_V1 + 2;
 
 /// Complete public column of a compact recipient-authorization proof.
 pub(super) const KAGEMUSHA_MINT_AUTHORIZATION_TRANSPORT_PUBLIC_INSTANCE_COUNT_V1: usize = 84;
@@ -83,6 +91,40 @@ impl MintTransportFamilyV1 {
         match self {
             Self::Authorization => authorization_public_instance::HISTORY_START,
             Self::Authority => authority_public_instance::HISTORY_START,
+        }
+    }
+
+    const fn inner_semantic_count(self) -> usize {
+        match self {
+            Self::Authorization => MINT_AUTHORIZATION_INNER_SEMANTIC_INSTANCE_COUNT_V1,
+            Self::Authority => KAGEMUSHA_MINT_AUTHORITY_PUBLIC_INSTANCE_COUNT_V1,
+        }
+    }
+
+    const fn carrier_commitment_limb_indices(
+        self,
+        parity: KagemushaPastaParityV1,
+    ) -> Option<[usize; 2]> {
+        match (self, parity) {
+            (Self::Authorization, KagemushaPastaParityV1::Eq) => Some([
+                MINT_AUTHORIZATION_EQ_CARRIER_COMMITMENT_LO_V1,
+                MINT_AUTHORIZATION_EQ_CARRIER_COMMITMENT_LO_V1 + 1,
+            ]),
+            (Self::Authorization, KagemushaPastaParityV1::Ep) => Some([
+                MINT_AUTHORIZATION_EP_CARRIER_COMMITMENT_LO_V1,
+                MINT_AUTHORIZATION_EP_CARRIER_COMMITMENT_LO_V1 + 1,
+            ]),
+            (Self::Authority, _) => None,
+        }
+    }
+
+    const fn carrier_binding_range(self) -> Option<std::ops::Range<usize>> {
+        match self {
+            Self::Authorization => Some(
+                MINT_AUTHORIZATION_EQ_CARRIER_COMMITMENT_LO_V1
+                    ..MINT_AUTHORIZATION_EP_CARRIER_COMMITMENT_LO_V1 + 2,
+            ),
+            Self::Authority => None,
         }
     }
 
@@ -130,8 +172,11 @@ impl MintTransportFamilyV1 {
 pub(super) struct KagemushaMintTransportParityWitnessV1<'a, C: CurveAffineExt> {
     /// Inner protocol loaded entirely as outer-circuit constants, never as a witness VK.
     pub(super) inner_protocol: &'a PlonkProtocol<C>,
-    /// Exact public column authenticated by the inner ordinary proof.
-    pub(super) inner_instances: &'a [C::ScalarExt],
+    /// Exact public columns authenticated by the inner proof.
+    ///
+    /// Mint authorization supplies `[semantic, wide carrier]`; mint authority
+    /// retains its legacy single public column.
+    pub(super) inner_instances: &'a [Vec<C::ScalarExt>],
     /// Exact ordinary inner proof, with no fabricated bootstrap transcript.
     pub(super) inner_proof: &'a [u8],
     /// Prior history bound to the inner public history tail.
@@ -239,6 +284,16 @@ macro_rules! impl_mint_transport_circuit {
                 unreachable!(concat!($label, " uses authenticated Base parameters"))
             }
 
+            fn synthesize_for_measurement(
+                &self,
+                config: Self::Config,
+                layouter: impl Layouter<$field>,
+            ) -> Result<(), PlonkError> {
+                let result = self.synthesize(config, layouter);
+                self.builder.reset_synthesis_state();
+                result
+            }
+
             fn synthesize(
                 &self,
                 config: Self::Config,
@@ -284,6 +339,267 @@ where
     builder: BaseCircuitBuilder<C::ScalarExt>,
     output: KagemushaDeferredParentOutputV1<C>,
     inner_binding_cells: Vec<AssignedValue<C::ScalarExt>>,
+}
+
+/// Compact reciprocal audit material discovered without retaining either transport graph.
+///
+/// Eq construction is dropped before Ep construction starts.  The retained values are the
+/// native deferred equations and their canonical digest limbs, not either scalar circuit's
+/// multi-million-cell advice graph.
+pub(super) struct KagemushaMintTransportDeferredAuditsV1 {
+    family: MintTransportFamilyV1,
+    eq: KagemushaDeferredParentOutputV1<EqAffine>,
+    ep: KagemushaDeferredParentOutputV1<EpAffine>,
+    eq_digest: [u8; 32],
+    ep_digest: [u8; 32],
+}
+
+impl KagemushaMintTransportDeferredAuditsV1 {
+    #[must_use]
+    pub(super) const fn eq_digest(&self) -> [u8; 32] {
+        self.eq_digest
+    }
+
+    #[must_use]
+    pub(super) const fn ep_digest(&self) -> [u8; 32] {
+        self.ep_digest
+    }
+}
+
+fn derive_mint_transport_deferred_audits_v1(
+    family: MintTransportFamilyV1,
+    eq_params: &ParamsIPA<EqAffine>,
+    ep_params: &ParamsIPA<EpAffine>,
+    witness: KagemushaMintTransportDeciderWitnessV1<'_>,
+) -> Result<KagemushaMintTransportDeferredAuditsV1, String> {
+    validate_mint_transport_parameter_degrees_v1(eq_params.k(), ep_params.k())?;
+    let eq_svk = eq_succinct_vk(eq_params);
+    let MintTransportScalarHalfV1 {
+        builder: eq_builder,
+        output: eq_output,
+        inner_binding_cells: _,
+    } = build_mint_transport_scalar_half_v1(
+        family,
+        KagemushaPastaParityV1::Eq,
+        &eq_svk,
+        witness.eq,
+    )?;
+    let eq_digest = assigned_digest_bytes(&eq_output.audit_digest_limbs)?;
+    drop(eq_builder);
+    halo2_proofs::release_allocator_slack();
+
+    let ep_svk = ep_succinct_vk(ep_params);
+    let MintTransportScalarHalfV1 {
+        builder: ep_builder,
+        output: ep_output,
+        inner_binding_cells: _,
+    } = build_mint_transport_scalar_half_v1(
+        family,
+        KagemushaPastaParityV1::Ep,
+        &ep_svk,
+        witness.ep,
+    )?;
+    let ep_digest = assigned_digest_bytes(&ep_output.audit_digest_limbs)?;
+    drop(ep_builder);
+    halo2_proofs::release_allocator_slack();
+
+    Ok(KagemushaMintTransportDeferredAuditsV1 {
+        family,
+        eq: eq_output,
+        ep: ep_output,
+        eq_digest,
+        ep_digest,
+    })
+}
+
+/// Discover recipient-authorization transport audits one parity at a time.
+pub(super) fn derive_kagemusha_mint_authorization_transport_deferred_audits_v1(
+    eq_params: &ParamsIPA<EqAffine>,
+    ep_params: &ParamsIPA<EpAffine>,
+    witness: KagemushaMintTransportDeciderWitnessV1<'_>,
+) -> Result<KagemushaMintTransportDeferredAuditsV1, String> {
+    derive_mint_transport_deferred_audits_v1(
+        MintTransportFamilyV1::Authorization,
+        eq_params,
+        ep_params,
+        witness,
+    )
+}
+
+/// Discover reserve/finality-authority transport audits one parity at a time.
+pub(super) fn derive_kagemusha_mint_authority_transport_deferred_audits_v1(
+    eq_params: &ParamsIPA<EqAffine>,
+    ep_params: &ParamsIPA<EpAffine>,
+    witness: KagemushaMintTransportDeciderWitnessV1<'_>,
+) -> Result<KagemushaMintTransportDeferredAuditsV1, String> {
+    derive_mint_transport_deferred_audits_v1(
+        MintTransportFamilyV1::Authority,
+        eq_params,
+        ep_params,
+        witness,
+    )
+}
+
+fn build_mint_transport_eq_v1(
+    family: MintTransportFamilyV1,
+    eq_params: &ParamsIPA<EqAffine>,
+    ep_params: &ParamsIPA<EpAffine>,
+    witness: KagemushaMintTransportDeciderWitnessV1<'_>,
+    audits: &KagemushaMintTransportDeferredAuditsV1,
+) -> Result<(BaseCircuitBuilder<Fp>, Vec<Fp>), String> {
+    validate_mint_transport_parameter_degrees_v1(eq_params.k(), ep_params.k())?;
+    if audits.family != family {
+        return Err("Kagemusha transport audit family does not match Eq circuit".to_owned());
+    }
+    let public_instances = witness.eq.outer_instances.to_vec();
+    let eq_svk = eq_succinct_vk(eq_params);
+    let MintTransportScalarHalfV1 {
+        builder: mut eq_builder,
+        output: eq_output,
+        inner_binding_cells: eq_inner_binding_cells,
+    } = build_mint_transport_scalar_half_v1(
+        family,
+        KagemushaPastaParityV1::Eq,
+        &eq_svk,
+        witness.eq,
+    )?;
+    bind_own_audit_v1(&mut eq_builder, family.eq_audit_start(), &eq_output)?;
+    let expected_ep = public_digest_cells_v1(&eq_builder, family.ep_audit_start())?;
+    constrain_reciprocal_output_with_u128_binding_serialized_v1::<EpAffine>(
+        &mut eq_builder,
+        &audits.ep,
+        &expected_ep,
+        &eq_inner_binding_cells,
+    )?;
+    eq_builder.calculate_params(Some(MINIMUM_UNUSABLE_ROWS));
+    if assigned_digest_bytes(&eq_output.audit_digest_limbs)? != audits.eq_digest {
+        return Err(format!(
+            "Kagemusha Eq {} audit changed after exact public rebinding",
+            family.label()
+        ));
+    }
+    Ok((eq_builder, public_instances))
+}
+
+fn build_mint_transport_ep_v1(
+    family: MintTransportFamilyV1,
+    eq_params: &ParamsIPA<EqAffine>,
+    ep_params: &ParamsIPA<EpAffine>,
+    witness: KagemushaMintTransportDeciderWitnessV1<'_>,
+    audits: &KagemushaMintTransportDeferredAuditsV1,
+) -> Result<(BaseCircuitBuilder<Fq>, Vec<Fq>), String> {
+    validate_mint_transport_parameter_degrees_v1(eq_params.k(), ep_params.k())?;
+    if audits.family != family {
+        return Err("Kagemusha transport audit family does not match Ep circuit".to_owned());
+    }
+    let public_instances = witness.ep.outer_instances.to_vec();
+    let ep_svk = ep_succinct_vk(ep_params);
+    let MintTransportScalarHalfV1 {
+        builder: mut ep_builder,
+        output: ep_output,
+        inner_binding_cells: ep_inner_binding_cells,
+    } = build_mint_transport_scalar_half_v1(
+        family,
+        KagemushaPastaParityV1::Ep,
+        &ep_svk,
+        witness.ep,
+    )?;
+    bind_own_audit_v1(&mut ep_builder, family.ep_audit_start(), &ep_output)?;
+    let expected_eq = public_digest_cells_v1(&ep_builder, family.eq_audit_start())?;
+    constrain_reciprocal_output_with_u128_binding_serialized_v1::<EqAffine>(
+        &mut ep_builder,
+        &audits.eq,
+        &expected_eq,
+        &ep_inner_binding_cells,
+    )?;
+    ep_builder.calculate_params(Some(MINIMUM_UNUSABLE_ROWS));
+    if assigned_digest_bytes(&ep_output.audit_digest_limbs)? != audits.ep_digest {
+        return Err(format!(
+            "Kagemusha Ep {} audit changed after exact public rebinding",
+            family.label()
+        ));
+    }
+    Ok((ep_builder, public_instances))
+}
+
+/// Build only the Eq recipient-authorization transport graph.
+pub(super) fn build_kagemusha_mint_authorization_transport_eq_v1(
+    eq_params: &ParamsIPA<EqAffine>,
+    ep_params: &ParamsIPA<EpAffine>,
+    witness: KagemushaMintTransportDeciderWitnessV1<'_>,
+    audits: &KagemushaMintTransportDeferredAuditsV1,
+) -> Result<(KagemushaMintAuthorizationTransportEqCircuitV1, Vec<Fp>), String> {
+    let (builder, instances) = build_mint_transport_eq_v1(
+        MintTransportFamilyV1::Authorization,
+        eq_params,
+        ep_params,
+        witness,
+        audits,
+    )?;
+    Ok((
+        KagemushaMintAuthorizationTransportEqCircuitV1 { builder },
+        instances,
+    ))
+}
+
+/// Build only the Ep recipient-authorization transport graph.
+pub(super) fn build_kagemusha_mint_authorization_transport_ep_v1(
+    eq_params: &ParamsIPA<EqAffine>,
+    ep_params: &ParamsIPA<EpAffine>,
+    witness: KagemushaMintTransportDeciderWitnessV1<'_>,
+    audits: &KagemushaMintTransportDeferredAuditsV1,
+) -> Result<(KagemushaMintAuthorizationTransportEpCircuitV1, Vec<Fq>), String> {
+    let (builder, instances) = build_mint_transport_ep_v1(
+        MintTransportFamilyV1::Authorization,
+        eq_params,
+        ep_params,
+        witness,
+        audits,
+    )?;
+    Ok((
+        KagemushaMintAuthorizationTransportEpCircuitV1 { builder },
+        instances,
+    ))
+}
+
+/// Build only the Eq reserve/finality-authority transport graph.
+pub(super) fn build_kagemusha_mint_authority_transport_eq_v1(
+    eq_params: &ParamsIPA<EqAffine>,
+    ep_params: &ParamsIPA<EpAffine>,
+    witness: KagemushaMintTransportDeciderWitnessV1<'_>,
+    audits: &KagemushaMintTransportDeferredAuditsV1,
+) -> Result<(KagemushaMintAuthorityTransportEqCircuitV1, Vec<Fp>), String> {
+    let (builder, instances) = build_mint_transport_eq_v1(
+        MintTransportFamilyV1::Authority,
+        eq_params,
+        ep_params,
+        witness,
+        audits,
+    )?;
+    Ok((
+        KagemushaMintAuthorityTransportEqCircuitV1 { builder },
+        instances,
+    ))
+}
+
+/// Build only the Ep reserve/finality-authority transport graph.
+pub(super) fn build_kagemusha_mint_authority_transport_ep_v1(
+    eq_params: &ParamsIPA<EqAffine>,
+    ep_params: &ParamsIPA<EpAffine>,
+    witness: KagemushaMintTransportDeciderWitnessV1<'_>,
+    audits: &KagemushaMintTransportDeferredAuditsV1,
+) -> Result<(KagemushaMintAuthorityTransportEpCircuitV1, Vec<Fq>), String> {
+    let (builder, instances) = build_mint_transport_ep_v1(
+        MintTransportFamilyV1::Authority,
+        eq_params,
+        ep_params,
+        witness,
+        audits,
+    )?;
+    Ok((
+        KagemushaMintAuthorityTransportEpCircuitV1 { builder },
+        instances,
+    ))
 }
 
 /// Build compact recipient-authorization parities and derive both outer audits.
@@ -371,12 +687,22 @@ fn build_mint_transport_pair_v1(
         builder: mut eq_builder,
         output: eq_output,
         inner_binding_cells: eq_inner_binding_cells,
-    } = build_mint_transport_scalar_half_v1(family, &eq_svk, witness.eq)?;
+    } = build_mint_transport_scalar_half_v1(
+        family,
+        KagemushaPastaParityV1::Eq,
+        &eq_svk,
+        witness.eq,
+    )?;
     let MintTransportScalarHalfV1 {
         builder: mut ep_builder,
         output: ep_output,
         inner_binding_cells: ep_inner_binding_cells,
-    } = build_mint_transport_scalar_half_v1(family, &ep_svk, witness.ep)?;
+    } = build_mint_transport_scalar_half_v1(
+        family,
+        KagemushaPastaParityV1::Ep,
+        &ep_svk,
+        witness.ep,
+    )?;
 
     bind_own_audit_v1(&mut eq_builder, family.eq_audit_start(), &eq_output)?;
     bind_own_audit_v1(&mut ep_builder, family.ep_audit_start(), &ep_output)?;
@@ -420,11 +746,21 @@ fn validate_mint_transport_parameter_degrees_v1(eq_k: u32, ep_k: u32) -> Result<
 fn validate_mint_transport_column_shape_v1(
     family: MintTransportFamilyV1,
     protocol_columns: &[usize],
-    inner_count: usize,
+    inner_columns: &[usize],
     outer_count: usize,
 ) -> Result<(), String> {
-    if protocol_columns != [family.public_count()]
-        || inner_count != family.public_count()
+    let inner_shape_matches = match family {
+        MintTransportFamilyV1::Authorization => {
+            protocol_columns.len() == 2
+                && protocol_columns == inner_columns
+                && protocol_columns[0] == family.inner_semantic_count()
+                && protocol_columns[1] > protocol_columns[0]
+        }
+        MintTransportFamilyV1::Authority => {
+            protocol_columns == [family.inner_semantic_count()] && protocol_columns == inner_columns
+        }
+    };
+    if !inner_shape_matches
         || outer_count != family.public_count()
         || family.history_start() + accumulator_limb_count() != family.public_count()
     {
@@ -460,7 +796,9 @@ fn constrain_public_projection_v1<F: ScalarField>(
     inner_cells: &[AssignedValue<F>],
     outer_cells: &[AssignedValue<F>],
 ) -> Result<Vec<AssignedValue<F>>, String> {
-    if inner_cells.len() != family.public_count() || outer_cells.len() != family.public_count() {
+    if inner_cells.len() != family.inner_semantic_count()
+        || outer_cells.len() != family.public_count()
+    {
         return Err("Kagemusha mint transport projection has the wrong shape".to_owned());
     }
     for index in 0..family.history_start() {
@@ -471,7 +809,7 @@ fn constrain_public_projection_v1<F: ScalarField>(
         }
     }
     let range = builder.range_chip();
-    let inner_binding_cells = family
+    let mut inner_binding_cells = family
         .inner_binding_indices()
         .into_iter()
         .map(|index| {
@@ -479,12 +817,19 @@ fn constrain_public_projection_v1<F: ScalarField>(
             range.range_check(builder.main(0), outer_cells[index], 128);
             inner_cells[index]
         })
-        .collect();
+        .collect::<Vec<_>>();
+    if let Some(indices) = family.carrier_binding_range() {
+        inner_binding_cells.extend(indices.map(|index| {
+            range.range_check(builder.main(0), inner_cells[index], 128);
+            inner_cells[index]
+        }));
+    }
     Ok(inner_binding_cells)
 }
 
 fn build_mint_transport_scalar_half_v1<C>(
     family: MintTransportFamilyV1,
+    parity: KagemushaPastaParityV1,
     succinct_vk: &IpaSuccinctVerifyingKey<C>,
     witness: KagemushaMintTransportParityWitnessV1<'_, C>,
 ) -> Result<MintTransportScalarHalfV1<C>, String>
@@ -493,17 +838,29 @@ where
     C::Base: BigPrimeField,
     C::ScalarExt: BigPrimeField + ScalarField,
 {
+    let inner_column_lengths = witness
+        .inner_instances
+        .iter()
+        .map(Vec::len)
+        .collect::<Vec<_>>();
     validate_mint_transport_column_shape_v1(
         family,
         &witness.inner_protocol.num_instance,
-        witness.inner_instances.len(),
+        &inner_column_lengths,
         witness.outer_instances.len(),
     )?;
     let proof_profile = ordinary_ipa_proof_profile_v1(witness.inner_protocol)?;
+    let expected_proof_bytes = match family {
+        MintTransportFamilyV1::Authorization => proof_profile
+            .byte_len
+            .checked_add(32)
+            .ok_or_else(|| "Kagemusha hybrid proof byte length overflowed".to_owned())?,
+        MintTransportFamilyV1::Authority => proof_profile.byte_len,
+    };
     validate_mint_transport_transcript_shape_v1(
         witness.inner_history.xi.len(),
         witness.inner_proof.len(),
-        proof_profile.byte_len,
+        expected_proof_bytes,
         witness.inner_history_fold_proof.len(),
     )?;
     let mut builder = BaseCircuitBuilder::new(false)
@@ -518,6 +875,8 @@ where
         .collect::<Vec<_>>();
     let inner_cells = witness
         .inner_instances
+        .first()
+        .expect("validated mint transport instance shape has a semantic column")
         .iter()
         .copied()
         .map(|value| builder.main(0).load_witness(value))
@@ -534,20 +893,34 @@ where
     // and transcript initial state in the outer circuit. Authority's public
     // protocol cells still name its recursive OUTER checkpoint protocol.
     let loaded_protocol = witness.inner_protocol.loaded(&loader);
-    let loaded_instances = vec![
-        inner_cells
-            .iter()
-            .copied()
-            .map(|cell| loader.scalar_from_assigned(cell))
-            .collect::<Vec<_>>(),
-    ];
-    let current = verify_ordinary_proof_v1(
-        &loader,
-        succinct_vk,
-        &loaded_protocol,
-        &loaded_instances,
-        witness.inner_proof,
-    )
+    let loaded_semantic_instances = inner_cells
+        .iter()
+        .copied()
+        .map(|cell| loader.scalar_from_assigned(cell))
+        .collect::<Vec<_>>();
+    let current = match family {
+        MintTransportFamilyV1::Authorization => {
+            let carrier_commitment_limb_indices = family
+                .carrier_commitment_limb_indices(parity)
+                .expect("authorization transport has a carrier commitment");
+            verify_hybrid_ordinary_proof_and_stream_v1(
+                &loader,
+                succinct_vk,
+                &loaded_protocol,
+                &loaded_semantic_instances,
+                carrier_commitment_limb_indices,
+                witness.inner_proof,
+            )
+            .map(|verified| verified.accumulator)
+        }
+        MintTransportFamilyV1::Authority => verify_ordinary_proof_v1(
+            &loader,
+            succinct_vk,
+            &loaded_protocol,
+            std::slice::from_ref(&loaded_semantic_instances),
+            witness.inner_proof,
+        ),
+    }
     .map_err(|error| {
         format!(
             "failed to verify private {} proof: {error:?}",
@@ -559,7 +932,7 @@ where
     bind_accumulator_limbs(
         &loader,
         &inner_history,
-        &inner_cells[family.history_start()..],
+        &inner_cells[family.history_start()..family.public_count()],
     )
     .map_err(|error| format!("failed to bind private mint history: {error:?}"))?;
     let transported_history = verify_fold(
@@ -707,10 +1080,13 @@ where
 
 const _: () = {
     assert!(MINT_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1 == 84);
+    assert!(MINT_AUTHORIZATION_INNER_SEMANTIC_INSTANCE_COUNT_V1 == 88);
     assert!(KAGEMUSHA_MINT_AUTHORITY_PUBLIC_INSTANCE_COUNT_V1 == 56);
     assert!(authorization_public_instance::EQ_AUDIT_LO == 46);
     assert!(authorization_public_instance::EP_AUDIT_LO == 48);
     assert!(authorization_public_instance::HISTORY_START == 50);
+    assert!(MINT_AUTHORIZATION_EQ_CARRIER_COMMITMENT_LO_V1 == 84);
+    assert!(MINT_AUTHORIZATION_EP_CARRIER_COMMITMENT_LO_V1 == 86);
     assert!(authority_public_instance::EQ_PROTOCOL_LO == 12);
     assert!(authority_public_instance::EP_PROTOCOL_HI == 15);
     assert!(authority_public_instance::EQ_AUDIT_LO == 16);
@@ -776,6 +1152,27 @@ mod tests {
                 copied
             );
             assert_eq!(family.inner_binding_indices(), binding);
+            assert_eq!(
+                family.carrier_binding_range(),
+                match family {
+                    MintTransportFamilyV1::Authorization => Some(84..88),
+                    MintTransportFamilyV1::Authority => None,
+                }
+            );
+            assert_eq!(
+                family.carrier_commitment_limb_indices(KagemushaPastaParityV1::Eq),
+                match family {
+                    MintTransportFamilyV1::Authorization => Some([84, 85]),
+                    MintTransportFamilyV1::Authority => None,
+                }
+            );
+            assert_eq!(
+                family.carrier_commitment_limb_indices(KagemushaPastaParityV1::Ep),
+                match family {
+                    MintTransportFamilyV1::Authorization => Some([86, 87]),
+                    MintTransportFamilyV1::Authority => None,
+                }
+            );
             assert_eq!(family.history_start(), history);
             assert_eq!(family.public_count() - history, 34);
             assert_eq!(family.equation_tag(), tag);
@@ -793,29 +1190,76 @@ mod tests {
             MintTransportFamilyV1::Authority,
         ] {
             let count = family.public_count();
+            let valid_columns = match family {
+                MintTransportFamilyV1::Authorization => vec![
+                    MINT_AUTHORIZATION_INNER_SEMANTIC_INSTANCE_COUNT_V1,
+                    MINT_AUTHORIZATION_INNER_SEMANTIC_INSTANCE_COUNT_V1 + 1,
+                ],
+                MintTransportFamilyV1::Authority => vec![count],
+            };
             assert!(
-                validate_mint_transport_column_shape_v1(family, &[count], count, count).is_ok()
+                validate_mint_transport_column_shape_v1(
+                    family,
+                    &valid_columns,
+                    &valid_columns,
+                    count,
+                )
+                .is_ok()
             );
-            for columns in [
-                vec![],
-                vec![count - 1],
-                vec![count + 1],
-                vec![count, 0],
-                vec![count / 2, count / 2],
-            ] {
+            let malformed_protocols = match family {
+                MintTransportFamilyV1::Authorization => vec![
+                    vec![],
+                    vec![MINT_AUTHORIZATION_INNER_SEMANTIC_INSTANCE_COUNT_V1],
+                    vec![MINT_AUTHORIZATION_INNER_SEMANTIC_INSTANCE_COUNT_V1, 0],
+                    vec![
+                        MINT_AUTHORIZATION_INNER_SEMANTIC_INSTANCE_COUNT_V1,
+                        MINT_AUTHORIZATION_INNER_SEMANTIC_INSTANCE_COUNT_V1,
+                    ],
+                    vec![
+                        MINT_AUTHORIZATION_INNER_SEMANTIC_INSTANCE_COUNT_V1 - 1,
+                        MINT_AUTHORIZATION_INNER_SEMANTIC_INSTANCE_COUNT_V1 + 1,
+                    ],
+                    vec![
+                        MINT_AUTHORIZATION_INNER_SEMANTIC_INSTANCE_COUNT_V1,
+                        MINT_AUTHORIZATION_INNER_SEMANTIC_INSTANCE_COUNT_V1 + 1,
+                        0,
+                    ],
+                ],
+                MintTransportFamilyV1::Authority => vec![
+                    vec![],
+                    vec![count - 1],
+                    vec![count + 1],
+                    vec![count, 0],
+                    vec![count / 2, count / 2],
+                ],
+            };
+            for columns in malformed_protocols {
                 assert!(
-                    validate_mint_transport_column_shape_v1(family, &columns, count, count)
-                        .is_err()
+                    validate_mint_transport_column_shape_v1(family, &columns, &columns, count)
+                        .is_err(),
+                    "malformed {family:?} columns unexpectedly passed: {columns:?}",
                 );
             }
+            let mut wrong_inner = valid_columns.clone();
+            wrong_inner[0] -= 1;
+            assert!(
+                validate_mint_transport_column_shape_v1(
+                    family,
+                    &valid_columns,
+                    &wrong_inner,
+                    count,
+                )
+                .is_err()
+            );
             for wrong in [0, count - 1, count + 1, usize::MAX] {
                 assert!(
-                    validate_mint_transport_column_shape_v1(family, &[count], wrong, count)
-                        .is_err()
-                );
-                assert!(
-                    validate_mint_transport_column_shape_v1(family, &[count], count, wrong)
-                        .is_err()
+                    validate_mint_transport_column_shape_v1(
+                        family,
+                        &valid_columns,
+                        &valid_columns,
+                        wrong,
+                    )
+                    .is_err()
                 );
             }
         }

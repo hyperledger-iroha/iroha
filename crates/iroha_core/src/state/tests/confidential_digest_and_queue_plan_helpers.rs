@@ -204,6 +204,26 @@ fn merge_candidate_with_lanes(epoch: u64, count: usize) -> crate::merge::MergeLe
     let_row! { lifecycle_incarnations = active_lanes .iter() .map( |binding| iroha_data_model::nexus::LaneLifecycleIncarnationEntry { lane_id: binding.lane_id, incarnation: binding.incarnation, }, ) .collect::<Vec<_>>() };
     let_row! { merge_hint_roots: Vec<Hash> = lane_snapshots .iter() .map(|snapshot| snapshot.merge_hint_root) .collect() };
     let global_state_root = crate::merge::reduce_merge_hint_roots(&merge_hint_roots);
+    let mut validators = (1..=4)
+        .map(|seed| {
+            PeerId::new(
+                KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                    .expect("deterministic lane fixture validator")
+                    .public_key()
+                    .clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    validators.sort();
+    let lane_authority_catalog = if count == 0 {
+        iroha_data_model::merge::MergeLaneAuthorityCatalogV1::default()
+    } else {
+        iroha_data_model::merge::MergeLaneAuthorityCatalogV1::from_lane_committees(&vec![
+            validators;
+            count
+        ])
+        .expect("canonical lane fixture authority")
+    };
     crate::merge::MergeLedgerCandidate {
         version: crate::merge::MergeLedgerCandidate::VERSION,
         epoch_id: epoch,
@@ -216,6 +236,7 @@ fn merge_candidate_with_lanes(epoch: u64, count: usize) -> crate::merge::MergeLe
         ),
         activation_root: crate::merge::merge_activation_root(&active_lanes),
         active_lanes,
+        lane_authority_catalog,
         lane_snapshots,
         execution_batch: None,
         lane_drain_certificates: Vec::new(),
@@ -252,6 +273,14 @@ fn merge_candidate_from_relay(
         carrier_parent_hash: state
             .latest_block_hash_fast()
             .expect("test merge carrier parent was seeded"),
+        lane_authority_catalog: state
+            .merge_active_lane_authority_snapshot(
+                u64::try_from(state.committed_height())
+                    .expect("fixture height fits")
+                    .saturating_add(1),
+            )
+            .expect("fixture exact lane authority")
+            .2,
         lane_catalog_hash: merge_lane_catalog_hash(&nexus.lane_catalog),
         incarnation_root: iroha_data_model::nexus::LaneLifecycleParameterV1::incarnation_root(
             &lifecycle_incarnations,
@@ -304,7 +333,11 @@ fn ensure_merge_carrier_parent_for_test(state: &State) {
         assert_eq!(state.committed_height(), durable_count);
         return;
     }
-    let_row! { parent = new_dummy_block_with_payload(|header| { header.set_height(nonzero!(1_u64)); header.set_prev_block_hash(None); header.set_view_change_index(0); }) };
+    let_row! { mut parent = new_dummy_block_with_payload(|header| { header.set_height(nonzero!(1_u64)); header.set_prev_block_hash(None); header.set_view_change_index(0); }) };
+    parent
+        .as_mut()
+        .set_transaction_results(Vec::new(), &[], Vec::new())
+        .expect("attach canonical empty execution results to merge-carrier parent");
     let parent_hash = parent.as_ref().hash();
     state
         .kura
@@ -700,8 +733,7 @@ fn queue_plan_admission_certificate_bytes_for_state_test(
     validator_keypairs: &[KeyPair],
 ) -> Vec<u8> {
     let coordinator = &binding.admission_context.route_incarnations[0];
-    let validator_indices = (0..coordinator.durability_threshold)
-        .collect::<Vec<_>>();
+    let validator_indices = (0..coordinator.durability_threshold).collect::<Vec<_>>();
     queue_plan_admission_certificate_bytes_for_signer_indices_state_test(
         binding,
         validator_keypairs,

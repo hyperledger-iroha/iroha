@@ -1,9 +1,9 @@
 #![allow(clippy::type_complexity)]
 use super::*;
-use crate::QuantumCell::{Constant, Witness};
 use crate::utils::biguint_to_fe;
 use crate::utils::testing::base_test;
-use crate::{QuantumCell, gates::flex_gate::GateInstructions};
+use crate::QuantumCell::{Constant, Witness};
+use crate::{gates::flex_gate::GateInstructions, QuantumCell};
 use itertools::Itertools;
 use num_bigint::BigUint;
 use test_case::test_case;

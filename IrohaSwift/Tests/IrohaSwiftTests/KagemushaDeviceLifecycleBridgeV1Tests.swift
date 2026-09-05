@@ -4,6 +4,17 @@ import XCTest
 @testable import IrohaSwift
 
 final class KagemushaDeviceLifecycleBridgeV1Tests: XCTestCase {
+  func testNativeContractVectorProbeIsBoundedWhenLinked() {
+    XCTAssertEqual(KagemushaDeviceLifecycleBridgeV1.maximumNativeContractVectorBytes, 4 * 1024)
+    if let vector = KagemushaDeviceLifecycleBridgeV1.nativeContractVector() {
+      XCTAssertFalse(vector.isEmpty)
+      XCTAssertLessThanOrEqual(
+        vector.count,
+        KagemushaDeviceLifecycleBridgeV1.maximumNativeContractVectorBytes
+      )
+    }
+  }
+
   func testUnsupportedDeviceRemainsOnlineOnly() throws {
     let bridge = KagemushaDeviceLifecycleBridgeV1.onlineOnly()
     XCTAssertEqual(bridge.availability, .onlineOnly)

@@ -36,21 +36,24 @@ use snark_verifier::{
 };
 
 use super::{
-    KagemushaEpAccumulatorV1, KagemushaEpFoldProofV1, KagemushaEqAccumulatorV1,
+    DigestV1, KagemushaEpAccumulatorV1, KagemushaEpFoldProofV1, KagemushaEqAccumulatorV1,
     KagemushaEqFoldProofV1, KagemushaGuardBundleRelationWitnessV1, KagemushaOperationV1,
     KagemushaPastaParityV1, KagemushaStateRelationWitnessV1,
     canonical_preimage::{
-        assemble_bounded_canonical_frame_v1, stream::KagemushaBoundedByteStreamV1,
+        assemble_bounded_canonical_frame_v1, assemble_canonical_preimage_v1,
+        stream::KagemushaBoundedByteStreamV1,
     },
     deferred_parent::{
         DeferredLoader, DeferredScalar, KagemushaDeferredParentOutputV1,
         KagemushaDeferredParentWitnessV1, accumulator_limb_count, bind_accumulator_limbs,
-        constrain_parent_and_history_into_loader_v1, constrain_reciprocal_parent_pass_v1,
-        deferred_field_chips_v1, deferred_loader_v1, finalize_deferred_audit_plan_v1,
+        constrain_parent_and_history_into_loader_v1,
+        constrain_reciprocal_output_with_u128_binding_v1, deferred_field_chips_v1,
+        deferred_loader_v1, finalize_deferred_audit_plan_with_u128_binding_v1,
         kagemusha_protocol_structure_digest_v1, load_and_constrain_parent_protocol_if_v1,
         load_and_constrain_parent_protocol_v1, load_native_accumulator,
         native_parent_protocol_digest_v1, select_accumulator_v1, verify_fold,
-        verify_ordinary_proof_v1,
+        verify_ordinary_proof_v1, verify_ordinary_proof_with_canonical_bytes_v1,
+        verify_two_carrier_hybrid_ordinary_proof_and_stream_v1,
     },
     guard_bundle::{
         GUARD_RECURSIVE_PUBLIC_INSTANCE_COUNT_V1, KagemushaAssignedGuardBundleV1,
@@ -60,11 +63,23 @@ use super::{
     mint_authority::{
         KAGEMUSHA_MINT_AUTHORITY_PUBLIC_INSTANCE_COUNT_V1, public_instance as mint_public_instance,
     },
+    mint_authorization::{
+        MINT_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1, mint_authorization_public_instances_v1,
+        public_instance as mint_authorization_public_instance,
+    },
+    mint_hash_claim_fold::{
+        KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_BINDING_COUNT_V1,
+        KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_INSTANCE_COUNT_V1,
+        KAGEMUSHA_MINT_HASH_CLAIM_INNER_SEMANTIC_INSTANCE_COUNT_V1,
+        KAGEMUSHA_MINT_HASH_CLAIM_PUBLIC_INSTANCE_COUNT_V1,
+        canonical_claim_carrier_binding_tail_v1, constrain_complete_claim_against_sha_jobs_v1,
+        public_instance as hash_claim_public,
+    },
     state_relation::{self, public_instance},
     terminal_authorization::{
         TERMINAL_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1,
-        TERMINAL_AUTHORIZATION_PUBLIC_PREFIX_COUNT_V1, hash_terminal_send_output_binding_v1,
-        public_instance as incoming_public_instance,
+        TERMINAL_AUTHORIZATION_PUBLIC_PREFIX_COUNT_V1, constrain_receiver_credential_lane_v1,
+        hash_terminal_send_output_binding_v1, public_instance as incoming_public_instance,
     },
 };
 
@@ -79,12 +94,18 @@ use crate::zk::{
         mint_envelope_digest_v1,
     },
     pasta_dense_msm::{PastaDenseMsmConfigV1, PastaDenseMsmJobsV1},
-    pasta_sha256::{PastaSha256BitV1, PastaSha256ByteV1, PastaSha256ConfigV1, PastaSha256JobsV1},
+    pasta_sha256::{PastaSha256BitV1, PastaSha256ByteV1, PastaSha256JobsV1},
 };
 use iroha_data_model::kagemusha::{
+    KAGEMUSHA_MINT_CREDIT_OPENING_COMMITMENT_PREIMAGE_FIELD_RANGES_V1,
     KAGEMUSHA_PASTA_STATE_COMMITMENT_DOMAIN_V1, KAGEMUSHA_PEER_CREDIT_OPENING_COMMITMENT_DOMAIN_V1,
-    KAGEMUSHA_WIRE_VERSION_V1, KagemushaLifecycleBindingV1, KagemushaOperationKindV1,
-    KagemushaPastaStateCommitmentV1, kagemusha_canonical_mint_frame_prefix_v1,
+    KAGEMUSHA_RECIPIENT_CREDENTIAL_COMMITMENT_PREIMAGE_FIELD_RANGES_V1, KAGEMUSHA_WIRE_VERSION_V1,
+    KagemushaCanonicalMintFrameV1, KagemushaCreditOpeningV1, KagemushaLifecycleBindingV1,
+    KagemushaMintAuthorizationStatementV1, KagemushaMintAuthorizationV1, KagemushaMintCreditV1,
+    KagemushaOperationKindV1, KagemushaPairedProofV1, KagemushaPastaStateCommitmentV1,
+    kagemusha_canonical_mint_frame_prefix_v1,
+    kagemusha_mint_credit_opening_commitment_preimage_layout_v1,
+    kagemusha_recipient_credential_commitment_preimage_layout_v1,
 };
 
 const MINIMUM_UNUSABLE_ROWS: usize = 9;
@@ -92,10 +113,27 @@ const PARENT_EQUATION_TAG: u32 = 1;
 const INCOMING_CREDIT_EQUATION_TAG: u32 = 2;
 const GUARD_BUNDLE_EQUATION_TAG: u32 = 3;
 const MINT_FINALITY_EQUATION_TAG: u32 = 4;
+const MINT_AUTHORIZATION_EQUATION_TAG: u32 = 5;
+const STATE_HASH_CLAIM_CURRENT_EQUATION_TAG: u32 = 6;
+const STATE_HASH_CLAIM_HISTORY_EQUATION_TAG: u32 = 7;
 // These private data-model domains are repeated next to the circuit relation deliberately. Native
 // parity tests below pin them to the model-owned canonical digest APIs.
 const MINT_FOLD_ASSET_IDENTITY_DIGEST_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:asset-identity";
 const MINT_FOLD_LIFECYCLE_DIGEST_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:lifecycle-binding";
+const MINT_AUTHORIZATION_STATEMENT_DIGEST_DOMAIN_V1: &[u8] =
+    b"iroha:kagemusha:v1:mint-authorization-statement";
+const MINT_AUTHORIZATION_CONTEXT_DIGEST_DOMAIN_V1: &[u8] =
+    b"iroha:kagemusha:v1:mint-authorization-context";
+const MINT_AUTHORIZATION_DIGEST_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:mint-authorization";
+const MINT_STATEMENT_DIGEST_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:mint-statement";
+const MINT_CIPHERTEXT_DIGEST_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:ciphertext";
+const MINT_CREDIT_ENVELOPE_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:mint-credit\0";
+const MINT_RECIPIENT_COMMITMENT_DOMAIN_V1: &[u8] =
+    b"iroha:kagemusha:v1:recipient-credential-commitment";
+const MINT_OPENING_COMMITMENT_DOMAIN_V1: &[u8] =
+    b"iroha:kagemusha:v1:mint-credit-opening-commitment";
+const MINT_ACCOUNT_IDENTITY_DIGEST_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:account-identity";
+const MINT_ASSET_IDENTITY_DIGEST_DOMAIN_EXACT_V1: &[u8] = b"iroha:kagemusha:v1:asset-identity";
 const MINT_FOLD_ASSET_PAYLOAD_BYTES_V1: usize = 32;
 const MINT_FOLD_ASSET_FRAME_BYTES_V1: usize = 72;
 const MINT_FOLD_LIFECYCLE_PAYLOAD_BYTES_V1: usize = 422;
@@ -252,12 +290,26 @@ fn validate_incoming_authorization_proof_shape_v1(
     Ok(())
 }
 
+/// Exact terminal ordered claim for the SHA jobs emitted by one aggregate parity.
+struct KagemushaRecursiveHashClaimParityWitnessV1<'a, C: CurveAffineExt> {
+    protocol_digests: [DigestV1; 4],
+    protocol: &'a PlonkProtocol<C>,
+    instances: &'a [Vec<C::ScalarExt>],
+    proof: &'a [u8],
+    history: &'a IpaAccumulator<C, NativeLoader>,
+    history_fold_proof: &'a [u8],
+    merge_fold_proof: &'a [u8],
+}
+
 /// One parity's predecessor and GuardBundle proof material consumed by the aggregate circuit.
 pub(super) struct KagemushaRecursiveParityWitnessV1<'a, C>
 where
     C: CurveAffineExt,
 {
+    hash_claim: Option<KagemushaRecursiveHashClaimParityWitnessV1<'a, C>>,
     pub(super) mint_fold_opening: Option<KagemushaMintFoldOpeningWitnessV1<'a>>,
+    pub(super) mint_authorization: &'a KagemushaMintAuthorizationV1,
+    pub(super) mint_credit: &'a KagemushaMintCreditV1,
     pub(super) parent_protocol: &'a PlonkProtocol<C>,
     pub(super) parent_instances: &'a [Vec<C::ScalarExt>],
     pub(super) parent_proof: &'a [u8],
@@ -265,13 +317,19 @@ where
     pub(super) parent_fold_proof: &'a [u8],
     pub(super) successor_history: &'a [u8; super::KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1],
     pub(super) incoming_protocol: &'a PlonkProtocol<C>,
-    incoming_slots: &'a [KagemushaRecursiveIncomingParityWitnessV1<'a, C>],
+    pub(super) incoming_credits: &'a [KagemushaRecursiveIncomingParityWitnessV1<'a, C>],
     pub(super) guard_protocol: &'a PlonkProtocol<C>,
     pub(super) guard_proof: &'a [u8],
     pub(super) guard_history: &'a IpaAccumulator<C, NativeLoader>,
     pub(super) guard_history_bytes: &'a [u8; super::KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1],
     pub(super) guard_history_fold_proof: &'a [u8],
     pub(super) guard_merge_fold_proof: &'a [u8],
+    pub(super) mint_authorization_protocol: &'a PlonkProtocol<C>,
+    pub(super) mint_authorization_instances: &'a [Vec<C::ScalarExt>],
+    pub(super) mint_authorization_proof: &'a [u8],
+    pub(super) mint_authorization_history: &'a IpaAccumulator<C, NativeLoader>,
+    pub(super) mint_authorization_history_fold_proof: &'a [u8],
+    pub(super) mint_authorization_merge_fold_proof: &'a [u8],
     pub(super) mint_protocol: &'a PlonkProtocol<C>,
     pub(super) mint_instances: &'a [Vec<C::ScalarExt>],
     pub(super) mint_proof: &'a [u8],
@@ -282,8 +340,11 @@ where
 
 /// Complete paired witness used to construct one Eq/Ep recursive transition circuit pair.
 pub(super) struct KagemushaRecursiveStateWitnessV1<'a> {
+    pub(super) hash_claim: Option<super::generation::KagemushaMintHashClaimGenerationWitnessV1<'a>>,
     pub(super) state: KagemushaStateRelationWitnessV1,
     pub(super) mint_fold_opening: Option<KagemushaMintFoldOpeningWitnessV1<'a>>,
+    pub(super) mint_authorization: &'a KagemushaMintAuthorizationV1,
+    pub(super) mint_credit: &'a KagemushaMintCreditV1,
     pub(super) guard_relation: KagemushaGuardBundleRelationWitnessV1,
     pub(super) eq_parent_protocol: &'a PlonkProtocol<EqAffine>,
     pub(super) ep_parent_protocol: &'a PlonkProtocol<EpAffine>,
@@ -297,9 +358,9 @@ pub(super) struct KagemushaRecursiveStateWitnessV1<'a> {
     pub(super) ep_parent_fold_proof: &'a KagemushaEpFoldProofV1,
     pub(super) eq_incoming_protocol: &'a PlonkProtocol<EqAffine>,
     pub(super) ep_incoming_protocol: &'a PlonkProtocol<EpAffine>,
-    pub(super) eq_incoming_slots: &'a [KagemushaRecursiveIncomingEqWitnessV1<'a>;
+    pub(super) eq_incoming_credits: &'a [KagemushaRecursiveIncomingEqWitnessV1<'a>;
             state_relation::KAGEMUSHA_RECEIVE_FOLD_ARITY_V1],
-    pub(super) ep_incoming_slots: &'a [KagemushaRecursiveIncomingEpWitnessV1<'a>;
+    pub(super) ep_incoming_credits: &'a [KagemushaRecursiveIncomingEpWitnessV1<'a>;
             state_relation::KAGEMUSHA_RECEIVE_FOLD_ARITY_V1],
     pub(super) eq_successor_history: &'a KagemushaEqAccumulatorV1,
     pub(super) ep_successor_history: &'a KagemushaEpAccumulatorV1,
@@ -313,6 +374,18 @@ pub(super) struct KagemushaRecursiveStateWitnessV1<'a> {
     pub(super) ep_guard_history_fold_proof: &'a KagemushaEpFoldProofV1,
     pub(super) eq_guard_merge_fold_proof: &'a KagemushaEqFoldProofV1,
     pub(super) ep_guard_merge_fold_proof: &'a KagemushaEpFoldProofV1,
+    pub(super) eq_mint_authorization_protocol: &'a PlonkProtocol<EqAffine>,
+    pub(super) ep_mint_authorization_protocol: &'a PlonkProtocol<EpAffine>,
+    pub(super) eq_mint_authorization_instances: &'a [Vec<Fp>],
+    pub(super) ep_mint_authorization_instances: &'a [Vec<Fq>],
+    pub(super) eq_mint_authorization_proof: &'a [u8],
+    pub(super) ep_mint_authorization_proof: &'a [u8],
+    pub(super) eq_mint_authorization_history: &'a KagemushaEqAccumulatorV1,
+    pub(super) ep_mint_authorization_history: &'a KagemushaEpAccumulatorV1,
+    pub(super) eq_mint_authorization_history_fold_proof: &'a KagemushaEqFoldProofV1,
+    pub(super) ep_mint_authorization_history_fold_proof: &'a KagemushaEpFoldProofV1,
+    pub(super) eq_mint_authorization_merge_fold_proof: &'a KagemushaEqFoldProofV1,
+    pub(super) ep_mint_authorization_merge_fold_proof: &'a KagemushaEpFoldProofV1,
     pub(super) eq_mint_protocol: &'a PlonkProtocol<EqAffine>,
     pub(super) ep_mint_protocol: &'a PlonkProtocol<EpAffine>,
     pub(super) eq_mint_instances: &'a [Vec<Fp>],
@@ -331,7 +404,6 @@ pub(super) struct KagemushaRecursiveStateWitnessV1<'a> {
 #[derive(Clone, Debug)]
 pub(super) struct KagemushaRecursiveStateConfigV1<F: halo2_base::utils::ScalarField> {
     base: BaseConfig<F>,
-    sha: PastaSha256ConfigV1,
     dense: PastaDenseMsmConfigV1,
 }
 
@@ -339,7 +411,6 @@ pub(super) struct KagemushaRecursiveStateConfigV1<F: halo2_base::utils::ScalarFi
 #[derive(Clone)]
 pub(super) struct KagemushaRecursiveStateEqCircuitV1 {
     builder: BaseCircuitBuilder<Fp>,
-    sha_jobs: PastaSha256JobsV1<Fp>,
     dense_jobs: PastaDenseMsmJobsV1<EpAffine>,
 }
 
@@ -347,7 +418,6 @@ pub(super) struct KagemushaRecursiveStateEqCircuitV1 {
 #[derive(Clone)]
 pub(super) struct KagemushaRecursiveStateEpCircuitV1 {
     builder: BaseCircuitBuilder<Fq>,
-    sha_jobs: PastaSha256JobsV1<Fq>,
     dense_jobs: PastaDenseMsmJobsV1<EqAffine>,
 }
 
@@ -365,7 +435,6 @@ macro_rules! impl_recursive_circuit {
             fn without_witnesses(&self) -> Self {
                 Self {
                     builder: self.builder.deep_clone().unknown(true),
-                    sha_jobs: self.sha_jobs.unknown(),
                     dense_jobs: self.dense_jobs.unknown(),
                 }
             }
@@ -379,13 +448,22 @@ macro_rules! impl_recursive_circuit {
                 base.set_usable_rows(usable_rows);
                 KagemushaRecursiveStateConfigV1 {
                     base,
-                    sha: PastaSha256ConfigV1::configure(meta),
                     dense: PastaDenseMsmConfigV1::configure::<$opposite>(meta),
                 }
             }
 
             fn configure(_: &mut ConstraintSystem<$field>) -> Self::Config {
                 unreachable!(concat!($label, " uses authenticated Base parameters"))
+            }
+
+            fn synthesize_for_measurement(
+                &self,
+                config: Self::Config,
+                layouter: impl Layouter<$field>,
+            ) -> Result<(), PlonkError> {
+                let result = self.synthesize(config, layouter);
+                self.builder.reset_synthesis_state();
+                result
             }
 
             fn synthesize(
@@ -398,12 +476,6 @@ macro_rules! impl_recursive_circuit {
                     &self.builder,
                     config.base,
                     layouter.namespace(|| concat!($label, " Base")),
-                )?;
-                self.sha_jobs.synthesize(
-                    &config.sha,
-                    &mut layouter,
-                    &self.builder.core().copy_manager,
-                    usable_rows,
                 )?;
                 self.dense_jobs.synthesize(
                     &config.dense,
@@ -444,8 +516,121 @@ pub(super) fn build_kagemusha_recursive_state_pair_v1(
     ),
     String,
 > {
+    if witness.hash_claim.is_none() {
+        return Err("recursive state requires its authenticated complete SHA claim".to_owned());
+    }
+    match build_recursive_state_pair_impl_v1(eq_params, ep_params, witness, false)? {
+        RecursiveStateBuildV1::Authenticated(eq, ep, eq_audit, ep_audit) => {
+            Ok((eq, ep, eq_audit, ep_audit))
+        }
+        RecursiveStateBuildV1::Messages(_, _) => {
+            Err("recursive state discovery cannot produce an authenticated circuit".to_owned())
+        }
+    }
+}
+
+enum RecursiveStateBuildV1 {
+    Authenticated(
+        KagemushaRecursiveStateEqCircuitV1,
+        KagemushaRecursiveStateEpCircuitV1,
+        DigestV1,
+        DigestV1,
+    ),
+    Messages(Vec<Vec<u8>>, Vec<Vec<u8>>),
+}
+
+/// Discover exact typed messages without exposing an unauthenticated circuit or changing bytes.
+///
+/// The queue depends on state/Guard semantics and already-existing incoming/mint proofs. Neither
+/// this state's successor recursive history nor its deferred audit is hashed, so the completed
+/// claim may subsequently be merged into that history without creating a self-reference.
+pub(super) fn recursive_state_sha_messages_v1(
+    eq_params: &ParamsIPA<EqAffine>,
+    ep_params: &ParamsIPA<EpAffine>,
+    mut witness: KagemushaRecursiveStateWitnessV1<'_>,
+) -> Result<(Vec<Vec<u8>>, Vec<Vec<u8>>), String> {
+    witness.hash_claim = None;
+    match build_recursive_state_pair_impl_v1(eq_params, ep_params, witness, true)? {
+        RecursiveStateBuildV1::Messages(eq, ep) => Ok((eq, ep)),
+        RecursiveStateBuildV1::Authenticated(_, _, _, _) => {
+            Err("recursive state discovery unexpectedly constructed a circuit".to_owned())
+        }
+    }
+}
+
+fn build_recursive_state_pair_impl_v1(
+    eq_params: &ParamsIPA<EqAffine>,
+    ep_params: &ParamsIPA<EpAffine>,
+    witness: KagemushaRecursiveStateWitnessV1<'_>,
+    discover_messages: bool,
+) -> Result<RecursiveStateBuildV1, String> {
+    if discover_messages != witness.hash_claim.is_none() {
+        return Err(
+            "recursive state SHA claim is absent or present in the wrong construction phase"
+                .to_owned(),
+        );
+    }
+    if let Some(claim) = &witness.hash_claim {
+        validate_recursive_hash_claim_v1(claim)?;
+    }
     witness.state.validate()?;
     validate_mint_fold_opening_against_state_v1(&witness.state, witness.mint_fold_opening)?;
+    let authorization = witness.mint_authorization;
+    authorization
+        .validate_shape()
+        .map_err(|error| format!("invalid MintFold authorization/padding: {error}"))?;
+    witness
+        .mint_credit
+        .validate_shape_against_authorization(authorization)
+        .map_err(|error| format!("invalid MintFold credit/padding: {error}"))?;
+    if witness
+        .mint_fold_opening
+        .is_some_and(|opening| opening.authorization() != authorization)
+    {
+        return Err("MintFold authorization differs from the staged authorization".to_owned());
+    }
+    if witness
+        .mint_fold_opening
+        .is_some_and(|opening| opening.credit() != witness.mint_credit)
+    {
+        return Err("MintFold credit differs from the staged credit".to_owned());
+    }
+    let proof = &authorization.proof;
+    let eq_authorization_history: &[u8; super::KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1] = proof
+        .eq_history
+        .as_slice()
+        .try_into()
+        .map_err(|_| "MintFold authorization Eq history has wrong width".to_owned())?;
+    let ep_authorization_history: &[u8; super::KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1] = proof
+        .ep_history
+        .as_slice()
+        .try_into()
+        .map_err(|_| "MintFold authorization Ep history has wrong width".to_owned())?;
+    let expected_eq = mint_authorization_public_instances_v1::<Fp>(
+        &authorization.statement,
+        proof.guard_ep_credential_audit,
+        proof.eq_deferred_audit,
+        proof.ep_deferred_audit,
+        eq_authorization_history,
+    )?;
+    let expected_ep = mint_authorization_public_instances_v1::<Fq>(
+        &authorization.statement,
+        proof.guard_ep_credential_audit,
+        proof.eq_deferred_audit,
+        proof.ep_deferred_audit,
+        ep_authorization_history,
+    )?;
+    if witness.eq_mint_authorization_instances != [expected_eq]
+        || witness.ep_mint_authorization_instances != [expected_ep]
+        || witness.eq_mint_authorization_proof != proof.eq_proof
+        || witness.ep_mint_authorization_proof != proof.ep_proof
+        || witness.eq_mint_authorization_history.as_bytes() != eq_authorization_history
+        || witness.ep_mint_authorization_history.as_bytes() != ep_authorization_history
+    {
+        return Err(
+            "MintFold authorization witness is detached from the exact authorization".to_owned(),
+        );
+    }
     witness.guard_relation.validate()?;
     let eq_history = witness
         .eq_predecessor_history
@@ -456,12 +641,12 @@ pub(super) fn build_kagemusha_recursive_state_pair_v1(
         .to_native()
         .map_err(|error| error.to_string())?;
     let eq_incoming_histories = witness
-        .eq_incoming_slots
+        .eq_incoming_credits
         .iter()
         .map(|slot| slot.history.to_native().map_err(|error| error.to_string()))
         .collect::<Result<Vec<_>, _>>()?;
     let ep_incoming_histories = witness
-        .ep_incoming_slots
+        .ep_incoming_credits
         .iter()
         .map(|slot| slot.history.to_native().map_err(|error| error.to_string()))
         .collect::<Result<Vec<_>, _>>()?;
@@ -473,6 +658,14 @@ pub(super) fn build_kagemusha_recursive_state_pair_v1(
         .ep_guard_history
         .to_native()
         .map_err(|error| error.to_string())?;
+    let eq_mint_authorization_history = witness
+        .eq_mint_authorization_history
+        .to_native()
+        .map_err(|error| error.to_string())?;
+    let ep_mint_authorization_history = witness
+        .ep_mint_authorization_history
+        .to_native()
+        .map_err(|error| error.to_string())?;
     let eq_mint_history = witness
         .eq_mint_history
         .to_native()
@@ -481,6 +674,26 @@ pub(super) fn build_kagemusha_recursive_state_pair_v1(
         .ep_mint_history
         .to_native()
         .map_err(|error| error.to_string())?;
+    let eq_hash_history = witness
+        .hash_claim
+        .as_ref()
+        .map(|claim| {
+            claim
+                .eq_history
+                .to_native()
+                .map_err(|error| error.to_string())
+        })
+        .transpose()?;
+    let ep_hash_history = witness
+        .hash_claim
+        .as_ref()
+        .map(|claim| {
+            claim
+                .ep_history
+                .to_native()
+                .map_err(|error| error.to_string())
+        })
+        .transpose()?;
     let eq_svk = eq_succinct_vk(eq_params);
     let ep_svk = ep_succinct_vk(ep_params);
     let eq_incoming_protocol_digest =
@@ -495,8 +708,8 @@ pub(super) fn build_kagemusha_recursive_state_pair_v1(
                 .to_owned(),
         );
     }
-    let eq_incoming_slots = witness
-        .eq_incoming_slots
+    let eq_incoming_credits = witness
+        .eq_incoming_credits
         .iter()
         .zip(&eq_incoming_histories)
         .map(
@@ -509,8 +722,8 @@ pub(super) fn build_kagemusha_recursive_state_pair_v1(
             },
         )
         .collect::<Vec<_>>();
-    let ep_incoming_slots = witness
-        .ep_incoming_slots
+    let ep_incoming_credits = witness
+        .ep_incoming_credits
         .iter()
         .zip(&ep_incoming_histories)
         .map(
@@ -523,13 +736,35 @@ pub(super) fn build_kagemusha_recursive_state_pair_v1(
             },
         )
         .collect::<Vec<_>>();
-    let (mut eq_builder, eq_sha, eq_output) = build_scalar_half::<EqAffine>(
+    let (mut eq_builder, eq_sha, eq_output, eq_claim_binding) = build_scalar_half::<EqAffine>(
         witness.state.clone(),
         witness.guard_relation.clone(),
         &eq_svk,
         KagemushaPastaParityV1::Eq,
         KagemushaRecursiveParityWitnessV1 {
+            hash_claim: witness
+                .hash_claim
+                .as_ref()
+                .zip(eq_hash_history.as_ref())
+                .map(
+                    |(claim, history)| KagemushaRecursiveHashClaimParityWitnessV1 {
+                        protocol_digests: [
+                            claim.eq_claim_protocol_digest,
+                            claim.ep_claim_protocol_digest,
+                            claim.eq_shard_protocol_digest,
+                            claim.ep_shard_protocol_digest,
+                        ],
+                        protocol: claim.eq_protocol,
+                        instances: claim.eq_instances,
+                        proof: claim.eq_proof,
+                        history,
+                        history_fold_proof: claim.eq_history_fold_proof.as_bytes(),
+                        merge_fold_proof: claim.eq_merge_fold_proof.as_bytes(),
+                    },
+                ),
             mint_fold_opening: witness.mint_fold_opening,
+            mint_authorization: witness.mint_authorization,
+            mint_credit: witness.mint_credit,
             parent_protocol: witness.eq_parent_protocol,
             parent_instances: witness.eq_parent_instances,
             parent_proof: witness.eq_parent_proof,
@@ -537,13 +772,23 @@ pub(super) fn build_kagemusha_recursive_state_pair_v1(
             parent_fold_proof: witness.eq_parent_fold_proof.as_bytes(),
             successor_history: witness.eq_successor_history.as_bytes(),
             incoming_protocol: witness.eq_incoming_protocol,
-            incoming_slots: &eq_incoming_slots,
+            incoming_credits: &eq_incoming_credits,
             guard_protocol: witness.eq_guard_protocol,
             guard_proof: witness.eq_guard_proof,
             guard_history: &eq_guard_history,
             guard_history_bytes: witness.eq_guard_history.as_bytes(),
             guard_history_fold_proof: witness.eq_guard_history_fold_proof.as_bytes(),
             guard_merge_fold_proof: witness.eq_guard_merge_fold_proof.as_bytes(),
+            mint_authorization_protocol: witness.eq_mint_authorization_protocol,
+            mint_authorization_instances: witness.eq_mint_authorization_instances,
+            mint_authorization_proof: witness.eq_mint_authorization_proof,
+            mint_authorization_history: &eq_mint_authorization_history,
+            mint_authorization_history_fold_proof: witness
+                .eq_mint_authorization_history_fold_proof
+                .as_bytes(),
+            mint_authorization_merge_fold_proof: witness
+                .eq_mint_authorization_merge_fold_proof
+                .as_bytes(),
             mint_protocol: witness.eq_mint_protocol,
             mint_instances: witness.eq_mint_instances,
             mint_proof: witness.eq_mint_proof,
@@ -552,13 +797,35 @@ pub(super) fn build_kagemusha_recursive_state_pair_v1(
             mint_merge_fold_proof: witness.eq_mint_merge_fold_proof.as_bytes(),
         },
     )?;
-    let (mut ep_builder, ep_sha, ep_output) = build_scalar_half::<EpAffine>(
+    let (mut ep_builder, ep_sha, ep_output, ep_claim_binding) = build_scalar_half::<EpAffine>(
         witness.state,
         witness.guard_relation,
         &ep_svk,
         KagemushaPastaParityV1::Ep,
         KagemushaRecursiveParityWitnessV1 {
+            hash_claim: witness
+                .hash_claim
+                .as_ref()
+                .zip(ep_hash_history.as_ref())
+                .map(
+                    |(claim, history)| KagemushaRecursiveHashClaimParityWitnessV1 {
+                        protocol_digests: [
+                            claim.eq_claim_protocol_digest,
+                            claim.ep_claim_protocol_digest,
+                            claim.eq_shard_protocol_digest,
+                            claim.ep_shard_protocol_digest,
+                        ],
+                        protocol: claim.ep_protocol,
+                        instances: claim.ep_instances,
+                        proof: claim.ep_proof,
+                        history,
+                        history_fold_proof: claim.ep_history_fold_proof.as_bytes(),
+                        merge_fold_proof: claim.ep_merge_fold_proof.as_bytes(),
+                    },
+                ),
             mint_fold_opening: witness.mint_fold_opening,
+            mint_authorization: witness.mint_authorization,
+            mint_credit: witness.mint_credit,
             parent_protocol: witness.ep_parent_protocol,
             parent_instances: witness.ep_parent_instances,
             parent_proof: witness.ep_parent_proof,
@@ -566,13 +833,23 @@ pub(super) fn build_kagemusha_recursive_state_pair_v1(
             parent_fold_proof: witness.ep_parent_fold_proof.as_bytes(),
             successor_history: witness.ep_successor_history.as_bytes(),
             incoming_protocol: witness.ep_incoming_protocol,
-            incoming_slots: &ep_incoming_slots,
+            incoming_credits: &ep_incoming_credits,
             guard_protocol: witness.ep_guard_protocol,
             guard_proof: witness.ep_guard_proof,
             guard_history: &ep_guard_history,
             guard_history_bytes: witness.ep_guard_history.as_bytes(),
             guard_history_fold_proof: witness.ep_guard_history_fold_proof.as_bytes(),
             guard_merge_fold_proof: witness.ep_guard_merge_fold_proof.as_bytes(),
+            mint_authorization_protocol: witness.ep_mint_authorization_protocol,
+            mint_authorization_instances: witness.ep_mint_authorization_instances,
+            mint_authorization_proof: witness.ep_mint_authorization_proof,
+            mint_authorization_history: &ep_mint_authorization_history,
+            mint_authorization_history_fold_proof: witness
+                .ep_mint_authorization_history_fold_proof
+                .as_bytes(),
+            mint_authorization_merge_fold_proof: witness
+                .ep_mint_authorization_merge_fold_proof
+                .as_bytes(),
             mint_protocol: witness.ep_mint_protocol,
             mint_instances: witness.ep_mint_instances,
             mint_proof: witness.ep_mint_proof,
@@ -582,38 +859,54 @@ pub(super) fn build_kagemusha_recursive_state_pair_v1(
         },
     )?;
 
+    if discover_messages {
+        // These builders have not consumed a hash proof and must never escape as circuits.
+        return Ok(RecursiveStateBuildV1::Messages(
+            eq_sha.canonical_messages()?,
+            ep_sha.canonical_messages()?,
+        ));
+    }
+    if eq_sha.compression_blocks()? != 0 || ep_sha.compression_blocks()? != 0 {
+        return Err("recursive state retained an unauthenticated inline SHA queue".to_owned());
+    }
+    let expected_ep_audit: [AssignedValue<Fp>; 2] = eq_builder.assigned_instances[0]
+        [public_instance::EP_DEFERRED_AUDIT_LO..public_instance::EP_DEFERRED_AUDIT_LO + 2]
+        .try_into()
+        .map_err(|_| "recursive state Ep audit width changed".to_owned())?;
+    let expected_eq_audit: [AssignedValue<Fq>; 2] = ep_builder.assigned_instances[0]
+        [public_instance::EQ_DEFERRED_AUDIT_LO..public_instance::EQ_DEFERRED_AUDIT_LO + 2]
+        .try_into()
+        .map_err(|_| "recursive state Eq audit width changed".to_owned())?;
     let mut eq_dense = PastaDenseMsmJobsV1::default();
-    constrain_reciprocal_parent_pass_v1::<EpAffine>(
+    constrain_reciprocal_output_with_u128_binding_v1::<EpAffine>(
         &mut eq_builder,
-        KagemushaPastaParityV1::Ep,
         &ep_output,
+        &expected_ep_audit,
+        &eq_claim_binding,
         &mut eq_dense,
     )?;
     let mut ep_dense = PastaDenseMsmJobsV1::default();
-    constrain_reciprocal_parent_pass_v1::<EqAffine>(
+    constrain_reciprocal_output_with_u128_binding_v1::<EqAffine>(
         &mut ep_builder,
-        KagemushaPastaParityV1::Eq,
         &eq_output,
+        &expected_eq_audit,
+        &ep_claim_binding,
         &mut ep_dense,
     )?;
     eq_builder.calculate_params(Some(MINIMUM_UNUSABLE_ROWS));
     ep_builder.calculate_params(Some(MINIMUM_UNUSABLE_ROWS));
     let usable_rows = (1_usize << 16) - MINIMUM_UNUSABLE_ROWS;
-    eq_sha.validate_capacity(usable_rows)?;
-    ep_sha.validate_capacity(usable_rows)?;
     eq_dense.validate_capacity(usable_rows)?;
     ep_dense.validate_capacity(usable_rows)?;
     let eq_audit = assigned_digest_bytes(&eq_output.audit_digest_limbs)?;
     let ep_audit = assigned_digest_bytes(&ep_output.audit_digest_limbs)?;
-    Ok((
+    Ok(RecursiveStateBuildV1::Authenticated(
         KagemushaRecursiveStateEqCircuitV1 {
             builder: eq_builder,
-            sha_jobs: eq_sha,
             dense_jobs: eq_dense,
         },
         KagemushaRecursiveStateEpCircuitV1 {
             builder: ep_builder,
-            sha_jobs: ep_sha,
             dense_jobs: ep_dense,
         },
         eq_audit,
@@ -650,6 +943,7 @@ fn build_scalar_half<C>(
         BaseCircuitBuilder<C::ScalarExt>,
         PastaSha256JobsV1<C::ScalarExt>,
         KagemushaDeferredParentOutputV1<C>,
+        Vec<AssignedValue<C::ScalarExt>>,
     ),
     String,
 >
@@ -720,6 +1014,22 @@ where
         .ok_or_else(|| "Kagemusha mint protocol public limbs are absent".to_owned())?
         .try_into()
         .map_err(|_| "Kagemusha mint protocol public limbs have wrong shape".to_owned())?;
+    let expected_mint_authorization_protocol: [AssignedValue<C::ScalarExt>; 2] = public
+        .get(match parity {
+            KagemushaPastaParityV1::Eq => {
+                public_instance::MINT_AUTHORIZATION_EQ_PROTOCOL_LO
+                    ..public_instance::MINT_AUTHORIZATION_EQ_PROTOCOL_LO + 2
+            }
+            KagemushaPastaParityV1::Ep => {
+                public_instance::MINT_AUTHORIZATION_EP_PROTOCOL_LO
+                    ..public_instance::MINT_AUTHORIZATION_EP_PROTOCOL_LO + 2
+            }
+        })
+        .ok_or_else(|| "Kagemusha mint-authorization protocol public limbs are absent".to_owned())?
+        .try_into()
+        .map_err(|_| {
+            "Kagemusha mint-authorization protocol public limbs have wrong shape".to_owned()
+        })?;
     let expected_incoming_eq_protocol: [AssignedValue<C::ScalarExt>; 2] = public
         .get(
             public_instance::COMMIT_WRAPPER_EQ_PROTOCOL_LO
@@ -775,6 +1085,15 @@ where
         witness.mint_fold_opening,
         mint,
     )?;
+    let native_parent_protocol_digest =
+        native_parent_protocol_digest_v1(witness.parent_protocol, parity)?;
+    let expected_native_protocol = match parity {
+        KagemushaPastaParityV1::Eq => state.eq_protocol_digest,
+        KagemushaPastaParityV1::Ep => state.ep_protocol_digest,
+    };
+    if native_parent_protocol_digest != expected_native_protocol {
+        return Err("Kagemusha predecessor protocol differs from the V1 state identity".to_owned());
+    }
     let expected_protocol = current_expected_protocol;
     let predecessor_components = state
         .predecessor
@@ -837,8 +1156,8 @@ where
         return Err("Kagemusha predecessor verifier emitted no equations".to_owned());
     }
 
-    if witness.incoming_slots.len() != state_relation::KAGEMUSHA_RECEIVE_FOLD_ARITY_V1 {
-        return Err("Kagemusha incoming sender proof has wrong fixed arity".to_owned());
+    if witness.incoming_credits.len() != state_relation::KAGEMUSHA_RECEIVE_FOLD_ARITY_V1 {
+        return Err("Kagemusha ReceiveFold requires exactly one incoming sender proof".to_owned());
     }
     // Incoming monetary authority is a release-pinned commit-wrapper verifier.
     // Its self-referential preprocessed points are witnesses so the production key graph remains
@@ -860,10 +1179,10 @@ where
     .map_err(|error| format!("failed to bind incoming post-commit payment protocol: {error:?}"))?
     .protocol;
     let mut state_history = base_successor_history;
-    let mut incoming_equation_spans = Vec::with_capacity(witness.incoming_slots.len());
+    let mut incoming_equation_spans = Vec::with_capacity(witness.incoming_credits.len());
     let mut previous_incoming_end = parent_end;
     for (index, (slot, assigned_slot)) in witness
-        .incoming_slots
+        .incoming_credits
         .iter()
         .zip(core::iter::once(&assigned_state.receive_credit))
         .enumerate()
@@ -1024,6 +1343,120 @@ where
         return Err("Kagemusha GuardBundle verifier emitted no equations".to_owned());
     }
 
+    if witness.mint_authorization_protocol.num_instance
+        != [MINT_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1]
+        || witness.mint_authorization_instances.len() != 1
+        || witness.mint_authorization_instances[0].len()
+            != MINT_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1
+    {
+        return Err("Kagemusha mint-authorization proof has wrong public shape".to_owned());
+    }
+    let authorization_structure =
+        kagemusha_protocol_structure_digest_v1(witness.mint_authorization_protocol, parity)?;
+    let loaded_authorization = load_and_constrain_parent_protocol_v1(
+        &loader,
+        witness.mint_authorization_protocol,
+        parity,
+        authorization_structure,
+        &expected_mint_authorization_protocol,
+    )
+    .map_err(|error| format!("failed to bind mint-authorization protocol: {error:?}"))?;
+    let authorization_instances = witness
+        .mint_authorization_instances
+        .iter()
+        .map(|column| {
+            column
+                .iter()
+                .map(|value| loader.assign_scalar(*value))
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    let authorization_column = authorization_instances
+        .first()
+        .ok_or_else(|| "Kagemusha mint-authorization public column is absent".to_owned())?;
+    constrain_mint_authorization_binding_v1(&loader, authorization_column, &public, mint)?;
+    let recipient_credential_preimage = witness
+        .mint_fold_opening
+        .map(|opening| opening.recipient_credential().canonical_id_preimage_bytes())
+        .transpose()
+        .map_err(|error| format!("invalid MintFold recipient credential preimage: {error}"))?;
+    {
+        let chip = loader.ecc_chip();
+        let mut loader_ctx = loader.ctx_mut();
+        let authorization_cells = authorization_column
+            .iter()
+            .map(|value| *value.assigned())
+            .collect::<Vec<_>>();
+        constrain_mint_fold_recipient_opening_v1(
+            loader_ctx.main(),
+            chip.range(),
+            &mut sha_jobs,
+            &authorization_cells,
+            assigned_state.successor.lane_id,
+            assigned_state.replay_credit_id,
+            recipient_credential_preimage.as_deref(),
+            witness
+                .mint_fold_opening
+                .map(|opening| opening.credit_opening()),
+            mint,
+        )?;
+    }
+    let authorization_current = verify_ordinary_proof_with_canonical_bytes_v1(
+        &loader,
+        succinct_vk,
+        &loaded_authorization.protocol,
+        &authorization_instances,
+        witness.mint_authorization_proof,
+    )
+    .map_err(|error| format!("failed to verify mint authorization: {error:?}"))?;
+    constrain_mint_authorization_statement_digest_v1(
+        &loader,
+        &mut sha_jobs,
+        authorization_column,
+        &witness.mint_authorization.statement,
+        mint,
+    )?;
+    let authorization_history =
+        load_native_accumulator(&loader, witness.mint_authorization_history)
+            .map_err(|error| format!("failed to load mint-authorization history: {error:?}"))?;
+    let authorization_history_cells = authorization_column
+        .get(mint_authorization_public_instance::HISTORY_START..)
+        .ok_or_else(|| "Kagemusha mint-authorization history is absent".to_owned())?
+        .iter()
+        .map(|value| *value.assigned())
+        .collect::<Vec<_>>();
+    bind_accumulator_limbs(
+        &loader,
+        &authorization_history,
+        &authorization_history_cells,
+    )
+    .map_err(|error| format!("failed to bind mint-authorization history: {error:?}"))?;
+    let complete_authorization = verify_fold(
+        &loader,
+        succinct_vk,
+        &[authorization_current.accumulator, authorization_history],
+        witness.mint_authorization_history_fold_proof,
+    )
+    .map_err(|error| format!("failed to fold mint-authorization history: {error:?}"))?;
+    let history_with_authorization = verify_fold(
+        &loader,
+        succinct_vk,
+        &[history_with_guard.clone(), complete_authorization],
+        witness.mint_authorization_merge_fold_proof,
+    )
+    .map_err(|error| format!("failed to merge mint-authorization history: {error:?}"))?;
+    let history_with_authorization = select_accumulator_v1(
+        &loader,
+        &history_with_authorization,
+        &history_with_guard,
+        mint,
+    )
+    .map_err(|error| format!("failed to select mint-authorization history: {error:?}"))?;
+    let authorization_end = loader.ecc_chip().equation_count();
+    if authorization_end <= guard_end {
+        return Err("Kagemusha mint-authorization verifier emitted no equations".to_owned());
+    }
+
     if witness.mint_protocol.num_instance != [KAGEMUSHA_MINT_AUTHORITY_PUBLIC_INSTANCE_COUNT_V1]
         || witness.mint_instances.len() != 1
         || witness.mint_instances[0].len() != KAGEMUSHA_MINT_AUTHORITY_PUBLIC_INSTANCE_COUNT_V1
@@ -1053,7 +1486,7 @@ where
         .first()
         .ok_or_else(|| "Kagemusha mint public column is absent".to_owned())?;
     constrain_mint_authority_binding_v1(&loader, mint_column, &public, mint)?;
-    let mint_current = verify_ordinary_proof_v1(
+    let mint_current = verify_ordinary_proof_with_canonical_bytes_v1(
         &loader,
         succinct_vk,
         &loaded_mint.protocol,
@@ -1061,6 +1494,20 @@ where
         witness.mint_proof,
     )
     .map_err(|error| format!("failed to verify finalized-mint proof: {error:?}"))?;
+    constrain_exact_mint_envelope_v1(
+        &loader,
+        &mut sha_jobs,
+        &assigned_state,
+        &public,
+        authorization_column,
+        mint_column,
+        &authorization_current.canonical_bytes,
+        &mint_current.canonical_bytes,
+        witness.mint_authorization,
+        witness.mint_credit,
+        parity,
+        mint,
+    )?;
     let mint_history = load_native_accumulator(&loader, witness.mint_history)
         .map_err(|error| format!("failed to load finalized-mint history: {error:?}"))?;
     let mint_history_cells = mint_column
@@ -1074,28 +1521,48 @@ where
     let complete_mint = verify_fold(
         &loader,
         succinct_vk,
-        &[mint_current, mint_history],
+        &[mint_current.accumulator, mint_history],
         witness.mint_history_fold_proof,
     )
     .map_err(|error| format!("failed to fold finalized-mint history: {error:?}"))?;
     let history_with_mint = verify_fold(
         &loader,
         succinct_vk,
-        &[history_with_guard.clone(), complete_mint],
+        &[history_with_authorization.clone(), complete_mint],
         witness.mint_merge_fold_proof,
     )
     .map_err(|error| format!("failed to merge finalized-mint history: {error:?}"))?;
-    let successor_history =
-        select_accumulator_v1(&loader, &history_with_mint, &history_with_guard, mint)
-            .map_err(|error| format!("failed to select finalized-mint history: {error:?}"))?;
-    bind_accumulator_limbs(&loader, &successor_history, &history_limbs)
-        .map_err(|error| format!("failed to bind successor history: {error:?}"))?;
+    let successor_history = select_accumulator_v1(
+        &loader,
+        &history_with_mint,
+        &history_with_authorization,
+        mint,
+    )
+    .map_err(|error| format!("failed to select finalized-mint history: {error:?}"))?;
     let mint_end = loader.ecc_chip().equation_count();
-    if mint_end <= guard_end {
+    if mint_end <= authorization_end {
         return Err("Kagemusha finalized-mint verifier emitted no equations".to_owned());
     }
 
-    let mut equation_tags = Vec::with_capacity(mint_end);
+    let (successor_history, claim_binding, claim_current_end) =
+        if let Some(claim) = witness.hash_claim {
+            let claimed_sha = core::mem::take(&mut sha_jobs);
+            constrain_recursive_hash_claim_v1(
+                &loader,
+                succinct_vk,
+                parity,
+                claim,
+                &claimed_sha,
+                assigned_state.successor.release_id,
+                successor_history,
+            )?
+        } else {
+            (successor_history, Vec::new(), mint_end)
+        };
+    bind_accumulator_limbs(&loader, &successor_history, &history_limbs)
+        .map_err(|error| format!("failed to bind successor history: {error:?}"))?;
+    let claim_end = loader.ecc_chip().equation_count();
+    let mut equation_tags = Vec::with_capacity(claim_end);
     equation_tags.extend(std::iter::repeat_n(PARENT_EQUATION_TAG, parent_end));
     equation_tags.extend(std::iter::repeat_n(
         INCOMING_CREDIT_EQUATION_TAG,
@@ -1106,8 +1573,12 @@ where
         guard_end - incoming_end,
     ));
     equation_tags.extend(std::iter::repeat_n(
+        MINT_AUTHORIZATION_EQUATION_TAG,
+        authorization_end - guard_end,
+    ));
+    equation_tags.extend(std::iter::repeat_n(
         MINT_FINALITY_EQUATION_TAG,
-        mint_end - guard_end,
+        mint_end - authorization_end,
     ));
     let mut assigned_selectors = Vec::with_capacity(mint_end);
     assigned_selectors.extend(std::iter::repeat_n(non_bootstrap, parent_end));
@@ -1116,25 +1587,268 @@ where
     }
     let guard_enabled = loader.ctx_mut().main().load_constant(C::ScalarExt::ONE);
     assigned_selectors.extend(std::iter::repeat_n(guard_enabled, guard_end - incoming_end));
-    assigned_selectors.extend(std::iter::repeat_n(mint, mint_end - guard_end));
+    assigned_selectors.extend(std::iter::repeat_n(mint, authorization_end - guard_end));
+    assigned_selectors.extend(std::iter::repeat_n(mint, mint_end - authorization_end));
     let mut equation_selectors = vec![parent_enabled; parent_end];
     for (equation_count, _, enabled) in &incoming_equation_spans {
         equation_selectors.extend(std::iter::repeat_n(*enabled, *equation_count));
     }
     equation_selectors.extend(std::iter::repeat_n(true, guard_end - incoming_end));
-    equation_selectors.extend(std::iter::repeat_n(mint_enabled, mint_end - guard_end));
-    let output = finalize_deferred_audit_plan_v1(
+    equation_selectors.extend(std::iter::repeat_n(
+        mint_enabled,
+        authorization_end - guard_end,
+    ));
+    equation_selectors.extend(std::iter::repeat_n(
+        mint_enabled,
+        mint_end - authorization_end,
+    ));
+    equation_tags.extend(std::iter::repeat_n(
+        STATE_HASH_CLAIM_CURRENT_EQUATION_TAG,
+        claim_current_end - mint_end,
+    ));
+    equation_tags.extend(std::iter::repeat_n(
+        STATE_HASH_CLAIM_HISTORY_EQUATION_TAG,
+        claim_end - claim_current_end,
+    ));
+    assigned_selectors.extend(std::iter::repeat_n(guard_enabled, claim_end - mint_end));
+    equation_selectors.extend(std::iter::repeat_n(true, claim_end - mint_end));
+    let output = finalize_deferred_audit_plan_with_u128_binding_v1(
         &mut builder,
         loader,
         equation_tags,
         assigned_selectors,
         equation_selectors,
+        &claim_binding,
     )
     .map_err(|error| format!("failed to finalize deferred audit: {error:?}"))?;
     for (actual, expected) in output.audit_digest_limbs.iter().zip(expected_audit) {
         builder.main(0).constrain_equal(actual, &expected);
     }
-    Ok((builder, sha_jobs, output))
+    Ok((builder, sha_jobs, output, claim_binding))
+}
+
+fn validate_recursive_hash_claim_v1(
+    claim: &super::generation::KagemushaMintHashClaimGenerationWitnessV1<'_>,
+) -> Result<(), String> {
+    let digests = [
+        claim.eq_claim_protocol_digest,
+        claim.ep_claim_protocol_digest,
+        claim.eq_shard_protocol_digest,
+        claim.ep_shard_protocol_digest,
+    ];
+    if digests.iter().any(|digest| *digest == [0; 32])
+        || digests[0] == digests[1]
+        || digests[2] == digests[3]
+    {
+        return Err(
+            "recursive state hash suite has absent or parity-aliased identities".to_owned(),
+        );
+    }
+    if native_parent_protocol_digest_v1(claim.eq_protocol, KagemushaPastaParityV1::Eq)?
+        != digests[0]
+        || native_parent_protocol_digest_v1(claim.ep_protocol, KagemushaPastaParityV1::Ep)?
+            != digests[1]
+    {
+        return Err(
+            "recursive state hash claim differs from its authenticated protocol".to_owned(),
+        );
+    }
+    validate_recursive_hash_claim_history_v1(claim.eq_instances, claim.eq_history.as_bytes())?;
+    validate_recursive_hash_claim_history_v1(claim.ep_instances, claim.ep_history.as_bytes())?;
+    if canonical_claim_carrier_binding_tail_v1(claim.eq_instances)?
+        != canonical_claim_carrier_binding_tail_v1(claim.ep_instances)?
+    {
+        return Err(
+            "recursive state paired hash claims have different carrier bindings".to_owned(),
+        );
+    }
+    Ok(())
+}
+
+fn validate_recursive_hash_claim_history_v1<F: KagemushaPoseidonFieldV1>(
+    instances: &[Vec<F>],
+    history: &[u8; super::KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1],
+) -> Result<(), String> {
+    let shape = [
+        KAGEMUSHA_MINT_HASH_CLAIM_INNER_SEMANTIC_INSTANCE_COUNT_V1,
+        KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_INSTANCE_COUNT_V1,
+        KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_INSTANCE_COUNT_V1,
+    ];
+    if !instances.iter().map(Vec::len).eq(shape) {
+        return Err(
+            "recursive state hash claim requires the exact two-carrier hybrid shape".to_owned(),
+        );
+    }
+    let expected = history
+        .chunks_exact(16)
+        .map(|bytes| {
+            F::from_u128(u128::from_le_bytes(
+                bytes.try_into().expect("history limb width"),
+            ))
+        })
+        .collect::<Vec<_>>();
+    if instances[0]
+        .get(hash_claim_public::HISTORY_START..KAGEMUSHA_MINT_HASH_CLAIM_PUBLIC_INSTANCE_COUNT_V1)
+        != Some(expected.as_slice())
+    {
+        return Err(
+            "recursive state hash-claim history is detached from its public column".to_owned(),
+        );
+    }
+    Ok(())
+}
+
+/// Verify the exact ordered SHA queue and fold its complete authenticated history.
+///
+/// The returned carrier binding must be absorbed in both deferred audits and equality-bound in
+/// the reciprocal passes. The hybrid proof alone does not authenticate its opposite-field
+/// deferred equations, and a host comparison of the binding is only an early diagnostic.
+#[allow(clippy::too_many_arguments)]
+fn constrain_recursive_hash_claim_v1<'chip, C>(
+    loader: &DeferredLoader<'chip, C>,
+    succinct_vk: &IpaSuccinctVerifyingKey<C>,
+    parity: KagemushaPastaParityV1,
+    claim: KagemushaRecursiveHashClaimParityWitnessV1<'_, C>,
+    jobs: &PastaSha256JobsV1<C::ScalarExt>,
+    release: [AssignedValue<C::ScalarExt>; 2],
+    predecessor: super::deferred_parent::DeferredAccumulator<'chip, C>,
+) -> Result<
+    (
+        super::deferred_parent::DeferredAccumulator<'chip, C>,
+        Vec<AssignedValue<C::ScalarExt>>,
+        usize,
+    ),
+    String,
+>
+where
+    C: CurveAffineExt,
+    C::Base: BigPrimeField,
+    C::ScalarExt: KagemushaPoseidonFieldV1,
+{
+    // These four identities are fixed-column values owned by the release-authenticated State
+    // key. They are not prover-selected public claims or unconstrained digest witnesses.
+    let protocols: [[AssignedValue<C::ScalarExt>; 2]; 4] = claim.protocol_digests.map(|digest| {
+        crate::zk::kagemusha_v1_poseidon::digest_limbs::<C::ScalarExt>(digest)
+            .map(|value| loader.ctx_mut().main().load_constant(value))
+    });
+    let structure = kagemusha_protocol_structure_digest_v1(claim.protocol, parity)?;
+    let loaded = load_and_constrain_parent_protocol_v1(
+        loader,
+        claim.protocol,
+        parity,
+        structure,
+        &protocols[match parity {
+            KagemushaPastaParityV1::Eq => 0,
+            KagemushaPastaParityV1::Ep => 1,
+        }],
+    )
+    .map_err(|error| format!("recursive state hash-claim protocol binding failed: {error:?}"))?;
+    let shape = [
+        KAGEMUSHA_MINT_HASH_CLAIM_INNER_SEMANTIC_INSTANCE_COUNT_V1,
+        KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_INSTANCE_COUNT_V1,
+        KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_INSTANCE_COUNT_V1,
+    ];
+    if loaded.protocol.num_instance != shape || !claim.instances.iter().map(Vec::len).eq(shape) {
+        return Err("recursive state terminal hash-claim protocol shape changed".to_owned());
+    }
+    let semantic = claim.instances[0]
+        .iter()
+        .map(|value| loader.assign_scalar(*value))
+        .collect::<Vec<_>>();
+    let equation_start = loader.ecc_chip().equation_count();
+    let current = verify_two_carrier_hybrid_ordinary_proof_and_stream_v1(
+        loader,
+        succinct_vk,
+        &loaded.protocol,
+        &semantic,
+        match parity {
+            KagemushaPastaParityV1::Eq => [
+                [
+                    hash_claim_public::EQ_PROOF_EQ_CARRIER_COMMITMENT_LO,
+                    hash_claim_public::EQ_PROOF_EQ_CARRIER_COMMITMENT_LO + 1,
+                ],
+                [
+                    hash_claim_public::EQ_PROOF_EP_CARRIER_COMMITMENT_LO,
+                    hash_claim_public::EQ_PROOF_EP_CARRIER_COMMITMENT_LO + 1,
+                ],
+            ],
+            KagemushaPastaParityV1::Ep => [
+                [
+                    hash_claim_public::EP_PROOF_EQ_CARRIER_COMMITMENT_LO,
+                    hash_claim_public::EP_PROOF_EQ_CARRIER_COMMITMENT_LO + 1,
+                ],
+                [
+                    hash_claim_public::EP_PROOF_EP_CARRIER_COMMITMENT_LO,
+                    hash_claim_public::EP_PROOF_EP_CARRIER_COMMITMENT_LO + 1,
+                ],
+            ],
+        },
+        claim.proof,
+    )
+    .map_err(|error| format!("recursive state hash-claim verifier failed: {error:?}"))?;
+    let current_end = loader.ecc_chip().equation_count();
+    if current_end <= equation_start {
+        return Err("recursive state hash-claim current verifier emitted no equation".to_owned());
+    }
+    let column = &semantic[..KAGEMUSHA_MINT_HASH_CLAIM_PUBLIC_INSTANCE_COUNT_V1];
+    let history = load_native_accumulator(loader, claim.history)
+        .map_err(|error| format!("recursive state hash history load failed: {error:?}"))?;
+    let history_cells = column[hash_claim_public::HISTORY_START..]
+        .iter()
+        .map(|value| *value.assigned())
+        .collect::<Vec<_>>();
+    bind_accumulator_limbs(loader, &history, &history_cells)
+        .map_err(|error| format!("recursive state hash history binding failed: {error:?}"))?;
+    let binding = semantic[KAGEMUSHA_MINT_HASH_CLAIM_PUBLIC_INSTANCE_COUNT_V1
+        ..hash_claim_public::CARRIER_BINDING_END]
+        .iter()
+        .map(|value| *value.assigned())
+        .collect::<Vec<_>>();
+    if binding.len() != KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_BINDING_COUNT_V1 {
+        return Err("recursive state hash carrier-binding width changed".to_owned());
+    }
+    {
+        let chip = loader.ecc_chip();
+        let mut ctx = loader.ctx_mut();
+        let assigned = column
+            .iter()
+            .map(|value| *value.assigned())
+            .collect::<Vec<_>>();
+        constrain_complete_claim_against_sha_jobs_v1(
+            ctx.main(),
+            chip.range(),
+            jobs,
+            &assigned,
+            parity,
+            release,
+            protocols[0],
+            protocols[1],
+            protocols[2],
+            protocols[3],
+        )?;
+    }
+    let complete = verify_fold(
+        loader,
+        succinct_vk,
+        &[current.accumulator, history],
+        claim.history_fold_proof,
+    )
+    .map_err(|error| format!("recursive state hash-claim history fold failed: {error:?}"))?;
+    let complete_end = loader.ecc_chip().equation_count();
+    if complete_end <= current_end {
+        return Err("recursive state hash-claim history fold emitted no equation".to_owned());
+    }
+    let successor = verify_fold(
+        loader,
+        succinct_vk,
+        &[predecessor, complete],
+        claim.merge_fold_proof,
+    )
+    .map_err(|error| format!("recursive state hash-claim merge fold failed: {error:?}"))?;
+    if loader.ecc_chip().equation_count() <= complete_end {
+        return Err("recursive state hash-claim merge fold emitted no equation".to_owned());
+    }
+    Ok((successor, binding, current_end))
 }
 
 fn assign_history_limbs<F: KagemushaPoseidonFieldV1>(
@@ -1157,6 +1871,361 @@ fn assign_history_limbs<F: KagemushaPoseidonFieldV1>(
         return Err("Kagemusha history limb count is not fixed".to_owned());
     }
     Ok(limbs)
+}
+
+fn adaptive_payload_v1<T: norito::codec::Encode>(value: &T) -> Result<Vec<u8>, String> {
+    let mut payload = Vec::new();
+    norito::codec::encode_adaptive_into(value, &mut payload).map_err(|error| error.to_string())?;
+    Ok(payload)
+}
+
+fn changed_range_v1(
+    original: &[u8],
+    mutated: &[u8],
+    expected_len: usize,
+    label: &str,
+) -> Result<core::ops::Range<usize>, String> {
+    if original.len() != mutated.len() {
+        return Err(format!(
+            "canonical {label} mutation changed its payload length"
+        ));
+    }
+    let changed = original
+        .iter()
+        .zip(mutated)
+        .enumerate()
+        .filter_map(|(index, (left, right))| (left != right).then_some(index))
+        .collect::<Vec<_>>();
+    let Some(&start) = changed.first() else {
+        return Err(format!("canonical {label} mutation changed no bytes"));
+    };
+    let end = start
+        .checked_add(expected_len)
+        .ok_or_else(|| format!("canonical {label} range overflow"))?;
+    if changed.len() != expected_len
+        || changed.iter().copied().ne(start..end)
+        || end > original.len()
+    {
+        return Err(format!(
+            "canonical {label} does not occupy one fixed byte range"
+        ));
+    }
+    Ok(start..end)
+}
+
+fn replace_assigned_range_v1<F: KagemushaPoseidonFieldV1>(
+    payload: &mut [PastaSha256ByteV1<F>],
+    range: core::ops::Range<usize>,
+    replacement: &[PastaSha256ByteV1<F>],
+    label: &str,
+) -> Result<(), String> {
+    let destination = payload
+        .get_mut(range)
+        .ok_or_else(|| format!("canonical {label} range is outside the payload"))?;
+    if destination.len() != replacement.len() {
+        return Err(format!("canonical {label} replacement has wrong width"));
+    }
+    destination.copy_from_slice(replacement);
+    Ok(())
+}
+
+fn replace_mutated_field_v1<F, T, M>(
+    payload: &mut [PastaSha256ByteV1<F>],
+    value: &T,
+    replacement: &[PastaSha256ByteV1<F>],
+    label: &str,
+    mutate: M,
+) -> Result<(), String>
+where
+    F: KagemushaPoseidonFieldV1,
+    T: Clone + norito::codec::Encode,
+    M: FnOnce(&mut T),
+{
+    let original = adaptive_payload_v1(value)?;
+    let mut mutated = value.clone();
+    mutate(&mut mutated);
+    let range = changed_range_v1(
+        &original,
+        &adaptive_payload_v1(&mutated)?,
+        replacement.len(),
+        label,
+    )?;
+    replace_assigned_range_v1(payload, range, replacement, label)
+}
+
+fn locate_unique_subslice_v1(
+    haystack: &[u8],
+    needle: &[u8],
+    label: &str,
+) -> Result<core::ops::Range<usize>, String> {
+    if needle.is_empty() || needle.len() > haystack.len() {
+        return Err(format!("canonical {label} nested payload is absent"));
+    }
+    let matches = haystack
+        .windows(needle.len())
+        .enumerate()
+        .filter_map(|(index, candidate)| (candidate == needle).then_some(index))
+        .collect::<Vec<_>>();
+    if matches.len() != 1 {
+        return Err(format!(
+            "canonical {label} nested payload is not uniquely located"
+        ));
+    }
+    Ok(matches[0]..matches[0] + needle.len())
+}
+
+fn locate_subslice_after_v1(
+    haystack: &[u8],
+    needle: &[u8],
+    start: usize,
+    label: &str,
+) -> Result<core::ops::Range<usize>, String> {
+    let suffix = haystack
+        .get(start..)
+        .ok_or_else(|| format!("canonical {label} search starts outside the payload"))?;
+    if needle.is_empty() || needle.len() > suffix.len() {
+        return Err(format!("canonical {label} nested payload is absent"));
+    }
+    let relative = suffix
+        .windows(needle.len())
+        .position(|candidate| candidate == needle)
+        .ok_or_else(|| format!("canonical {label} nested payload is absent"))?;
+    let begin = start + relative;
+    Ok(begin..begin + needle.len())
+}
+
+fn assigned_canonical_frame_v1<F, T>(
+    ctx: &mut halo2_base::Context<F>,
+    range: &halo2_base::gates::RangeChip<F>,
+    value: &T,
+    payload: Vec<PastaSha256ByteV1<F>>,
+) -> Result<Vec<PastaSha256ByteV1<F>>, String>
+where
+    F: KagemushaPoseidonFieldV1,
+    T: KagemushaCanonicalMintFrameV1,
+{
+    let payload_len = ctx
+        .load_constant(F::from(u64::try_from(payload.len()).map_err(|_| {
+            "canonical monetary payload length exceeds u64".to_owned()
+        })?));
+    let stream = KagemushaBoundedByteStreamV1::constrain(ctx, range, payload, payload_len)?;
+    let prefix = kagemusha_canonical_mint_frame_prefix_v1(value)
+        .map_err(|error| format!("invalid canonical monetary frame prefix: {error}"))?;
+    Ok(
+        assemble_bounded_canonical_frame_v1(ctx, range, &prefix, &stream)?
+            .bytes()
+            .to_vec(),
+    )
+}
+
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+fn assigned_paired_proof_payload_v1<F: KagemushaPoseidonFieldV1>(
+    ctx: &mut halo2_base::Context<F>,
+    range: &halo2_base::gates::RangeChip<F>,
+    proof: &KagemushaPairedProofV1,
+    parity: KagemushaPastaParityV1,
+    current_proof: &[PastaSha256ByteV1<F>],
+    eq_protocol: [AssignedValue<F>; 2],
+    ep_protocol: [AssignedValue<F>; 2],
+    semantic: [AssignedValue<F>; 2],
+    guard_eq_audit: [AssignedValue<F>; 2],
+    guard_ep_audit: [AssignedValue<F>; 2],
+    eq_deferred_audit: [AssignedValue<F>; 2],
+    ep_deferred_audit: [AssignedValue<F>; 2],
+    eq_history: &[PastaSha256ByteV1<F>],
+    ep_history: &[PastaSha256ByteV1<F>],
+) -> Result<Vec<PastaSha256ByteV1<F>>, String> {
+    let native = adaptive_payload_v1(proof)?;
+    let mut payload = assign_bytes(ctx, range, &native);
+    let gate = range.gate();
+    let bindings = [
+        (
+            assigned_digest_bytes_v1(ctx, gate, eq_protocol),
+            "paired-proof Eq protocol",
+            0_u8,
+        ),
+        (
+            assigned_digest_bytes_v1(ctx, gate, ep_protocol),
+            "paired-proof Ep protocol",
+            1,
+        ),
+        (
+            assigned_digest_bytes_v1(ctx, gate, semantic),
+            "paired-proof semantic digest",
+            2,
+        ),
+        (
+            assigned_digest_bytes_v1(ctx, gate, guard_eq_audit),
+            "paired-proof Eq guard audit",
+            3,
+        ),
+        (
+            assigned_digest_bytes_v1(ctx, gate, guard_ep_audit),
+            "paired-proof Ep guard audit",
+            4,
+        ),
+        (
+            assigned_digest_bytes_v1(ctx, gate, eq_deferred_audit),
+            "paired-proof Eq deferred audit",
+            5,
+        ),
+        (
+            assigned_digest_bytes_v1(ctx, gate, ep_deferred_audit),
+            "paired-proof Ep deferred audit",
+            6,
+        ),
+    ];
+    for (replacement, label, selector) in bindings {
+        let mut mutated = proof.clone();
+        let target = match selector {
+            0 => &mut mutated.eq_protocol_digest,
+            1 => &mut mutated.ep_protocol_digest,
+            2 => &mut mutated.semantic_digest,
+            3 => &mut mutated.guard_eq_credential_audit,
+            4 => &mut mutated.guard_ep_credential_audit,
+            5 => &mut mutated.eq_deferred_audit,
+            6 => &mut mutated.ep_deferred_audit,
+            _ => unreachable!(),
+        };
+        target.iter_mut().for_each(|byte| *byte = !*byte);
+        let changed = changed_range_v1(&native, &adaptive_payload_v1(&mutated)?, 32, label)?;
+        replace_assigned_range_v1(&mut payload, changed, &replacement, label)?;
+    }
+
+    for (replacement, label, eq) in [
+        (eq_history, "paired-proof Eq history", true),
+        (ep_history, "paired-proof Ep history", false),
+    ] {
+        let mut mutated = proof.clone();
+        let target = if eq {
+            &mut mutated.eq_history
+        } else {
+            &mut mutated.ep_history
+        };
+        target.iter_mut().for_each(|byte| *byte = !*byte);
+        let changed = changed_range_v1(
+            &native,
+            &adaptive_payload_v1(&mutated)?,
+            replacement.len(),
+            label,
+        )?;
+        replace_assigned_range_v1(&mut payload, changed, replacement, label)?;
+    }
+
+    let mut mutated = proof.clone();
+    let target = match parity {
+        KagemushaPastaParityV1::Eq => &mut mutated.eq_proof,
+        KagemushaPastaParityV1::Ep => &mut mutated.ep_proof,
+    };
+    target.iter_mut().for_each(|byte| *byte = !*byte);
+    let label = match parity {
+        KagemushaPastaParityV1::Eq => "paired-proof Eq current proof",
+        KagemushaPastaParityV1::Ep => "paired-proof Ep current proof",
+    };
+    let changed = changed_range_v1(
+        &native,
+        &adaptive_payload_v1(&mutated)?,
+        current_proof.len(),
+        label,
+    )?;
+    replace_assigned_range_v1(&mut payload, changed, current_proof, label)?;
+    Ok(payload)
+}
+
+fn hash_model_frame_v1<F: KagemushaPoseidonFieldV1>(
+    ctx: &mut halo2_base::Context<F>,
+    jobs: &mut PastaSha256JobsV1<F>,
+    domain: &[u8],
+    frame: &[PastaSha256ByteV1<F>],
+) -> Result<[PastaSha256ByteV1<F>; 32], String> {
+    let mut message = constant_bytes(domain);
+    message.push(PastaSha256ByteV1::constant(0));
+    message.extend(constant_bytes(
+        &u64::try_from(frame.len())
+            .map_err(|_| "canonical monetary frame length exceeds u64".to_owned())?
+            .to_le_bytes(),
+    ));
+    message.extend_from_slice(frame);
+    hash(ctx, jobs, message)
+}
+
+fn hash_state_envelope_frame_v1<F: KagemushaPoseidonFieldV1>(
+    ctx: &mut halo2_base::Context<F>,
+    jobs: &mut PastaSha256JobsV1<F>,
+    domain: &[u8],
+    frame: &[PastaSha256ByteV1<F>],
+) -> Result<[PastaSha256ByteV1<F>; 32], String> {
+    let mut message = constant_bytes(
+        &u64::try_from(domain.len())
+            .map_err(|_| "state envelope domain length exceeds u64".to_owned())?
+            .to_be_bytes(),
+    );
+    message.extend(constant_bytes(domain));
+    message.extend(constant_bytes(
+        &u64::try_from(frame.len())
+            .map_err(|_| "state envelope frame length exceeds u64".to_owned())?
+            .to_be_bytes(),
+    ));
+    message.extend_from_slice(frame);
+    hash(ctx, jobs, message)
+}
+
+fn deferred_digest_cells_v1<C>(
+    column: &[DeferredScalar<'_, C>],
+    offset: usize,
+    label: &str,
+) -> Result<[AssignedValue<C::ScalarExt>; 2], String>
+where
+    C: CurveAffineExt,
+    C::Base: BigPrimeField,
+    C::ScalarExt: BigPrimeField,
+{
+    column
+        .get(offset..offset + 2)
+        .ok_or_else(|| format!("{label} digest cells are absent"))?
+        .iter()
+        .map(|value| *value.assigned())
+        .collect::<Vec<_>>()
+        .try_into()
+        .map_err(|_| format!("{label} digest cell width changed"))
+}
+
+fn deferred_history_bytes_v1<C>(
+    ctx: &mut halo2_base::Context<C::ScalarExt>,
+    gate: &halo2_base::gates::GateChip<C::ScalarExt>,
+    column: &[DeferredScalar<'_, C>],
+    offset: usize,
+    label: &str,
+) -> Result<Vec<PastaSha256ByteV1<C::ScalarExt>>, String>
+where
+    C: CurveAffineExt,
+    C::Base: BigPrimeField,
+    C::ScalarExt: KagemushaPoseidonFieldV1,
+{
+    let history = column
+        .get(offset..)
+        .ok_or_else(|| format!("{label} history cells are absent"))?;
+    if history.len() != accumulator_limb_count() {
+        return Err(format!("{label} history cell width changed"));
+    }
+    Ok(history
+        .iter()
+        .flat_map(|value| assigned_uint_bytes_v1(ctx, gate, *value.assigned(), 128))
+        .collect())
+}
+
+fn constrain_digest_bytes_if_v1<F: KagemushaPoseidonFieldV1>(
+    ctx: &mut halo2_base::Context<F>,
+    gate: &halo2_base::gates::GateChip<F>,
+    digest: &[PastaSha256ByteV1<F>; 32],
+    expected: [AssignedValue<F>; 2],
+    enabled: AssignedValue<F>,
+) {
+    for (actual, expected) in digest_limbs_assigned(ctx, digest).into_iter().zip(expected) {
+        let difference = gate.sub(ctx, actual, expected);
+        let selected = gate.mul(ctx, difference, enabled);
+        gate.assert_is_const(ctx, &selected, &F::ZERO);
+    }
 }
 
 fn constrain_byte_bit_pattern_if_v1<F: KagemushaPoseidonFieldV1>(
@@ -1413,8 +2482,8 @@ fn constrain_mint_fold_opening_v1<F: KagemushaPoseidonFieldV1>(
         gate.assert_is_const(ctx, &selected, &F::ZERO);
     }
 
-    // TODO: bind `replay_envelope_digest` to the exact variable-size canonical credit frame when
-    // the bounded proof-byte frame relation is integrated. This tranche binds its exact replay key.
+    // The exact variable-size credit frame and this replay key are joined below after the
+    // MintAuthorization and MintAuthority recursive verifiers expose their assigned proof bytes.
     Ok(())
 }
 
@@ -1531,6 +2600,1013 @@ where
     // The final proof independently authenticates an enabled sender hardware profile and policy.
     // They need not equal the receiving wallet's profile or policy epoch.
     let _ = jobs;
+    Ok(())
+}
+
+/// Join the original authorized recipient and both plaintext openings to this aggregate lane.
+///
+/// The authorization verifier establishes the credential ID and commitment values. Opening that
+/// exact credential to its stable lane prevents another otherwise valid hardware lane from
+/// consuming the same mint credit against its independent replay tree. Original credential epoch
+/// fields deliberately remain unchanged: a credit staged before ordinary rotation still belongs
+/// to the same lane. Both branches assign identical fixed-size private buffers and SHA jobs.
+#[allow(clippy::too_many_arguments)]
+fn constrain_mint_fold_recipient_opening_v1<F: KagemushaPoseidonFieldV1>(
+    ctx: &mut halo2_base::Context<F>,
+    range: &halo2_base::gates::RangeChip<F>,
+    jobs: &mut PastaSha256JobsV1<F>,
+    authorization: &[AssignedValue<F>],
+    successor_lane: [AssignedValue<F>; 2],
+    replay_credit_id: [AssignedValue<F>; 2],
+    credential_preimage: Option<&[u8]>,
+    opening: Option<&KagemushaCreditOpeningV1>,
+    enabled: AssignedValue<F>,
+) -> Result<(), String> {
+    if authorization.len() != MINT_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1
+        || credential_preimage.is_some() != opening.is_some()
+    {
+        return Err("MintFold recipient opening has incomplete fixed-shape inputs".to_owned());
+    }
+    let gate = range.gate();
+    let digest = |offset: usize| [authorization[offset], authorization[offset + 1]];
+    let credential_id = assigned_digest_bytes_v1(
+        ctx,
+        gate,
+        digest(mint_authorization_public_instance::CREDENTIAL_LO),
+    );
+    let recipient_lane = constrain_receiver_credential_lane_v1(
+        ctx,
+        range,
+        jobs,
+        credential_preimage,
+        &credential_id,
+        enabled,
+    )?;
+    constrain_digest_bytes_if_v1(ctx, gate, &recipient_lane, successor_lane, enabled);
+
+    // This is inactive circuit padding only. It cannot satisfy an active MintFold without the
+    // private preimages of the commitments already established by its recursive authorization.
+    let padding = KagemushaCreditOpeningV1 {
+        version: KAGEMUSHA_WIRE_VERSION_V1,
+        credit_id: [1; 32],
+        amount: 1,
+        credit_commitment_opening: [1; 32],
+        recipient_binding_opening: [1; 32],
+        recovery_nonce: [1; 32],
+    };
+    let opening = opening.unwrap_or(&padding);
+    let opening_version = ctx.load_witness(F::from(u64::from(opening.version)));
+    let opening_amount = ctx.load_witness(F::from_u128(opening.amount));
+    let version_bytes = assigned_uint_bytes_v1(ctx, gate, opening_version, 16);
+    let amount_bytes = assigned_uint_bytes_v1(ctx, gate, opening_amount, 128);
+    for (actual, expected) in [
+        (
+            opening_version,
+            authorization[mint_authorization_public_instance::VERSION],
+        ),
+        (
+            opening_amount,
+            authorization[mint_authorization_public_instance::AMOUNT],
+        ),
+    ] {
+        let difference = gate.sub(ctx, actual, expected);
+        let selected = gate.mul(ctx, difference, enabled);
+        gate.assert_is_const(ctx, &selected, &F::ZERO);
+    }
+    let opening_id: [PastaSha256ByteV1<F>; 32] = assign_bytes(ctx, range, &opening.credit_id)
+        .try_into()
+        .expect("fixed mint opening credit ID width");
+    constrain_digest_bytes_if_v1(
+        ctx,
+        gate,
+        &opening_id,
+        digest(mint_authorization_public_instance::CREDIT_ID_LO),
+        enabled,
+    );
+    constrain_digest_bytes_if_v1(ctx, gate, &opening_id, replay_credit_id, enabled);
+    let recipient_opening = assign_bytes(ctx, range, &opening.recipient_binding_opening);
+    let credit_opening = assign_bytes(ctx, range, &opening.credit_commitment_opening);
+    assert_bytes_nonzero(ctx, range, &recipient_opening);
+    assert_bytes_nonzero(ctx, range, &credit_opening);
+    let operation = assigned_digest_bytes_v1(
+        ctx,
+        gate,
+        digest(mint_authorization_public_instance::OPERATION_LO),
+    );
+    let recipient_preimage = assemble_canonical_preimage_v1(
+        ctx,
+        range,
+        &kagemusha_recipient_credential_commitment_preimage_layout_v1()
+            .map_err(|error| error.to_string())?,
+        &KAGEMUSHA_RECIPIENT_CREDENTIAL_COMMITMENT_PREIMAGE_FIELD_RANGES_V1,
+        &[&operation, &credential_id, &recipient_opening],
+    )?;
+    let recipient_commitment = hash_model_frame_v1(
+        ctx,
+        jobs,
+        MINT_RECIPIENT_COMMITMENT_DOMAIN_V1,
+        &recipient_preimage,
+    )?;
+    constrain_digest_bytes_if_v1(
+        ctx,
+        gate,
+        &recipient_commitment,
+        digest(mint_authorization_public_instance::RECIPIENT_COMMITMENT_LO),
+        enabled,
+    );
+
+    let [network, asset, incarnation, pool, recipient, key] = [
+        mint_authorization_public_instance::NETWORK_LO,
+        mint_authorization_public_instance::ASSET_LO,
+        mint_authorization_public_instance::INCARNATION_LO,
+        mint_authorization_public_instance::POOL_LO,
+        mint_authorization_public_instance::RECIPIENT_LO,
+        mint_authorization_public_instance::RECIPIENT_KEY_LO,
+    ]
+    .map(|offset| assigned_digest_bytes_v1(ctx, gate, digest(offset)));
+    let scale = assigned_uint_bytes_v1(
+        ctx,
+        gate,
+        authorization[mint_authorization_public_instance::SCALE],
+        32,
+    );
+    let credit_preimage = assemble_canonical_preimage_v1(
+        ctx,
+        range,
+        &kagemusha_mint_credit_opening_commitment_preimage_layout_v1()
+            .map_err(|error| error.to_string())?,
+        &KAGEMUSHA_MINT_CREDIT_OPENING_COMMITMENT_PREIMAGE_FIELD_RANGES_V1,
+        &[
+            &version_bytes,
+            &network,
+            &asset,
+            &incarnation,
+            &scale,
+            &pool,
+            &amount_bytes,
+            &recipient,
+            &key,
+            &credit_opening,
+        ],
+    )?;
+    let credit_commitment = hash_model_frame_v1(
+        ctx,
+        jobs,
+        MINT_OPENING_COMMITMENT_DOMAIN_V1,
+        &credit_preimage,
+    )?;
+    constrain_digest_bytes_if_v1(
+        ctx,
+        gate,
+        &credit_commitment,
+        digest(mint_authorization_public_instance::CREDIT_COMMITMENT_LO),
+        enabled,
+    );
+    Ok(())
+}
+
+fn constrain_mint_authorization_statement_digest_v1<'chip, C>(
+    loader: &DeferredLoader<'chip, C>,
+    jobs: &mut PastaSha256JobsV1<C::ScalarExt>,
+    authorization: &[DeferredScalar<'chip, C>],
+    statement: &KagemushaMintAuthorizationStatementV1,
+    enabled: AssignedValue<C::ScalarExt>,
+) -> Result<(), String>
+where
+    C: CurveAffineExt,
+    C::Base: BigPrimeField,
+    C::ScalarExt: KagemushaPoseidonFieldV1,
+{
+    let frame = norito::encode_canonical(statement)
+        .map_err(|error| format!("cannot encode canonical MintAuthorization statement: {error}"))?;
+    let chip = loader.ecc_chip();
+    let range = chip.range();
+    let mut loader_ctx = loader.ctx_mut();
+    let ctx = loader_ctx.main();
+    let mut message = constant_bytes(MINT_AUTHORIZATION_STATEMENT_DIGEST_DOMAIN_V1);
+    message.push(PastaSha256ByteV1::constant(0));
+    message.extend(constant_bytes(
+        &u64::try_from(frame.len())
+            .map_err(|_| "MintAuthorization statement length exceeds u64".to_owned())?
+            .to_le_bytes(),
+    ));
+    message.extend(assign_bytes(ctx, range, &frame));
+    let digest = hash(ctx, jobs, message)?;
+    let digest_limbs = digest_limbs_assigned(ctx, &digest);
+    drop(loader_ctx);
+    for (actual, index) in digest_limbs.into_iter().zip(
+        mint_authorization_public_instance::SEMANTIC_LO
+            ..mint_authorization_public_instance::SEMANTIC_LO + 2,
+    ) {
+        constrain_loader_equal_if_v1(loader, actual, *authorization[index].assigned(), enabled);
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+fn constrain_exact_mint_envelope_v1<'chip, C>(
+    loader: &DeferredLoader<'chip, C>,
+    jobs: &mut PastaSha256JobsV1<C::ScalarExt>,
+    state: &state_relation::KagemushaAssignedStateRelationV1<C::ScalarExt>,
+    state_public: &[AssignedValue<C::ScalarExt>],
+    authorization_column: &[DeferredScalar<'chip, C>],
+    mint_column: &[DeferredScalar<'chip, C>],
+    authorization_current_proof: &[PastaSha256ByteV1<C::ScalarExt>],
+    mint_current_proof: &[PastaSha256ByteV1<C::ScalarExt>],
+    authorization: &KagemushaMintAuthorizationV1,
+    credit: &KagemushaMintCreditV1,
+    parity: KagemushaPastaParityV1,
+    enabled: AssignedValue<C::ScalarExt>,
+) -> Result<(), String>
+where
+    C: CurveAffineExt,
+    C::Base: BigPrimeField,
+    C::ScalarExt: KagemushaPoseidonFieldV1,
+{
+    let chip = loader.ecc_chip();
+    let range = chip.range();
+    let gate = range.gate();
+    let mut loader_ctx = loader.ctx_mut();
+    let ctx = loader_ctx.main();
+
+    let auth = |offset| deferred_digest_cells_v1(authorization_column, offset, "authorization");
+    let mint_public = |offset| deferred_digest_cells_v1(mint_column, offset, "mint authority");
+
+    // Reconstruct the authorization context from the same assigned values exposed by the
+    // recursively verified authorization proof. Variable account/asset leaves are hashed from
+    // their exact canonical frames before their nested payloads are copied into the statement.
+    let context = &authorization.statement.context;
+    let context_native = adaptive_payload_v1(context)?;
+    let mut context_payload = assign_bytes(ctx, range, &context_native);
+    let context_digest_bindings = [
+        (
+            auth(mint_authorization_public_instance::OPERATION_LO)?,
+            "operation",
+            0_u8,
+        ),
+        (
+            auth(mint_authorization_public_instance::RELEASE_LO)?,
+            "release",
+            1,
+        ),
+        (
+            auth(mint_authorization_public_instance::SUITE_LO)?,
+            "suite",
+            2,
+        ),
+        (auth(mint_authorization_public_instance::VK_LO)?, "vk", 3),
+        (
+            auth(mint_authorization_public_instance::MANIFEST_LO)?,
+            "manifest",
+            4,
+        ),
+        (
+            auth(mint_authorization_public_instance::INCARNATION_LO)?,
+            "incarnation",
+            5,
+        ),
+        (
+            auth(mint_authorization_public_instance::POOL_LO)?,
+            "pool",
+            6,
+        ),
+        (
+            auth(mint_authorization_public_instance::CREDENTIAL_LO)?,
+            "credential",
+            7,
+        ),
+        (
+            auth(mint_authorization_public_instance::PROFILE_LO)?,
+            "profile",
+            8,
+        ),
+        (
+            auth(mint_authorization_public_instance::RECIPIENT_COMMITMENT_LO)?,
+            "recipient commitment",
+            9,
+        ),
+        (
+            auth(mint_authorization_public_instance::CREDIT_COMMITMENT_LO)?,
+            "credit commitment",
+            10,
+        ),
+        (
+            auth(mint_authorization_public_instance::RECIPIENT_KEY_LO)?,
+            "recipient key",
+            11,
+        ),
+    ];
+    for (cells, label, selector) in context_digest_bindings {
+        let replacement = assigned_digest_bytes_v1(ctx, gate, cells);
+        replace_mutated_field_v1(
+            &mut context_payload,
+            context,
+            &replacement,
+            &format!("mint authorization context {label}"),
+            |mutated| {
+                let target = match selector {
+                    0 => &mut mutated.operation_id,
+                    1 => &mut mutated.release_id,
+                    2 => &mut mutated.suite_id,
+                    3 => &mut mutated.vk_digest,
+                    4 => &mut mutated.artifact_manifest_digest,
+                    5 => {
+                        let mut bytes = *mutated.asset_incarnation.as_bytes();
+                        bytes.iter_mut().for_each(|byte| *byte = !*byte);
+                        // `Hash`-backed incarnation values require the low marker bit.  Keep the
+                        // mutation canonical so the structural range locator never relies on an
+                        // invalid model value.
+                        let last = bytes.len() - 1;
+                        bytes[last] |= 1;
+                        mutated.asset_incarnation =
+                            iroha_data_model::nexus::AxtAssetIncarnationV1::try_from_bytes(bytes)
+                                .expect("inverted non-zero incarnation with marker is canonical");
+                        return;
+                    }
+                    6 => &mut mutated.liability_pool_id,
+                    7 => &mut mutated.hardware_credential_id,
+                    8 => &mut mutated.hardware_profile_id,
+                    9 => &mut mutated.recipient_credential_commitment,
+                    10 => &mut mutated.credit_commitment,
+                    11 => &mut mutated.recipient_one_time_key,
+                    _ => unreachable!(),
+                };
+                target.iter_mut().for_each(|byte| *byte = !*byte);
+            },
+        )?;
+    }
+    let network_replacement = assigned_digest_bytes_v1(
+        ctx,
+        gate,
+        auth(mint_authorization_public_instance::NETWORK_LO)?,
+    );
+    let network_range = locate_unique_subslice_v1(
+        &context_native,
+        context.network_id.as_bytes(),
+        "mint authorization network",
+    )?;
+    replace_assigned_range_v1(
+        &mut context_payload,
+        network_range,
+        &network_replacement,
+        "mint authorization network",
+    )?;
+    for (value, offset, bit_len, label) in [
+        (
+            *authorization_column[mint_authorization_public_instance::SCALE].assigned(),
+            0_u8,
+            32_usize,
+            "scale",
+        ),
+        (
+            *authorization_column[mint_authorization_public_instance::AMOUNT].assigned(),
+            1,
+            128,
+            "amount",
+        ),
+        (
+            *authorization_column[mint_authorization_public_instance::POLICY_EPOCH].assigned(),
+            2,
+            64,
+            "policy epoch",
+        ),
+    ] {
+        let replacement = assigned_uint_bytes_v1(ctx, gate, value, bit_len);
+        replace_mutated_field_v1(
+            &mut context_payload,
+            context,
+            &replacement,
+            &format!("mint authorization context {label}"),
+            |mutated| match offset {
+                0 => mutated.scale = !mutated.scale,
+                1 => mutated.amount = !mutated.amount,
+                2 => mutated.policy_epoch = !mutated.policy_epoch,
+                _ => unreachable!(),
+            },
+        )?;
+    }
+
+    let asset_payload_native = adaptive_payload_v1(&context.asset)?;
+    let asset_payload = assign_bytes(ctx, range, &asset_payload_native);
+    let asset_frame =
+        assigned_canonical_frame_v1(ctx, range, &context.asset, asset_payload.clone())?;
+    let asset_digest = hash_model_frame_v1(
+        ctx,
+        jobs,
+        MINT_ASSET_IDENTITY_DIGEST_DOMAIN_EXACT_V1,
+        &asset_frame,
+    )?;
+    constrain_digest_bytes_if_v1(
+        ctx,
+        gate,
+        &asset_digest,
+        auth(mint_authorization_public_instance::ASSET_LO)?,
+        enabled,
+    );
+    let asset_range = locate_unique_subslice_v1(
+        &context_native,
+        &asset_payload_native,
+        "mint authorization asset",
+    )?;
+    replace_assigned_range_v1(
+        &mut context_payload,
+        asset_range,
+        &asset_payload,
+        "mint authorization asset",
+    )?;
+
+    let mut amount_mutated_context = context.clone();
+    amount_mutated_context.amount = !amount_mutated_context.amount;
+    let mut account_cursor = changed_range_v1(
+        &context_native,
+        &adaptive_payload_v1(&amount_mutated_context)?,
+        16,
+        "mint authorization amount",
+    )?
+    .end;
+    let mut recipient_account_payload = None;
+    for (account, offset, label) in [
+        (
+            &context.payer,
+            mint_authorization_public_instance::PAYER_LO,
+            "payer",
+        ),
+        (
+            &context.recipient,
+            mint_authorization_public_instance::RECIPIENT_LO,
+            "recipient",
+        ),
+    ] {
+        let payload_native = adaptive_payload_v1(account)?;
+        let payload = assign_bytes(ctx, range, &payload_native);
+        let frame = assigned_canonical_frame_v1(ctx, range, account, payload.clone())?;
+        let digest =
+            hash_model_frame_v1(ctx, jobs, MINT_ACCOUNT_IDENTITY_DIGEST_DOMAIN_V1, &frame)?;
+        constrain_digest_bytes_if_v1(ctx, gate, &digest, auth(offset)?, enabled);
+        let account_range = locate_subslice_after_v1(
+            &context_native,
+            &payload_native,
+            account_cursor,
+            &format!("mint authorization {label}"),
+        )?;
+        account_cursor = account_range.end;
+        replace_assigned_range_v1(
+            &mut context_payload,
+            account_range,
+            &payload,
+            &format!("mint authorization {label}"),
+        )?;
+        if label == "recipient" {
+            recipient_account_payload = Some(payload);
+        }
+    }
+
+    let context_frame = assigned_canonical_frame_v1(ctx, range, context, context_payload.clone())?;
+    let context_digest = hash_model_frame_v1(
+        ctx,
+        jobs,
+        MINT_AUTHORIZATION_CONTEXT_DIGEST_DOMAIN_V1,
+        &context_frame,
+    )?;
+
+    let statement = &authorization.statement;
+    let statement_native = adaptive_payload_v1(statement)?;
+    let mut statement_payload = assign_bytes(ctx, range, &statement_native);
+    let context_range = locate_unique_subslice_v1(
+        &statement_native,
+        &context_native,
+        "mint authorization context in statement",
+    )?;
+    replace_assigned_range_v1(
+        &mut statement_payload,
+        context_range,
+        &context_payload,
+        "mint authorization context in statement",
+    )?;
+    for (cells, label, selector) in [
+        (
+            auth(mint_authorization_public_instance::ISSUANCE_LO)?,
+            "issuance",
+            0_u8,
+        ),
+        (
+            auth(mint_authorization_public_instance::CREDIT_ID_LO)?,
+            "credit ID",
+            1,
+        ),
+        (
+            auth(mint_authorization_public_instance::CIPHERTEXT_LO)?,
+            "ciphertext",
+            2,
+        ),
+    ] {
+        let replacement = assigned_digest_bytes_v1(ctx, gate, cells);
+        replace_mutated_field_v1(
+            &mut statement_payload,
+            statement,
+            &replacement,
+            &format!("mint authorization statement {label}"),
+            |mutated| {
+                let target = match selector {
+                    0 => &mut mutated.issuance_commitment,
+                    1 => &mut mutated.credit_id,
+                    2 => &mut mutated.ciphertext_digest,
+                    _ => unreachable!(),
+                };
+                target.iter_mut().for_each(|byte| *byte = !*byte);
+            },
+        )?;
+    }
+    let statement_frame =
+        assigned_canonical_frame_v1(ctx, range, statement, statement_payload.clone())?;
+    let statement_digest = hash_model_frame_v1(
+        ctx,
+        jobs,
+        MINT_AUTHORIZATION_STATEMENT_DIGEST_DOMAIN_V1,
+        &statement_frame,
+    )?;
+    constrain_digest_bytes_if_v1(
+        ctx,
+        gate,
+        &statement_digest,
+        auth(mint_authorization_public_instance::SEMANTIC_LO)?,
+        enabled,
+    );
+
+    let auth_eq_history = if parity == KagemushaPastaParityV1::Eq {
+        deferred_history_bytes_v1::<C>(
+            ctx,
+            gate,
+            authorization_column,
+            mint_authorization_public_instance::HISTORY_START,
+            "Eq mint authorization",
+        )?
+    } else {
+        assign_bytes(ctx, range, &authorization.proof.eq_history)
+    };
+    let auth_ep_history = if parity == KagemushaPastaParityV1::Ep {
+        deferred_history_bytes_v1::<C>(
+            ctx,
+            gate,
+            authorization_column,
+            mint_authorization_public_instance::HISTORY_START,
+            "Ep mint authorization",
+        )?
+    } else {
+        assign_bytes(ctx, range, &authorization.proof.ep_history)
+    };
+    let auth_proof_payload = assigned_paired_proof_payload_v1(
+        ctx,
+        range,
+        &authorization.proof,
+        parity,
+        authorization_current_proof,
+        [
+            state_public[public_instance::MINT_AUTHORIZATION_EQ_PROTOCOL_LO],
+            state_public[public_instance::MINT_AUTHORIZATION_EQ_PROTOCOL_HI],
+        ],
+        [
+            state_public[public_instance::MINT_AUTHORIZATION_EP_PROTOCOL_LO],
+            state_public[public_instance::MINT_AUTHORIZATION_EP_PROTOCOL_HI],
+        ],
+        auth(mint_authorization_public_instance::SEMANTIC_LO)?,
+        auth(mint_authorization_public_instance::RECIPIENT_COMMITMENT_LO)?,
+        auth(mint_authorization_public_instance::HARDWARE_AUTHORIZATION_LO)?,
+        auth(mint_authorization_public_instance::EQ_AUDIT_LO)?,
+        auth(mint_authorization_public_instance::EP_AUDIT_LO)?,
+        &auth_eq_history,
+        &auth_ep_history,
+    )?;
+    let authorization_native = adaptive_payload_v1(authorization)?;
+    let mut authorization_payload = assign_bytes(ctx, range, &authorization_native);
+    let nested_statement = locate_unique_subslice_v1(
+        &authorization_native,
+        &statement_native,
+        "authorization statement",
+    )?;
+    replace_assigned_range_v1(
+        &mut authorization_payload,
+        nested_statement,
+        &statement_payload,
+        "authorization statement",
+    )?;
+    let native_auth_proof = adaptive_payload_v1(&authorization.proof)?;
+    let nested_auth_proof = locate_unique_subslice_v1(
+        &authorization_native,
+        &native_auth_proof,
+        "authorization paired proof",
+    )?;
+    replace_assigned_range_v1(
+        &mut authorization_payload,
+        nested_auth_proof,
+        &auth_proof_payload,
+        "authorization paired proof",
+    )?;
+    let authorization_frame =
+        assigned_canonical_frame_v1(ctx, range, authorization, authorization_payload)?;
+    let authorization_digest = hash_model_frame_v1(
+        ctx,
+        jobs,
+        MINT_AUTHORIZATION_DIGEST_DOMAIN_V1,
+        &authorization_frame,
+    )?;
+
+    let lifecycle = &credit.statement.lifecycle;
+    let lifecycle_native = adaptive_payload_v1(lifecycle)?;
+    let lifecycle_payload = assign_bytes(ctx, range, &lifecycle_native);
+    let lifecycle_frame =
+        assigned_canonical_frame_v1(ctx, range, lifecycle, lifecycle_payload.clone())?;
+    let lifecycle_digest = hash_model_frame_v1(
+        ctx,
+        jobs,
+        MINT_FOLD_LIFECYCLE_DIGEST_DOMAIN_V1,
+        &lifecycle_frame,
+    )?;
+    constrain_digest_bytes_if_v1(
+        ctx,
+        gate,
+        &lifecycle_digest,
+        state.lifecycle_binding_digest,
+        enabled,
+    );
+
+    let credit_statement = &credit.statement;
+    let credit_statement_native = adaptive_payload_v1(credit_statement)?;
+    let mut credit_statement_payload = assign_bytes(ctx, range, &credit_statement_native);
+    let lifecycle_range = locate_unique_subslice_v1(
+        &credit_statement_native,
+        &lifecycle_native,
+        "mint credit lifecycle",
+    )?;
+    replace_assigned_range_v1(
+        &mut credit_statement_payload,
+        lifecycle_range,
+        &lifecycle_payload,
+        "mint credit lifecycle",
+    )?;
+    let credit_statement_bindings = [
+        (
+            auth(mint_authorization_public_instance::RECIPIENT_COMMITMENT_LO)?,
+            "recipient commitment",
+            0_u8,
+        ),
+        (
+            auth(mint_authorization_public_instance::ISSUANCE_LO)?,
+            "issuance commitment",
+            1,
+        ),
+        (
+            auth(mint_authorization_public_instance::CREDIT_COMMITMENT_LO)?,
+            "credit commitment",
+            2,
+        ),
+    ];
+    for (cells, label, selector) in credit_statement_bindings {
+        let replacement = assigned_digest_bytes_v1(ctx, gate, cells);
+        replace_mutated_field_v1(
+            &mut credit_statement_payload,
+            credit_statement,
+            &replacement,
+            &format!("mint credit statement {label}"),
+            |mutated| {
+                let target = match selector {
+                    0 => &mut mutated.recipient_credential_commitment,
+                    1 => &mut mutated.issuance_commitment,
+                    2 => &mut mutated.credit_commitment,
+                    _ => unreachable!(),
+                };
+                target.iter_mut().for_each(|byte| *byte = !*byte);
+            },
+        )?;
+    }
+    replace_mutated_field_v1(
+        &mut credit_statement_payload,
+        credit_statement,
+        &context_digest,
+        "mint credit authorization-context digest",
+        |mutated| {
+            mutated
+                .authorization_context_digest
+                .iter_mut()
+                .for_each(|byte| *byte = !*byte);
+        },
+    )?;
+    replace_mutated_field_v1(
+        &mut credit_statement_payload,
+        credit_statement,
+        &authorization_digest,
+        "mint credit authorization digest",
+        |mutated| {
+            mutated
+                .mint_authorization_digest
+                .iter_mut()
+                .for_each(|byte| *byte = !*byte);
+        },
+    )?;
+    let amount = assigned_uint_bytes_v1(
+        ctx,
+        gate,
+        *authorization_column[mint_authorization_public_instance::AMOUNT].assigned(),
+        128,
+    );
+    replace_mutated_field_v1(
+        &mut credit_statement_payload,
+        credit_statement,
+        &amount,
+        "mint credit amount",
+        |mutated| mutated.amount = !mutated.amount,
+    )?;
+    let mut issuance_mutated_statement = credit_statement.clone();
+    issuance_mutated_statement
+        .issuance_commitment
+        .iter_mut()
+        .for_each(|byte| *byte = !*byte);
+    let credit_statement_cursor = changed_range_v1(
+        &credit_statement_native,
+        &adaptive_payload_v1(&issuance_mutated_statement)?,
+        32,
+        "mint credit issuance commitment",
+    )?
+    .end;
+    let credit_recipient_native = adaptive_payload_v1(&credit_statement.recipient)?;
+    let credit_recipient_range = locate_subslice_after_v1(
+        &credit_statement_native,
+        &credit_recipient_native,
+        credit_statement_cursor,
+        "mint credit recipient",
+    )?;
+    replace_assigned_range_v1(
+        &mut credit_statement_payload,
+        credit_recipient_range,
+        recipient_account_payload
+            .as_ref()
+            .ok_or_else(|| "mint authorization recipient payload is absent".to_owned())?,
+        "mint credit recipient",
+    )?;
+    let credit_statement_frame = assigned_canonical_frame_v1(
+        ctx,
+        range,
+        credit_statement,
+        credit_statement_payload.clone(),
+    )?;
+    let credit_statement_digest = hash_model_frame_v1(
+        ctx,
+        jobs,
+        MINT_STATEMENT_DIGEST_DOMAIN_V1,
+        &credit_statement_frame,
+    )?;
+    constrain_digest_bytes_if_v1(
+        ctx,
+        gate,
+        &credit_statement_digest,
+        mint_public(mint_public_instance::SEMANTIC_LO)?,
+        enabled,
+    );
+
+    let mint_eq_history = if parity == KagemushaPastaParityV1::Eq {
+        deferred_history_bytes_v1::<C>(
+            ctx,
+            gate,
+            mint_column,
+            mint_public_instance::HISTORY_START,
+            "Eq mint authority",
+        )?
+    } else {
+        assign_bytes(ctx, range, &credit.proof.eq_history)
+    };
+    let mint_ep_history = if parity == KagemushaPastaParityV1::Ep {
+        deferred_history_bytes_v1::<C>(
+            ctx,
+            gate,
+            mint_column,
+            mint_public_instance::HISTORY_START,
+            "Ep mint authority",
+        )?
+    } else {
+        assign_bytes(ctx, range, &credit.proof.ep_history)
+    };
+    let mint_proof_payload = assigned_paired_proof_payload_v1(
+        ctx,
+        range,
+        &credit.proof,
+        parity,
+        mint_current_proof,
+        [
+            state_public[public_instance::MINT_EQ_PROTOCOL_LO],
+            state_public[public_instance::MINT_EQ_PROTOCOL_HI],
+        ],
+        [
+            state_public[public_instance::MINT_EP_PROTOCOL_LO],
+            state_public[public_instance::MINT_EP_PROTOCOL_HI],
+        ],
+        mint_public(mint_public_instance::SEMANTIC_LO)?,
+        mint_public(mint_public_instance::CERTIFICATE_LO)?,
+        mint_public(mint_public_instance::AUTHORITY_LO)?,
+        mint_public(mint_public_instance::EQ_AUDIT_LO)?,
+        mint_public(mint_public_instance::EP_AUDIT_LO)?,
+        &mint_eq_history,
+        &mint_ep_history,
+    )?;
+
+    let encrypted_credit = assign_bytes(ctx, range, &credit.encrypted_credit);
+    let ciphertext_digest = hash_model_frame_v1(
+        ctx,
+        jobs,
+        MINT_CIPHERTEXT_DIGEST_DOMAIN_V1,
+        &encrypted_credit,
+    )?;
+    constrain_digest_bytes_if_v1(
+        ctx,
+        gate,
+        &ciphertext_digest,
+        auth(mint_authorization_public_instance::CIPHERTEXT_LO)?,
+        enabled,
+    );
+
+    let credit_native = adaptive_payload_v1(credit)?;
+    let mut credit_payload = assign_bytes(ctx, range, &credit_native);
+    let nested_credit_statement = locate_unique_subslice_v1(
+        &credit_native,
+        &credit_statement_native,
+        "finalized mint statement",
+    )?;
+    replace_assigned_range_v1(
+        &mut credit_payload,
+        nested_credit_statement,
+        &credit_statement_payload,
+        "finalized mint statement",
+    )?;
+    let native_mint_proof = adaptive_payload_v1(&credit.proof)?;
+    let nested_mint_proof = locate_unique_subslice_v1(
+        &credit_native,
+        &native_mint_proof,
+        "finalized mint paired proof",
+    )?;
+    replace_assigned_range_v1(
+        &mut credit_payload,
+        nested_mint_proof,
+        &mint_proof_payload,
+        "finalized mint paired proof",
+    )?;
+    let encrypted_range = locate_unique_subslice_v1(
+        &credit_native,
+        &credit.encrypted_credit,
+        "finalized mint encrypted credit",
+    )?;
+    replace_assigned_range_v1(
+        &mut credit_payload,
+        encrypted_range,
+        &encrypted_credit,
+        "finalized mint encrypted credit",
+    )?;
+    for (cells, label, selector) in [
+        (
+            mint_public(mint_public_instance::CERTIFICATE_LO)?,
+            "certificate",
+            0_u8,
+        ),
+        (
+            mint_public(mint_public_instance::AUTHORITY_LO)?,
+            "authority head",
+            1,
+        ),
+        (
+            mint_public(mint_public_instance::GENESIS_LO)?,
+            "genesis roster",
+            2,
+        ),
+        (
+            mint_public(mint_public_instance::PAIR_BINDING_LO)?,
+            "proof binding",
+            3,
+        ),
+        (
+            auth(mint_authorization_public_instance::MANIFEST_LO)?,
+            "manifest",
+            4,
+        ),
+    ] {
+        let replacement = assigned_digest_bytes_v1(ctx, gate, cells);
+        replace_mutated_field_v1(
+            &mut credit_payload,
+            credit,
+            &replacement,
+            &format!("finalized mint {label}"),
+            |mutated| {
+                let target = match selector {
+                    0 => &mut mutated.finality_certificate_binding,
+                    1 => &mut mutated.finality_authority_head,
+                    2 => &mut mutated.finality_genesis_roster_id,
+                    3 => &mut mutated.finality_proof_binding_digest,
+                    4 => &mut mutated.artifact_manifest_digest,
+                    _ => unreachable!(),
+                };
+                target.iter_mut().for_each(|byte| *byte = !*byte);
+            },
+        )?;
+    }
+    let credit_frame = assigned_canonical_frame_v1(ctx, range, credit, credit_payload)?;
+    let replay_digest =
+        hash_state_envelope_frame_v1(ctx, jobs, MINT_CREDIT_ENVELOPE_DOMAIN_V1, &credit_frame)?;
+    constrain_digest_bytes_if_v1(
+        ctx,
+        gate,
+        &replay_digest,
+        state.replay_envelope_digest,
+        enabled,
+    );
+    Ok(())
+}
+
+fn constrain_mint_authorization_binding_v1<'chip, C>(
+    loader: &DeferredLoader<'chip, C>,
+    authorization: &[DeferredScalar<'chip, C>],
+    state_public: &[AssignedValue<C::ScalarExt>],
+    enabled: AssignedValue<C::ScalarExt>,
+) -> Result<(), String>
+where
+    C: CurveAffineExt,
+    C::Base: BigPrimeField,
+    C::ScalarExt: KagemushaPoseidonFieldV1,
+{
+    if authorization.len() != MINT_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1
+        || state_public.len() < state_relation::PUBLIC_INSTANCE_COUNT
+    {
+        return Err("Kagemusha mint-authorization binding input is truncated".to_owned());
+    }
+    let version = loader.ctx_mut().main().load_constant(C::ScalarExt::ONE);
+    constrain_loader_equal_if_v1(
+        loader,
+        *authorization[mint_authorization_public_instance::VERSION].assigned(),
+        version,
+        enabled,
+    );
+    for (authorization_offset, state_offset, width) in [
+        (
+            mint_authorization_public_instance::RELEASE_LO,
+            public_instance::RELEASE_LO,
+            2,
+        ),
+        (
+            mint_authorization_public_instance::SUITE_LO,
+            public_instance::SUCCESSOR_SUITE_LO,
+            2,
+        ),
+        (
+            mint_authorization_public_instance::VK_LO,
+            public_instance::SUCCESSOR_VK_LO,
+            2,
+        ),
+        (
+            mint_authorization_public_instance::NETWORK_LO,
+            public_instance::NETWORK_LO,
+            2,
+        ),
+        (
+            mint_authorization_public_instance::ASSET_LO,
+            public_instance::ASSET_LO,
+            2,
+        ),
+        (
+            mint_authorization_public_instance::INCARNATION_LO,
+            public_instance::ASSET_INCARNATION_LO,
+            2,
+        ),
+        (
+            mint_authorization_public_instance::SCALE,
+            public_instance::ASSET_SCALE,
+            1,
+        ),
+        (
+            mint_authorization_public_instance::POOL_LO,
+            public_instance::LIABILITY_POOL_LO,
+            2,
+        ),
+        (
+            mint_authorization_public_instance::AMOUNT,
+            public_instance::AMOUNT,
+            1,
+        ),
+        (
+            mint_authorization_public_instance::PROFILE_LO,
+            public_instance::HARDWARE_PROFILE_LO,
+            2,
+        ),
+        (
+            mint_authorization_public_instance::POLICY_EPOCH,
+            public_instance::POLICY_EPOCH,
+            1,
+        ),
+    ] {
+        for offset in 0..width {
+            constrain_loader_equal_if_v1(
+                loader,
+                *authorization[authorization_offset + offset].assigned(),
+                state_public[state_offset + offset],
+                enabled,
+            );
+        }
+    }
     Ok(())
 }
 
@@ -1840,7 +3916,10 @@ fn constrain_state_guard_binding_v1<F: KagemushaPoseidonFieldV1>(
         (state.successor.suite_id, guard.successor_suite_id),
         (state.successor.vk_digest, guard.successor_vk_digest),
         (state.peer_credit_id, guard.peer_credit_id),
-        (state.peer_recipient_lane_id, guard.peer_recipient_lane_id),
+        (
+            state.recipient_encryption_key_binding,
+            guard.recipient_encryption_key_binding,
+        ),
         (
             state.mint_finality_proof_binding_digest,
             guard.mint_finality_proof_binding_digest,
@@ -1871,8 +3950,8 @@ fn constrain_state_guard_binding_v1<F: KagemushaPoseidonFieldV1>(
             guard.lifecycle_binding_digest,
         ),
         (
-            state.precommit_binding_digest,
-            guard.precommit_binding_digest,
+            state.prepared_transition_binding_digest,
+            guard.prepared_transition_binding_digest,
         ),
         (
             state.receive_credit_binding_digest,
@@ -1960,12 +4039,11 @@ pub(super) fn ep_succinct_vk(params: &ParamsIPA<EpAffine>) -> IpaSuccinctVerifyi
 
 #[cfg(test)]
 mod tests {
-    use super::super::DigestV1;
     use super::super::terminal_authorization::{
-        constrain_receiver_credential_lane_v1, hash_incoming_payment_claims_binding_v1,
-        hash_terminal_prepared_transfer_v1,
+        hash_incoming_payment_claims_binding_v1, hash_terminal_prepared_transfer_v1,
     };
     use super::*;
+    use crate::zk::pasta_sha256::PastaSha256ConfigV1;
     use halo2_base::gates::RangeChip;
     use halo2_proofs::dev::MockProver;
     use sha2::{Digest as _, Sha256};
@@ -2033,7 +4111,7 @@ mod tests {
                 &config.sha,
                 &mut layouter,
                 &self.builder.core().copy_manager,
-                (1_usize << RECEIVER_LANE_TEST_K) - MINIMUM_UNUSABLE_ROWS,
+                (1_usize << self.builder.config_params.k) - MINIMUM_UNUSABLE_ROWS,
             )
         }
     }
@@ -2438,6 +4516,406 @@ mod tests {
         assert_canonical_mint_lifecycle_digest::<Fq>(lifecycle);
     }
 
+    #[derive(Clone)]
+    struct MintRecipientOpeningFixture {
+        authorization: Vec<u128>,
+        credential_preimage: Vec<u8>,
+        opening: KagemushaCreditOpeningV1,
+        lane: DigestV1,
+        replay_credit_id: DigestV1,
+    }
+
+    fn mint_recipient_opening_fixture() -> MintRecipientOpeningFixture {
+        use iroha_data_model::kagemusha::{
+            kagemusha_asset_identity_digest_v1, kagemusha_mint_credit_opening_commitment_v1,
+            kagemusha_recipient_credential_commitment_v1,
+        };
+        // Existing structural fixtures supply real canonical values, never proof authority. This
+        // test invokes the production binder directly without checking its witnesses on the host.
+        let credit = super::super::tests::compact_mint_credit_fixture();
+        let lifecycle = &credit.statement.lifecycle;
+        let payment = super::super::tests::incoming_payment_fixture(0x41, 9, 7, 11, 128, 128);
+        let key = payment.request.recipient_encryption_key;
+        let mut credential = payment.request.hardware_credential;
+        credential.network_id = lifecycle.network_id;
+        credential.suite_id = lifecycle.suite_id;
+        credential.hardware_profile_id = lifecycle.hardware_profile_id;
+        credential.policy_epoch = lifecycle.policy_epoch;
+        credential = credential
+            .seal_credential_id()
+            .expect("retained credential ID");
+        let opening = KagemushaCreditOpeningV1 {
+            version: KAGEMUSHA_WIRE_VERSION_V1,
+            credit_id: lifecycle.credit_id,
+            amount: credit.statement.amount,
+            recipient_binding_opening: [0x91; 32],
+            credit_commitment_opening: [0x92; 32],
+            recovery_nonce: [0x93; 32],
+        };
+        let operation = [0x94; 32];
+        let recipient_commitment = kagemusha_recipient_credential_commitment_v1(
+            operation,
+            credential.credential_id,
+            opening.recipient_binding_opening,
+        )
+        .expect("canonical recipient commitment");
+        let credit_commitment = kagemusha_mint_credit_opening_commitment_v1(
+            &lifecycle.network_id,
+            &lifecycle.asset,
+            lifecycle.asset_incarnation,
+            lifecycle.scale,
+            lifecycle.liability_pool_id,
+            opening.amount,
+            &credit.statement.recipient,
+            key,
+            opening.credit_commitment_opening,
+        )
+        .expect("canonical credit commitment");
+        let recipient = canonical_test_digest(
+            MINT_ACCOUNT_IDENTITY_DIGEST_DOMAIN_V1,
+            &norito::encode_canonical(&credit.statement.recipient).expect("canonical recipient"),
+        );
+        let mut authorization = vec![0; MINT_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1];
+        for (offset, bytes) in [
+            (mint_authorization_public_instance::OPERATION_LO, operation),
+            (
+                mint_authorization_public_instance::CREDENTIAL_LO,
+                credential.credential_id,
+            ),
+            (
+                mint_authorization_public_instance::NETWORK_LO,
+                *lifecycle.network_id.as_bytes(),
+            ),
+            (
+                mint_authorization_public_instance::ASSET_LO,
+                kagemusha_asset_identity_digest_v1(&lifecycle.asset).expect("asset digest"),
+            ),
+            (
+                mint_authorization_public_instance::INCARNATION_LO,
+                *lifecycle.asset_incarnation.as_bytes(),
+            ),
+            (
+                mint_authorization_public_instance::POOL_LO,
+                lifecycle.liability_pool_id,
+            ),
+            (mint_authorization_public_instance::RECIPIENT_LO, recipient),
+            (mint_authorization_public_instance::RECIPIENT_KEY_LO, key),
+            (
+                mint_authorization_public_instance::CREDIT_ID_LO,
+                opening.credit_id,
+            ),
+            (
+                mint_authorization_public_instance::RECIPIENT_COMMITMENT_LO,
+                recipient_commitment,
+            ),
+            (
+                mint_authorization_public_instance::CREDIT_COMMITMENT_LO,
+                credit_commitment,
+            ),
+        ] {
+            for (cell, bytes) in authorization[offset..offset + 2]
+                .iter_mut()
+                .zip(bytes.chunks_exact(16))
+            {
+                *cell = u128::from_le_bytes(bytes.try_into().expect("digest limb"));
+            }
+        }
+        authorization[mint_authorization_public_instance::VERSION] = u128::from(opening.version);
+        authorization[mint_authorization_public_instance::AMOUNT] = opening.amount;
+        authorization[mint_authorization_public_instance::SCALE] = u128::from(lifecycle.scale);
+        MintRecipientOpeningFixture {
+            authorization,
+            credential_preimage: credential
+                .canonical_id_preimage_bytes()
+                .expect("credential preimage"),
+            opening,
+            lane: credential.lane_commitment,
+            replay_credit_id: opening.credit_id,
+        }
+    }
+
+    fn mint_recipient_opening_circuit<F: KagemushaPoseidonFieldV1>(
+        fixture: &MintRecipientOpeningFixture,
+        enabled: bool,
+    ) -> ReceiverLaneTestCircuit<F> {
+        let mut builder = BaseCircuitBuilder::<F>::new(false)
+            .use_k(16)
+            .use_lookup_bits(15)
+            .use_instance_columns(1);
+        let range = builder.range_chip();
+        let mut instances = fixture
+            .authorization
+            .iter()
+            .copied()
+            .map(F::from_u128)
+            .collect::<Vec<_>>();
+        instances.extend(crate::zk::kagemusha_v1_poseidon::digest_limbs::<F>(
+            fixture.lane,
+        ));
+        instances.extend(crate::zk::kagemusha_v1_poseidon::digest_limbs::<F>(
+            fixture.replay_credit_id,
+        ));
+        instances.push(F::from(u64::from(enabled)));
+        let cells = builder.main(0).assign_witnesses(instances.iter().copied());
+        let end = MINT_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1;
+        range.gate().assert_bit(builder.main(0), cells[end + 4]);
+        let mut jobs = PastaSha256JobsV1::default();
+        constrain_mint_fold_recipient_opening_v1(
+            builder.main(0),
+            &range,
+            &mut jobs,
+            &cells[..end],
+            [cells[end], cells[end + 1]],
+            [cells[end + 2], cells[end + 3]],
+            enabled.then_some(fixture.credential_preimage.as_slice()),
+            enabled.then_some(&fixture.opening),
+            cells[end + 4],
+        )
+        .expect("fixed MintFold opening inputs");
+        assert_eq!(
+            jobs.compression_blocks()
+                .expect("mint opening SHA inventory"),
+            17
+        );
+        builder.assigned_instances = vec![cells];
+        builder.calculate_params(Some(MINIMUM_UNUSABLE_ROWS));
+        ReceiverLaneTestCircuit {
+            builder,
+            jobs,
+            instances,
+        }
+    }
+
+    fn assert_mint_recipient_opening<F: KagemushaPoseidonFieldV1>(
+        fixture: &MintRecipientOpeningFixture,
+        enabled: bool,
+        valid: bool,
+    ) {
+        let circuit = mint_recipient_opening_circuit::<F>(fixture, enabled);
+        let result = MockProver::run(16, &circuit, vec![circuit.instances.clone()])
+            .expect("MintFold recipient opening synthesis")
+            .verify();
+        assert_eq!(
+            result.is_ok(),
+            valid,
+            "MintFold recipient opening constraints: {result:?}"
+        );
+    }
+
+    fn mint_fold_claim_binding_result<F: KagemushaPoseidonFieldV1>(tamper: u8) -> bool {
+        use super::super::{
+            mint_hash_claim_fold::KagemushaMintHashClaimPlanV1,
+            mint_hash_shard::KagemushaMintHashPlanV1,
+        };
+        use crate::zk::kagemusha_v1_poseidon::digest_limbs;
+        let fixture = mint_recipient_opening_fixture();
+        let mut circuit = mint_recipient_opening_circuit::<F>(&fixture, true);
+        let parity = if F::IS_EQ_PARITY {
+            KagemushaPastaParityV1::Eq
+        } else {
+            KagemushaPastaParityV1::Ep
+        };
+        let release = [0x31; 32];
+        let mut messages = circuit
+            .jobs
+            .canonical_messages()
+            .expect("exact composite opening queue");
+        // Derive a different, internally valid SHA plan. Host recomputation must not authorize
+        // even one changed byte once the consumer binds the original assigned queue.
+        if tamper == 1 {
+            messages[0][0] ^= 1;
+        }
+        let leaves = KagemushaMintHashPlanV1::from_messages(release, parity, [0x51; 32], messages)
+            .expect("native candidate SHA plan");
+        let plan = KagemushaMintHashClaimPlanV1::from_leaves::<F>(release, leaves.leaves())
+            .expect("candidate ordered claim plan");
+        assert_eq!(plan.total_stages, 17);
+        let mut claim = vec![F::ZERO; KAGEMUSHA_MINT_HASH_CLAIM_PUBLIC_INSTANCE_COUNT_V1];
+        claim[hash_claim_public::VERSION] = F::ONE;
+        claim[hash_claim_public::PARITY] = F::from(u64::from(!F::IS_EQ_PARITY));
+        claim[hash_claim_public::COMPLETE] = F::from(u64::from(tamper != 2));
+        claim[hash_claim_public::TOTAL_STAGES] = F::from(plan.total_stages);
+        claim[hash_claim_public::TOTAL_JOBS] = F::from(u64::from(plan.total_jobs));
+        claim[hash_claim_public::NEXT_STAGE] = F::from(plan.total_stages);
+        claim[hash_claim_public::NEXT_JOB] = F::from(u64::from(plan.total_jobs));
+        let offsets = if F::IS_EQ_PARITY {
+            [
+                hash_claim_public::EQ_PLAN_LO,
+                hash_claim_public::EQ_MESSAGE_ROOT_LO,
+                hash_claim_public::EQ_EXPECTED_MESSAGE_ROOT_LO,
+                hash_claim_public::EQ_TERMINAL_ROOT_LO,
+                hash_claim_public::EQ_EXPECTED_ROOT_LO,
+            ]
+        } else {
+            [
+                hash_claim_public::EP_PLAN_LO,
+                hash_claim_public::EP_MESSAGE_ROOT_LO,
+                hash_claim_public::EP_EXPECTED_MESSAGE_ROOT_LO,
+                hash_claim_public::EP_TERMINAL_ROOT_LO,
+                hash_claim_public::EP_EXPECTED_ROOT_LO,
+            ]
+        };
+        for (offset, digest) in offsets.into_iter().zip([
+            plan.plan_binding,
+            plan.expected_message_root,
+            plan.expected_message_root,
+            plan.expected_terminal_root,
+            plan.expected_terminal_root,
+        ]) {
+            claim[offset..offset + 2].copy_from_slice(&digest_limbs::<F>(digest));
+        }
+        let protocol_digests = [[0x61; 32], [0x62; 32], [0x63; 32], [0x64; 32]];
+        for (offset, digest) in [
+            hash_claim_public::RELEASE_LO,
+            hash_claim_public::EQ_CLAIM_PROTOCOL_LO,
+            hash_claim_public::EP_CLAIM_PROTOCOL_LO,
+            hash_claim_public::EQ_SHARD_PROTOCOL_LO,
+            hash_claim_public::EP_SHARD_PROTOCOL_LO,
+        ]
+        .into_iter()
+        .zip([release].into_iter().chain(protocol_digests))
+        {
+            claim[offset..offset + 2].copy_from_slice(&digest_limbs::<F>(digest));
+        }
+        for offset in [
+            hash_claim_public::EQ_CHAINING_STATE,
+            hash_claim_public::EP_CHAINING_STATE,
+        ] {
+            claim[offset..offset + 8].copy_from_slice(
+                &crate::zk::pasta_sha256_table8::IV.map(|word| F::from(u64::from(word))),
+            );
+        }
+        if tamper == 3 {
+            claim[hash_claim_public::EQ_SHARD_PROTOCOL_LO] += F::ONE;
+        }
+        let range = circuit.builder.range_chip();
+        let ctx = circuit.builder.main(0);
+        let cells = ctx.assign_witnesses(claim);
+        let release = digest_limbs::<F>(release).map(|value| ctx.load_constant(value));
+        let protocols = protocol_digests
+            .map(|digest| digest_limbs::<F>(digest).map(|value| ctx.load_constant(value)));
+        constrain_complete_claim_against_sha_jobs_v1(
+            ctx,
+            &range,
+            &circuit.jobs,
+            &cells,
+            parity,
+            release,
+            protocols[0],
+            protocols[1],
+            protocols[2],
+            protocols[3],
+        )
+        .expect("constrain exact composite queue");
+        circuit
+            .builder
+            .calculate_params(Some(MINIMUM_UNUSABLE_ROWS));
+        // This tests the byte/plan binding only. The production consumer additionally verifies
+        // the terminal proof and both complete-history folds before emitting a state circuit.
+        MockProver::run(16, &circuit.builder, vec![circuit.instances])
+            .expect("K16 exact queue binding synthesis")
+            .verify()
+            .is_ok()
+    }
+
+    #[test]
+    fn mint_fold_sha_claim_binding_rejects_changed_bytes_incomplete_plan_and_substituted_suite() {
+        for tamper in 0..4 {
+            assert_eq!(mint_fold_claim_binding_result::<Fp>(tamper), tamper == 0);
+            assert_eq!(mint_fold_claim_binding_result::<Fq>(tamper), tamper == 0);
+        }
+    }
+
+    #[test]
+    fn recursive_hash_claim_history_rejects_truncation_extra_columns_and_detached_history() {
+        fn check<F: KagemushaPoseidonFieldV1>() {
+            let history = [0x42; super::super::KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1];
+            let mut instances = vec![
+                vec![F::ZERO; KAGEMUSHA_MINT_HASH_CLAIM_INNER_SEMANTIC_INSTANCE_COUNT_V1],
+                vec![F::ZERO; KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_INSTANCE_COUNT_V1],
+                vec![F::ZERO; KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_INSTANCE_COUNT_V1],
+            ];
+            for (cell, bytes) in instances[0][hash_claim_public::HISTORY_START
+                ..KAGEMUSHA_MINT_HASH_CLAIM_PUBLIC_INSTANCE_COUNT_V1]
+                .iter_mut()
+                .zip(history.chunks_exact(16))
+            {
+                *cell = F::from_u128(u128::from_le_bytes(bytes.try_into().unwrap()));
+            }
+            validate_recursive_hash_claim_history_v1(&instances, &history)
+                .expect("exact bound history");
+            let mut changed = instances.clone();
+            changed[0][hash_claim_public::HISTORY_START] += F::ONE;
+            assert!(validate_recursive_hash_claim_history_v1(&changed, &history).is_err());
+            for index in 0..3 {
+                let mut changed = instances.clone();
+                changed[index].pop();
+                assert!(validate_recursive_hash_claim_history_v1(&changed, &history).is_err());
+            }
+            instances.push(Vec::new());
+            assert!(validate_recursive_hash_claim_history_v1(&instances, &history).is_err());
+        }
+        check::<Fp>();
+        check::<Fq>();
+    }
+
+    #[test]
+    fn mint_fold_recipient_opening_rejects_cross_lane_and_secret_substitutions_in_both_fields() {
+        let fixture = mint_recipient_opening_fixture();
+        assert_mint_recipient_opening::<Fp>(&fixture, true, true);
+        assert_mint_recipient_opening::<Fq>(&fixture, true, true);
+        for index in 0..3 {
+            let mut changed = fixture.clone();
+            match index {
+                0 => changed.lane[0] ^= 1,
+                1 => changed.opening.recipient_binding_opening[0] ^= 1,
+                _ => changed.opening.credit_commitment_opening[0] ^= 1,
+            }
+            assert_mint_recipient_opening::<Fp>(&changed, true, false);
+            assert_mint_recipient_opening::<Fq>(&changed, true, false);
+        }
+    }
+
+    #[test]
+    fn mint_fold_recipient_opening_rejects_version_amount_credit_and_replay_substitutions() {
+        let fixture = mint_recipient_opening_fixture();
+        for index in 0..4 {
+            let mut changed = fixture.clone();
+            match index {
+                0 => changed.opening.version += 1,
+                1 => changed.opening.amount += 1,
+                2 => changed.opening.credit_id[0] ^= 1,
+                _ => changed.replay_credit_id[0] ^= 1,
+            }
+            assert_mint_recipient_opening::<Fp>(&changed, true, false);
+        }
+    }
+
+    #[test]
+    fn mint_fold_recipient_opening_retains_fixed_padding_and_original_credential() {
+        let fixture = mint_recipient_opening_fixture();
+        let active = mint_recipient_opening_circuit::<Fp>(&fixture, true);
+        let inactive = mint_recipient_opening_circuit::<Fp>(&fixture, false);
+        assert_eq!(
+            active.builder.config_params.num_advice_per_phase,
+            inactive.builder.config_params.num_advice_per_phase,
+        );
+        assert_eq!(
+            active.builder.config_params.num_lookup_advice_per_phase,
+            inactive.builder.config_params.num_lookup_advice_per_phase,
+        );
+        assert_eq!(
+            active.builder.config_params.num_fixed,
+            inactive.builder.config_params.num_fixed
+        );
+        assert_mint_recipient_opening::<Fp>(&fixture, false, true);
+        // Epoch bytes remain in the credential-ID preimage and are never equated with a later
+        // aggregate epoch. Substituting a newly issued credential cannot open the original ID.
+        let mut changed = fixture;
+        changed.credential_preimage[218] ^= 1;
+        assert_mint_recipient_opening::<Fp>(&changed, true, false);
+    }
+
     #[test]
     fn incoming_output_binding_constraint_rejects_cross_lane_replay_and_recipient_key_change() {
         // Signed structural fixture, not an actual recursive proof. Only the production binding
@@ -2494,7 +4972,8 @@ mod tests {
             }),
             true,
         );
-        // Request, receiver, sender-state pair, output, ciphertext, candidate, certificate.
+        // Request, receiver credential, sender-state pair, output, actual ciphertext, candidate,
+        // and certificate.
         // These are only digest-gadget witnesses; no synthetic proof is treated as authority.
         for index in 0..values.len() {
             let mut changed = values;

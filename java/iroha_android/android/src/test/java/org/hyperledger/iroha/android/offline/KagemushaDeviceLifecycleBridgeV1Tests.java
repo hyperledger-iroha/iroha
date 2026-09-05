@@ -15,6 +15,17 @@ import org.junit.Test;
 /** Java-facade checks for the fail-closed KAGEMUSHA V1 device bridge. */
 public final class KagemushaDeviceLifecycleBridgeV1Tests {
   @Test
+  public void nativeContractVectorProbeIsBoundedWhenLinked() {
+    assertEquals(4 * 1024, KagemushaDeviceLifecycleBridgeV1.MAXIMUM_NATIVE_CONTRACT_VECTOR_BYTES);
+    final byte[] vector = KagemushaDeviceLifecycleBridgeV1.nativeContractVector();
+    if (vector != null) {
+      org.junit.Assert.assertTrue(vector.length > 0);
+      org.junit.Assert.assertTrue(
+          vector.length <= KagemushaDeviceLifecycleBridgeV1.MAXIMUM_NATIVE_CONTRACT_VECTOR_BYTES);
+    }
+  }
+
+  @Test
   public void explicitUnsupportedDeviceRemainsOnlineOnly() {
     final KagemushaDeviceLifecycleBridgeV1 bridge =
         KagemushaDeviceLifecycleBridgeV1.onlineOnly();

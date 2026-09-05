@@ -14,6 +14,16 @@ pub enum PendingCreditFoldV1 {
     Receive(CreditIdV1),
 }
 
+impl PendingCreditFoldV1 {
+    /// Return the globally unique credit selected by this singular fold.
+    #[must_use]
+    pub const fn credit_id(self) -> CreditIdV1 {
+        match self {
+            Self::Mint(credit_id) | Self::Receive(credit_id) => credit_id,
+        }
+    }
+}
+
 /// Stable native inbox boundary for an explicit drain pass.
 ///
 /// Epoch identity prevents a counter reset from reinterpreting an old watermark. This is local
@@ -22,6 +32,136 @@ pub enum PendingCreditFoldV1 {
 pub struct KagemushaPendingCreditWatermarkV1 {
     hardware_epoch: HardwareEpochV1,
     inbox_revision: u128,
+}
+
+impl KagemushaPendingCreditWatermarkV1 {
+    /// Return the hardware epoch which owns this inclusive drain boundary.
+    #[must_use]
+    pub const fn hardware_epoch(self) -> HardwareEpochV1 {
+        self.hardware_epoch
+    }
+
+    /// Return the inclusive accepted-credit inbox revision captured for this pass.
+    #[must_use]
+    pub const fn inbox_revision(self) -> u128 {
+        self.inbox_revision
+    }
+}
+
+fn validate_pending_credit_watermark(
+    current_epoch: HardwareEpochV1,
+    current_inbox_revision: u128,
+    watermark: KagemushaPendingCreditWatermarkV1,
+) -> Result<(), KagemushaStateErrorV1> {
+    if watermark.hardware_epoch != current_epoch {
+        return Err(KagemushaStateErrorV1::InvalidHardwareRotation);
+    }
+    if watermark.inbox_revision > current_inbox_revision {
+        return Err(KagemushaStateErrorV1::SnapshotRollback);
+    }
+    Ok(())
+}
+
+fn next_pending_fold_through_entries(
+    current_epoch: HardwareEpochV1,
+    current_inbox_revision: u128,
+    watermark: KagemushaPendingCreditWatermarkV1,
+    peers: impl IntoIterator<Item = (CreditIdV1, HardwareEpochV1, u128)>,
+    mints: impl IntoIterator<Item = (CreditIdV1, HardwareEpochV1, u128)>,
+) -> Result<Option<PendingCreditFoldV1>, KagemushaStateErrorV1> {
+    validate_pending_credit_watermark(current_epoch, current_inbox_revision, watermark)?;
+    let eligible = |epoch: HardwareEpochV1, revision: u128| {
+        epoch.generation < watermark.hardware_epoch.generation
+            || (epoch == watermark.hardware_epoch && revision <= watermark.inbox_revision)
+    };
+    let first_peer = peers
+        .into_iter()
+        .filter_map(|(id, epoch, revision)| eligible(epoch, revision).then_some(id))
+        .min();
+    let first_mint = mints
+        .into_iter()
+        .filter_map(|(id, epoch, revision)| eligible(epoch, revision).then_some(id))
+        .min();
+    match (first_mint, first_peer) {
+        (None, None) => Ok(None),
+        (Some(id), None) => Ok(Some(PendingCreditFoldV1::Mint(id))),
+        (None, Some(id)) => Ok(Some(PendingCreditFoldV1::Receive(id))),
+        (Some(mint), Some(peer)) if mint < peer => Ok(Some(PendingCreditFoldV1::Mint(mint))),
+        (Some(mint), Some(peer)) if peer < mint => Ok(Some(PendingCreditFoldV1::Receive(peer))),
+        (Some(id), Some(_)) => Err(KagemushaStateErrorV1::CreditConflict(id)),
+    }
+}
+
+fn next_required_pending_fold_through_entries(
+    current_balance: u128,
+    required_amount: u128,
+    current_epoch: HardwareEpochV1,
+    current_inbox_revision: u128,
+    watermark: KagemushaPendingCreditWatermarkV1,
+    peers: impl IntoIterator<Item = (CreditIdV1, HardwareEpochV1, u128)>,
+    mints: impl IntoIterator<Item = (CreditIdV1, HardwareEpochV1, u128)>,
+) -> Result<Option<PendingCreditFoldV1>, KagemushaStateErrorV1> {
+    validate_pending_credit_watermark(current_epoch, current_inbox_revision, watermark)?;
+    if current_balance >= required_amount {
+        return Ok(None);
+    }
+    next_pending_fold_through_entries(
+        current_epoch,
+        current_inbox_revision,
+        watermark,
+        peers,
+        mints,
+    )?
+    .map(Some)
+    .ok_or(KagemushaStateErrorV1::InsufficientBalance)
+}
+
+fn required_pending_fold_prefix(
+    current_balance: u128,
+    amount: u128,
+    peers: impl IntoIterator<Item = (CreditIdV1, u128)>,
+    mints: impl IntoIterator<Item = (CreditIdV1, u128)>,
+) -> Result<Vec<PendingCreditFoldV1>, KagemushaStateErrorV1> {
+    let mut pending = BTreeMap::new();
+    for (credit_id, credit_amount) in peers {
+        if pending
+            .insert(
+                credit_id,
+                (PendingCreditFoldV1::Receive(credit_id), credit_amount),
+            )
+            .is_some()
+        {
+            return Err(KagemushaStateErrorV1::CreditConflict(credit_id));
+        }
+    }
+    for (credit_id, credit_amount) in mints {
+        if pending
+            .insert(
+                credit_id,
+                (PendingCreditFoldV1::Mint(credit_id), credit_amount),
+            )
+            .is_some()
+        {
+            return Err(KagemushaStateErrorV1::CreditConflict(credit_id));
+        }
+    }
+
+    let selected = required_pending_credit_prefix(
+        current_balance,
+        amount,
+        pending
+            .iter()
+            .map(|(credit_id, (_, credit_amount))| (*credit_id, *credit_amount)),
+    )?;
+    selected
+        .into_iter()
+        .map(|credit_id| {
+            pending
+                .get(&credit_id)
+                .map(|(fold, _)| *fold)
+                .ok_or(KagemushaStateErrorV1::StateInvariant)
+        })
+        .collect()
 }
 
 /// Durable result of mint delivery; every retry retains the original certificate.
@@ -63,44 +203,62 @@ where
         &self,
         watermark: KagemushaPendingCreditWatermarkV1,
     ) -> Result<Option<PendingCreditFoldV1>, KagemushaStateErrorV1> {
-        if watermark.hardware_epoch != self.state.hardware_epoch {
-            return Err(KagemushaStateErrorV1::InvalidHardwareRotation);
-        }
-        if watermark.inbox_revision > self.inbox_revision {
-            return Err(KagemushaStateErrorV1::SnapshotRollback);
-        }
-        let eligible = |epoch: HardwareEpochV1, revision: u128| {
-            epoch.generation < watermark.hardware_epoch.generation
-                || (epoch == watermark.hardware_epoch && revision <= watermark.inbox_revision)
-        };
-        let mut peers = self
-            .pending_credits
-            .iter()
-            .filter_map(|(id, record)| {
+        next_pending_fold_through_entries(
+            self.state.hardware_epoch,
+            self.inbox_revision,
+            watermark,
+            self.pending_credits.iter().map(|(id, record)| {
                 let statement = &record.stage_certificate.statement;
-                eligible(
+                (
+                    *id,
                     statement.receiver_hardware_epoch,
                     statement.journal_revision_after,
                 )
-                .then_some(*id)
-            })
-            .peekable();
-        let first_mint = self.mint_inbox.pending().iter().find_map(|(id, record)| {
-            let statement = &record.stage_certificate().statement;
-            eligible(statement.hardware_epoch, statement.inbox_revision_after).then_some(*id)
-        });
-        if let Some(id) = first_mint {
-            if peers.peek().is_none_or(|peer| id < *peer) {
-                return Ok(Some(PendingCreditFoldV1::Mint(id)));
-            }
-            if peers.peek() == Some(&id) {
-                return Err(KagemushaStateErrorV1::CreditConflict(id));
-            }
-        }
-        Ok(peers
-            .next()
-            .filter(|id| first_mint.is_none_or(|mint| *id < mint))
-            .map(PendingCreditFoldV1::Receive))
+            }),
+            self.mint_inbox.pending().iter().map(|(id, record)| {
+                let statement = &record.stage_certificate().statement;
+                (
+                    *id,
+                    statement.hardware_epoch,
+                    statement.inbox_revision_after,
+                )
+            }),
+        )
+    }
+
+    /// Select the next mint/peer fold needed for a specific send or redemption amount.
+    ///
+    /// Unlike [`Self::next_pending_fold_through`], this target-aware selector stops as soon as
+    /// the hidden aggregate balance covers `required_amount`. If the captured pass is exhausted
+    /// before then, it reports insufficient funds instead of treating a partial drain as success.
+    pub fn next_pending_fold_required_for_amount_through(
+        &self,
+        watermark: KagemushaPendingCreditWatermarkV1,
+        required_amount: u128,
+    ) -> Result<Option<PendingCreditFoldV1>, KagemushaStateErrorV1> {
+        next_required_pending_fold_through_entries(
+            self.state.balance,
+            required_amount,
+            self.state.hardware_epoch,
+            self.inbox_revision,
+            watermark,
+            self.pending_credits.iter().map(|(id, record)| {
+                let statement = &record.stage_certificate.statement;
+                (
+                    *id,
+                    statement.receiver_hardware_epoch,
+                    statement.journal_revision_after,
+                )
+            }),
+            self.mint_inbox.pending().iter().map(|(id, record)| {
+                let statement = &record.stage_certificate().statement;
+                (
+                    *id,
+                    statement.hardware_epoch,
+                    statement.inbox_revision_after,
+                )
+            }),
+        )
     }
 
     /// Select only the monetary folds required to cover the requested outgoing amount.
@@ -111,17 +269,17 @@ where
         &self,
         amount: u128,
     ) -> Result<Vec<PendingCreditFoldV1>, KagemushaStateErrorV1> {
-        let selected = self.pending_credits_required_for_amount(amount)?;
-        Ok(selected
-            .into_iter()
-            .map(|id| {
-                if self.mint_inbox.pending_credit(id).is_some() {
-                    PendingCreditFoldV1::Mint(id)
-                } else {
-                    PendingCreditFoldV1::Receive(id)
-                }
-            })
-            .collect())
+        required_pending_fold_prefix(
+            self.state.balance,
+            amount,
+            self.pending_credits
+                .iter()
+                .map(|(id, staged)| (*id, staged.request.amount)),
+            self.mint_inbox
+                .pending()
+                .iter()
+                .map(|(id, staged)| (*id, staged.credit().statement.amount)),
+        )
     }
 
     /// Preview the pre-debit allocation and sealed local recipient binding.
@@ -617,5 +775,189 @@ where
         self.guard_verifier
             .verify_mint_stage(statement, &certificate.guard_bundle)
             .map_err(KagemushaStateErrorV1::GuardRejected)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn credit_id(index: u32) -> CreditIdV1 {
+        let mut bytes = [0_u8; 32];
+        bytes[28..].copy_from_slice(&index.to_be_bytes());
+        CreditIdV1(bytes)
+    }
+
+    fn epoch(generation: u128, marker: u8) -> HardwareEpochV1 {
+        HardwareEpochV1 {
+            generation,
+            epoch_id: [marker; 32],
+        }
+    }
+
+    #[test]
+    fn mixed_required_plan_is_globally_credit_id_ordered() {
+        let plan = required_pending_fold_prefix(
+            2,
+            10,
+            [(credit_id(2), 2), (credit_id(4), 2)],
+            [(credit_id(1), 2), (credit_id(3), 2)],
+        )
+        .expect("the mixed pending balance covers the requested amount");
+        assert_eq!(
+            plan,
+            vec![
+                PendingCreditFoldV1::Mint(credit_id(1)),
+                PendingCreditFoldV1::Receive(credit_id(2)),
+                PendingCreditFoldV1::Mint(credit_id(3)),
+                PendingCreditFoldV1::Receive(credit_id(4)),
+            ]
+        );
+    }
+
+    #[test]
+    fn mixed_required_plan_has_no_protocol_count_ceiling() {
+        let peers = (1_u32..=4_096)
+            .filter(|index| index % 2 == 0)
+            .map(|index| (credit_id(index), 1_u128));
+        let mints = (1_u32..=4_096)
+            .filter(|index| index % 2 == 1)
+            .map(|index| (credit_id(index), 1_u128));
+        let plan = required_pending_fold_prefix(0, 4_096, peers, mints)
+            .expect("every staged mint and peer credit remains spendable");
+        assert_eq!(plan.len(), 4_096);
+        for (offset, fold) in plan.into_iter().enumerate() {
+            let index = u32::try_from(offset + 1).expect("qualification schedule index");
+            let expected = if index % 2 == 0 {
+                PendingCreditFoldV1::Receive(credit_id(index))
+            } else {
+                PendingCreditFoldV1::Mint(credit_id(index))
+            };
+            assert_eq!(fold, expected);
+        }
+    }
+
+    #[test]
+    fn mixed_required_plan_rejects_cross_kind_credit_identity_reuse() {
+        assert_eq!(
+            required_pending_fold_prefix(0, 1, [(credit_id(7), 1)], [(credit_id(7), 1)],),
+            Err(KagemushaStateErrorV1::CreditConflict(credit_id(7)))
+        );
+    }
+
+    #[test]
+    fn drain_watermark_keeps_old_epoch_mints_visible_after_restart() {
+        let current = epoch(9, 9);
+        let old = epoch(8, 8);
+        let watermark = KagemushaPendingCreditWatermarkV1 {
+            hardware_epoch: current,
+            inbox_revision: 5,
+        };
+
+        let first = next_pending_fold_through_entries(
+            current,
+            6,
+            watermark,
+            [(credit_id(2), old, u128::MAX), (credit_id(4), current, 6)],
+            [(credit_id(1), old, u128::MAX), (credit_id(3), current, 5)],
+        )
+        .expect("restored old-epoch inbox entries remain eligible");
+        assert_eq!(first, Some(PendingCreditFoldV1::Mint(credit_id(1))));
+
+        let after_first = next_pending_fold_through_entries(
+            current,
+            6,
+            watermark,
+            [(credit_id(2), old, u128::MAX), (credit_id(4), current, 6)],
+            [(credit_id(3), current, 5)],
+        )
+        .expect("the same restored watermark remains deterministic");
+        assert_eq!(
+            after_first,
+            Some(PendingCreditFoldV1::Receive(credit_id(2)))
+        );
+
+        let concurrent_only = next_pending_fold_through_entries(
+            current,
+            6,
+            watermark,
+            [(credit_id(4), current, 6)],
+            [],
+        )
+        .expect("a later arrival belongs to the next drain pass");
+        assert_eq!(concurrent_only, None);
+    }
+
+    #[test]
+    fn target_aware_selector_stops_at_balance_and_fails_if_pass_is_exhausted() {
+        let current = epoch(9, 9);
+        let watermark = KagemushaPendingCreditWatermarkV1 {
+            hardware_epoch: current,
+            inbox_revision: 5,
+        };
+        let pending = [(credit_id(1), current, 5)];
+        assert_eq!(
+            next_required_pending_fold_through_entries(10, 10, current, 5, watermark, pending, [],),
+            Ok(None),
+            "a send must not drain unrelated accepted money once its balance is sufficient"
+        );
+        assert_eq!(
+            next_required_pending_fold_through_entries(9, 10, current, 5, watermark, [], [],),
+            Err(KagemushaStateErrorV1::InsufficientBalance),
+            "exhausting a fixed pass below target is not a successful drain"
+        );
+    }
+
+    #[test]
+    fn fixed_watermark_prevents_continuous_arrivals_from_starving_eligible_credit() {
+        let current = epoch(9, 9);
+        let watermark = KagemushaPendingCreditWatermarkV1 {
+            hardware_epoch: current,
+            inbox_revision: 5,
+        };
+        let selected = next_pending_fold_through_entries(
+            current,
+            100,
+            watermark,
+            [
+                (credit_id(50), current, 5),
+                (credit_id(1), current, 6),
+                (credit_id(2), current, 7),
+            ],
+            [(credit_id(3), current, 8), (credit_id(4), current, 100)],
+        )
+        .expect("later lower credit IDs are outside the captured pass");
+        assert_eq!(selected, Some(PendingCreditFoldV1::Receive(credit_id(50))));
+    }
+
+    #[test]
+    fn drain_watermark_rejects_rotation_and_rollback() {
+        let current = epoch(9, 9);
+        assert_eq!(
+            next_pending_fold_through_entries(
+                current,
+                5,
+                KagemushaPendingCreditWatermarkV1 {
+                    hardware_epoch: epoch(8, 8),
+                    inbox_revision: 5,
+                },
+                [],
+                [],
+            ),
+            Err(KagemushaStateErrorV1::InvalidHardwareRotation)
+        );
+        assert_eq!(
+            next_pending_fold_through_entries(
+                current,
+                5,
+                KagemushaPendingCreditWatermarkV1 {
+                    hardware_epoch: current,
+                    inbox_revision: 6,
+                },
+                [],
+                [],
+            ),
+            Err(KagemushaStateErrorV1::SnapshotRollback)
+        );
     }
 }

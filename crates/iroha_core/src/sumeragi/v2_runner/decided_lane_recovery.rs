@@ -40,7 +40,7 @@ fn drain_blocked_ordinary_lane_local_ingress(
             "blocked-ordinary lane-local selector returned global ingress".to_owned(),
         ));
     }
-    let _ = lane_work.accept_lane_message_with_ingress_ownership(inbound, active_view);
+    let _ = lane_work.accept_lane_message_with_ingress_ownership(inbound, active_view)?;
     Ok(true)
 }
 
@@ -416,7 +416,7 @@ impl DecidedLaneRecoveryDrainCommitter for ProductionDecidedLaneRecoveryDrainCom
         }
         let _ = self
             .lane_work
-            .accept_lane_message_with_ingress_ownership(inbound, self.active_view);
+            .accept_lane_message_with_ingress_ownership(inbound, self.active_view)?;
         if self.services.lifecycle_output_guard().restart_required() {
             return Err(V2RunnerError::RestartRequired);
         }

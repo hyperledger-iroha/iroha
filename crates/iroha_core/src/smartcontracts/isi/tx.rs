@@ -1250,6 +1250,11 @@ pub fn indexed_kaigi_signal_candidates_page(
             let (_, block_wire_bytes) = state_ro
                 .kura()
                 .durable_block_payload_len_by_hash(position.block_hash())
+                .map_err(|error| {
+                    QueryExecutionFail::Conversion(format!(
+                        "indexed Kaigi signal carrier storage is unreadable: {error}"
+                    ))
+                })?
                 .ok_or_else(|| {
                     QueryExecutionFail::Conversion(
                         "indexed Kaigi signal carrier has no exact durable byte bound".to_owned(),
@@ -2327,6 +2332,7 @@ pub(crate) mod tests {
             epoch_id: epoch,
             lane_catalog_hash: Hash::new(b"merge-query-catalog"),
             active_lanes: Vec::new(),
+            lane_authority_catalog: iroha_data_model::merge::MergeLaneAuthorityCatalogV1::default(),
             incarnation_root: Hash::new(b"merge-query-incarnations"),
             activation_root: Hash::new(b"merge-query-activations"),
             lane_snapshots: Vec::new(),

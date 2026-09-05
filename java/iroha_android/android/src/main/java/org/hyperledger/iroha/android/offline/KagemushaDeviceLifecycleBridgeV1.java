@@ -28,28 +28,38 @@ public final class KagemushaDeviceLifecycleBridgeV1 {
    * once, and recovers every terminal certificate and installed envelope byte-identically.
    */
   public enum Operation {
-    READ_ACTIVE_HARDWARE_CREDENTIAL,
-    STAGE_INBOUND_PAYMENT,
-    RECOVER_STAGED_INBOUND_PAYMENT,
-    RECOVER_INBOUND_INBOX_PAGE,
-    PREPARE_EXACT_NEXT_TRANSITION,
-    RECOVER_PREPARED_TRANSITION,
-    COMMIT_VERIFIED_CANDIDATE_AND_SIGN_TERMINAL,
-    RECOVER_TERMINAL_OUTCOME,
-    INSTALL_TERMINAL_ENVELOPE,
-    RECOVER_INSTALLED_ENVELOPE_OR_STATE_PROOF,
-    SIGN_RECEIVE_ACKNOWLEDGEMENT,
-    RELEASE_OUTBOX_ENTRY,
-    READ_TRUSTED_TIME_OR_LEASE,
-    PREPARE_MINT_AUTHORIZATION,
-    RECOVER_MINT_AUTHORIZATION,
-    VERIFY_AUTHORIZATION_AND_STAGE_MINT_CREDIT,
-    FOLD_RECEIVE_CREDIT,
-    READ_PENDING_CREDIT_WATERMARK,
-    ROTATE_HARDWARE_EPOCH,
-    BOOTSTRAP_AGGREGATE_STATE,
-    RECOVER_WALLET_SNAPSHOT,
-    CREATE_SIGNED_PAYMENT_REQUEST,
+    READ_ACTIVE_HARDWARE_CREDENTIAL(1),
+    STAGE_INBOUND_PAYMENT(2),
+    RECOVER_STAGED_INBOUND_PAYMENT(3),
+    RECOVER_INBOUND_INBOX_PAGE(4),
+    PREPARE_EXACT_NEXT_TRANSITION(5),
+    RECOVER_PREPARED_TRANSITION(6),
+    COMMIT_VERIFIED_CANDIDATE_AND_SIGN_TERMINAL(7),
+    RECOVER_TERMINAL_OUTCOME(8),
+    INSTALL_TERMINAL_ENVELOPE(9),
+    RECOVER_INSTALLED_ENVELOPE_OR_STATE_PROOF(10),
+    SIGN_RECEIVE_ACKNOWLEDGEMENT(11),
+    RELEASE_OUTBOX_ENTRY(12),
+    READ_TRUSTED_TIME_OR_LEASE(13),
+    PREPARE_MINT_AUTHORIZATION(14),
+    RECOVER_MINT_AUTHORIZATION(15),
+    VERIFY_AUTHORIZATION_AND_STAGE_MINT_CREDIT(16),
+    FOLD_RECEIVE_CREDIT(17),
+    READ_PENDING_CREDIT_WATERMARK(18),
+    ROTATE_HARDWARE_EPOCH(19),
+    BOOTSTRAP_AGGREGATE_STATE(20),
+    RECOVER_WALLET_SNAPSHOT(21),
+    CREATE_SIGNED_PAYMENT_REQUEST(22);
+
+    private final int code;
+
+    Operation(final int code) {
+      this.code = code;
+    }
+
+    public int code() {
+      return code;
+    }
   }
 
   /** Exact secure-backend capabilities shared with the Kotlin bridge. */
@@ -153,6 +163,20 @@ public final class KagemushaDeviceLifecycleBridgeV1 {
 
   private final org.hyperledger.iroha.sdk.offline.KagemushaDeviceLifecycleBridgeV1 delegate;
 
+  public static final int PROTOCOL_VERSION =
+      org.hyperledger.iroha.sdk.offline.KagemushaDeviceLifecycleBridgeV1.PROTOCOL_VERSION;
+  public static final int MAXIMUM_COMMAND_PAYLOAD_BYTES =
+      org.hyperledger.iroha.sdk.offline.KagemushaDeviceLifecycleBridgeV1
+          .MAXIMUM_COMMAND_PAYLOAD_BYTES;
+  public static final int MAXIMUM_RESPONSE_PAYLOAD_BYTES =
+      org.hyperledger.iroha.sdk.offline.KagemushaDeviceLifecycleBridgeV1
+          .MAXIMUM_RESPONSE_PAYLOAD_BYTES;
+  public static final int MAXIMUM_AUTHENTICATOR_BYTES =
+      org.hyperledger.iroha.sdk.offline.KagemushaDeviceLifecycleBridgeV1.MAXIMUM_AUTHENTICATOR_BYTES;
+  public static final int MAXIMUM_NATIVE_CONTRACT_VECTOR_BYTES =
+      org.hyperledger.iroha.sdk.offline.KagemushaDeviceLifecycleBridgeV1
+          .MAXIMUM_NATIVE_CONTRACT_VECTOR_BYTES;
+
   private KagemushaDeviceLifecycleBridgeV1(
       final org.hyperledger.iroha.sdk.offline.KagemushaDeviceLifecycleBridgeV1 delegate) {
     this.delegate = Objects.requireNonNull(delegate, "delegate");
@@ -168,6 +192,18 @@ public final class KagemushaDeviceLifecycleBridgeV1 {
   public static KagemushaDeviceLifecycleBridgeV1 onlineOnly() {
     return new KagemushaDeviceLifecycleBridgeV1(
         org.hyperledger.iroha.sdk.offline.KagemushaDeviceLifecycleBridgeV1.onlineOnly());
+  }
+
+  /**
+   * Return the canonical Norito contract vector compiled into the native bridge, when linked.
+   *
+   * <p>Its domain-separated digest is an ABI/tamper pin only and never grants monetary authority.
+   */
+  public static byte[] nativeContractVector() {
+    final byte[] vector =
+        org.hyperledger.iroha.sdk.offline.KagemushaDeviceLifecycleBridgeV1
+            .nativeContractVector();
+    return vector == null ? null : vector.clone();
   }
 
   public Availability availability() {

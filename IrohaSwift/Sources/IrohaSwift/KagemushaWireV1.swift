@@ -113,8 +113,8 @@ public enum KagemushaWireV1 {
     UInt32(maximumPaymentBytes + 512 + maximumAcknowledgementBytes)
   public static let maximumSealedTransitionInputBytes: UInt32 = 2_048
   public static let maximumRecoverySeedBytes: UInt32 = 512
-  public static let maximumPrecommitPairedProofBytes: UInt32 = 6_528
-  public static let maximumPrecommitCandidateMetadataBytes: UInt32 = 1_024
+  public static let maximumPreparedTransitionPairedProofBytes: UInt32 = 6_528
+  public static let maximumPreparedTransitionMetadataBytes: UInt32 = 1_024
   public static let maximumRedemptionProofBytes: UInt32 = 6_528
   public static let maximumPaymentProofBytes: UInt32 = 6_528
   public static let maximumOutboxRetryMetadataBytes: UInt32 = 512

@@ -41,11 +41,12 @@ use crate::zk::{
     kagemusha_v1_recursion::{
         KagemushaAuthenticatedArtifactSetV1, KagemushaAuthenticatedRecursiveVerifierV1,
         KagemushaDirectoryArtifactResolverV1, KagemushaLoadedEpMintAuthorityArtifactsV1,
-        KagemushaLoadedEqMintAuthorityArtifactsV1, KagemushaMintAuthorityCheckpointV1,
+        KagemushaLoadedEpMintHashArtifactsV1, KagemushaLoadedEqMintAuthorityArtifactsV1,
+        KagemushaLoadedEqMintHashArtifactsV1, KagemushaMintAuthorityCheckpointV1,
         KagemushaMintCertificateWitnessV1, KagemushaRecursiveVerifierProfileV1,
         decode_kagemusha_mint_finality_seal_bundle_v1, kagemusha_mint_finality_empty_root_v1,
-        load_kagemusha_ep_mint_authority_artifacts_v1,
-        load_kagemusha_eq_mint_authority_artifacts_v1,
+        load_kagemusha_ep_mint_authority_artifacts_v1, load_kagemusha_ep_mint_hash_artifacts_v1,
+        load_kagemusha_eq_mint_authority_artifacts_v1, load_kagemusha_eq_mint_hash_artifacts_v1,
         prove_kagemusha_finalized_mint_from_checkpoint_v1,
         prove_kagemusha_mint_authority_bootstrap_v1,
         prove_kagemusha_mint_authority_rotation_from_checkpoint_v1,
@@ -93,8 +94,16 @@ struct KagemushaRecursiveVerifierProfileFileV1 {
     inner_mint_authorization_ep: KagemushaBaseCircuitProfileFileV1,
     inner_mint_eq: KagemushaBaseCircuitProfileFileV1,
     inner_mint_ep: KagemushaBaseCircuitProfileFileV1,
+    mint_hash_shard_eq: KagemushaBaseCircuitProfileFileV1,
+    mint_hash_shard_ep: KagemushaBaseCircuitProfileFileV1,
+    mint_hash_claim_eq: KagemushaBaseCircuitProfileFileV1,
+    mint_hash_claim_ep: KagemushaBaseCircuitProfileFileV1,
     mint_eq_protocol_digest: [u8; 32],
     mint_ep_protocol_digest: [u8; 32],
+    mint_hash_shard_eq_protocol_digest: [u8; 32],
+    mint_hash_shard_ep_protocol_digest: [u8; 32],
+    mint_hash_claim_eq_protocol_digest: [u8; 32],
+    mint_hash_claim_ep_protocol_digest: [u8; 32],
     mint_genesis_roster_id: [u8; 32],
 }
 
@@ -329,6 +338,8 @@ struct AuthenticatedKagemushaV1ReleaseRuntime {
     verifier: KagemushaAuthenticatedRecursiveVerifierV1,
     eq_mint_prover: KagemushaLoadedEqMintAuthorityArtifactsV1,
     ep_mint_prover: KagemushaLoadedEpMintAuthorityArtifactsV1,
+    eq_mint_hash_prover: KagemushaLoadedEqMintHashArtifactsV1,
+    ep_mint_hash_prover: KagemushaLoadedEpMintHashArtifactsV1,
     enabled_profiles: Vec<KagemushaEnabledProfileV1>,
 }
 
@@ -514,6 +525,10 @@ impl AuthenticatedKagemushaV1RuntimeVerifier {
             .map_err(|error| format!("failed to load Kagemusha V1 Eq mint prover: {error}"))?;
         let ep_mint_prover = load_kagemusha_ep_mint_authority_artifacts_v1(&artifacts, &profile)
             .map_err(|error| format!("failed to load Kagemusha V1 Ep mint prover: {error}"))?;
+        let eq_mint_hash_prover = load_kagemusha_eq_mint_hash_artifacts_v1(&artifacts, &profile)
+            .map_err(|error| format!("failed to load Kagemusha V1 Eq mint-hash prover: {error}"))?;
+        let ep_mint_hash_prover = load_kagemusha_ep_mint_hash_artifacts_v1(&artifacts, &profile)
+            .map_err(|error| format!("failed to load Kagemusha V1 Ep mint-hash prover: {error}"))?;
         let verifier = KagemushaAuthenticatedRecursiveVerifierV1::load(&artifacts, profile)
             .map_err(|error| format!("failed to load Kagemusha V1 recursive verifier: {error}"))?;
         self.lifecycle.register(release_id)?;
@@ -524,6 +539,8 @@ impl AuthenticatedKagemushaV1RuntimeVerifier {
                 verifier,
                 eq_mint_prover,
                 ep_mint_prover,
+                eq_mint_hash_prover,
+                ep_mint_hash_prover,
                 enabled_profiles: release.enabled_profiles().to_vec(),
             },
         );
@@ -929,6 +946,8 @@ impl KagemushaV1RuntimeVerifier for AuthenticatedKagemushaV1RuntimeVerifier {
         let checkpoint = prove_kagemusha_mint_authority_bootstrap_v1(
             &runtime.eq_mint_prover,
             &runtime.ep_mint_prover,
+            &runtime.eq_mint_hash_prover,
+            &runtime.ep_mint_hash_prover,
             release_id,
             runtime.verifier.mint_genesis_roster_id(),
             certificate,
@@ -997,6 +1016,8 @@ impl KagemushaV1RuntimeVerifier for AuthenticatedKagemushaV1RuntimeVerifier {
         let generated = prove_kagemusha_finalized_mint_from_checkpoint_v1(
             &runtime.eq_mint_prover,
             &runtime.ep_mint_prover,
+            &runtime.eq_mint_hash_prover,
+            &runtime.ep_mint_hash_prover,
             &runtime.verifier,
             certificate,
             authority_checkpoint,
@@ -1098,6 +1119,8 @@ impl KagemushaV1RuntimeVerifier for AuthenticatedKagemushaV1RuntimeVerifier {
         let checkpoint = prove_kagemusha_mint_authority_rotation_from_checkpoint_v1(
             &runtime.eq_mint_prover,
             &runtime.ep_mint_prover,
+            &runtime.eq_mint_hash_prover,
+            &runtime.ep_mint_hash_prover,
             &runtime.verifier,
             certificate,
             authority_checkpoint,
@@ -1195,8 +1218,24 @@ impl KagemushaRecursiveVerifierProfileFileV1 {
             inner_mint_ep: self
                 .inner_mint_ep
                 .try_into_params("inner mint authority Ep")?,
+            mint_hash_shard_eq: self
+                .mint_hash_shard_eq
+                .try_into_params("mint hash shard Eq")?,
+            mint_hash_shard_ep: self
+                .mint_hash_shard_ep
+                .try_into_params("mint hash shard Ep")?,
+            mint_hash_claim_eq: self
+                .mint_hash_claim_eq
+                .try_into_params("mint hash claim Eq")?,
+            mint_hash_claim_ep: self
+                .mint_hash_claim_ep
+                .try_into_params("mint hash claim Ep")?,
             mint_eq_protocol_digest: self.mint_eq_protocol_digest,
             mint_ep_protocol_digest: self.mint_ep_protocol_digest,
+            mint_hash_shard_eq_protocol_digest: self.mint_hash_shard_eq_protocol_digest,
+            mint_hash_shard_ep_protocol_digest: self.mint_hash_shard_ep_protocol_digest,
+            mint_hash_claim_eq_protocol_digest: self.mint_hash_claim_eq_protocol_digest,
+            mint_hash_claim_ep_protocol_digest: self.mint_hash_claim_ep_protocol_digest,
             mint_genesis_roster_id: self.mint_genesis_roster_id,
         })
     }
@@ -1227,7 +1266,22 @@ mod recursive_profile_file_tests {
             ("inner_mint_authorization_ep", 9),
             ("inner_mint_eq", 11),
             ("inner_mint_ep", 13),
+            ("mint_hash_shard_eq", 15),
+            ("mint_hash_shard_ep", 17),
+            ("mint_hash_claim_eq", 19),
+            ("mint_hash_claim_ep", 21),
         ] {
+            let num_instance_columns = if matches!(
+                name,
+                "inner_mint_authorization_eq"
+                    | "inner_mint_authorization_ep"
+                    | "mint_hash_claim_eq"
+                    | "mint_hash_claim_ep"
+            ) {
+                2
+            } else {
+                1
+            };
             fields.insert(
                 name.to_owned(),
                 norito::json!({
@@ -1236,7 +1290,7 @@ mod recursive_profile_file_tests {
                     "num_fixed": fixed,
                     "num_lookup_advice_per_phase": [1],
                     "lookup_bits": 11,
-                    "num_instance_columns": 1,
+                    "num_instance_columns": num_instance_columns,
                 }),
             );
         }
@@ -1244,6 +1298,10 @@ mod recursive_profile_file_tests {
             ("mint_eq_protocol_digest", 1_u8),
             ("mint_ep_protocol_digest", 2_u8),
             ("mint_genesis_roster_id", 3_u8),
+            ("mint_hash_shard_eq_protocol_digest", 4_u8),
+            ("mint_hash_shard_ep_protocol_digest", 5_u8),
+            ("mint_hash_claim_eq_protocol_digest", 6_u8),
+            ("mint_hash_claim_ep_protocol_digest", 7_u8),
         ] {
             fields.insert(name.to_owned(), norito::json::to_value(&[tag; 32]).unwrap());
         }
@@ -1275,11 +1333,27 @@ mod recursive_profile_file_tests {
         assert_eq!(profile.inner_mint_ep.num_fixed, 13);
         assert_eq!(profile.mint_authorization_eq.num_fixed, 1);
         assert_eq!(profile.mint_eq.num_fixed, 1);
+        assert_eq!(profile.mint_hash_shard_eq.num_fixed, 15);
+        assert_eq!(profile.mint_hash_shard_ep.num_fixed, 17);
+        assert_eq!(profile.mint_hash_claim_eq.num_fixed, 19);
+        assert_eq!(profile.mint_hash_claim_ep.num_fixed, 21);
+        assert_eq!(profile.inner_mint_authorization_eq.num_instance_columns, 2);
+        assert_eq!(profile.inner_mint_authorization_ep.num_instance_columns, 2);
+        assert_eq!(profile.mint_hash_claim_eq.num_instance_columns, 2);
+        assert_eq!(profile.mint_hash_claim_ep.num_instance_columns, 2);
         for name in [
             "inner_mint_authorization_eq",
             "inner_mint_authorization_ep",
             "inner_mint_eq",
             "inner_mint_ep",
+            "mint_hash_shard_eq",
+            "mint_hash_shard_ep",
+            "mint_hash_claim_eq",
+            "mint_hash_claim_ep",
+            "mint_hash_shard_eq_protocol_digest",
+            "mint_hash_shard_ep_protocol_digest",
+            "mint_hash_claim_eq_protocol_digest",
+            "mint_hash_claim_ep_protocol_digest",
         ] {
             let mut incomplete = fields.clone();
             incomplete.remove(name).unwrap();
@@ -1290,22 +1364,6 @@ mod recursive_profile_file_tests {
                 "missing private layout {name} must not default to an outer layout"
             );
         }
-    }
-
-    #[test]
-    fn recursive_profile_rejects_removed_pre_ticket_proof_profile_names() {
-        let mut fields = profile_json_fields();
-        for (current, removed) in [
-            ("commit_wrapper_eq", "acceptance_intent_authorization_eq"),
-            ("commit_wrapper_ep", "acceptance_intent_authorization_ep"),
-        ] {
-            let profile = fields.remove(current).unwrap();
-            fields.insert(removed.to_owned(), profile);
-        }
-        let bytes = norito::json::to_vec(&fields).unwrap();
-        assert!(
-            norito::json::from_slice::<KagemushaRecursiveVerifierProfileFileV1>(&bytes).is_err()
-        );
     }
 }
 

@@ -7860,7 +7860,11 @@ pub(crate) mod valid {
                         .creation_time()
                         .as_millis()
                         .saturating_sub(max_clock_drift_ms);
-                    cache.insert_ok(prepared.metadata.signed_hash, expires_at_ms, not_before_ms);
+                    cache.insert_ok(
+                        prepared.metadata.stateless_cache_key,
+                        expires_at_ms,
+                        not_before_ms,
+                    );
                 }
             }
             if let Some(timings) = timings.as_deref_mut() {
@@ -9701,14 +9705,16 @@ pub(crate) mod valid {
                 }
                 exact_current_slot = true;
             }
-            if let Some(artifact) =
-                state
-                    .kura()
-                    .latest_lane_block_artifact_matching(descriptor.lane_id, |artifact| {
-                        artifact.ownership.dataspace_id == descriptor.dataspace_id
-                            && artifact.ownership.lane_incarnation == descriptor.lane_incarnation
-                            && artifact.ownership.proposal_height <= descriptor.proposal_height
-                    })
+            if let Some(artifact) = state
+                .kura()
+                .latest_lane_block_artifact_matching(descriptor.lane_id, |artifact| {
+                    artifact.ownership.dataspace_id == descriptor.dataspace_id
+                        && artifact.ownership.lane_incarnation == descriptor.lane_incarnation
+                        && artifact.ownership.proposal_height <= descriptor.proposal_height
+                })
+                .map_err(|error| {
+                    slot_error(&format!("canonical lane frontier is unreadable: {error}"))
+                })?
             {
                 let artifact_height = artifact.ownership.lane_block_height;
                 if artifact_height > lane_block_height {
@@ -11332,7 +11338,11 @@ pub(crate) mod valid {
                         .creation_time()
                         .as_millis()
                         .saturating_sub(max_clock_drift_ms);
-                    cache.insert_ok(prepared.metadata.signed_hash, expires_at_ms, not_before_ms);
+                    cache.insert_ok(
+                        prepared.metadata.stateless_cache_key,
+                        expires_at_ms,
+                        not_before_ms,
+                    );
                 }
             }
             Ok(())
@@ -12885,7 +12895,7 @@ pub(crate) mod valid {
                         .as_millis()
                         .saturating_sub(max_clock_drift_ms);
                     cache.insert_ok(
-                        prepared_txs[idx].metadata.signed_hash,
+                        prepared_txs[idx].metadata.stateless_cache_key,
                         expires_at_ms,
                         not_before_ms,
                     );
@@ -16614,7 +16624,7 @@ pub(crate) mod valid {
                 )
                 .with_instructions([Log::new(Level::INFO, "cacheable".to_owned())])
                 .sign(signer.private_key());
-                let $tx_hash = tx.hash();
+                let $tx_hash = crate::tx::StatelessValidationCacheKey::new(&tx);
                 let $accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
             };
         }
@@ -23457,7 +23467,7 @@ pub(crate) mod valid {
             topology: Topology,
             block_time_source: TimeSource,
             block: SignedBlock,
-            signed_hash: HashOf<SignedTransaction>,
+            stateless_cache_key: crate::tx::StatelessValidationCacheKey,
         }
         #[allow(clippy::too_many_arguments)]
         fn queue_plan_ttl_fixture(
@@ -23543,7 +23553,7 @@ pub(crate) mod valid {
                 let (forged_authority, _) = gen_account_in(&format!("{label}-forged"));
                 signed = signed.with_authority(forged_authority);
             }
-            let signed_hash = signed.hash();
+            let stateless_cache_key = crate::tx::StatelessValidationCacheKey::new(&signed);
             let entrypoint = TransactionEntrypoint::External(signed.clone());
             let routing_plan = crate::queue::RoutingPlan::single(
                 crate::queue::RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
@@ -23652,7 +23662,7 @@ pub(crate) mod valid {
                 topology,
                 block_time_source,
                 block,
-                signed_hash,
+                stateless_cache_key,
             }
         }
         fn validate_queue_plan_ttl_fixture(
@@ -23700,7 +23710,7 @@ pub(crate) mod valid {
                     .state
                     .stateless_validation_cache()
                     .lock()
-                    .contains_key(&fixture.signed_hash),
+                    .contains_key(&fixture.stateless_cache_key),
                 "rejected QueuePlan authority must not become a generic cache entry"
             );
         }
@@ -23925,7 +23935,7 @@ pub(crate) mod valid {
             .unpack(|_| {})
             .expect("valid block should warm stateless cache");
             let invalid_tx = valid_tx.with_authority(other_authority);
-            let invalid_hash = invalid_tx.hash();
+            let invalid_hash = crate::tx::StatelessValidationCacheKey::new(&invalid_tx);
             let invalid_accepted = AcceptedTransaction::new_unchecked(Cow::Owned(invalid_tx));
             let (_invalid_block_handle, invalid_block_time_source) =
                 TimeSource::new_mock(Duration::from_millis(20));

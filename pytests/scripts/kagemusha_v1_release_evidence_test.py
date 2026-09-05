@@ -26,9 +26,20 @@ VERIFIER = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = VERIFIER
 SPEC.loader.exec_module(VERIFIER)
 
+PHYSICAL_SPEC = importlib.util.spec_from_file_location(
+    "kagemusha_physical_test_fixture",
+    ROOT / "pytests/scripts/kagemusha_v1_physical_device_test.py",
+)
+assert PHYSICAL_SPEC is not None and PHYSICAL_SPEC.loader is not None
+PHYSICAL_TEST = importlib.util.module_from_spec(PHYSICAL_SPEC)
+sys.modules[PHYSICAL_SPEC.name] = PHYSICAL_TEST
+PHYSICAL_SPEC.loader.exec_module(PHYSICAL_TEST)
+
 INTERNAL_HELPER_PROOF_LENGTHS = {
     "platform_credential": (8_000, 8_032),
     "guard_bundle": (12_000, 12_032),
+    "mint_hash_shard": (8_064, 8_096),
+    "mint_hash_claim": (12_064, 12_096),
 }
 
 
@@ -247,6 +258,11 @@ def _fixture(tmp_path: Path) -> EvidenceFixture:
                 "id": "kagemusha-release-verifier-v1",
                 "sha256": trusted_verifier_sha256,
                 "report_schemas": sorted(VERIFIER.REPORT_SCHEMAS),
+            },
+            {
+                "id": VERIFIER.PHYSICAL_VERIFIER_ID,
+                "sha256": _sha256(VERIFIER.PHYSICAL_VERIFIER_PATH.read_bytes()),
+                "report_schemas": ["iroha.kagemusha_v1.hardware_profile_qualification_report"],
             }
         ],
     }
@@ -298,7 +314,7 @@ def _fixture(tmp_path: Path) -> EvidenceFixture:
         inputs: list[str] | tuple[str, ...] = (),
     ) -> str:
         nonlocal command_index
-        command_id = f"verify-{command_index:04d}"
+        command_id = body.get("verification_id", f"verify-{command_index:04d}")
         command_index += 1
         report = {
             "schema": schema,
@@ -388,8 +404,8 @@ def _fixture(tmp_path: Path) -> EvidenceFixture:
         "state_ep_protocol_digest": state_ep,
         "terminal_authorization_eq_protocol_digest": _digest(3),
         "terminal_authorization_ep_protocol_digest": _digest(4),
-        "commit_wrapper_eq_protocol_digest": _digest(13),
-        "commit_wrapper_ep_protocol_digest": _digest(14),
+        "commit_wrapper_eq_protocol_digest": _digest(17),
+        "commit_wrapper_ep_protocol_digest": _digest(18),
         "helper_protocols": helper_protocols,
     }
     artifact_projection = [
@@ -445,15 +461,31 @@ def _fixture(tmp_path: Path) -> EvidenceFixture:
 
     provider_id = "11" * 32
     policy_epoch = 1
+    run_id = _digest(0xF150)
+    physical_paths = {
+        "transcript": "physical/transcript.json",
+        "attestation": "physical/oem-attestation.bin",
+        "trust_roots": "physical/oem-trust-roots.bin",
+        "observer_policy": "physical/observer-policy.json",
+        "oem_report": "reports/profile/oem-attestation.json",
+    }
+    fixture.write(physical_paths["attestation"], b"synthetic OEM attestation only", "oem_attestation")
+    fixture.write(physical_paths["trust_roots"], b"synthetic OEM roots only", "oem_trust_roots")
+    fixture.write(physical_paths["observer_policy"], observer_policy_bytes, "observer_policy")
+    # Allocate the referenced files before command observations are assembled.
+    fixture.write(physical_paths["transcript"], b"{}", "physical_transcript")
+    fixture.write(physical_paths["oem_report"], b"{}", "report")
     qualification_path = add_report(
         "reports/profile/qualification.json",
         "iroha.kagemusha_v1.hardware_profile_qualification_report",
         {
+            "verification_id": f"physical-{run_id}",
             "provider_id": provider_id,
             "policy_epoch": policy_epoch,
             "physical_checks": list(VERIFIER.PHYSICAL_PROFILE_CHECKS),
             "passed": True,
         },
+        inputs=list(physical_paths.values()),
     )
     suite_id = "12" * 32
     p256_base_point = (
@@ -469,8 +501,8 @@ def _fixture(tmp_path: Path) -> EvidenceFixture:
         "platform_class": "dedicated_secure_element",
         "product_class_digest": "15" * 32,
         "firmware_policy_digest": "16" * 32,
-        "enrollment_attestation_verifier_digest": "17" * 32,
-        "attestation_trust_roots_digest": "18" * 32,
+        "enrollment_attestation_verifier_digest": trusted_verifier_sha256,
+        "attestation_trust_roots_digest": _sha256(fixture.path(physical_paths["trust_roots"]).read_bytes()),
         "allowed_suite_commitment": VERIFIER._suite_commitment(suite_id),
         "policy_epoch": policy_epoch,
         "governance_credential_public_key": p256_base_point,
@@ -479,7 +511,7 @@ def _fixture(tmp_path: Path) -> EvidenceFixture:
             fixture.path(qualification_path).read_bytes()
         ),
         "valid_from_ms": 1,
-        "expires_at_ms": 100_000,
+        "expires_at_ms": 1_800_000_000_000,
     }
     hardware_profile["hardware_profile_id"] = VERIFIER.rust_hardware_profile_id(
         hardware_profile
@@ -767,6 +799,7 @@ def _fixture(tmp_path: Path) -> EvidenceFixture:
                 "hardware_profile": hardware_profile,
                 "suite_id": suite_id,
                 "qualification_report": qualification_path,
+                "physical_evidence": physical_paths,
                 "relations": relation_rows,
                 "helpers": helper_rows,
                 "recursive_depths": depth_rows,
@@ -779,6 +812,47 @@ def _fixture(tmp_path: Path) -> EvidenceFixture:
         "reproducible_builds": build_rows,
         "commands": fixture.commands,
     }
+    policy = VERIFIER._load_observer_policy(observer_policy_path, fixture.observer_policy_sha256)
+    builder = PHYSICAL_TEST._TranscriptBuilder(policy, {observer_authority_id: observer_seed})
+    document = builder.build()
+    document["profile"].update({key: hardware_profile[key] for key in (
+        "hardware_profile_id", "provider_id", "qualification_report_digest", "policy_epoch", "capability_mask",
+    )})
+    document["endpoint"].update({
+        "hardware_profile_id": profile_id,
+        "qualification_report_digest": hardware_profile["qualification_report_digest"],
+        "platform_class": hardware_profile["platform_class"],
+        "attestation_digest": _sha256(fixture.path(physical_paths["attestation"]).read_bytes()),
+    })
+    document["run"].update({
+        "run_id": run_id, "candidate_context_digest": fixture.candidate_context_digest(),
+        "artifact_set_digest": artifact_set_digest,
+    })
+    builder.approve(document)
+    fixture.write(physical_paths["transcript"], VERIFIER.canonical_json_bytes(document), "physical_transcript")
+    oem_body = {
+        **{key: hardware_profile[key] for key in (
+            "hardware_profile_id", "provider_id", "policy_epoch", "capability_mask",
+            "product_class_digest", "firmware_policy_digest",
+        )},
+        **{key: document["endpoint"][key] for key in (
+            "hardware_policy_id", "platform_class", "device_id", "product_id", "firmware_digest",
+            "os_build_digest", "hardware_backed", "software_fallback", "production_build",
+        )},
+        **{key: document["run"][key] for key in (
+            "candidate_context_digest", "artifact_set_digest", "run_id", "started_at_ms", "ended_at_ms",
+        )},
+        "challenge_sha256": VERIFIER.physical_oem_challenge(profile_id, document["endpoint"], document["run"]),
+        "attestation_verifier_sha256": trusted_verifier_sha256,
+        **{name: {
+            "sha256": _sha256(fixture.path(physical_paths[name]).read_bytes()),
+            "byte_len": fixture.path(physical_paths[name]).stat().st_size,
+        } for name in ("attestation", "trust_roots", "transcript", "observer_policy")},
+        "passed": True,
+    }
+    add_report(physical_paths["oem_report"], VERIFIER.OEM_ATTESTATION_REPORT_SCHEMA, oem_body,
+               inputs=list(physical_paths.values()))
+    fixture.commands.sort(key=lambda command: command["id"])
     fixture.refresh_files()
     fixture.resign_all_for_candidate_context()
     fixture.refresh_files()
@@ -949,7 +1023,7 @@ def test_release_artifact_ordinals_match_current_rust_model() -> None:
         for ordinal, role in enumerate(VERIFIER.ARTIFACT_ROLES)
     ]
     assert rust_roles == expected
-    assert len(rust_roles) == 42
+    assert len(rust_roles) == 50
 
 
 def test_native_inner_mint_profiles_are_required_and_authenticated() -> None:
@@ -970,20 +1044,24 @@ def test_native_inner_mint_profiles_are_required_and_authenticated() -> None:
         r"^    (\w+): KagemushaBaseCircuitProfileFileV1,", config_profile, re.MULTILINE
     )
     assert native_fields == config_fields
-    inner_fields = (
+    mint_profile_fields = (
         "inner_mint_authorization_eq",
         "inner_mint_authorization_ep",
         "inner_mint_eq",
         "inner_mint_ep",
+        "mint_hash_shard_eq",
+        "mint_hash_shard_ep",
+        "mint_hash_claim_eq",
+        "mint_hash_claim_ep",
     )
-    assert tuple(native_fields[-4:]) == inner_fields
+    assert tuple(native_fields[-8:]) == mint_profile_fields
     digest_impl = native.split("impl KagemushaRecursiveVerifierProfileV1 {", 1)[1].split(
         "    fn validate(&self)", 1
     )[0]
     validation_impl = native.split("    fn validate(&self)", 1)[1].split(
         "        if self.mint_eq_protocol_digest", 1
     )[0]
-    for tag, field in enumerate(inner_fields, start=18):
+    for tag, field in enumerate(mint_profile_fields, start=18):
         assert re.search(rf"\({tag}(?:_u8)?, &self\.{field}\)", digest_impl)
         assert f"&self.{field}" in validation_impl
 
@@ -1005,7 +1083,7 @@ def test_release_rejects_missing_inner_mint_artifacts(
     fixture.write_manifest()
     result = _run(fixture)
     assert result.returncode == 1
-    assert "artifact inventory must contain exactly the 42 V1 roles" in result.stderr
+    assert "artifact inventory must contain exactly the 50 V1 roles" in result.stderr
 
 
 def test_release_rejects_reordered_inner_mint_artifacts(tmp_path: Path) -> None:
@@ -1127,7 +1205,7 @@ def test_valid_closure_derives_complete_projection_deterministically(tmp_path: P
         "terminal_authorization_vk_ep",
         "commit_wrapper_vk_ep",
     }
-    assert len(profile["helper_circuits"]) == 4
+    assert len(profile["helper_circuits"]) == 6
     assert [row["helper"] for row in profile["helper_circuits"]] == list(
         VERIFIER.HELPERS
     )
@@ -1146,7 +1224,7 @@ def test_valid_closure_derives_complete_projection_deterministically(tmp_path: P
         VERIFIER.ACCEPTANCE_CASES
     )
     assert len(profile["acceptance_cases"]) == len(VERIFIER.ACCEPTANCE_CASES)
-    assert len(projection["artifact_inventory"]) == 42
+    assert len(projection["artifact_inventory"]) == 50
     assert [row["role"] for row in projection["artifact_inventory"]][2:10] == [
         "inner_state_pk_eq",
         "inner_state_vk_eq",
@@ -1172,6 +1250,16 @@ def test_valid_closure_derives_complete_projection_deterministically(tmp_path: P
         "inner_mint_credit_vk_eq",
         "inner_mint_credit_pk_ep",
         "inner_mint_credit_vk_ep",
+    ]
+    assert [row["role"] for row in projection["artifact_inventory"]][42:50] == [
+        "mint_hash_shard_pk_eq",
+        "mint_hash_shard_vk_eq",
+        "mint_hash_shard_pk_ep",
+        "mint_hash_shard_vk_ep",
+        "mint_hash_claim_pk_eq",
+        "mint_hash_claim_vk_eq",
+        "mint_hash_claim_pk_ep",
+        "mint_hash_claim_vk_ep",
     ]
     assert len(projection["verifier_commands"]) == len(fixture.commands)
     candidate_context_digest = projection["receipt_projection"]["evidence_closure"][
@@ -1743,6 +1831,19 @@ def test_hardware_profile_body_substitution_is_rejected(tmp_path: Path) -> None:
     result = _run(fixture)
     assert result.returncode == 1
     assert "Rust-derived qualified hardware" in result.stderr
+
+
+def test_physical_qualification_requires_clock_rollback_even_when_signed(tmp_path: Path) -> None:
+    fixture = _fixture(tmp_path)
+    report_path = fixture.manifest["profiles"][0]["qualification_report"]
+    report = json.loads(fixture.path(report_path).read_text())
+    report["physical_checks"].remove("clock_rollback")
+    fixture.write(report_path, VERIFIER.canonical_json_bytes(report), "report")
+    fixture.resign_commands_for_file(report_path)
+    fixture.refresh_files()
+    result = _run(fixture)
+    assert result.returncode == 1
+    assert "omits a required physical check" in result.stderr
 
 
 def test_reproducible_build_observation_must_bind_cargo_lock(tmp_path: Path) -> None:

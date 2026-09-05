@@ -52,7 +52,6 @@ fn sample() -> ToriiKagemushaV1Commands {
         redemption_private_key: Some(key_pair.private_key().clone()),
         redemption_private_key_file: None,
         redemption_minimum_xor_balance: Some(Quantity::from(25_u32)),
-        max_tx_value: defaults::torii::kagemusha_v1_commands::max_tx_value(),
         operation_registry_max_entries:
             defaults::torii::kagemusha_v1_commands::OPERATION_REGISTRY_MAX_ENTRIES,
         operation_registry_max_bytes:
@@ -100,7 +99,6 @@ fn parses_kagemusha_v1_redemption_authority() {
         .redemption_issuer
         .expect("configured redemption issuer");
     assert_eq!(issuer.minimum_xor_balance, Quantity::from(25_u32));
-    assert!(!parsed.max_tx_value.is_zero());
 }
 
 #[test]
@@ -110,7 +108,6 @@ fn payer_signed_top_up_admission_does_not_require_a_redemption_key() {
     config.redemption_minimum_xor_balance = None;
     let parsed = parse_valid(config);
     assert!(parsed.redemption_issuer.is_none());
-    assert!(!parsed.max_tx_value.is_zero());
 }
 #[test]
 fn parses_owner_held_kagemusha_v1_redemption_key() {
@@ -218,9 +215,25 @@ fn rejects_operation_registry_byte_limit_below_one_entry() {
     config.operation_registry_max_bytes = minimum - 1;
     assert_rejected(config);
 }
+
 #[test]
-fn rejects_zero_maximum_transaction_value() {
-    let mut config = sample();
-    config.max_tx_value = Quantity::zero();
-    assert_rejected(config);
+fn rejects_removed_transaction_value_ceiling() {
+    let key_pair = KeyPair::from_seed(vec![0x44; 32], Algorithm::Ed25519);
+    let private_key = ExposedPrivateKey(key_pair.private_key().clone())
+        .try_to_multihash_string()
+        .expect("encode fixture private key");
+    let json = norito::json!({
+        "redemption_private_key": private_key,
+        "redemption_minimum_xor_balance": "1",
+        "max_tx_value": "100000",
+        "operation_registry_max_entries": 1,
+        "operation_registry_max_bytes": (
+            defaults::torii::kagemusha_v1_commands::OPERATION_REGISTRY_ACCOUNTED_BYTES_PER_ENTRY
+        ),
+    });
+    let bytes = norito::json::to_vec(&json).expect("encode removed-field fixture");
+    assert!(
+        norito::json::from_slice::<ToriiKagemushaV1Commands>(&bytes).is_err(),
+        "first-release KAGEMUSHA config must reject the removed value ceiling"
+    );
 }

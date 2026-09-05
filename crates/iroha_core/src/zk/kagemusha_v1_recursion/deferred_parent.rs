@@ -15,7 +15,6 @@ use std::{
 use ff::{Field as _, PrimeField as _};
 use halo2_base::{
     AssignedValue,
-    QuantumCell::{Constant, Existing},
     gates::circuit::builder::BaseCircuitBuilder,
     gates::{GateInstructions as _, RangeInstructions as _},
     utils::{BigPrimeField, CurveAffineExt, fe_to_biguint},
@@ -31,7 +30,7 @@ use snark_verifier::{
         ipa::{Bgh19, IpaAccumulator, IpaAs, IpaSuccinctVerifyingKey},
     },
     system::halo2::transcript::halo2::PoseidonTranscript,
-    util::hash::Poseidon,
+    util::{hash::Poseidon, transcript::Transcript as _},
     verifier::{
         SnarkVerifier as _,
         plonk::{PlonkProtocol, PlonkSuccinctVerifier},
@@ -45,8 +44,8 @@ use super::{
     KAGEMUSHA_RECURSION_IPA_K_V1, KagemushaPastaParityV1, state_relation::public_instance,
 };
 use crate::zk::pasta_cycle_loader::{
-    DeferredEquationWitness, DeferredScalarEccChip, LIMB_BITS, LIMBS, PastaCycleEccChip,
-    constrain_reciprocal_poseidon_v1, pasta_poseidon_domain_elements_v1,
+    DeferredBatchedEquationWitnessV1, DeferredEquationWitness, DeferredScalarEccChip, LIMB_BITS,
+    LIMBS, PastaCycleEccChip, constrain_reciprocal_poseidon_v1, pasta_poseidon_domain_elements_v1,
 };
 use crate::zk::pasta_dense_msm::PastaDenseMsmJobsV1;
 
@@ -57,7 +56,21 @@ use crate::zk::pasta_dense_msm::PastaDenseMsmJobsV1;
 pub(super) type DeferredLoader<'chip, C> = Rc<Halo2Loader<C, DeferredScalarEccChip<'chip, C>>>;
 pub(super) type DeferredScalar<'chip, C> =
     snark_verifier::loader::halo2::Scalar<C, DeferredScalarEccChip<'chip, C>>;
+pub(super) type DeferredEcPoint<'chip, C> =
+    snark_verifier::loader::halo2::EcPoint<C, DeferredScalarEccChip<'chip, C>>;
 pub(super) type DeferredAccumulator<'chip, C> = IpaAccumulator<C, DeferredLoader<'chip, C>>;
+
+/// One verified BGH19 fold plus a constant-size binding to its complete
+/// transcript and both input accumulators.
+pub(super) struct KagemushaAssignedFoldV1<'chip, C>
+where
+    C: CurveAffineExt,
+    C::Base: BigPrimeField,
+    C::ScalarExt: BigPrimeField + halo2_base::utils::ScalarField,
+{
+    pub(super) accumulator: DeferredAccumulator<'chip, C>,
+    pub(super) transcript_binding: AssignedValue<C::ScalarExt>,
+}
 type DeferredTranscript<'chip, C, R> = PoseidonTranscript<
     C,
     DeferredLoader<'chip, C>,
@@ -71,11 +84,13 @@ type DeferredTranscript<'chip, C, R> = PoseidonTranscript<
 #[path = "deferred_parent_proof_bytes.rs"]
 mod proof_bytes;
 #[cfg(test)]
-use proof_bytes::canonical_loaded_proof_bytes_v1;
+pub(super) use proof_bytes::canonical_loaded_proof_bytes_v1;
+pub(super) use proof_bytes::verify_hybrid_ordinary_proof_and_stream_v1;
 use proof_bytes::verify_ordinary_proof_and_stream_v1;
+pub(super) use proof_bytes::verify_two_carrier_hybrid_ordinary_proof_and_stream_v1;
 pub(in crate::zk::kagemusha_v1_recursion) use proof_bytes::{
-    verify_ordinary_proof_with_canonical_bytes_at_k_v1,
     verify_ordinary_proof_with_canonical_bytes_v1,
+    verify_ordinary_proof_with_transcript_binding_at_k_v1,
 };
 
 #[cfg(test)]
@@ -735,6 +750,70 @@ where
     pub(super) audit_digest_limbs: [AssignedValue<C::ScalarExt>; 2],
 }
 
+/// Native-scalar half of the compact two-stage deferred audit.
+///
+/// This is deliberately not an authenticated output.  A cross-parity binding
+/// gadget must commit `challenge`, every source commitment, every aggregate
+/// coefficient and every bound value before the reciprocal dense MSM may
+/// consume `batch`.
+pub(super) struct KagemushaNativeDeferredBatchV1<C>
+where
+    C: CurveAffineExt,
+    C::Base: BigPrimeField,
+    C::ScalarExt: BigPrimeField + halo2_base::utils::ScalarField,
+{
+    pub(super) batch: DeferredBatchedEquationWitnessV1<C>,
+    pub(super) challenge: AssignedValue<C::ScalarExt>,
+    pub(super) challenge_limbs: [AssignedValue<C::ScalarExt>; 2],
+    pub(super) source_commitments: Vec<[AssignedValue<C::ScalarExt>; 2]>,
+    pub(super) aggregate_coefficients: Vec<AssignedValue<C::ScalarExt>>,
+    /// Canonical two-`u128` encodings of every aggregate coefficient.
+    ///
+    /// Together with `source_commitments`, these are the complete wide
+    /// instance carrier authenticated by the hybrid IPA commitment.  Keeping
+    /// the split here, while the scalar arithmetic is still native, avoids
+    /// repeating a non-native 255-bit decomposition in the reciprocal parity.
+    pub(super) aggregate_coefficient_limbs: Vec<[AssignedValue<C::ScalarExt>; 2]>,
+    pub(super) bound_u128_values: Vec<u128>,
+    pub(super) bound_values: Vec<AssignedValue<C::ScalarExt>>,
+}
+
+impl<C> KagemushaNativeDeferredBatchV1<C>
+where
+    C: CurveAffineExt,
+    C::Base: BigPrimeField,
+    C::ScalarExt: BigPrimeField + halo2_base::utils::ScalarField,
+{
+    /// Return the canonical source-major carrier column.
+    ///
+    /// Every source contributes its compressed point and aggregate scalar as
+    /// two `u128` limbs each. Any cross-parity bound values follow in their
+    /// exact transcript order. The challenge remains in the small semantic
+    /// column as the existing audit digest; the reciprocal consumer constrains
+    /// the assigned batch challenge to those public digest limbs.
+    pub(super) fn carrier_cells_v1(&self) -> Result<Vec<AssignedValue<C::ScalarExt>>, Error> {
+        if self.source_commitments.is_empty()
+            || self.source_commitments.len() != self.aggregate_coefficients.len()
+            || self.source_commitments.len() != self.aggregate_coefficient_limbs.len()
+            || self.source_commitments.len() != self.batch.source_count()
+        {
+            return Err(Error::InvalidInstances);
+        }
+        if self.bound_values.len() != self.bound_u128_values.len() {
+            return Err(Error::InvalidInstances);
+        }
+        Ok(self
+            .source_commitments
+            .iter()
+            .zip(&self.aggregate_coefficient_limbs)
+            .flat_map(|(source, coefficient)| {
+                [source[0], source[1], coefficient[0], coefficient[1]]
+            })
+            .chain(self.bound_values.iter().copied())
+            .collect())
+    }
+}
+
 /// Run the complete authenticated scalar predecessor pass against a state-relation builder.
 ///
 /// The fixed 544-byte successor history is appended to the parity proof's public instance column
@@ -1235,8 +1314,278 @@ where
     Ok(output)
 }
 
+/// Derive a source-major deferred batch entirely in the native-scalar half.
+///
+/// The first-stage Poseidon transcript is identical to the V1 full audit.  Its
+/// nonzero digest becomes the Fiat-Shamir challenge used to fold every tagged,
+/// selector-gated equation into one coefficient per source.  This helper
+/// intentionally stops before cross-parity authentication; callers must bind
+/// every returned field before using the compact host witness in a reciprocal
+/// circuit.
+pub(super) fn finalize_tagged_native_deferred_batch_v1<C>(
+    builder: &mut BaseCircuitBuilder<C::ScalarExt>,
+    loader: DeferredLoader<'_, C>,
+    equation_tag: u32,
+) -> Result<KagemushaNativeDeferredBatchV1<C>, Error>
+where
+    C: CurveAffineExt,
+    C::Base: BigPrimeField,
+    C::ScalarExt: BigPrimeField + halo2_base::utils::ScalarField,
+{
+    if equation_tag == 0 {
+        return Err(Error::InvalidInstances);
+    }
+    let equation_count = loader.ecc_chip().equation_count();
+    let assigned_selectors = {
+        let mut ctx = loader.ctx_mut();
+        (0..equation_count)
+            .map(|_| ctx.main().load_constant(C::ScalarExt::ONE))
+            .collect::<Vec<_>>()
+    };
+    derive_native_deferred_batch_with_u128_binding_v1(
+        builder,
+        loader,
+        vec![equation_tag; equation_count],
+        assigned_selectors,
+        &[],
+    )
+}
+
+pub(super) fn derive_native_deferred_batch_with_u128_binding_v1<C>(
+    builder: &mut BaseCircuitBuilder<C::ScalarExt>,
+    loader: DeferredLoader<'_, C>,
+    equation_tags: Vec<u32>,
+    assigned_selectors: Vec<AssignedValue<C::ScalarExt>>,
+    bound_values: &[AssignedValue<C::ScalarExt>],
+) -> Result<KagemushaNativeDeferredBatchV1<C>, Error>
+where
+    C: CurveAffineExt,
+    C::Base: BigPrimeField,
+    C::ScalarExt: BigPrimeField + halo2_base::utils::ScalarField,
+{
+    let equation_count = loader.ecc_chip().equation_count();
+    if equation_count == 0
+        || equation_tags.len() != equation_count
+        || assigned_selectors.len() != equation_count
+        || equation_tags.iter().any(|tag| *tag == 0)
+    {
+        return Err(Error::InvalidInstances);
+    }
+    let (elements, bound_u128_values) = {
+        let chip = loader.ecc_chip();
+        let mut ctx = loader.ctx_mut();
+        let mut elements = chip.assigned_equation_poseidon_elements_v1(
+            &mut ctx,
+            &equation_tags,
+            &assigned_selectors,
+        )?;
+        let mut bound_u128_values = Vec::with_capacity(bound_values.len());
+        if !bound_values.is_empty() {
+            elements.push(ctx.main().load_constant(C::ScalarExt::from(
+                KAGEMUSHA_DEFERRED_AUDIT_BOUND_VALUES_TAG_V1,
+            )));
+            elements.push(ctx.main().load_constant(C::ScalarExt::from(
+                u64::try_from(bound_values.len()).map_err(|_| Error::InvalidInstances)?,
+            )));
+            for value in bound_values {
+                chip.range().range_check(ctx.main(), *value, 128);
+                let integer = fe_to_biguint(value.value());
+                if integer.bits() > 128 {
+                    return Err(Error::InvalidInstances);
+                }
+                let digits = integer.to_u64_digits();
+                let low = u128::from(digits.first().copied().unwrap_or(0));
+                let high = u128::from(digits.get(1).copied().unwrap_or(0));
+                bound_u128_values.push(low | (high << 64));
+                elements.push(*value);
+            }
+        }
+        (elements, bound_u128_values)
+    };
+    let challenge = poseidon_digest_assigned(&loader, elements);
+    let challenge_limbs = assigned_scalar_u128_limbs(&loader, challenge);
+    let (batch, source_commitments, aggregate_coefficients, aggregate_coefficient_limbs) = {
+        let chip = loader.ecc_chip();
+        let mut ctx = loader.ctx_mut();
+        let aggregate_coefficients =
+            chip.assigned_deferred_batch_coefficients_v1(&mut ctx, &assigned_selectors, challenge)?;
+        let source_commitments = chip.assigned_source_commitments_v1(&mut ctx);
+        let batch = chip.batched_witness_v1(challenge, &aggregate_coefficients)?;
+        drop(ctx);
+        let aggregate_coefficient_limbs = aggregate_coefficients
+            .iter()
+            .copied()
+            .map(|coefficient| assigned_scalar_u128_limbs(&loader, coefficient))
+            .collect::<Vec<_>>();
+        (
+            batch,
+            source_commitments,
+            aggregate_coefficients,
+            aggregate_coefficient_limbs,
+        )
+    };
+    let output = KagemushaNativeDeferredBatchV1 {
+        batch,
+        challenge,
+        challenge_limbs,
+        source_commitments,
+        aggregate_coefficients,
+        aggregate_coefficient_limbs,
+        bound_u128_values,
+        bound_values: bound_values.to_vec(),
+    };
+    *builder.pool(0) = loader.take_ctx();
+    Ok(output)
+}
+
+/// Derive the MintHashClaim deferred-equation challenge from a compact,
+/// non-adaptive transcript commitment.
+///
+/// Unlike the generic audit above, this deliberately does not absorb every
+/// equation coefficient. The claim verifier first binds every input from
+/// which those coefficients can be derived: authenticated protocol identities,
+/// public and instance data, final ordinary-proof transcript squeezes, and
+/// final squeezes of both BGH19 folds. This helper then additionally absorbs
+/// the complete source namespace and every equation tag and selector before
+/// deriving `challenge`. The unchanged coefficient gadget evaluates every
+/// original equation at successive powers of that challenge, and the
+/// reciprocal parity still performs the full source-major MSM.
+///
+/// This is claim-specific because using it without a complete verifier-input
+/// binding would let a prover choose omitted coefficients after seeing the
+/// batching challenge.
+pub(super) fn derive_mint_hash_claim_native_deferred_batch_v1<C>(
+    builder: &mut BaseCircuitBuilder<C::ScalarExt>,
+    loader: DeferredLoader<'_, C>,
+    equation_tags: Vec<u32>,
+    assigned_selectors: Vec<AssignedValue<C::ScalarExt>>,
+    verifier_input_binding: &[AssignedValue<C::ScalarExt>],
+    bound_values: &[AssignedValue<C::ScalarExt>],
+) -> Result<KagemushaNativeDeferredBatchV1<C>, Error>
+where
+    C: CurveAffineExt,
+    C::Base: BigPrimeField,
+    C::ScalarExt: BigPrimeField + halo2_base::utils::ScalarField,
+{
+    let equation_count = loader.ecc_chip().equation_count();
+    if equation_count == 0
+        || equation_tags.len() != equation_count
+        || assigned_selectors.len() != equation_count
+        || equation_tags.iter().any(|tag| *tag == 0)
+        || verifier_input_binding.is_empty()
+    {
+        return Err(Error::InvalidInstances);
+    }
+
+    let (elements, source_commitments, bound_u128_values) = {
+        let chip = loader.ecc_chip();
+        let mut ctx = loader.ctx_mut();
+        let mut elements = pasta_poseidon_domain_elements_v1::<C::ScalarExt>(
+            KAGEMUSHA_MINT_HASH_CLAIM_BATCH_DOMAIN_V1,
+            KAGEMUSHA_MINT_HASH_CLAIM_BATCH_VERSION_V1,
+        )
+        .into_iter()
+        .map(|value| ctx.main().load_constant(value))
+        .collect::<Vec<_>>();
+
+        elements.push(ctx.main().load_constant(C::ScalarExt::from(
+            KAGEMUSHA_MINT_HASH_CLAIM_BATCH_INPUTS_TAG_V1,
+        )));
+        elements.push(ctx.main().load_constant(C::ScalarExt::from(
+            u64::try_from(verifier_input_binding.len()).map_err(|_| Error::InvalidInstances)?,
+        )));
+        elements.extend_from_slice(verifier_input_binding);
+
+        let source_commitments = chip.assigned_source_commitments_v1(&mut ctx);
+        elements.push(ctx.main().load_constant(C::ScalarExt::from(
+            KAGEMUSHA_MINT_HASH_CLAIM_BATCH_SOURCES_TAG_V1,
+        )));
+        elements.push(ctx.main().load_constant(C::ScalarExt::from(
+            u64::try_from(source_commitments.len()).map_err(|_| Error::InvalidInstances)?,
+        )));
+        elements.extend(
+            source_commitments
+                .iter()
+                .flat_map(|commitment| commitment.iter().copied()),
+        );
+
+        elements.push(ctx.main().load_constant(C::ScalarExt::from(
+            KAGEMUSHA_MINT_HASH_CLAIM_BATCH_EQUATIONS_TAG_V1,
+        )));
+        elements.push(ctx.main().load_constant(C::ScalarExt::from(
+            u64::try_from(equation_count).map_err(|_| Error::InvalidInstances)?,
+        )));
+        for (tag, selector) in equation_tags.iter().zip(&assigned_selectors) {
+            elements.push(
+                ctx.main()
+                    .load_constant(C::ScalarExt::from(u64::from(*tag))),
+            );
+            elements.push(*selector);
+        }
+
+        elements.push(ctx.main().load_constant(C::ScalarExt::from(
+            KAGEMUSHA_DEFERRED_AUDIT_BOUND_VALUES_TAG_V1,
+        )));
+        elements.push(ctx.main().load_constant(C::ScalarExt::from(
+            u64::try_from(bound_values.len()).map_err(|_| Error::InvalidInstances)?,
+        )));
+        let mut bound_u128_values = Vec::with_capacity(bound_values.len());
+        for value in bound_values {
+            chip.range().range_check(ctx.main(), *value, 128);
+            let integer = fe_to_biguint(value.value());
+            if integer.bits() > 128 {
+                return Err(Error::InvalidInstances);
+            }
+            let digits = integer.to_u64_digits();
+            let low = u128::from(digits.first().copied().unwrap_or(0));
+            let high = u128::from(digits.get(1).copied().unwrap_or(0));
+            bound_u128_values.push(low | (high << 64));
+            elements.push(*value);
+        }
+        (elements, source_commitments, bound_u128_values)
+    };
+
+    let challenge = poseidon_digest_assigned(&loader, elements);
+    let challenge_limbs = assigned_scalar_u128_limbs(&loader, challenge);
+    let (batch, aggregate_coefficients, aggregate_coefficient_limbs) = {
+        let chip = loader.ecc_chip();
+        let mut ctx = loader.ctx_mut();
+        // This unchanged gadget asserts every selector is a bit and retains
+        // every term of every verifier equation in the aggregate coefficient.
+        let aggregate_coefficients =
+            chip.assigned_deferred_batch_coefficients_v1(&mut ctx, &assigned_selectors, challenge)?;
+        let batch = chip.batched_witness_v1(challenge, &aggregate_coefficients)?;
+        drop(ctx);
+        let aggregate_coefficient_limbs = aggregate_coefficients
+            .iter()
+            .copied()
+            .map(|coefficient| assigned_scalar_u128_limbs(&loader, coefficient))
+            .collect::<Vec<_>>();
+        (batch, aggregate_coefficients, aggregate_coefficient_limbs)
+    };
+
+    let output = KagemushaNativeDeferredBatchV1 {
+        batch,
+        challenge,
+        challenge_limbs,
+        source_commitments,
+        aggregate_coefficients,
+        aggregate_coefficient_limbs,
+        bound_u128_values,
+        bound_values: bound_values.to_vec(),
+    };
+    *builder.pool(0) = loader.take_ctx();
+    Ok(output)
+}
+
 const KAGEMUSHA_PARENT_EQUATION_TAG_V1: u32 = 1;
 const KAGEMUSHA_DEFERRED_AUDIT_BOUND_VALUES_TAG_V1: u64 = u64::from_le_bytes(*b"kgmbnd_1");
+const KAGEMUSHA_MINT_HASH_CLAIM_BATCH_DOMAIN_V1: &[u8] =
+    b"iroha:kagemusha:v1:mint-hash-claim-deferred-batch";
+const KAGEMUSHA_MINT_HASH_CLAIM_BATCH_VERSION_V1: u32 = 1;
+const KAGEMUSHA_MINT_HASH_CLAIM_BATCH_INPUTS_TAG_V1: u64 = u64::from_le_bytes(*b"kgminp_1");
+const KAGEMUSHA_MINT_HASH_CLAIM_BATCH_SOURCES_TAG_V1: u64 = u64::from_le_bytes(*b"kgmsrc_1");
+const KAGEMUSHA_MINT_HASH_CLAIM_BATCH_EQUATIONS_TAG_V1: u64 = u64::from_le_bytes(*b"kgmeqn_1");
 
 /// Constrain one scalar-verifier audit in the reciprocal Pasta parity.
 ///
@@ -1289,6 +1638,162 @@ where
         expected_audit_limbs,
         dense_jobs,
     )
+}
+
+/// Consume a compact native deferred batch, constrain its aggregate equation,
+/// and return the complete source-major carrier reconstructed in the
+/// reciprocal Pasta field.
+///
+/// The caller authenticates these returned `u128` cells against the paired
+/// proof-supplied instance columns with the claim-specific common-prime RLC.
+/// Keeping the large carrier out of a second fixed-base MSM avoids allocating
+/// three additional 37-column dense machines at `k = 16`.
+pub(super) fn constrain_reciprocal_native_batch_v1<C>(
+    builder: &mut BaseCircuitBuilder<C::Base>,
+    output: &KagemushaNativeDeferredBatchV1<C>,
+    expected_audit_limbs: &[AssignedValue<C::Base>; 2],
+    local_bound_values: &[AssignedValue<C::Base>],
+    dense_jobs: &mut PastaDenseMsmJobsV1<C>,
+    configured_dense_lanes: usize,
+) -> Result<Vec<AssignedValue<C::Base>>, String>
+where
+    C: CurveAffineExt,
+    C::Base: BigPrimeField + halo2_base::utils::ScalarField + ff::WithSmallOrderMulGroup<3>,
+    C::ScalarExt: BigPrimeField + ff::WithSmallOrderMulGroup<3>,
+{
+    if output.bound_u128_values.len() != output.bound_values.len()
+        || output.bound_u128_values.len() != local_bound_values.len()
+    {
+        return Err("Kagemusha compact carrier parameter shape is invalid".to_owned());
+    }
+    let range = builder.range_chip();
+    let base = FpChip::<C::Base, C::Base>::new(&range, LIMB_BITS, LIMBS);
+    let scalar = FpChip::<C::Base, C::ScalarExt>::new(&range, LIMB_BITS, LIMBS);
+    let chip = PastaCycleEccChip::<C>::new(&base, &scalar);
+    let mut ctx = std::mem::take(builder.pool(0));
+    let assigned = chip.assign_deferred_batched_equation_v1(&mut ctx, &output.batch)?;
+    let challenge_limbs = chip.assigned_scalar_u128_limbs(&mut ctx, &assigned.challenge);
+    for (actual, expected) in challenge_limbs.iter().zip(expected_audit_limbs) {
+        ctx.main().constrain_equal(actual, expected);
+    }
+
+    let mut carrier_values =
+        Vec::with_capacity(assigned.sources.len() * 4 + local_bound_values.len());
+    for (source, coefficient) in assigned
+        .sources
+        .iter()
+        .zip(&assigned.aggregate_coefficients)
+    {
+        carrier_values.extend(chip.assigned_point_u128_limbs(&mut ctx, source));
+        carrier_values.extend(chip.assigned_scalar_u128_limbs(&mut ctx, coefficient));
+    }
+    for (value, local) in output
+        .bound_u128_values
+        .iter()
+        .copied()
+        .zip(local_bound_values)
+    {
+        range.range_check(ctx.main(), *local, 128);
+        let assigned = ctx.main().load_witness(C::Base::from_u128(value));
+        range.range_check(ctx.main(), assigned, 128);
+        ctx.main().constrain_equal(&assigned, local);
+        carrier_values.push(assigned);
+    }
+    chip.constrain_deferred_batched_equation_with_lanes_v1(
+        &mut ctx,
+        &assigned,
+        dense_jobs,
+        configured_dense_lanes,
+    )?;
+    *builder.pool(0) = ctx;
+    Ok(carrier_values)
+}
+
+/// Legacy one-carrier consumer used by the two-column MintAuthorization
+/// transport. Claim proofs use [`constrain_reciprocal_native_batch_v1`] and
+/// authenticate two carrier columns with the compact common-prime binding.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn constrain_reciprocal_native_batch_with_carrier_v1<C>(
+    builder: &mut BaseCircuitBuilder<C::Base>,
+    output: &KagemushaNativeDeferredBatchV1<C>,
+    expected_audit_limbs: &[AssignedValue<C::Base>; 2],
+    carrier_lagrange_bases: &[C],
+    carrier_blind_base: C,
+    carrier_commitment: C,
+    expected_carrier_commitment_limbs: &[AssignedValue<C::Base>; 2],
+    local_bound_values: &[AssignedValue<C::Base>],
+    dense_jobs: &mut PastaDenseMsmJobsV1<C>,
+) -> Result<(), String>
+where
+    C: CurveAffineExt,
+    C::Base: BigPrimeField + halo2_base::utils::ScalarField + ff::WithSmallOrderMulGroup<3>,
+    C::ScalarExt: BigPrimeField + ff::WithSmallOrderMulGroup<3>,
+{
+    if output.bound_u128_values.len() != output.bound_values.len()
+        || output.bound_u128_values.len() != local_bound_values.len()
+        || output
+            .carrier_cells_v1()
+            .map_err(|error| format!("Kagemusha compact carrier shape is invalid: {error:?}"))?
+            .len()
+            != carrier_lagrange_bases.len()
+    {
+        return Err("Kagemusha compact carrier parameter shape is invalid".to_owned());
+    }
+    let range = builder.range_chip();
+    let base = FpChip::<C::Base, C::Base>::new(&range, LIMB_BITS, LIMBS);
+    let scalar = FpChip::<C::Base, C::ScalarExt>::new(&range, LIMB_BITS, LIMBS);
+    let chip = PastaCycleEccChip::<C>::new(&base, &scalar);
+    let mut ctx = std::mem::take(builder.pool(0));
+    let assigned = chip.assign_deferred_batched_equation_v1(&mut ctx, &output.batch)?;
+    let challenge_limbs = chip.assigned_scalar_u128_limbs(&mut ctx, &assigned.challenge);
+    for (actual, expected) in challenge_limbs.iter().zip(expected_audit_limbs) {
+        ctx.main().constrain_equal(actual, expected);
+    }
+
+    let mut carrier_values =
+        Vec::with_capacity(assigned.sources.len() * 4 + local_bound_values.len());
+    for (source, coefficient) in assigned
+        .sources
+        .iter()
+        .zip(&assigned.aggregate_coefficients)
+    {
+        carrier_values.extend(chip.assigned_point_u128_limbs(&mut ctx, source));
+        carrier_values.extend(chip.assigned_scalar_u128_limbs(&mut ctx, coefficient));
+    }
+    for (value, local) in output
+        .bound_u128_values
+        .iter()
+        .copied()
+        .zip(local_bound_values)
+    {
+        range.range_check(ctx.main(), *local, 128);
+        let assigned = ctx.main().load_witness(C::Base::from_u128(value));
+        range.range_check(ctx.main(), assigned, 128);
+        ctx.main().constrain_equal(&assigned, local);
+        carrier_values.push(assigned);
+    }
+    if carrier_values.len() != carrier_lagrange_bases.len() {
+        return Err("Kagemusha compact carrier length changed during assignment".to_owned());
+    }
+
+    chip.constrain_deferred_batched_equation_v1(&mut ctx, &assigned, dense_jobs)?;
+    let assigned_commitment = chip.constrain_canonical_lagrange_commitment_v1(
+        &mut ctx,
+        &carrier_values,
+        carrier_lagrange_bases,
+        carrier_blind_base,
+        carrier_commitment,
+        dense_jobs,
+    )?;
+    let commitment_limbs = chip.assigned_point_u128_limbs(&mut ctx, &assigned_commitment);
+    for (actual, expected) in commitment_limbs
+        .iter()
+        .zip(expected_carrier_commitment_limbs)
+    {
+        ctx.main().constrain_equal(actual, expected);
+    }
+    *builder.pool(0) = ctx;
+    Ok(())
 }
 
 /// Constrain one mixed-role scalar-verifier audit in the reciprocal Pasta parity.
@@ -1538,19 +2043,7 @@ where
 {
     let chip = loader.ecc_chip();
     let mut ctx = loader.ctx_mut();
-    let bits = chip.range().gate().num_to_bits(ctx.main(), scalar, 255);
-    let pack = |ctx: &mut halo2_base::Context<C::ScalarExt>,
-                bits: &[AssignedValue<C::ScalarExt>]| {
-        chip.range().gate().inner_product(
-            ctx,
-            bits.iter().copied().map(Existing),
-            (0..bits.len()).map(|index| Constant(C::ScalarExt::from_u128(1_u128 << index))),
-        )
-    };
-    [
-        pack(ctx.main(), &bits[..128]),
-        pack(ctx.main(), &bits[128..]),
-    ]
+    chip.assigned_scalar_u128_limbs(&mut ctx, scalar)
 }
 
 /// Construct the fixed scalar-half loader over an existing V1 circuit builder.
@@ -1673,6 +2166,27 @@ where
     C::Base: BigPrimeField,
     C::ScalarExt: BigPrimeField + halo2_base::utils::ScalarField,
 {
+    Ok(
+        verify_fold_with_transcript_binding_v1(loader, succinct_vk, inputs, proof_bytes)?
+            .accumulator,
+    )
+}
+
+/// Verify one BGH19 fold and retain a constrained final transcript squeeze.
+///
+/// BGH19 absorbs both input accumulators before deriving its challenges, so
+/// this one cell binds the exact fold inputs as well as every proof object.
+pub(super) fn verify_fold_with_transcript_binding_v1<'chip, C>(
+    loader: &DeferredLoader<'chip, C>,
+    succinct_vk: &IpaSuccinctVerifyingKey<C>,
+    inputs: &[DeferredAccumulator<'chip, C>],
+    proof_bytes: &[u8],
+) -> Result<KagemushaAssignedFoldV1<'chip, C>, Error>
+where
+    C: CurveAffineExt,
+    C::Base: BigPrimeField,
+    C::ScalarExt: BigPrimeField + halo2_base::utils::ScalarField,
+{
     validate_zk_ipa_succinct_key_v1(succinct_vk, KagemushaIpaProofKindV1::Fold)?;
     if succinct_vk.domain.k != KAGEMUSHA_RECURSION_IPA_K_V1 as usize {
         return Err(transcript_error(
@@ -1700,7 +2214,11 @@ where
     if position.get() != proof_bytes.len() {
         return Err(transcript_error("Kagemusha BGH19 fold has trailing bytes"));
     }
-    Ok(accumulated)
+    let transcript_binding = transcript.squeeze_challenge().into_assigned();
+    Ok(KagemushaAssignedFoldV1 {
+        accumulator: accumulated,
+        transcript_binding,
+    })
 }
 
 pub(super) fn load_native_accumulator<'chip, C>(

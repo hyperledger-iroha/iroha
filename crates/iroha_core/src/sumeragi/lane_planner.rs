@@ -2329,7 +2329,9 @@ fn autonomous_lane_predecessor_blocked(
 ) -> bool {
     state
         .unapplied_lane_block_artifact_heights_snapshot_cached()
-        .contains_key(&(lane_id, dataspace_id))
+        .map_or(true, |pending| {
+            pending.contains_key(&(lane_id, dataspace_id))
+        })
         || state
             .unapplied_certified_lane_block_heights_snapshot_cached()
             .contains_key(&(lane_id, dataspace_id))
@@ -2661,7 +2663,11 @@ fn prepare_v2_lane_payload_plan_inner(
     }
     let native_amx_blocked_routes =
         state.unapplied_native_amx_participant_control_heights_snapshot_cached();
-    let mut blocked_routes = state.unapplied_lane_block_artifact_heights_snapshot_cached();
+    let mut blocked_routes = state
+        .unapplied_lane_block_artifact_heights_snapshot_cached()
+        .map_err(|error| {
+            V2LanePayloadPlanError::new(format!("lane frontier unavailable: {error}"))
+        })?;
     for (route, height) in state.unapplied_certified_lane_block_heights_snapshot_cached() {
         blocked_routes
             .entry(route)
@@ -2672,52 +2678,61 @@ fn prepare_v2_lane_payload_plan_inner(
         V2LanePayloadPlanError::new("committed height does not fit the v2 lane planner")
     })?;
     let canonical_unapplied_tips = if allow_canonical_unapplied_predecessor {
-        routing_decisions
-            .iter()
-            .filter_map(|route| {
-                let artifact =
-                    kura.latest_lane_block_artifact_matching(route.lane_id, |artifact| {
-                        let ownership = &artifact.ownership;
-                        ownership.dataspace_id == route.dataspace_id
-                            && ownership.proposal_height <= committed_height
-                            && ownership.proposal_height < context.height
-                            && state.lane_route_and_incarnation_active_at_height(
-                                ownership.lane_id,
-                                ownership.dataspace_id,
-                                ownership.lane_incarnation,
-                                ownership.proposal_height,
-                            )
-                            && state.lane_route_and_incarnation_active_at_height(
-                                ownership.lane_id,
-                                ownership.dataspace_id,
-                                ownership.lane_incarnation,
-                                context.height,
-                            )
-                    })?;
-                // A matching global block hash is not enough: bind the raw
-                // sidecar to the exact ownership embedded in that canonical
-                // block body before it can affect deterministic planning.
-                let canonical = kura.canonical_lane_block_artifacts_at_proposal_height_matching(
-                    artifact.ownership.proposal_height,
-                    1,
-                    |ownership| ownership == &artifact.ownership,
-                );
-                if canonical.first() != Some(&artifact) || canonical.len() != 1 {
-                    return None;
-                }
-                let ownership = artifact.ownership;
-                Some((
-                    (ownership.lane_id, ownership.dataspace_id),
-                    LaneBlockTip {
-                        lane_id: ownership.lane_id,
-                        dataspace_id: ownership.dataspace_id,
-                        lane_incarnation: ownership.lane_incarnation,
-                        latest_lane_block_height: ownership.lane_block_height,
-                        latest_lane_block_descriptor_hash: ownership.lane_block_descriptor_hash,
-                    },
-                ))
-            })
-            .collect::<BTreeMap<_, _>>()
+        let mut tips = BTreeMap::new();
+        for route in routing_decisions {
+            let Some(artifact) = kura
+                .latest_lane_block_artifact_matching(route.lane_id, |artifact| {
+                    let ownership = &artifact.ownership;
+                    ownership.dataspace_id == route.dataspace_id
+                        && ownership.proposal_height <= committed_height
+                        && ownership.proposal_height < context.height
+                        && state.lane_route_and_incarnation_active_at_height(
+                            ownership.lane_id,
+                            ownership.dataspace_id,
+                            ownership.lane_incarnation,
+                            ownership.proposal_height,
+                        )
+                        && state.lane_route_and_incarnation_active_at_height(
+                            ownership.lane_id,
+                            ownership.dataspace_id,
+                            ownership.lane_incarnation,
+                            context.height,
+                        )
+                })
+                .map_err(|error| {
+                    V2LanePayloadPlanError::new(format!(
+                        "canonical lane frontier unavailable: {error}"
+                    ))
+                })?
+            else {
+                continue;
+            };
+            // A matching global block hash is not enough: bind the raw
+            // sidecar to the exact ownership embedded in that canonical
+            // block body before it can affect deterministic planning.
+            let canonical = kura.canonical_lane_block_artifacts_at_proposal_height_matching(
+                artifact.ownership.proposal_height,
+                1,
+                |ownership| ownership == &artifact.ownership,
+            );
+            if canonical.first() != Some(&artifact) || canonical.len() != 1 {
+                return Err(V2LanePayloadPlanError::new(
+                    "canonical lane frontier does not match exact block ownership",
+                ));
+            }
+            let ownership = artifact.ownership;
+            tips.insert(
+                (ownership.lane_id, ownership.dataspace_id),
+                LaneBlockTip {
+                    lane_id: ownership.lane_id,
+                    dataspace_id: ownership.dataspace_id,
+                    lane_incarnation: ownership.lane_incarnation,
+                    latest_lane_block_height: ownership.lane_block_height,
+                    latest_lane_block_descriptor_hash: ownership.lane_block_descriptor_hash,
+                },
+            );
+        }
+        tips
     } else {
         BTreeMap::new()
     };
@@ -2884,11 +2899,14 @@ fn v2_relay_route_is_active(
     crate::state::consensus_lane_dataspace_at_height(lane_id, nexus, proposal_height)
         == Some(dataspace_id)
 }
-fn v2_known_lane_tips(state: &State, proposal_height: u64) -> Vec<LaneBlockTip> {
+fn v2_known_lane_tips(
+    state: &State,
+    proposal_height: u64,
+) -> Result<Vec<LaneBlockTip>, crate::kura::Error> {
     let nexus = state.nexus_snapshot();
     let reset_heights = state.da_shard_canonical_reset_heights_snapshot_cached();
     let mut tips = state
-        .lane_block_artifact_tips_snapshot_cached()
+        .lane_block_artifact_tips_snapshot_cached()?
         .into_iter()
         .map(
             |(
@@ -2953,7 +2971,7 @@ fn v2_known_lane_tips(state: &State, proposal_height: u64) -> Vec<LaneBlockTip> 
                 },
             ),
     );
-    tips
+    Ok(tips)
 }
 /// Resolve the exact latest lane-local frontier for a participant-only AMX proposal.
 pub(crate) fn v2_known_lane_tip_for_route(
@@ -2965,6 +2983,7 @@ pub(crate) fn v2_known_lane_tip_for_route(
     lane_incarnation: Hash,
 ) -> Option<(u64, Option<Hash>)> {
     let mut matching = v2_known_lane_tips(state, proposal_height)
+        .ok()?
         .into_iter()
         .filter(|tip| {
             tip.lane_id == lane_id

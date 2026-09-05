@@ -664,7 +664,10 @@ impl MergeLaneAuthorityCatalogV1 {
     #[must_use]
     pub fn contains_validator(&self, active_lane_count: usize, validator: &PeerId) -> bool {
         self.validate_for_active_lanes(active_lane_count).is_ok()
-            && self.rosters.iter().any(|roster| roster.validators.contains(validator))
+            && self
+                .rosters
+                .iter()
+                .any(|roster| roster.validators.contains(validator))
     }
 }
 /// BFT quorum certificate produced by the merge committee for a merge-ledger entry.
@@ -1167,6 +1170,21 @@ mod tests {
     fn sample_hash(label: &[u8]) -> Hash {
         Hash::new(label)
     }
+    fn sample_lane_authority_catalog(active_lane_count: usize) -> MergeLaneAuthorityCatalogV1 {
+        let mut validators: Vec<_> = (1..=4)
+            .map(|seed| {
+                PeerId::new(
+                    KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                        .expect("BLS lane committee fixture keypair")
+                        .public_key()
+                        .clone(),
+                )
+            })
+            .collect();
+        validators.sort();
+        MergeLaneAuthorityCatalogV1::from_lane_committees(&vec![validators; active_lane_count])
+            .expect("canonical lane authority fixture")
+    }
     fn sample_network_id(label: &[u8]) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(label)))
     }
@@ -1449,6 +1467,7 @@ mod tests {
             epoch_id: 1,
             lane_catalog_hash: sample_hash(b"max-overhead-catalog"),
             active_lanes,
+            lane_authority_catalog: sample_lane_authority_catalog(MAX_ACTIVE_LANES),
             incarnation_root: sample_hash(b"max-overhead-incarnations"),
             activation_root: sample_hash(b"max-overhead-activations"),
             lane_snapshots: Vec::new(),
@@ -1516,6 +1535,7 @@ mod tests {
                     activation_height: 1,
                 },
             ],
+            lane_authority_catalog: sample_lane_authority_catalog(2),
             incarnation_root: sample_hash(b"incarnation-root"),
             activation_root: sample_hash(b"activation-root"),
             lane_snapshots: vec![
@@ -1573,6 +1593,10 @@ mod tests {
             global_state_root: sample_hash(b"global"),
             merge_qc: qc.clone(),
         };
+        entry
+            .lane_authority_catalog
+            .validate_for_active_lanes(entry.active_lanes.len())
+            .expect("roundtrip fixture carries the exact lane authority catalog");
         assert_eq!(entry.lane_count(), 2);
         assert_eq!(entry.lane_tips().len(), 2);
         assert_eq!(entry.merge_hint_roots().len(), 2);
@@ -1680,11 +1704,9 @@ mod tests {
             lane_drain_certificates: entry.lane_drain_certificates.clone(),
         };
         let previous_v1_encoded = previous_v1.encode();
-        let decoded_previous_v1 = MergeLedgerEntry::decode(&mut previous_v1_encoded.as_slice())
-            .expect("the retired layout is structurally identical apart from its version");
         assert!(
-            !decoded_previous_v1.has_current_version(),
-            "the retired version-one value must never be admitted as the current entry"
+            MergeLedgerEntry::decode(&mut previous_v1_encoded.as_slice()).is_err(),
+            "the retired version-one layout must fail closed during decoding"
         );
         let mut unsupported = entry;
         unsupported.version = MergeLedgerEntry::VERSION.saturating_add(1);

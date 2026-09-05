@@ -23,6 +23,82 @@ use crate::zk::pasta_sha256::PastaSha256ByteV1;
 const PROOF_BYTES_TEST_K: usize = 12;
 const PROOF_BYTES_LOOKUP_BITS: usize = 8;
 
+#[test]
+fn ordinary_parser_bounds_individual_and_total_release_challenges() {
+    assert_eq!(
+        super::proof_bytes::validate_ordinary_challenge_profile_v1(&[1, 2, 1])
+            .expect("the fixed release challenge profile"),
+        4
+    );
+    assert!(
+        super::proof_bytes::validate_ordinary_challenge_profile_v1(&[3, 0, 0]).is_err(),
+        "one phase cannot exceed the release maximum even when its total is small"
+    );
+    assert!(
+        super::proof_bytes::validate_ordinary_challenge_profile_v1(&[2, 2, 1]).is_err(),
+        "individually bounded phases cannot exceed the aggregate release maximum"
+    );
+    assert!(
+        super::proof_bytes::validate_ordinary_challenge_profile_v1(&[usize::MAX]).is_err(),
+        "an attacker-controlled count is rejected before transcript allocation"
+    );
+}
+
+#[test]
+fn hybrid_parser_bounds_carrier_by_authenticated_lagrange_capacity() {
+    let capacity = 1_usize << KAGEMUSHA_RECURSION_IPA_K_V1;
+    super::proof_bytes::validate_hybrid_carrier_lagrange_capacity_v1(capacity, capacity)
+        .expect("the final authenticated Lagrange base remains usable");
+    assert!(
+        super::proof_bytes::validate_hybrid_carrier_lagrange_capacity_v1(capacity + 1, capacity)
+            .is_err(),
+        "a carrier wider than the authenticated SRS cannot enter recursive parsing"
+    );
+}
+
+#[test]
+fn hybrid_parser_accounts_for_each_proof_supplied_commitment() {
+    assert_eq!(
+        super::proof_bytes::hybrid_proof_supplied_commitment_bytes_v1(1)
+            .expect("one compressed Pasta point"),
+        32
+    );
+    assert_eq!(
+        super::proof_bytes::hybrid_proof_supplied_commitment_bytes_v1(2)
+            .expect("two compressed Pasta points"),
+        64
+    );
+    assert!(
+        super::proof_bytes::hybrid_proof_supplied_commitment_bytes_v1(usize::MAX).is_err(),
+        "proof framing rejects a commitment-count overflow"
+    );
+}
+
+#[test]
+fn hybrid_parser_requires_canonical_commitment_limb_order() {
+    let validate = |pairs: &[[usize; 2]], expected| {
+        super::proof_bytes::validate_hybrid_commitment_limb_indices_v1(8, pairs, expected)
+    };
+    validate(&[[2, 3]], 1).expect("legacy one-carrier binding");
+    validate(&[[2, 3], [4, 5]], 2).expect("claim two-carrier binding");
+
+    for (pairs, expected) in [
+        (&[][..], 1),
+        (&[[2, 3], [4, 5]][..], 1),
+        (&[[2, 3]][..], 2),
+        (&[[3, 2], [4, 5]][..], 2),
+        (&[[4, 5], [2, 3]][..], 2),
+        (&[[2, 3], [5, 6]][..], 2),
+        (&[[2, 3], [3, 4]][..], 2),
+        (&[[4, 5], [7, 8]][..], 2),
+    ] {
+        assert!(
+            validate(pairs, expected).is_err(),
+            "missing, extra, reversed, swapped, overlapping, gapped, or out-of-range limbs must fail"
+        );
+    }
+}
+
 #[derive(Clone, Copy)]
 enum ReadItem {
     Scalar,

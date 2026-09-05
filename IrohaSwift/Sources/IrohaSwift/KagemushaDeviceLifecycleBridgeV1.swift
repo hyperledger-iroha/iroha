@@ -145,6 +145,7 @@ public final class KagemushaDeviceLifecycleBridgeV1 {
   public static let maximumCommandPayloadBytes = 64 * 1024
   public static let maximumResponsePayloadBytes = 64 * 1024
   public static let maximumAuthenticatorBytes = 64
+  public static let maximumNativeContractVectorBytes = 4 * 1024
 
   public let availability: Availability
   public let acceptedCapabilities: KagemushaDeviceLifecycleCapabilitiesV1?
@@ -180,6 +181,14 @@ public final class KagemushaDeviceLifecycleBridgeV1 {
   /// Construct an explicit online-only bridge for a device without the complete hardware API.
   public static func onlineOnly() -> KagemushaDeviceLifecycleBridgeV1 {
     KagemushaDeviceLifecycleBridgeV1(endpoint: nil, capabilities: nil)
+  }
+
+  /// Read the canonical Norito contract vector compiled into the native bridge.
+  ///
+  /// The vector's domain-separated digest is an ABI/tamper pin only. It is not
+  /// hardware attestation, a settlement receipt, or monetary authority.
+  public static func nativeContractVector() -> Data? {
+    NativeContractVector.load()
   }
 
   /// Execute and expose a success only after native verification of its complete response.
@@ -260,6 +269,46 @@ public final class KagemushaDeviceLifecycleBridgeV1 {
       endpoint: endpoint,
       capabilities: capabilities
     )
+  }
+
+  private enum NativeContractVector {
+    #if canImport(Darwin)
+      private typealias ExportFn =
+        @convention(c) (
+          UnsafeMutablePointer<UInt8>?,
+          Int,
+          UnsafeMutablePointer<Int>?
+        ) -> Int32
+
+      static func load() -> Data? {
+        let (handle, _) = NoritoBridgeLoader.openHandle()
+        guard let handle,
+          let symbol = dlsym(handle, "connect_norito_kagemusha_contract_vector_v1")
+        else {
+          return nil
+        }
+        let export = unsafeBitCast(symbol, to: ExportFn.self)
+        var required = 0
+        guard export(nil, 0, &required) == -12,
+          required > 0,
+          required <= KagemushaDeviceLifecycleBridgeV1.maximumNativeContractVectorBytes
+        else {
+          return nil
+        }
+        var output = Data(repeating: 0, count: required)
+        let capacity = output.count
+        var written = 0
+        let status = output.withUnsafeMutableBytes { raw in
+          export(raw.bindMemory(to: UInt8.self).baseAddress, capacity, &written)
+        }
+        guard status == 0, written == required else {
+          return nil
+        }
+        return output
+      }
+    #else
+      static func load() -> Data? { nil }
+    #endif
   }
 
   private final class NativeEndpoint: KagemushaDeviceLifecycleEndpointV1 {

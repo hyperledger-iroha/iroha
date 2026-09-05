@@ -70,6 +70,22 @@ impl<C: CurveAffine> CommitmentScheme for IPACommitmentScheme<C> {
 /// Verifier parameters
 pub type ParamsVerifierIPA<C> = ParamsIPA<C>;
 
+impl<C: CurveAffine> ParamsIPA<C> {
+    /// Bases for commitments to evaluation-form polynomials.
+    ///
+    /// Recursive circuits use this read-only view to authenticate a compact
+    /// proof-supplied instance commitment without cloning the full parameter
+    /// vector or round-tripping the parameter serialization.
+    pub fn get_g_lagrange(&self) -> &[C] {
+        &self.g_lagrange
+    }
+
+    /// Fixed IPA blinding base used by [`Params::commit_lagrange`].
+    pub fn get_blind_base(&self) -> C {
+        self.w
+    }
+}
+
 impl<'params, C: CurveAffine> ParamsVerifier<'params, C> for ParamsIPA<C> {}
 
 impl<'params, C: CurveAffine> Params<'params, C> for ParamsIPA<C> {

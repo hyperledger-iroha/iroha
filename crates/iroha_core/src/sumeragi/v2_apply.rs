@@ -902,7 +902,7 @@ fn canonical_autonomous_carrier_disposition(
         || execution_commitment.validate().is_err()
         || execution_commitment.executed_block_wire_len == 0
         || execution_commitment.executed_block_wire_len > crate::kura::STRICT_INIT_MAX_BLOCK_BYTES
-        || kura.durable_block_payload_len_by_hash(finality.block_hash)
+        || kura.durable_block_payload_len_by_hash(finality.block_hash)?
             != Some((height, execution_commitment.executed_block_wire_len))
     {
         return Err(V2ReservationLifecycleError::CanonicalContextMismatch { height });
@@ -917,7 +917,7 @@ fn canonical_autonomous_carrier_disposition(
     };
     let block_height = NonZeroUsize::new(usize::try_from(height)?)
         .ok_or(V2ReservationLifecycleError::MissingCanonicalBody { height })?;
-    let Some(block) = kura.get_block_without_merge_sidecar(block_height) else {
+    let Some(block) = kura.read_block_body(block_height)? else {
         return Ok(CanonicalAutonomousCarrierInspection::MissingBody(need));
     };
     let executed_block_wire = block

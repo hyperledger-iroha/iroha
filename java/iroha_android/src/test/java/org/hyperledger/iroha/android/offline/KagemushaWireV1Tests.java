@@ -31,6 +31,9 @@ public final class KagemushaWireV1Tests {
   @Test
   public void sharedCanonicalFixtureRoundTripsByteForByte() throws Exception {
     final String fixture = loadCanonicalFixture();
+    assertFalse(fixture.contains("\"acceptance_intent\""));
+    assertFalse(fixture.contains("\"acceptance_ticket\""));
+    assertFalse(fixture.contains("\"complete_five_message\""));
     assertEquals(1L, fixtureLong(fixture, null, "fixture_version"));
     assertEquals("KAGEMUSHA", fixtureString(fixture, null, "protocol"));
     assertEquals("kgm1:", fixtureString(fixture, null, "text_prefix"));

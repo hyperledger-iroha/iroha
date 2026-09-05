@@ -87,6 +87,7 @@ public final class KagemushaWireV1 {
       org.hyperledger.iroha.sdk.offline.KagemushaWireV1.REDEMPTION_OUTBOX_MIN_BYTES;
   public static final int INBOX_STAGE_MIN_BYTES =
       org.hyperledger.iroha.sdk.offline.KagemushaWireV1.INBOX_STAGE_MIN_BYTES;
+
   private KagemushaWireV1() {}
 
   /** Encode bounded canonical bytes as exact unpadded base64url with the {@code kgm1:} prefix. */

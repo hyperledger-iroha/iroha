@@ -1556,9 +1556,13 @@ real block/lane checks produced the 862-test checkpoint. The eligible-only
 Ready-Proposal-Sign preemption regression produced the 863-test checkpoint;
 retaining the exact failed-pre-handshake dial backoff owner
 brings the 864-test checkpoint. The two sealed Certified-Serve storage
-regressions and the CompleteTip payload-before-ledger-repair regression bring
-the current inventory to 867
-exact tests across 44 modules and 85 pre-network legs.
+regressions and the CompleteTip payload-before-ledger-repair regression brought
+the historical inventory to 867 exact tests across 44 modules. The Kagemusha
+clean-break retired the separate finality and offline compact-QC rows and their
+module legs, replacing them with one consensus-signature-envelope regression
+in the existing context-identity module. That consolidation brings the
+current inventory to 866
+exact tests across 42 modules and 83 pre-network legs.
 The exact Apply regression also drains the typed Kura completion and verifies
 that its immutable finality artifact and original reducer tag absorb a later
 identical periodic rediscovery even after live tag authority is relinquished,
@@ -1566,7 +1570,7 @@ without allocating a new work ID; tag drift or a conflicting post-completion
 certificate still fails closed. This extends an existing named regression and
 therefore does not change the inventory cardinality.
 Its canonical module/test TSV inventory SHA-256 is
-`49312043ca34bd4a1857ef64d21bd858c4f9af1e4f39d02e5338e57bc6494a8a`.
+`47a818de4cc0793664977d5e0f4b7e56dda943580b647f15671c3b8aa8a5cd20`.
 Nine of those legs execute the separate 522-test G-UNIT focus inventory. Its
 canonical source-derived inventory contains 523 TSV lines and has SHA-256
 `5e8b82b400b438eabb7733adbccae15b5aa212a98a89161a586cbce686e2f6e9`.
@@ -1813,7 +1817,7 @@ three-per-materialized-authenticated-non-validator owners (`5N+3H` total)
 capacity-negative boundary and the exact
 PrepareQC equal-vote quorum regressions. Its four integration tests run
 together under their module filter; the complete pre-network corridor now has
-85 legs, including the governance-unlock audit module, the autonomous
+83 legs, including the governance-unlock audit module, the autonomous
 lifecycle-recovery module, separate exact
 status and atomic lane-certificate decode
 contracts, nine G-UNIT execution-receipt legs, the source-attested Native AMX
@@ -1821,12 +1825,12 @@ fixture check, two `iroha_config` geometry modules, the two new `iroha_p2p`
 geometry modules, the shared-byte-budget module, plus source-sealed workspace
 formatting, the legacy-codec guard, workspace
 build, Clippy, workspace tests, and feature-enabled `irohad` command-success
-legs, the G-SCALE runner/validator preflight, plus three proposal-origin
+legs, the G-SCALE runner/validator preflight, plus two proposal-origin
 data-model module legs. Immediately before completion publication, the runner
 also revalidates the source-bound localnet binary bundle. The data-model modules are
 discovered and executed against `iroha_data_model`; they cannot fall through to
 the `iroha_core` runner.
-The current 867-test inventory is a mechanically checked
+The current 866-test inventory is a mechanically checked
 source contract, not execution evidence; the
 complete inventory must still run as one clean committed, detached,
 source-sealed release leg before it becomes release evidence.
@@ -2241,7 +2245,7 @@ unbounded broadcast admission. The integration filter remains a four-test
 module leg, while separate P2P, daemon, status, Nexus lane-relay, and atomic
 lane-certificate contracts brought that historical aggregate pre-network
 corridor to 61 legs. The current source-bound inventory is the separately
-audited 85-leg, 867-production-test corridor plus 522 G-UNIT tests; execution
+audited 83-leg, 866-production-test corridor plus 522 G-UNIT tests; execution
 against a signed clean candidate remains required before release promotion.
 
 The current reconnect changes supersede older mutable-tree diagnostics that
@@ -2523,8 +2527,8 @@ runner and preserves the active logs and evidence directory for diagnosis;
 without terminal validation it cannot publish external completion.
 
 On success, the private invocation publishes its exact aggregate receipt. That
-receipt binds the 85 pre-network corridor legs and
-their exact 867-test production inventory, the separate 522-test G-UNIT
+receipt binds the 83 pre-network corridor legs and
+their exact 866-test production inventory, the separate 522-test G-UNIT
 inventory, semantic test names/counts, commands, logs, the exact source-bound
 prebuilt localnet binary bundle and attestation, and resolved tool identities.
 Formal evidence includes the completion, pinned harness lock and toolchain,

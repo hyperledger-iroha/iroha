@@ -346,8 +346,8 @@ fn higher_view_carrier_rebinds_same_autonomous_payload_without_retirement() {
     .expect("encode autonomous payload envelope");
 
     let first_view = 0;
-    let first_leader = usize::try_from(adapter.context.leader(first_view))
-        .expect("first carrier leader index");
+    let first_leader =
+        usize::try_from(adapter.context.leader(first_view)).expect("first carrier leader index");
     let mut first_builder = BlockBuilder::new(
         adapter
             .merge_carrier_context_header(first_view)
@@ -392,8 +392,7 @@ fn higher_view_carrier_rebinds_same_autonomous_payload_without_retirement() {
             .expect("higher-view carrier context header"),
     );
     winning_builder.set_execution_context(Some(
-        BlockExecutionContextBundle::new(Vec::new())
-            .with_autonomous_lane_payloads(vec![envelope]),
+        BlockExecutionContextBundle::new(Vec::new()).with_autonomous_lane_payloads(vec![envelope]),
     ));
     let winning_carrier = winning_builder
         .build_with_signature(
@@ -404,10 +403,7 @@ fn higher_view_carrier_rebinds_same_autonomous_payload_without_retirement() {
     mark_global_body_locked_for_block(&mut adapter, &winning_carrier);
     assert!(adapter.autonomous_payloads.is_empty());
     assert_eq!(
-        adapter
-            .pending_autonomous_anchor_payloads
-            .values()
-            .next(),
+        adapter.pending_autonomous_anchor_payloads.values().next(),
         Some(&hint_free),
         "the superseded hint must be quarantined without changing stable payload bytes"
     );
@@ -442,10 +438,7 @@ fn higher_view_carrier_rebinds_same_autonomous_payload_without_retirement() {
             adapter.context.epoch,
         )
         .expect("attach the expected winning hint");
-    assert_eq!(
-        adapter.autonomous_payloads.values().next(),
-        Some(&expected)
-    );
+    assert_eq!(adapter.autonomous_payloads.values().next(), Some(&expected));
     assert_eq!(
         adapter
             .kura
@@ -998,6 +991,24 @@ fn merge_candidate_for_persistence_retry(
             },
         )
         .collect::<Vec<_>>();
+    let lane_committees = active_lanes
+        .iter()
+        .map(|binding| {
+            adapter
+                .state
+                .resolve_lane_committee_at_height(
+                    crate::state::LaneAuthorityRoute::new(binding.lane_id, binding.dataspace_id),
+                    adapter.context.height,
+                )
+                .expect("fixture exact lane committee")
+                .into_validators()
+        })
+        .collect::<Vec<_>>();
+    let lane_authority_catalog =
+        iroha_data_model::merge::MergeLaneAuthorityCatalogV1::from_lane_committees(
+            &lane_committees,
+        )
+        .expect("canonical fixture lane authority");
     crate::merge::MergeLedgerCandidate {
         version: crate::merge::MergeLedgerCandidate::VERSION,
         epoch_id: 1,
@@ -1014,6 +1025,7 @@ fn merge_candidate_for_persistence_retry(
             &nexus.lane_catalog,
         ),
         active_lanes: active_lanes.clone(),
+        lane_authority_catalog,
         incarnation_root: iroha_data_model::nexus::LaneLifecycleParameterV1::incarnation_root(
             &incarnation_entries,
         ),
@@ -1928,13 +1940,14 @@ fn record_production_merge_candidate_for_persistence_retry(
     let executed_block_wire = block
         .encode_wire()
         .expect("encode persistence-retry carrier");
-    let mut execution_commitment = wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
-        parent_state_root,
-        post_state_root,
-        Hash::new(b"v2 merge retry ordinary writes"),
-        u64::try_from(executed_block_wire.len()).expect("carrier wire length fits u64"),
-        Hash::new(&executed_block_wire),
-    );
+    let mut execution_commitment =
+        wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+            parent_state_root,
+            post_state_root,
+            Hash::new(b"v2 merge retry ordinary writes"),
+            u64::try_from(executed_block_wire.len()).expect("carrier wire length fits u64"),
+            Hash::new(&executed_block_wire),
+        );
     execution_commitment.lane_finality_manifest = Some(statement_commitment);
     execution_commitment
         .validate()

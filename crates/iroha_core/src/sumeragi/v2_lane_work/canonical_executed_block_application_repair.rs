@@ -1,3 +1,20 @@
+#[derive(Debug, Error)]
+enum CanonicalRecoveryReadError {
+    #[error("{0}")]
+    Rejected(String),
+    #[error("canonical recovery durable read failed: {0}")]
+    LocalPersistence(String),
+}
+impl From<String> for CanonicalRecoveryReadError {
+    fn from(reason: String) -> Self {
+        Self::Rejected(reason)
+    }
+}
+impl CanonicalRecoveryReadError {
+    fn storage(error: crate::kura::Error) -> Self {
+        Self::LocalPersistence(error.to_string())
+    }
+}
 const CANONICAL_EXECUTED_BLOCK_CHUNK_BYTES: usize = MAX_CERTIFIED_MERGE_CHUNK_BYTES;
 const CANONICAL_EXECUTED_BLOCK_MAX_CHUNKS: usize =
     (STRICT_INIT_MAX_BLOCK_BYTES as usize).div_ceil(CANONICAL_EXECUTED_BLOCK_CHUNK_BYTES);
@@ -50,7 +67,9 @@ pub(crate) fn canonical_executed_block_need_for_height(
         executed_block_wire_hash: execution_commitment.executed_block_wire_hash,
     };
     if header.hash() != expected_hash
-        || kura.durable_block_payload_len_by_hash(expected_hash)
+        || kura
+            .durable_block_payload_len_by_hash(expected_hash)
+            .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?
             != Some((height, need.executed_block_wire_len))
     {
         return Err(V2LaneWorkError::Persistence(format!(
@@ -58,7 +77,7 @@ pub(crate) fn canonical_executed_block_need_for_height(
         )));
     }
     validate_canonical_executed_block_need(context, state, kura, need)
-        .map_err(V2LaneWorkError::Persistence)?;
+        .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
     Ok(need)
 }
 fn validate_canonical_executed_block_need(
@@ -66,7 +85,7 @@ fn validate_canonical_executed_block_need(
     state: &State,
     kura: &Kura,
     need: CanonicalExecutedBlockNeedV1,
-) -> Result<wire::finality::V2FinalityArtifact, String> {
+) -> Result<wire::finality::V2FinalityArtifact, CanonicalRecoveryReadError> {
     if need.height == 0
         || need.height > u64::try_from(state.committed_height()).unwrap_or(u64::MAX)
         || need.height > context.height
@@ -79,19 +98,24 @@ fn validate_canonical_executed_block_need(
     {
         return Err(
             "canonical executed-block need has an invalid State, height, or execution binding"
-                .to_owned(),
+                .to_owned()
+                .into(),
         );
     }
-    if kura.durable_block_payload_len_by_hash(need.block_hash)
+    if kura
+        .durable_block_payload_len_by_hash(need.block_hash)
+        .map_err(CanonicalRecoveryReadError::storage)?
         != Some((need.height, need.executed_block_wire_len))
     {
         return Err(
-            "canonical executed-block need differs from durable Kura length authority".to_owned(),
+            "canonical executed-block need differs from durable Kura length authority"
+                .to_owned()
+                .into(),
         );
     }
     let (header, finality) = kura
         .v2_finality_artifact_with_header(need.height)
-        .map_err(|error| error.to_string())?
+        .map_err(CanonicalRecoveryReadError::storage)?
         .ok_or_else(|| "canonical executed-block need lacks durable finality".to_owned())?;
     if HashOf::new(&finality) != need.finality_artifact_hash
         || finality.verify().is_err()
@@ -106,7 +130,11 @@ fn validate_canonical_executed_block_need(
         || finality.commit_qc.execution_commitment != need.execution_commitment
         || finality.height_context.network_id != context.network_id
     {
-        return Err("canonical executed-block need differs from exact local finality".to_owned());
+        return Err(
+            "canonical executed-block need differs from exact local finality"
+                .to_owned()
+                .into(),
+        );
     }
     Ok(finality)
 }
@@ -123,11 +151,13 @@ fn validate_canonical_executed_block_request(
         wire::finality::V2FinalityArtifact,
         u32,
     ),
-    String,
+    CanonicalRecoveryReadError,
 > {
     let LaneHistoricalRecoveryKindV1::CanonicalExecutedBlock { need, chunk_index } = &request.kind
     else {
-        return Err("request is not canonical executed-block recovery".to_owned());
+        return Err("request is not canonical executed-block recovery"
+            .to_owned()
+            .into());
     };
     if request.version != LANE_HISTORICAL_RECOVERY_VERSION_V1
         || &request.requester != sender
@@ -143,7 +173,8 @@ fn validate_canonical_executed_block_request(
     {
         return Err(
             "canonical executed-block recovery request has invalid shape, sender, chunk, or size"
-                .to_owned(),
+                .to_owned()
+                .into(),
         );
     }
     let finality = validate_canonical_executed_block_need(context, state, kura, **need)?;
@@ -158,7 +189,9 @@ fn validate_canonical_executed_block_request(
             .any(|entry| &entry.validator == sender);
     if !requester_is_authorized {
         return Err(
-            "canonical executed-block requester is outside authenticated rosters".to_owned(),
+            "canonical executed-block requester is outside authenticated rosters"
+                .to_owned()
+                .into(),
         );
     }
     Ok((**need, finality, *chunk_index))
@@ -188,7 +221,7 @@ fn build_canonical_executed_block_response(
     limits: V2LaneWorkLimits,
     request: &LaneHistoricalRecoveryRequestV1,
     sender: &PeerId,
-) -> Result<LaneHistoricalRecoveryResponseV1, String> {
+) -> Result<LaneHistoricalRecoveryResponseV1, CanonicalRecoveryReadError> {
     let (need, finality, chunk_index) =
         validate_canonical_executed_block_request(context, state, kura, limits, request, sender)?;
     let height = usize::try_from(need.height)
@@ -196,16 +229,23 @@ fn build_canonical_executed_block_response(
         .and_then(NonZeroUsize::new)
         .ok_or_else(|| "canonical executed-block height is invalid".to_owned())?;
     let block = kura
-        .get_block_without_merge_sidecar(height)
+        .read_block_body(height)
+        .map_err(CanonicalRecoveryReadError::storage)?
         .ok_or_else(|| "canonical executed block is unavailable at responder".to_owned())?;
     if !canonical_executed_block_matches_need(&block, &finality, need) {
-        return Err("canonical executed-block response differs from finality".to_owned());
+        return Err("canonical executed-block response differs from finality"
+            .to_owned()
+            .into());
     }
     let wire = block.encode_wire().map_err(|error| error.to_string())?;
     if u64::try_from(wire.len()).ok() != Some(need.executed_block_wire_len)
         || Hash::new(&wire) != need.executed_block_wire_hash
     {
-        return Err("canonical executed-block wire exceeds the durable block bound".to_owned());
+        return Err(
+            "canonical executed-block wire exceeds the durable block bound"
+                .to_owned()
+                .into(),
+        );
     }
     let chunk_count = wire.len().div_ceil(CANONICAL_EXECUTED_BLOCK_CHUNK_BYTES);
     let chunk_index_usize = usize::try_from(chunk_index).map_err(|error| error.to_string())?;
@@ -213,7 +253,9 @@ fn build_canonical_executed_block_response(
         || chunk_count > CANONICAL_EXECUTED_BLOCK_MAX_CHUNKS
         || chunk_index_usize >= chunk_count
     {
-        return Err("canonical executed-block chunk is outside the exact wire".to_owned());
+        return Err("canonical executed-block chunk is outside the exact wire"
+            .to_owned()
+            .into());
     }
     let start = chunk_index_usize
         .checked_mul(CANONICAL_EXECUTED_BLOCK_CHUNK_BYTES)
@@ -235,7 +277,8 @@ fn build_canonical_executed_block_response(
     if !canonical_executed_block_response_fits_frame(limits, &response) {
         return Err(
             "canonical executed-block chunk exceeds the configured authenticated response frame"
-                .to_owned(),
+                .to_owned()
+                .into(),
         );
     }
     Ok(response)
@@ -320,7 +363,7 @@ impl CanonicalExecutedBlockRecovery {
             .map_err(|error| V2LaneWorkError::InvalidContext(error.to_string()))?;
         for need in &needs {
             validate_canonical_executed_block_need(&context, state.as_ref(), kura.as_ref(), *need)
-                .map_err(V2LaneWorkError::Persistence)?;
+                .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
         }
         Ok(Self {
             context,
@@ -540,7 +583,11 @@ impl CanonicalExecutedBlockRecovery {
                         "canonical executed-block recovery has an invalid height".to_owned(),
                     )
                 })?;
-            let Some(block) = self.kura.get_block_without_merge_sidecar(height) else {
+            let Some(block) = self.kura.read_block_body(height).map_err(|error| {
+                self.output_guard.close_admission_for_restart();
+                V2LaneWorkError::Persistence(error.to_string())
+            })?
+            else {
                 return Ok(());
             };
             let finality = validate_canonical_executed_block_need(
@@ -549,7 +596,7 @@ impl CanonicalExecutedBlockRecovery {
                 self.kura.as_ref(),
                 need,
             )
-            .map_err(V2LaneWorkError::Persistence)?;
+            .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
             if !canonical_executed_block_matches_need(&block, &finality, need) {
                 return Err(V2LaneWorkError::Persistence(
                     "locally cached canonical executed block conflicts with its exact need"
@@ -606,7 +653,7 @@ impl CanonicalExecutedBlockRecovery {
             self.kura.as_ref(),
             need,
         )
-        .map_err(V2LaneWorkError::Persistence)?;
+        .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
         if let Some(outstanding) = self.outstanding.as_ref() {
             let responder_is_still_exact = self.assembly_responder.as_ref().is_some_and(|pinned| {
                 pinned.peer == outstanding.responder.peer
@@ -730,7 +777,8 @@ impl CanonicalExecutedBlockRecovery {
             return Err(V2LaneWorkError::RestartRequired);
         };
         let Some(ownership) = inbound.take_ingress_ownership() else {
-            return Ok(V2LaneIngressOutcome::Rejected);
+            self.output_guard.close_admission_for_restart();
+            return Err(V2LaneWorkError::RestartRequired);
         };
         let (message, sender, reply_routes) = inbound.into_message_sender_and_reply_routes();
         if !ownership.validate_exact()
@@ -738,7 +786,8 @@ impl CanonicalExecutedBlockRecovery {
             || !ownership.matches_semantic_origin(&sender)
             || !ownership.matches_reply_routes(reply_routes.as_ref())
         {
-            return Ok(V2LaneIngressOutcome::Rejected);
+            self.output_guard.close_admission_for_restart();
+            return Err(V2LaneWorkError::RestartRequired);
         }
         match message {
             BlockMessage::LaneHistoricalRecoveryRequest(request) => {
@@ -754,11 +803,12 @@ impl CanonicalExecutedBlockRecovery {
                     &sender,
                 ) {
                     Ok(response) => response,
-                    Err(error) => {
-                        iroha_logger::debug!(
-                            %error,
-                            "rejected canonical executed-block recovery request"
-                        );
+                    Err(CanonicalRecoveryReadError::LocalPersistence(error)) => {
+                        self.output_guard.close_admission_for_restart();
+                        return Err(V2LaneWorkError::Persistence(error));
+                    }
+                    Err(CanonicalRecoveryReadError::Rejected(error)) => {
+                        iroha_logger::debug!(%error, "rejected canonical executed-block recovery request");
                         return Ok(V2LaneIngressOutcome::Rejected);
                     }
                 };
@@ -769,7 +819,9 @@ impl CanonicalExecutedBlockRecovery {
                 Ok(V2LaneIngressOutcome::Inserted)
             }
             BlockMessage::LaneHistoricalRecoveryResponse(response) => {
-                self.accept_response(*response, &sender)
+                self.accept_response(*response, &sender).inspect_err(|_| {
+                    self.output_guard.close_admission_for_restart();
+                })
             }
             _ => Ok(V2LaneIngressOutcome::Rejected),
         }
@@ -822,7 +874,7 @@ impl CanonicalExecutedBlockRecovery {
             self.kura.as_ref(),
             need,
         )
-        .map_err(V2LaneWorkError::Persistence)?;
+        .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
         let signed_wire_len = usize::try_from(need.executed_block_wire_len).ok();
         let chunk_count_usize = usize::try_from(chunk_count).ok();
         let expected_count =
@@ -1143,7 +1195,10 @@ pub(crate) fn plan_lane_application_evidence_repair(
                     "Native AMX carrier height is not representable".to_owned(),
                 )
             })?;
-        let Some(block) = kura.get_block_without_merge_sidecar(height) else {
+        let Some(block) = kura
+            .read_block_body(height)
+            .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?
+        else {
             let need = canonical_executed_block_need_for_height(
                 context,
                 state,
@@ -1220,7 +1275,7 @@ pub(crate) fn plan_lane_application_evidence_repair(
                 height,
                 block.hash(),
             )
-            .map_err(V2LaneWorkError::Persistence)?,
+            .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?,
         );
     }
     ordinary.sort_by_key(|repair| {
@@ -1352,7 +1407,7 @@ pub(crate) fn apply_lane_application_evidence_repair(
         };
         state
             .persist_committed_lane_block_session_lifecycle_bound(&session, &artifact.signer_pops)
-            .map_err(V2LaneWorkError::Persistence)?;
+            .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
         summary.ordinary_pairs = summary.ordinary_pairs.saturating_add(1);
     }
     summary.merge_carriers = kura

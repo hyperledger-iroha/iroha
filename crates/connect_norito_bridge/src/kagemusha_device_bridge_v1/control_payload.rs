@@ -13,13 +13,14 @@ use iroha_data_model::{
     account::AccountId,
     kagemusha::{
         KAGEMUSHA_ACKNOWLEDGEMENT_MAX_BYTES_V1, KAGEMUSHA_AGGREGATE_STATE_MAX_BYTES_V1,
-        KAGEMUSHA_HARDWARE_CREDENTIAL_MAX_BYTES_V1, KAGEMUSHA_HARDWARE_PROFILE_MAX_BYTES_V1,
-        KAGEMUSHA_MINT_AUTHORIZATION_MAX_BYTES_V1, KAGEMUSHA_PAYMENT_MAX_BYTES_V1,
-        KAGEMUSHA_PAYMENT_REQUEST_MAX_BYTES_V1, KAGEMUSHA_REQUEST_MAX_TTL_MS_V1,
-        KAGEMUSHA_WIRE_VERSION_V1, KagemushaAcknowledgementV1, KagemushaAggregateStateCommitmentV1,
-        KagemushaCommitEvidenceV1, KagemushaDevicePublicKeyV1, KagemushaHardwareCredentialV1,
+        KAGEMUSHA_ENCRYPTED_CREDIT_MAX_BYTES_V1, KAGEMUSHA_HARDWARE_CREDENTIAL_MAX_BYTES_V1,
+        KAGEMUSHA_HARDWARE_PROFILE_MAX_BYTES_V1, KAGEMUSHA_MINT_AUTHORIZATION_MAX_BYTES_V1,
+        KAGEMUSHA_PAYMENT_MAX_BYTES_V1, KAGEMUSHA_PAYMENT_REQUEST_MAX_BYTES_V1,
+        KAGEMUSHA_REQUEST_MAX_TTL_MS_V1, KAGEMUSHA_WIRE_VERSION_V1, KagemushaAcknowledgementV1,
+        KagemushaAggregateStateCommitmentV1, KagemushaCommitEvidenceV1, KagemushaDevicePublicKeyV1,
+        KagemushaEncryptedCreditEnvelopeV1, KagemushaHardwareCredentialV1,
         KagemushaHardwareProfileV1, KagemushaInboxReceiptV1, KagemushaMintAuthorizationV1,
-        KagemushaPaymentRequestV1, KagemushaPaymentV1,
+        KagemushaPaymentRequestV1, KagemushaPaymentV1, kagemusha_ciphertext_digest_v1,
     },
 };
 use norito::{
@@ -147,7 +148,45 @@ struct FoldReceiveCreditPayloadV1 {
     version: u16,
     operation: u8,
     operation_id: [u8; 32],
+    kind: PendingCreditKindV1,
     credit_id: [u8; 32],
+}
+
+/// The authenticated inbox holding one pending monetary credit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
+#[norito(schema_name = "iroha.kagemusha.device.v1.pending-credit-kind")]
+pub(super) enum PendingCreditKindV1 {
+    /// A finalized reserve-backed mint awaiting `MintFold`.
+    Mint,
+    /// A peer payment awaiting `ReceiveFold`.
+    Receive,
+}
+
+/// One deterministic pending-credit selection.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
+#[norito(schema_name = "iroha.kagemusha.device.v1.pending-credit-selector")]
+pub(super) struct PendingCreditSelectorV1 {
+    kind: PendingCreditKindV1,
+    credit_id: [u8; 32],
+}
+
+/// Epoch-qualified inclusive inbox boundary retained for one selection pass.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
+#[norito(schema_name = "iroha.kagemusha.device.v1.pending-credit-watermark")]
+pub(super) struct PendingCreditWatermarkV1 {
+    hardware_epoch_generation: u128,
+    hardware_epoch_id: [u8; 32],
+    inbox_revision: u128,
+}
+
+/// The amount-aware objective for one pending-credit selection.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
+#[norito(schema_name = "iroha.kagemusha.device.v1.pending-credit-target")]
+pub(super) enum PendingCreditTargetV1 {
+    /// Select the next credit regardless of the current aggregate balance.
+    DrainAll,
+    /// Select only while the authenticated aggregate balance is below this amount.
+    RequiredBalance(u128),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
@@ -155,6 +194,8 @@ struct FoldReceiveCreditPayloadV1 {
 struct ReadPendingWatermarkPayloadV1 {
     version: u16,
     operation: u8,
+    watermark: Option<PendingCreditWatermarkV1>,
+    target: PendingCreditTargetV1,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
@@ -216,10 +257,13 @@ pub(super) enum ControlCommandV1 {
     /// Fold one staged credit into the aggregate balance.
     FoldReceiveCredit {
         operation_id: [u8; 32],
-        credit_id: [u8; 32],
+        selector: PendingCreditSelectorV1,
     },
-    /// Read the stable pending-credit inclusive watermark.
-    ReadPendingWatermark,
+    /// Read the stable watermark and deterministic next credit for this balance target.
+    ReadPendingWatermark {
+        watermark: Option<PendingCreditWatermarkV1>,
+        target: PendingCreditTargetV1,
+    },
     /// Rotate state into the next qualified hardware epoch.
     RotateHardwareEpoch { operation_id: [u8; 32] },
     /// Create the unique sequence-zero aggregate state under native custody.
@@ -244,7 +288,7 @@ impl ControlCommandV1 {
             Self::PrepareMint { .. } => PREPARE_MINT,
             Self::RecoverMint { .. } => RECOVER_MINT,
             Self::FoldReceiveCredit { .. } => FOLD_RECEIVE_CREDIT,
-            Self::ReadPendingWatermark => READ_PENDING_WATERMARK,
+            Self::ReadPendingWatermark { .. } => READ_PENDING_WATERMARK,
             Self::RotateHardwareEpoch { .. } => ROTATE_HARDWARE_EPOCH,
             Self::BootstrapAggregateState { .. } => BOOTSTRAP_AGGREGATE_STATE,
             Self::RecoverWalletSnapshot => RECOVER_WALLET_SNAPSHOT,
@@ -263,6 +307,14 @@ fn bound(bytes: &[u8], maximum: usize) -> Result<()> {
 
 fn nonzero(value: &[u8; 32]) -> Result<()> {
     if value == &[0; 32] {
+        Err(ControlErrorV1::Binding)
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_pending_watermark(watermark: PendingCreditWatermarkV1) -> Result<()> {
+    if watermark.hardware_epoch_generation == 0 || watermark.hardware_epoch_id == [0; 32] {
         Err(ControlErrorV1::Binding)
     } else {
         Ok(())
@@ -380,13 +432,28 @@ pub(super) fn decode_control_command_v1(
             }
             Ok(ControlCommandV1::FoldReceiveCredit {
                 operation_id: value.operation_id,
-                credit_id: value.credit_id,
+                selector: PendingCreditSelectorV1 {
+                    kind: value.kind,
+                    credit_id: value.credit_id,
+                },
             })
         }
         READ_PENDING_WATERMARK => {
             let value: ReadPendingWatermarkPayloadV1 = exact(bytes, READ_COMMAND_MAX)?;
             header(value.version, value.operation, operation)?;
-            Ok(ControlCommandV1::ReadPendingWatermark)
+            if let Some(watermark) = value.watermark {
+                validate_pending_watermark(watermark)?;
+            }
+            if matches!(value.target, PendingCreditTargetV1::RequiredBalance(0))
+                || matches!(value.target, PendingCreditTargetV1::RequiredBalance(_))
+                    && value.watermark.is_some()
+            {
+                return Err(ControlErrorV1::Binding);
+            }
+            Ok(ControlCommandV1::ReadPendingWatermark {
+                watermark: value.watermark,
+                target: value.target,
+            })
         }
         ROTATE_HARDWARE_EPOCH => {
             let value: RotateHardwareEpochPayloadV1 = exact(bytes, READ_COMMAND_MAX)?;
@@ -445,6 +512,7 @@ struct QualificationReplyV1 {
     operation: u8,
     release_id: [u8; 32],
     hardware_policy_digest: [u8; 32],
+    core_authorization_key_reference: [u8; 32],
     profile: KagemushaHardwareProfileV1,
     credential: KagemushaHardwareCredentialV1,
 }
@@ -466,11 +534,12 @@ struct TimeOrLeaseReplyV1 {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-#[norito(schema_name = "iroha.kagemusha.device.v1.mint-authorization-reply")]
-struct MintAuthorizationReplyV1 {
+#[norito(schema_name = "iroha.kagemusha.device.v1.mint-construction-bundle-reply")]
+struct MintConstructionBundleReplyV1 {
     version: u16,
     operation: u8,
     canonical_authorization: Vec<u8>,
+    encrypted_credit: Vec<u8>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
@@ -478,6 +547,7 @@ struct MintAuthorizationReplyV1 {
 struct FoldReceiveCreditReplyV1 {
     version: u16,
     operation: u8,
+    kind: PendingCreditKindV1,
     credit_id: [u8; 32],
     canonical_aggregate_state: Vec<u8>,
 }
@@ -487,7 +557,8 @@ struct FoldReceiveCreditReplyV1 {
 struct PendingWatermarkReplyV1 {
     version: u16,
     operation: u8,
-    inbox_sequence_inclusive: u128,
+    watermark: PendingCreditWatermarkV1,
+    next_pending: Option<PendingCreditSelectorV1>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
@@ -536,13 +607,11 @@ pub(super) fn validate_control_reply_v1(command: &ControlCommandV1, bytes: &[u8]
             header(reply.version, reply.operation, command.operation())?;
             nonzero(&reply.release_id)?;
             nonzero(&reply.hardware_policy_digest)?;
+            nonzero(&reply.core_authorization_key_reference)?;
             reply
                 .profile
                 .validate()
                 .map_err(|_| ControlErrorV1::PublicShape)?;
-            if reply.hardware_policy_digest != reply.profile.hardware_profile_id {
-                return Err(ControlErrorV1::Binding);
-            }
             reply
                 .credential
                 .validate_against_profile(&reply.profile)
@@ -584,7 +653,7 @@ pub(super) fn validate_control_reply_v1(command: &ControlCommandV1, bytes: &[u8]
             payer,
             recipient,
         } => {
-            let reply: MintAuthorizationReplyV1 = exact(bytes, MINT_REPLY_MAX)?;
+            let reply: MintConstructionBundleReplyV1 = exact(bytes, MINT_REPLY_MAX)?;
             header(reply.version, reply.operation, command.operation())?;
             bound(
                 &reply.canonical_authorization,
@@ -594,6 +663,7 @@ pub(super) fn validate_control_reply_v1(command: &ControlCommandV1, bytes: &[u8]
                 &reply.canonical_authorization,
             )
             .map_err(|_| ControlErrorV1::PublicShape)?;
+            validate_mint_encrypted_credit_v1(&authorization, &reply.encrypted_credit)?;
             let context = &authorization.statement.context;
             if &context.operation_id != operation_id
                 || context.amount != *amount
@@ -605,7 +675,7 @@ pub(super) fn validate_control_reply_v1(command: &ControlCommandV1, bytes: &[u8]
             Ok(())
         }
         ControlCommandV1::RecoverMint { operation_id } => {
-            let reply: MintAuthorizationReplyV1 = exact(bytes, MINT_REPLY_MAX)?;
+            let reply: MintConstructionBundleReplyV1 = exact(bytes, MINT_REPLY_MAX)?;
             header(reply.version, reply.operation, command.operation())?;
             bound(
                 &reply.canonical_authorization,
@@ -615,15 +685,16 @@ pub(super) fn validate_control_reply_v1(command: &ControlCommandV1, bytes: &[u8]
                 &reply.canonical_authorization,
             )
             .map_err(|_| ControlErrorV1::PublicShape)?;
+            validate_mint_encrypted_credit_v1(&authorization, &reply.encrypted_credit)?;
             if &authorization.statement.context.operation_id != operation_id {
                 return Err(ControlErrorV1::Binding);
             }
             Ok(())
         }
-        ControlCommandV1::FoldReceiveCredit { credit_id, .. } => {
+        ControlCommandV1::FoldReceiveCredit { selector, .. } => {
             let reply: FoldReceiveCreditReplyV1 = exact(bytes, FOLD_REPLY_MAX)?;
             header(reply.version, reply.operation, command.operation())?;
-            if reply.credit_id != *credit_id {
+            if reply.kind != selector.kind || reply.credit_id != selector.credit_id {
                 return Err(ControlErrorV1::Binding);
             }
             bound(
@@ -636,9 +707,17 @@ pub(super) fn validate_control_reply_v1(command: &ControlCommandV1, bytes: &[u8]
             .map_err(|_| ControlErrorV1::PublicShape)?;
             Ok(())
         }
-        ControlCommandV1::ReadPendingWatermark => {
+        ControlCommandV1::ReadPendingWatermark { watermark, .. } => {
             let reply: PendingWatermarkReplyV1 = exact(bytes, WATERMARK_REPLY_MAX)?;
             header(reply.version, reply.operation, command.operation())
+                .and_then(|()| validate_pending_watermark(reply.watermark))?;
+            if watermark.is_some_and(|expected| expected != reply.watermark) {
+                return Err(ControlErrorV1::Binding);
+            }
+            if let Some(next) = reply.next_pending {
+                nonzero(&next.credit_id)?;
+            }
+            Ok(())
         }
         ControlCommandV1::RotateHardwareEpoch { .. } => {
             let reply: RotationReplyV1 = exact(bytes, ROTATION_REPLY_MAX)?;
@@ -713,6 +792,23 @@ pub(super) fn validate_control_reply_v1(command: &ControlCommandV1, bytes: &[u8]
     }
 }
 
+fn validate_mint_encrypted_credit_v1(
+    authorization: &KagemushaMintAuthorizationV1,
+    encrypted_credit: &[u8],
+) -> Result<()> {
+    bound(encrypted_credit, KAGEMUSHA_ENCRYPTED_CREDIT_MAX_BYTES_V1)?;
+    KagemushaEncryptedCreditEnvelopeV1::decode_canonical_shape_exact_against_recipient_key(
+        encrypted_credit,
+        authorization.statement.context.recipient_one_time_key,
+    )
+    .map_err(|_| ControlErrorV1::PublicShape)?;
+    if authorization.statement.ciphertext_digest != kagemusha_ciphertext_digest_v1(encrypted_credit)
+    {
+        return Err(ControlErrorV1::Binding);
+    }
+    Ok(())
+}
+
 /// Validate operation 1's self-contained qualification chain and bind it to
 /// the two digests previously accepted from the capability frame.
 ///
@@ -726,7 +822,6 @@ pub(super) fn qualification_response_key_v1(
     validate_control_reply_v1(&ControlCommandV1::ReadCredential, bytes)?;
     let reply: QualificationReplyV1 = exact(bytes, QUALIFICATION_REPLY_MAX)?;
     if reply.hardware_policy_digest != hardware_policy_id
-        || reply.profile.hardware_profile_id != hardware_policy_id
         || reply.profile.qualification_report_digest != qualification_report_digest
     {
         return Err(ControlErrorV1::Binding);
@@ -756,7 +851,7 @@ impl ControlEngineV1 for UnavailableControlEngineV1 {
                 MissingAuthorityV1::QualifiedMintJournal
             }
             ControlCommandV1::FoldReceiveCredit { .. }
-            | ControlCommandV1::ReadPendingWatermark
+            | ControlCommandV1::ReadPendingWatermark { .. }
             | ControlCommandV1::RotateHardwareEpoch { .. } => {
                 MissingAuthorityV1::QualifiedAggregateState
             }
@@ -893,6 +988,7 @@ pub(crate) fn canonical_command_body_for_tests(
                 version: VERSION,
                 operation,
                 operation_id: request_id,
+                kind: PendingCreditKindV1::Receive,
                 credit_id: [8; 32],
             },
             FOLD_COMMAND_MAX,
@@ -902,6 +998,8 @@ pub(crate) fn canonical_command_body_for_tests(
             &ReadPendingWatermarkPayloadV1 {
                 version: VERSION,
                 operation,
+                watermark: None,
+                target: PendingCreditTargetV1::DrainAll,
             },
             READ_COMMAND_MAX,
         )
@@ -972,6 +1070,7 @@ mod tests {
             version: VERSION,
             operation: FOLD_RECEIVE_CREDIT,
             operation_id: [7; 32],
+            kind: PendingCreditKindV1::Receive,
             credit_id: [8; 32],
         };
         let bytes = encode(&payload, FOLD_COMMAND_MAX).unwrap();
@@ -982,6 +1081,38 @@ mod tests {
         let bytes = encode(&invalid, FOLD_COMMAND_MAX).unwrap();
         assert_eq!(
             decode_control_command_v1(FOLD_RECEIVE_CREDIT, [7; 32], &bytes),
+            Err(ControlErrorV1::Binding),
+        );
+    }
+
+    #[test]
+    fn pending_selector_binds_kind_target_and_stable_watermark() {
+        let watermark = PendingCreditWatermarkV1 {
+            hardware_epoch_generation: 9,
+            hardware_epoch_id: [4; 32],
+            inbox_revision: 31,
+        };
+        let command = ControlCommandV1::ReadPendingWatermark {
+            watermark: Some(watermark),
+            target: PendingCreditTargetV1::RequiredBalance(500),
+        };
+        let reply = PendingWatermarkReplyV1 {
+            version: VERSION,
+            operation: READ_PENDING_WATERMARK,
+            watermark,
+            next_pending: Some(PendingCreditSelectorV1 {
+                kind: PendingCreditKindV1::Mint,
+                credit_id: [6; 32],
+            }),
+        };
+        let bytes = encode(&reply, WATERMARK_REPLY_MAX).unwrap();
+        assert!(validate_control_reply_v1(&command, &bytes).is_ok());
+
+        let mut wrong = reply;
+        wrong.watermark.inbox_revision += 1;
+        let bytes = encode(&wrong, WATERMARK_REPLY_MAX).unwrap();
+        assert_eq!(
+            validate_control_reply_v1(&command, &bytes),
             Err(ControlErrorV1::Binding),
         );
     }

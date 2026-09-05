@@ -10914,7 +10914,7 @@ struct StatelessValidationCacheEntry {
 }
 #[derive(Debug, Clone, Copy)]
 struct StatelessValidationCacheWarmEntry {
-    signed_hash: HashOf<SignedTransaction>,
+    key: crate::tx::StatelessValidationCacheKey,
     expires_at_ms: Option<u128>,
     not_before_ms: u128,
 }
@@ -10933,7 +10933,7 @@ fn stateless_validation_cache_warm_entry(
         .as_millis()
         .saturating_sub(max_clock_drift_ms);
     Some(StatelessValidationCacheWarmEntry {
-        signed_hash: prepared.signed_hash,
+        key: prepared.stateless_cache_key,
         expires_at_ms,
         not_before_ms,
     })
@@ -10944,13 +10944,10 @@ pub(crate) struct StatelessValidationCache {
     next_order: u64,
     context: Option<StatelessValidationContext>,
     entries: std::collections::HashMap<
-        iroha_crypto::HashOf<iroha_data_model::transaction::SignedTransaction>,
+        crate::tx::StatelessValidationCacheKey,
         StatelessValidationCacheEntry,
     >,
-    lru: std::collections::BTreeSet<(
-        u64,
-        iroha_crypto::HashOf<iroha_data_model::transaction::SignedTransaction>,
-    )>,
+    lru: std::collections::BTreeSet<(u64, crate::tx::StatelessValidationCacheKey)>,
 }
 impl StatelessValidationCache {
     fn new(cap: usize) -> Self {
@@ -10970,7 +10967,7 @@ impl StatelessValidationCache {
             self.next_order = 0;
             return;
         }
-        self.evict_capacity();
+        self.trim_to(self.cap);
     }
     pub(crate) fn ensure_context(&mut self, context: StatelessValidationContext) {
         if self.context.as_ref() != Some(&context) {
@@ -10982,7 +10979,7 @@ impl StatelessValidationCache {
     }
     pub(crate) fn get_ok(
         &self,
-        key: &iroha_crypto::HashOf<iroha_data_model::transaction::SignedTransaction>,
+        key: &crate::tx::StatelessValidationCacheKey,
         now_ms: u128,
     ) -> bool {
         self.entries.get(key).is_some_and(|entry| {
@@ -10993,15 +10990,12 @@ impl StatelessValidationCache {
         })
     }
     #[cfg(test)]
-    pub(crate) fn contains_key(
-        &self,
-        key: &iroha_crypto::HashOf<iroha_data_model::transaction::SignedTransaction>,
-    ) -> bool {
+    pub(crate) fn contains_key(&self, key: &crate::tx::StatelessValidationCacheKey) -> bool {
         self.entries.contains_key(key)
     }
     pub(crate) fn insert_ok(
         &mut self,
-        key: iroha_crypto::HashOf<iroha_data_model::transaction::SignedTransaction>,
+        key: crate::tx::StatelessValidationCacheKey,
         expires_at_ms: Option<u128>,
         not_before_ms: u128,
     ) {
@@ -11011,7 +11005,7 @@ impl StatelessValidationCache {
         if let Some(entry) = self.entries.remove(&key) {
             self.lru.remove(&(entry.order, key.clone()));
         }
-        self.evict_capacity();
+        self.trim_to(self.cap - 1);
         let order = self.next_order();
         self.entries.insert(
             key.clone(),
@@ -11024,17 +11018,28 @@ impl StatelessValidationCache {
         self.lru.insert((order, key));
     }
     fn next_order(&mut self) -> u64 {
+        if self.next_order == u64::MAX {
+            let retained = std::mem::take(&mut self.lru);
+            self.next_order = 0;
+            for (_, key) in retained {
+                if let Some(entry) = self.entries.get_mut(&key) {
+                    entry.order = self.next_order;
+                    self.lru.insert((self.next_order, key));
+                    self.next_order += 1;
+                }
+            }
+        }
         let order = self.next_order;
-        self.next_order = self.next_order.wrapping_add(1);
+        self.next_order += 1;
         order
     }
-    fn evict_capacity(&mut self) {
-        if self.cap == 0 {
+    fn trim_to(&mut self, maximum: usize) {
+        if maximum == 0 {
             self.entries.clear();
             self.lru.clear();
             return;
         }
-        while self.entries.len() >= self.cap {
+        while self.entries.len() > maximum {
             let Some((order, key)) = self.lru.pop_first() else {
                 self.entries.clear();
                 break;
@@ -11052,8 +11057,10 @@ mod stateless_validation_cache_tests {
         NetworkId, block::BlockHeader, parameter::TransactionParameters,
         transaction::SignedTransaction,
     };
-    fn dummy_hash(seed: u8) -> HashOf<SignedTransaction> {
-        HashOf::from_untyped_unchecked(Hash::new([seed]))
+    fn dummy_hash(seed: u8) -> crate::tx::StatelessValidationCacheKey {
+        crate::tx::StatelessValidationCacheKey::for_test(
+            HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::new([seed])),
+        )
     }
     #[test]
     fn cache_tracks_inserted_hashes_and_capacity() {
@@ -11081,6 +11088,42 @@ mod stateless_validation_cache_tests {
         assert!(cache.get_ok(&first, 100));
         assert!(!cache.get_ok(&second, 100));
         assert!(cache.get_ok(&third, 100));
+    }
+    #[test]
+    fn unchanged_capacity_preserves_every_admitted_entry() {
+        let mut cache = StatelessValidationCache::new(2);
+        let first = dummy_hash(1);
+        let second = dummy_hash(2);
+        cache.insert_ok(first, None, 0);
+        cache.insert_ok(second, None, 0);
+        for _ in 0..3 {
+            cache.set_cap(2);
+            assert!(cache.get_ok(&first, 100));
+            assert!(cache.get_ok(&second, 100));
+            assert_eq!(cache.entries.len(), 2);
+        }
+        cache.set_cap(1);
+        assert!(!cache.get_ok(&first, 100));
+        assert!(cache.get_ok(&second, 100));
+        cache.set_cap(0);
+        assert!(cache.entries.is_empty());
+        assert!(cache.lru.is_empty());
+    }
+    #[test]
+    fn order_exhaustion_preserves_oldest_first_eviction() {
+        let mut cache = StatelessValidationCache::new(2);
+        let first = dummy_hash(1);
+        let second = dummy_hash(2);
+        let third = dummy_hash(3);
+        cache.insert_ok(first, None, 0);
+        cache.next_order = u64::MAX;
+        cache.insert_ok(second, None, 0);
+        assert_eq!(cache.next_order, 2);
+        cache.insert_ok(third, None, 0);
+        assert!(!cache.get_ok(&first, 100));
+        assert!(cache.get_ok(&second, 100));
+        assert!(cache.get_ok(&third, 100));
+        assert_eq!(cache.entries.len(), cache.lru.len());
     }
     #[test]
     fn cache_context_change_invalidates_entries() {
@@ -30508,7 +30551,7 @@ impl State {
         cache.set_cap(cache_cap);
         cache.ensure_context(context);
         for entry in entries {
-            cache.insert_ok(entry.signed_hash, entry.expires_at_ms, entry.not_before_ms);
+            cache.insert_ok(entry.key, entry.expires_at_ms, entry.not_before_ms);
         }
     }
     /// Block cadence frozen into the Sumeragi v2 height profile.
@@ -34008,7 +34051,9 @@ impl State {
             .is_some()
             || self
                 .unapplied_lane_block_artifact_heights_snapshot_cached()
-                .contains_key(&(lane_id, dataspace_id))
+                .map_or(true, |pending| {
+                    pending.contains_key(&(lane_id, dataspace_id))
+                })
             || self
                 .unapplied_certified_lane_block_heights_snapshot_cached()
                 .contains_key(&(lane_id, dataspace_id))
@@ -35291,36 +35336,37 @@ impl State {
     #[must_use]
     pub(crate) fn lane_block_artifact_tips_snapshot_cached(
         &self,
-    ) -> Vec<(LaneId, DataSpaceId, Hash, u64, Option<Hash>)> {
+    ) -> Result<Vec<(LaneId, DataSpaceId, Hash, u64, Option<Hash>)>, crate::kura::Error> {
         let lifecycle = self.lane_consensus_lifecycle_snapshot();
-        let mut tips = Self::lane_block_artifact_routes(&lifecycle.nexus)
-            .into_iter()
-            .filter_map(|(lane_id, dataspace_id)| {
-                let artifact =
-                    self.kura
-                        .latest_lane_block_artifact_matching(lane_id, |artifact| {
-                            let ownership = &artifact.ownership;
-                            ownership.dataspace_id == dataspace_id
-                                && lifecycle.lane_route_and_incarnation_matches(
-                                    lane_id,
-                                    dataspace_id,
-                                    ownership.proposal_height,
-                                    ownership.lane_incarnation,
-                                )
-                        })?;
-                let lane_block_height = artifact.ownership.lane_block_height;
-                if !self.lane_block_artifact_is_applied_or_snapshot_anchored_cached(&artifact) {
-                    return None;
-                }
-                Some((
-                    lane_id,
-                    dataspace_id,
-                    artifact.ownership.lane_incarnation,
-                    lane_block_height,
-                    artifact.ownership.lane_block_descriptor_hash,
-                ))
-            })
-            .collect::<Vec<_>>();
+        let mut tips = Vec::new();
+        for (lane_id, dataspace_id) in Self::lane_block_artifact_routes(&lifecycle.nexus) {
+            let Some(artifact) =
+                self.kura
+                    .latest_lane_block_artifact_matching(lane_id, |artifact| {
+                        let ownership = &artifact.ownership;
+                        ownership.dataspace_id == dataspace_id
+                            && lifecycle.lane_route_and_incarnation_matches(
+                                lane_id,
+                                dataspace_id,
+                                ownership.proposal_height,
+                                ownership.lane_incarnation,
+                            )
+                    })?
+            else {
+                continue;
+            };
+            let lane_block_height = artifact.ownership.lane_block_height;
+            if !self.lane_block_artifact_is_applied_or_snapshot_anchored_cached(&artifact) {
+                continue;
+            }
+            tips.push((
+                lane_id,
+                dataspace_id,
+                artifact.ownership.lane_incarnation,
+                lane_block_height,
+                artifact.ownership.lane_block_descriptor_hash,
+            ));
+        }
         tips.extend(self.native_amx_participant_application_tips_snapshot_cached());
         let mut latest = BTreeMap::<(LaneId, DataSpaceId, Hash), (u64, Option<Hash>)>::new();
         for (lane_id, dataspace_id, incarnation, height, descriptor_hash) in tips {
@@ -35338,14 +35384,14 @@ impl State {
                 })
                 .or_insert((height, descriptor_hash));
         }
-        latest
+        Ok(latest
             .into_iter()
             .map(
                 |((lane_id, dataspace_id, incarnation), (height, descriptor_hash))| {
                     (lane_id, dataspace_id, incarnation, height, descriptor_hash)
                 },
             )
-            .collect()
+            .collect())
     }
     fn native_amx_participant_receipt_matches_frontier(
         receipt: &crate::kura::NativeAmxParticipantApplicationReceiptArtifact,
@@ -36205,14 +36251,18 @@ impl State {
             }
             tips.push((marker.lane_block_height, marker.lane_block_descriptor_hash));
         }
-        if let Some(artifact) =
+        let latest =
             state
                 .kura()
                 .latest_lane_block_artifact_matching(descriptor.lane_id, |artifact| {
                     artifact.ownership.dataspace_id == descriptor.dataspace_id
                         && artifact.ownership.lane_incarnation == descriptor.lane_incarnation
-                })
-        {
+                });
+        let latest = match latest {
+            Ok(latest) => latest,
+            Err(_) => return false,
+        };
+        if let Some(artifact) = latest {
             let ownership = &artifact.ownership;
             let Some(artifact_descriptor_hash) = ownership.lane_block_descriptor_hash else {
                 return false;
@@ -36312,7 +36362,7 @@ impl State {
     #[must_use]
     pub(crate) fn unapplied_lane_block_artifact_heights_snapshot_cached(
         &self,
-    ) -> BTreeMap<(LaneId, DataSpaceId), u64> {
+    ) -> Result<BTreeMap<(LaneId, DataSpaceId), u64>, crate::kura::Error> {
         let lifecycle = self.lane_consensus_lifecycle_snapshot();
         let mut heights = BTreeMap::new();
         for (lane_id, dataspace_id) in Self::lane_block_artifact_routes(&lifecycle.nexus) {
@@ -36327,7 +36377,7 @@ impl State {
                                 ownership.proposal_height,
                                 ownership.lane_incarnation,
                             )
-                    })
+                    })?
             else {
                 continue;
             };
@@ -36345,7 +36395,7 @@ impl State {
                 .and_modify(|height| *height = (*height).max(lane_block_height))
                 .or_insert(lane_block_height);
         }
-        heights
+        Ok(heights)
     }
     /// Snapshot latest certified standalone lane-local blocks for active catalog lanes.
     ///

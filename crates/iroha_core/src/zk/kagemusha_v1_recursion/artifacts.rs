@@ -10,7 +10,7 @@ use std::{
     fs,
     io::{self, Read as _},
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, OnceLock},
 };
 
 use halo2_proofs::{
@@ -41,6 +41,61 @@ use super::{
 
 const ARTIFACT_STREAM_BUFFER_BYTES_V1: usize = 64 * 1024;
 
+/// One canonical transparent parameter derivation and its exact wire encoding.
+///
+/// Parameter roles are release-authenticated on every load. Caching only avoids repeating the
+/// deterministic hash-to-curve derivation and serialization used for the final canonical-byte
+/// comparison; callers still receive an owned parameter set.
+struct KagemushaCanonicalParamsCacheV1<C: CurveAffine> {
+    params: ParamsIPA<C>,
+    bytes: Box<[u8]>,
+}
+
+fn build_canonical_params_cache_v1<C>() -> io::Result<KagemushaCanonicalParamsCacheV1<C>>
+where
+    C: CurveAffine,
+{
+    let params = ParamsIPA::<C>::new(KAGEMUSHA_HALO2_K_V1);
+    if params.k() != KAGEMUSHA_HALO2_K_V1 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "canonical IPA parameter degree changed",
+        ));
+    }
+    let expected_len =
+        usize::try_from(KAGEMUSHA_PARAMS_BYTES_V1).expect("parameter size fits usize");
+    let mut bytes = Vec::with_capacity(expected_len);
+    params.write(&mut bytes)?;
+    if bytes.len() != expected_len {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "canonical IPA parameter encoding length changed",
+        ));
+    }
+    Ok(KagemushaCanonicalParamsCacheV1 {
+        params,
+        bytes: bytes.into_boxed_slice(),
+    })
+}
+
+fn canonical_eq_params_cache_v1()
+-> Result<&'static KagemushaCanonicalParamsCacheV1<EqAffine>, KagemushaArtifactErrorV1> {
+    static CACHE: OnceLock<Result<KagemushaCanonicalParamsCacheV1<EqAffine>, ()>> = OnceLock::new();
+    CACHE
+        .get_or_init(|| build_canonical_params_cache_v1().map_err(|_| ()))
+        .as_ref()
+        .map_err(|()| KagemushaArtifactErrorV1::NonCanonicalParameters(KagemushaPastaParityV1::Eq))
+}
+
+fn canonical_ep_params_cache_v1()
+-> Result<&'static KagemushaCanonicalParamsCacheV1<EpAffine>, KagemushaArtifactErrorV1> {
+    static CACHE: OnceLock<Result<KagemushaCanonicalParamsCacheV1<EpAffine>, ()>> = OnceLock::new();
+    CACHE
+        .get_or_init(|| build_canonical_params_cache_v1().map_err(|_| ()))
+        .as_ref()
+        .map_err(|()| KagemushaArtifactErrorV1::NonCanonicalParameters(KagemushaPastaParityV1::Ep))
+}
+
 /// Logical circuit family selected by one authenticated artifact role.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum KagemushaCircuitFamilyV1 {
@@ -64,6 +119,10 @@ pub enum KagemushaCircuitFamilyV1 {
     InnerMintAuthorization,
     /// Inner finalized reserve-mint receipt and consensus-finality relation.
     InnerMintCredit,
+    /// One-block `k = 12` mint-certificate SHA-256 compression relation.
+    MintHashShard,
+    /// Ordered recursive `k = 16` mint-hash completeness relation.
+    MintHashClaim,
 }
 
 /// Serialization kind selected by one authenticated artifact role.
@@ -100,7 +159,8 @@ impl KagemushaArtifactDescriptorV1 {
         use KagemushaArtifactRoleV1 as Role;
         use KagemushaCircuitFamilyV1::{
             CommitWrapper, GuardBundle, InnerMintAuthorization, InnerMintCredit, InnerState,
-            MintAuthorization, MintCredit, PlatformCredential, State, TerminalAuthorization,
+            MintAuthorization, MintCredit, MintHashClaim, MintHashShard, PlatformCredential, State,
+            TerminalAuthorization,
         };
         use KagemushaPastaParityV1::{Ep, Eq};
 
@@ -125,7 +185,11 @@ impl KagemushaArtifactDescriptorV1 {
             | Role::InnerMintAuthorizationPkEq
             | Role::InnerMintAuthorizationVkEq
             | Role::InnerMintCreditPkEq
-            | Role::InnerMintCreditVkEq => Eq,
+            | Role::InnerMintCreditVkEq
+            | Role::MintHashShardPkEq
+            | Role::MintHashShardVkEq
+            | Role::MintHashClaimPkEq
+            | Role::MintHashClaimVkEq => Eq,
             Role::ParamsEp
             | Role::InnerStatePkEp
             | Role::InnerStateVkEp
@@ -146,7 +210,11 @@ impl KagemushaArtifactDescriptorV1 {
             | Role::InnerMintAuthorizationPkEp
             | Role::InnerMintAuthorizationVkEp
             | Role::InnerMintCreditPkEp
-            | Role::InnerMintCreditVkEp => Ep,
+            | Role::InnerMintCreditVkEp
+            | Role::MintHashShardPkEp
+            | Role::MintHashShardVkEp
+            | Role::MintHashClaimPkEp
+            | Role::MintHashClaimVkEp => Ep,
         };
         let family = match role {
             Role::ParamsEq | Role::ParamsEp => None,
@@ -187,6 +255,14 @@ impl KagemushaArtifactDescriptorV1 {
             | Role::InnerMintCreditVkEq
             | Role::InnerMintCreditPkEp
             | Role::InnerMintCreditVkEp => Some(InnerMintCredit),
+            Role::MintHashShardPkEq
+            | Role::MintHashShardVkEq
+            | Role::MintHashShardPkEp
+            | Role::MintHashShardVkEp => Some(MintHashShard),
+            Role::MintHashClaimPkEq
+            | Role::MintHashClaimVkEq
+            | Role::MintHashClaimPkEp
+            | Role::MintHashClaimVkEp => Some(MintHashClaim),
         };
         let (kind, byte_limit) = match role {
             Role::ParamsEq | Role::ParamsEp => (Parameters, KAGEMUSHA_PARAMS_BYTES_V1),
@@ -208,7 +284,11 @@ impl KagemushaArtifactDescriptorV1 {
             | Role::InnerMintAuthorizationPkEq
             | Role::InnerMintAuthorizationPkEp
             | Role::InnerMintCreditPkEq
-            | Role::InnerMintCreditPkEp => (ProvingKey, KAGEMUSHA_HELPER_PROVING_KEY_MAX_BYTES_V1),
+            | Role::InnerMintCreditPkEp
+            | Role::MintHashShardPkEq
+            | Role::MintHashShardPkEp
+            | Role::MintHashClaimPkEq
+            | Role::MintHashClaimPkEp => (ProvingKey, KAGEMUSHA_HELPER_PROVING_KEY_MAX_BYTES_V1),
             Role::InnerStateVkEq
             | Role::InnerStateVkEp
             | Role::StateVkEq
@@ -228,7 +308,11 @@ impl KagemushaArtifactDescriptorV1 {
             | Role::InnerMintAuthorizationVkEq
             | Role::InnerMintAuthorizationVkEp
             | Role::InnerMintCreditVkEq
-            | Role::InnerMintCreditVkEp => (VerifyingKey, KAGEMUSHA_VERIFYING_KEY_MAX_BYTES_V1),
+            | Role::InnerMintCreditVkEp
+            | Role::MintHashShardVkEq
+            | Role::MintHashShardVkEp
+            | Role::MintHashClaimVkEq
+            | Role::MintHashClaimVkEp => (VerifyingKey, KAGEMUSHA_VERIFYING_KEY_MAX_BYTES_V1),
         };
         Self {
             role,
@@ -488,7 +572,7 @@ pub struct KagemushaAuthenticatedArtifactSetV1<R> {
 impl<R: KagemushaArtifactByteResolverV1> KagemushaAuthenticatedArtifactSetV1<R> {
     /// Bind an untrusted resolver to one already threshold-authenticated release.
     ///
-    /// This validates the one release-wide proof suite, all 42 role/length bindings, and the
+    /// This validates the one release-wide proof suite, all 50 role/length bindings, and the
     /// complete package size before any bytes are read. It does not authenticate storage until
     /// [`Self::resolve`] is called.
     ///
@@ -635,7 +719,11 @@ impl<R: KagemushaArtifactByteResolverV1> KagemushaAuthenticatedArtifactSetV1<R> 
     /// Returns an error when storage bytes differ from Halo2's sole transparent derivation.
     pub fn load_eq_params(&self) -> Result<ParamsIPA<EqAffine>, KagemushaArtifactErrorV1> {
         let bytes = self.resolve(KagemushaArtifactRoleV1::ParamsEq)?;
-        load_canonical_params::<EqAffine>(KagemushaPastaParityV1::Eq, bytes.as_ref())
+        load_canonical_params(
+            KagemushaPastaParityV1::Eq,
+            bytes.as_ref(),
+            canonical_eq_params_cache_v1()?,
+        )
     }
 
     /// Load and authenticate the deterministic Ep/Pallas `k = 16` IPA parameters.
@@ -645,7 +733,11 @@ impl<R: KagemushaArtifactByteResolverV1> KagemushaAuthenticatedArtifactSetV1<R> 
     /// Returns an error when storage bytes differ from Halo2's sole transparent derivation.
     pub fn load_ep_params(&self) -> Result<ParamsIPA<EpAffine>, KagemushaArtifactErrorV1> {
         let bytes = self.resolve(KagemushaArtifactRoleV1::ParamsEp)?;
-        load_canonical_params::<EpAffine>(KagemushaPastaParityV1::Ep, bytes.as_ref())
+        load_canonical_params(
+            KagemushaPastaParityV1::Ep,
+            bytes.as_ref(),
+            canonical_ep_params_cache_v1()?,
+        )
     }
 
     /// Verify and seal one redemption using only this authenticated release's artifact identity.
@@ -830,6 +922,7 @@ fn validate_resolved_bytes(
 fn load_canonical_params<C>(
     parity: KagemushaPastaParityV1,
     bytes: &[u8],
+    canonical: &KagemushaCanonicalParamsCacheV1<C>,
 ) -> Result<ParamsIPA<C>, KagemushaArtifactErrorV1>
 where
     C: CurveAffine,
@@ -837,15 +930,10 @@ where
     if bytes.len() != usize::try_from(KAGEMUSHA_PARAMS_BYTES_V1).expect("parameter size fits") {
         return Err(KagemushaArtifactErrorV1::NonCanonicalParameters(parity));
     }
-    let params = ParamsIPA::<C>::new(KAGEMUSHA_HALO2_K_V1);
-    let mut canonical = Vec::with_capacity(bytes.len());
-    params
-        .write(&mut canonical)
-        .map_err(|_| KagemushaArtifactErrorV1::NonCanonicalParameters(parity))?;
-    if canonical.as_slice() != bytes {
+    if canonical.params.k() != KAGEMUSHA_HALO2_K_V1 || canonical.bytes.as_ref() != bytes {
         return Err(KagemushaArtifactErrorV1::NonCanonicalParameters(parity));
     }
-    Ok(params)
+    Ok(canonical.params.clone())
 }
 
 fn lower_hex(bytes: DigestV1) -> String {
@@ -861,7 +949,7 @@ fn lower_hex(bytes: DigestV1) -> String {
 const _: () = {
     assert!(KAGEMUSHA_HALO2_K_V1 == 16);
     assert!(KAGEMUSHA_PARAMS_BYTES_V1 == 4_194_372);
-    assert!(KagemushaArtifactRoleV1::ALL.len() == 42);
+    assert!(KagemushaArtifactRoleV1::ALL.len() == 50);
 };
 
 #[cfg(test)]
@@ -909,6 +997,10 @@ mod tests {
             mint_finality_ep_protocol_digest: [18; 32],
             guard_bundle_eq_protocol_digest: [11; 32],
             guard_bundle_ep_protocol_digest: [12; 32],
+            mint_hash_shard_eq_protocol_digest: [19; 32],
+            mint_hash_shard_ep_protocol_digest: [20; 32],
+            mint_hash_claim_eq_protocol_digest: [21; 32],
+            mint_hash_claim_ep_protocol_digest: [22; 32],
             guard_bundle_verifying_key_eq: role_binding(KagemushaArtifactRoleV1::GuardBundleVkEq),
             guard_bundle_verifying_key_ep: role_binding(KagemushaArtifactRoleV1::GuardBundleVkEp),
             terminal_authorization_verifying_key_eq: role_binding(
@@ -1387,6 +1479,59 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn mint_hash_descriptors_are_distinct_release_authorities() {
+        use KagemushaArtifactKindV1::{ProvingKey, VerifyingKey};
+        use KagemushaArtifactRoleV1 as Role;
+        use KagemushaCircuitFamilyV1 as Family;
+
+        for (family, roles) in [
+            (
+                Family::MintHashShard,
+                [
+                    Role::MintHashShardPkEq,
+                    Role::MintHashShardVkEq,
+                    Role::MintHashShardPkEp,
+                    Role::MintHashShardVkEp,
+                ],
+            ),
+            (
+                Family::MintHashClaim,
+                [
+                    Role::MintHashClaimPkEq,
+                    Role::MintHashClaimVkEq,
+                    Role::MintHashClaimPkEp,
+                    Role::MintHashClaimVkEp,
+                ],
+            ),
+        ] {
+            for (index, role) in roles.into_iter().enumerate() {
+                let descriptor = KagemushaArtifactDescriptorV1::for_role(role);
+                assert_eq!(descriptor.family, Some(family));
+                assert_eq!(
+                    descriptor.parity,
+                    if index < 2 {
+                        KagemushaPastaParityV1::Eq
+                    } else {
+                        KagemushaPastaParityV1::Ep
+                    }
+                );
+                assert_eq!(
+                    descriptor.kind,
+                    if index % 2 == 0 {
+                        ProvingKey
+                    } else {
+                        VerifyingKey
+                    }
+                );
+            }
+        }
+        assert_ne!(
+            KagemushaArtifactDescriptorV1::for_role(Role::MintHashShardVkEq).family,
+            KagemushaArtifactDescriptorV1::for_role(Role::MintHashClaimVkEq).family
+        );
     }
 
     #[test]

@@ -127,7 +127,9 @@ This crate hosts cross-component tests for Iroha.
   duplicate rejection, exact replay rejection, and final restart/catch-up.
   Run it with
   `TEST_NETWORK_IROHAD_FEATURES=zk-stark IROHA_TEST_REQUIRE_NETWORK=1 IROHA_TEST_SERIALIZE_NETWORKS=1 cargo test --locked -p integration_tests --test network_functional --features zk-stark privacy_exact12_activation_network::canonical_exact12_governance_survives_four_peer_activation_replay_and_restart -- --exact --nocapture --test-threads=1`.
-- KAGEMUSHA V1 lifecycle coverage exercises pooled-reserve top-up,
-  aggregate-balance receipt folding, restart recovery, unrestricted subsequent
-  payment, and full or partial redemption under paired-Pasta verification.
+- `tests/zk_confidential_localnet.rs` covers only the first-release KAGEMUSHA
+  instruction-registry surface and exclusion of retired confidential wires.
+  Aggregate receipt folding, canonical restart recovery, subsequent payment,
+  and full or partial redemption are Core unit/qualification gates; this
+  integration crate does not yet claim a complete paired-Pasta lifecycle run.
 - SoraNet web deploy + public DNS ALIAS/CNAME + NS/DS delegation placeholders coverage lives at `tests/soranet_web_deploy.rs`.

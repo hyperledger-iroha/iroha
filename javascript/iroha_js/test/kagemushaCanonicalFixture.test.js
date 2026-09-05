@@ -59,7 +59,13 @@ test("all SDKs consume the Rust-generated canonical KAGEMUSHA three-message fixt
 
   const expectedRaw = requestRaw.length + paymentRaw.length + acknowledgementRaw.length;
   assert.equal(Kagemusha.validateCompleteExchange(request, payment, acknowledgement), expectedRaw);
-  if (fixture.complete_three_message !== undefined) {
-    assert.equal(fixture.complete_three_message.raw_bytes, expectedRaw);
-  }
+  assert.equal(fixture.complete_exchange.raw_bytes, expectedRaw);
+  assert.deepEqual(fixture.complete_exchange.messages, [
+    "request", "payment", "acknowledgement",
+  ]);
+  assert.equal(
+    fixture.complete_exchange.text_bytes,
+    fixture.payment_request.kgm1.length + fixture.payment.kgm1.length
+      + fixture.acknowledgement.kgm1.length,
+  );
 });

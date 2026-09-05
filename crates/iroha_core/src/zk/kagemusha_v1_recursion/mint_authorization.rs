@@ -6,7 +6,7 @@
 //! XChaCha20-Poly1305 stay in the qualified non-forking hardware service; the circuit authenticates
 //! that service's one-use authorization over the exact key, opening and ciphertext transcript.
 
-use ff::PrimeField as _;
+use ff::{Field as _, PrimeField as _};
 use halo2_base::{
     AssignedValue, Context,
     gates::{
@@ -16,9 +16,15 @@ use halo2_base::{
     utils::{BigPrimeField, CurveAffineExt},
 };
 use halo2_proofs::{
+    arithmetic::best_multiexp,
     circuit::{Layouter, V1},
-    halo2curves::pasta::{EpAffine, EqAffine, Fp, Fq},
+    halo2curves::{
+        CurveAffine,
+        group::{Curve as _, prime::PrimeCurveAffine as _},
+        pasta::{EpAffine, EqAffine, Fp, Fq},
+    },
     plonk::{Circuit, ConstraintSystem, Error as PlonkError},
+    poly::ipa::commitment::ParamsIPA,
 };
 use iroha_data_model::kagemusha::{
     KAGEMUSHA_ASSET_SCALE_MAX_V1, KAGEMUSHA_CREDIT_OPENING_CANONICAL_FIELD_RANGES_V1,
@@ -42,29 +48,47 @@ use iroha_data_model::kagemusha::{
     kagemusha_recipient_credential_commitment_v1,
 };
 use sha2::{Digest as _, Sha256};
-use snark_verifier::{pcs::ipa::IpaSuccinctVerifyingKey, verifier::plonk::PlonkProtocol};
+use snark_verifier::{
+    loader::native::NativeLoader,
+    pcs::ipa::{IpaAccumulator, IpaSuccinctVerifyingKey},
+    verifier::plonk::PlonkProtocol,
+};
 
 use super::{
     DigestV1, KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1, KagemushaEpAccumulatorV1,
-    KagemushaEqAccumulatorV1, KagemushaPastaParityV1,
+    KagemushaEpFoldProofV1, KagemushaEqAccumulatorV1, KagemushaEqFoldProofV1,
+    KagemushaPastaParityV1,
     canonical_preimage::assemble_canonical_preimage_v1,
     deferred_parent::{
-        DeferredAccumulator, accumulator_limb_count, bind_accumulator_limbs,
-        constrain_reciprocal_tagged_audit_v1, deferred_field_chips_v1, deferred_loader_v1,
-        finalize_tagged_deferred_audit_v1, ordinary_ipa_proof_profile_v1, verify_ordinary_proof_v1,
+        DeferredAccumulator, KagemushaNativeDeferredBatchV1, accumulator_limb_count,
+        bind_accumulator_limbs, constrain_reciprocal_native_batch_with_carrier_v1,
+        deferred_field_chips_v1, deferred_loader_v1,
+        derive_native_deferred_batch_with_u128_binding_v1, kagemusha_protocol_structure_digest_v1,
+        load_and_constrain_parent_protocol_v1, load_native_accumulator,
+        native_parent_protocol_digest_v1, ordinary_ipa_proof_profile_v1, verify_fold,
+        verify_ordinary_proof_v1, verify_two_carrier_hybrid_ordinary_proof_and_stream_v1,
     },
     guard_bundle::{
         AssignedCredentialV1, KAGEMUSHA_ENABLED_HARDWARE_PROFILE_SLOTS_V1,
+        KAGEMUSHA_PLATFORM_CREDENTIAL_PUBLIC_INSTANCE_COUNT_V1,
         KagemushaPlatformCredentialStatementV1, assert_digest_nonzero, assign_bytes,
         assign_credential_statement_v1, bind_equal_digest, constant_bytes,
         constrain_enabled_hardware_profile_membership_v1, device_authority_commitment_v1,
-        digest_limbs_assigned, hash,
+        digest_limbs_assigned, hash, platform_credential_public_instance,
+    },
+    mint_hash_claim_fold::{
+        KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_BINDING_COUNT_V1,
+        KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_INSTANCE_COUNT_V1,
+        KAGEMUSHA_MINT_HASH_CLAIM_INNER_SEMANTIC_INSTANCE_COUNT_V1,
+        KAGEMUSHA_MINT_HASH_CLAIM_PUBLIC_INSTANCE_COUNT_V1,
+        canonical_claim_carrier_binding_tail_v1, constrain_complete_claim_against_sha_jobs_v1,
+        public_instance as hash_claim_public,
     },
 };
 use crate::zk::{
     kagemusha_v1_poseidon::{KagemushaPoseidonFieldV1, digest_limbs, from_u128},
     pasta_dense_msm::{PastaDenseMsmConfigV1, PastaDenseMsmJobsV1},
-    pasta_sha256::{PastaSha256BitV1, PastaSha256ByteV1, PastaSha256ConfigV1, PastaSha256JobsV1},
+    pasta_sha256::{PastaSha256BitV1, PastaSha256ByteV1, PastaSha256JobsV1},
 };
 
 const MINIMUM_UNUSABLE_ROWS: usize = 9;
@@ -80,12 +104,19 @@ const CIPHERTEXT_DIGEST_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:ciphertext";
 const ACCOUNT_IDENTITY_DIGEST_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:account-identity";
 const HARDWARE_AUTHORIZATION_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:mint-hardware-authorization";
 const MINT_AUTHORIZATION_CREDENTIAL_EQUATION_TAG_V1: u32 = 5;
+const MINT_AUTHORIZATION_HASH_CLAIM_EQUATION_TAG_V1: u32 = 14;
+const _: () = assert!(KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_BINDING_COUNT_V1 == 14);
 
 /// Non-history public cells in one mint-authorization parity.
 pub(crate) const MINT_AUTHORIZATION_PUBLIC_PREFIX_COUNT_V1: usize = 50;
-/// Public cells in one mint-authorization parity, including the credential accumulator.
+/// Public cells in one mint-authorization parity, including the complete recursive history.
 pub(crate) const MINT_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1: usize =
     MINT_AUTHORIZATION_PUBLIC_PREFIX_COUNT_V1 + 34;
+/// Small semantic column of the internal authorization proof. The first 84
+/// cells retain the transport ABI; the final four bind both proof-carrier
+/// commitments across the paired parities.
+pub(super) const MINT_AUTHORIZATION_INNER_SEMANTIC_INSTANCE_COUNT_V1: usize =
+    MINT_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1 + 4;
 
 /// Public-instance offsets shared by both mint-authorization parities.
 pub(crate) mod public_instance {
@@ -117,6 +148,9 @@ pub(crate) mod public_instance {
     pub(crate) const EQ_AUDIT_LO: usize = 46;
     pub(crate) const EP_AUDIT_LO: usize = 48;
     pub(crate) const HISTORY_START: usize = 50;
+    pub(super) const EQ_CARRIER_COMMITMENT_LO: usize =
+        super::MINT_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1;
+    pub(super) const EP_CARRIER_COMMITMENT_LO: usize = EQ_CARRIER_COMMITMENT_LO + 2;
 }
 
 /// Exact private recipient material consumed by both authorization parities.
@@ -259,25 +293,48 @@ impl KagemushaMintAuthorizationRelationWitnessV1 {
     }
 }
 
-/// Complete paired credential-proof inputs for one mint authorization.
+/// Complete paired credential and own-hash claim inputs for one mint authorization.
 pub(crate) struct KagemushaMintAuthorizationRecursiveWitnessV1<'a> {
     pub(crate) relation: KagemushaMintAuthorizationRelationWitnessV1,
     pub(crate) enabled_hardware_profiles: [DigestV1; KAGEMUSHA_ENABLED_HARDWARE_PROFILE_SLOTS_V1],
+    pub(crate) eq_hash_claim_protocol_digest: DigestV1,
+    pub(crate) ep_hash_claim_protocol_digest: DigestV1,
+    pub(crate) eq_hash_shard_protocol_digest: DigestV1,
+    pub(crate) ep_hash_shard_protocol_digest: DigestV1,
+    pub(crate) eq_credential_protocol_digest: DigestV1,
     pub(crate) eq_credential_protocol: &'a PlonkProtocol<EqAffine>,
+    pub(crate) eq_credential_instances: &'a [Vec<Fp>],
     pub(crate) eq_credential_proof: &'a [u8],
-    pub(crate) eq_credential_history: &'a KagemushaEqAccumulatorV1,
+    pub(crate) eq_credential_claim_history: &'a KagemushaEqAccumulatorV1,
+    pub(crate) eq_credential_history_fold_proof: &'a KagemushaEqFoldProofV1,
+    pub(crate) eq_hash_claim_protocol: &'a PlonkProtocol<EqAffine>,
+    pub(crate) eq_hash_claim_instances: &'a [Vec<Fp>],
+    pub(crate) eq_hash_claim_proof: &'a [u8],
+    pub(crate) eq_hash_claim_history: &'a KagemushaEqAccumulatorV1,
+    pub(crate) eq_hash_claim_history_fold_proof: &'a KagemushaEqFoldProofV1,
+    pub(crate) eq_hash_claim_merge_fold_proof: &'a KagemushaEqFoldProofV1,
+    pub(crate) eq_successor_history: &'a KagemushaEqAccumulatorV1,
+    pub(crate) ep_credential_protocol_digest: DigestV1,
     pub(crate) ep_credential_protocol: &'a PlonkProtocol<EpAffine>,
+    pub(crate) ep_credential_instances: &'a [Vec<Fq>],
     pub(crate) ep_credential_proof: &'a [u8],
-    pub(crate) ep_credential_history: &'a KagemushaEpAccumulatorV1,
+    pub(crate) ep_credential_claim_history: &'a KagemushaEpAccumulatorV1,
+    pub(crate) ep_credential_history_fold_proof: &'a KagemushaEpFoldProofV1,
+    pub(crate) ep_hash_claim_protocol: &'a PlonkProtocol<EpAffine>,
+    pub(crate) ep_hash_claim_instances: &'a [Vec<Fq>],
+    pub(crate) ep_hash_claim_proof: &'a [u8],
+    pub(crate) ep_hash_claim_history: &'a KagemushaEpAccumulatorV1,
+    pub(crate) ep_hash_claim_history_fold_proof: &'a KagemushaEpFoldProofV1,
+    pub(crate) ep_hash_claim_merge_fold_proof: &'a KagemushaEpFoldProofV1,
+    pub(crate) ep_successor_history: &'a KagemushaEpAccumulatorV1,
     pub(crate) eq_deferred_audit: DigestV1,
     pub(crate) ep_deferred_audit: DigestV1,
 }
 
-/// Base, SHA-256 and reciprocal dense-MSM configuration for one authorization parity.
+/// Base and reciprocal dense-MSM configuration for one authorization parity.
 #[derive(Clone, Debug)]
 pub(crate) struct KagemushaMintAuthorizationCircuitConfigV1<F: halo2_base::utils::ScalarField> {
     base: BaseConfig<F>,
-    sha: PastaSha256ConfigV1,
     dense: PastaDenseMsmConfigV1,
 }
 
@@ -285,7 +342,6 @@ pub(crate) struct KagemushaMintAuthorizationCircuitConfigV1<F: halo2_base::utils
 #[derive(Clone)]
 pub(crate) struct KagemushaMintAuthorizationEqCircuitV1 {
     builder: BaseCircuitBuilder<Fp>,
-    sha_jobs: PastaSha256JobsV1<Fp>,
     dense_jobs: PastaDenseMsmJobsV1<EpAffine>,
 }
 
@@ -293,7 +349,6 @@ pub(crate) struct KagemushaMintAuthorizationEqCircuitV1 {
 #[derive(Clone)]
 pub(crate) struct KagemushaMintAuthorizationEpCircuitV1 {
     builder: BaseCircuitBuilder<Fq>,
-    sha_jobs: PastaSha256JobsV1<Fq>,
     dense_jobs: PastaDenseMsmJobsV1<EqAffine>,
 }
 
@@ -311,7 +366,6 @@ macro_rules! impl_mint_authorization_circuit {
             fn without_witnesses(&self) -> Self {
                 Self {
                     builder: self.builder.deep_clone().unknown(true),
-                    sha_jobs: self.sha_jobs.unknown(),
                     dense_jobs: self.dense_jobs.unknown(),
                 }
             }
@@ -325,13 +379,22 @@ macro_rules! impl_mint_authorization_circuit {
                 base.set_usable_rows(usable_rows);
                 KagemushaMintAuthorizationCircuitConfigV1 {
                     base,
-                    sha: PastaSha256ConfigV1::configure(meta),
                     dense: PastaDenseMsmConfigV1::configure::<$opposite>(meta),
                 }
             }
 
             fn configure(_: &mut ConstraintSystem<$field>) -> Self::Config {
                 unreachable!(concat!($label, " uses authenticated Base parameters"))
+            }
+
+            fn synthesize_for_measurement(
+                &self,
+                config: Self::Config,
+                layouter: impl Layouter<$field>,
+            ) -> Result<(), PlonkError> {
+                let result = self.synthesize(config, layouter);
+                self.builder.reset_synthesis_state();
+                result
             }
 
             fn synthesize(
@@ -344,12 +407,6 @@ macro_rules! impl_mint_authorization_circuit {
                     &self.builder,
                     config.base,
                     layouter.namespace(|| concat!($label, " Base")),
-                )?;
-                self.sha_jobs.synthesize(
-                    &config.sha,
-                    &mut layouter,
-                    &self.builder.core().copy_manager,
-                    usable_rows,
                 )?;
                 self.dense_jobs.synthesize(
                     &config.dense,
@@ -376,11 +433,264 @@ impl_mint_authorization_circuit!(
     "Kagemusha Ep mint authorization"
 );
 
+/// Compact native Eq/Ep verifier audits retained after their scalar builders are dropped.
+pub(crate) struct KagemushaMintAuthorizationDeferredAuditsV1 {
+    eq: KagemushaNativeDeferredBatchV1<EqAffine>,
+    ep: KagemushaNativeDeferredBatchV1<EpAffine>,
+    eq_digest: DigestV1,
+    ep_digest: DigestV1,
+    eq_carrier_commitment: EqAffine,
+    ep_carrier_commitment: EpAffine,
+}
+
+impl KagemushaMintAuthorizationDeferredAuditsV1 {
+    #[must_use]
+    pub(crate) const fn eq_digest(&self) -> DigestV1 {
+        self.eq_digest
+    }
+
+    #[must_use]
+    pub(crate) const fn ep_digest(&self) -> DigestV1 {
+        self.ep_digest
+    }
+
+    #[must_use]
+    pub(super) const fn eq_carrier_commitment(&self) -> EqAffine {
+        self.eq_carrier_commitment
+    }
+
+    #[must_use]
+    pub(super) const fn ep_carrier_commitment(&self) -> EpAffine {
+        self.ep_carrier_commitment
+    }
+}
+
+fn native_carrier_values_v1<C>(
+    output: &KagemushaNativeDeferredBatchV1<C>,
+) -> Result<Vec<C::ScalarExt>, String>
+where
+    C: CurveAffineExt,
+    C::Base: BigPrimeField,
+    C::ScalarExt: BigPrimeField + halo2_base::utils::ScalarField,
+{
+    output
+        .carrier_cells_v1()
+        .map(|cells| cells.into_iter().map(|cell| *cell.value()).collect())
+        .map_err(|error| format!("mint-authorization carrier shape is invalid: {error:?}"))
+}
+
+fn canonical_carrier_commitment_v1<C>(
+    parameters: &ParamsIPA<C>,
+    output: &KagemushaNativeDeferredBatchV1<C>,
+) -> Result<C, String>
+where
+    C: CurveAffineExt,
+    C::Base: BigPrimeField,
+    C::ScalarExt: BigPrimeField + halo2_base::utils::ScalarField,
+{
+    let values = native_carrier_values_v1(output)?;
+    let bases = parameters
+        .get_g_lagrange()
+        .get(..values.len())
+        .ok_or_else(|| "mint-authorization carrier exceeds the IPA domain".to_owned())?;
+    let commitment =
+        (best_multiexp::<C>(&values, bases) + parameters.get_blind_base().to_curve()).to_affine();
+    if bool::from(commitment.is_identity()) {
+        return Err("mint-authorization carrier commitment is the identity".to_owned());
+    }
+    Ok(commitment)
+}
+
+fn point_u128_limbs_v1<C: CurveAffine>(point: C) -> [u128; 2] {
+    let bytes = point.to_bytes();
+    let bytes = bytes.as_ref();
+    std::array::from_fn(|half| {
+        u128::from_le_bytes(
+            bytes[half * 16..(half + 1) * 16]
+                .try_into()
+                .expect("Pasta compressed point half has sixteen bytes"),
+        )
+    })
+}
+
+fn append_inner_carrier_commitments_v1<F: KagemushaPoseidonFieldV1>(
+    semantic: &mut Vec<F>,
+    eq_commitment: EqAffine,
+    ep_commitment: EpAffine,
+) -> Result<(), String> {
+    if semantic.len() != MINT_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1 {
+        return Err("mint-authorization semantic prefix has the wrong shape".to_owned());
+    }
+    semantic.extend(
+        point_u128_limbs_v1(eq_commitment)
+            .into_iter()
+            .chain(point_u128_limbs_v1(ep_commitment))
+            .map(F::from_u128),
+    );
+    if semantic.len() != MINT_AUTHORIZATION_INNER_SEMANTIC_INSTANCE_COUNT_V1 {
+        return Err("mint-authorization inner semantic layout drift".to_owned());
+    }
+    Ok(())
+}
+
+fn validate_credential_public_instances_v1<F: KagemushaPoseidonFieldV1>(
+    parity: KagemushaPastaParityV1,
+    instances: &[Vec<F>],
+    credential_digest: DigestV1,
+    carried_history: &[u8; KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1],
+) -> Result<(), String> {
+    if instances.len() != 1
+        || instances[0].len() != KAGEMUSHA_PLATFORM_CREDENTIAL_PUBLIC_INSTANCE_COUNT_V1
+    {
+        return Err(format!(
+            "{parity:?} mint-authorization credential public shape is not exactly one-by-{KAGEMUSHA_PLATFORM_CREDENTIAL_PUBLIC_INSTANCE_COUNT_V1}"
+        ));
+    }
+    let column = &instances[0];
+    if column.get(
+        platform_credential_public_instance::CREDENTIAL_LO
+            ..platform_credential_public_instance::CREDENTIAL_LO + 2,
+    ) != Some(digest_limbs::<F>(credential_digest).as_slice())
+    {
+        return Err(format!(
+            "{parity:?} mint-authorization credential digest does not match public rows 0..2"
+        ));
+    }
+    let expected_history = carried_history
+        .chunks_exact(16)
+        .map(|chunk| {
+            F::from_u128(u128::from_le_bytes(
+                chunk.try_into().expect("history limb width"),
+            ))
+        })
+        .collect::<Vec<_>>();
+    if expected_history.len() != accumulator_limb_count()
+        || column.get(platform_credential_public_instance::HISTORY_START..)
+            != Some(expected_history.as_slice())
+    {
+        return Err(format!(
+            "{parity:?} mint-authorization carried claim history does not match credential public rows 6..40"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_hash_claim_public_instances_v1<F: KagemushaPoseidonFieldV1>(
+    parity: KagemushaPastaParityV1,
+    instances: &[Vec<F>],
+    carried_history: &[u8; KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1],
+) -> Result<[u128; KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_BINDING_COUNT_V1], String> {
+    if instances.len() != 3
+        || instances[0].len() != KAGEMUSHA_MINT_HASH_CLAIM_INNER_SEMANTIC_INSTANCE_COUNT_V1
+        || instances[1].len() != KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_INSTANCE_COUNT_V1
+        || instances[2].len() != KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_INSTANCE_COUNT_V1
+    {
+        return Err(format!(
+            "{parity:?} mint-authorization hash-claim internal shape is not exactly [{KAGEMUSHA_MINT_HASH_CLAIM_INNER_SEMANTIC_INSTANCE_COUNT_V1}, {KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_INSTANCE_COUNT_V1}, {KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_INSTANCE_COUNT_V1}]"
+        ));
+    }
+    let expected_history = carried_history
+        .chunks_exact(16)
+        .map(|chunk| {
+            F::from_u128(u128::from_le_bytes(
+                chunk.try_into().expect("history limb width"),
+            ))
+        })
+        .collect::<Vec<_>>();
+    if expected_history.len() != accumulator_limb_count()
+        || instances[0].get(
+            hash_claim_public::HISTORY_START..KAGEMUSHA_MINT_HASH_CLAIM_PUBLIC_INSTANCE_COUNT_V1,
+        ) != Some(expected_history.as_slice())
+    {
+        return Err(format!(
+            "{parity:?} mint-authorization carried hash-claim history does not match claim public rows 63..97"
+        ));
+    }
+    canonical_claim_carrier_binding_tail_v1(instances).map_err(|error| {
+        format!("{parity:?} mint-authorization hash-claim carrier binding is invalid: {error}")
+    })
+}
+
+fn validate_recursive_witness_v1(
+    witness: &KagemushaMintAuthorizationRecursiveWitnessV1<'_>,
+) -> Result<DigestV1, String> {
+    witness.relation.validate_shape()?;
+    validate_enabled_profiles(&witness.enabled_hardware_profiles)?;
+    validate_audits(witness.eq_deferred_audit, witness.ep_deferred_audit)?;
+    if witness.eq_credential_protocol_digest == [0; 32]
+        || witness.ep_credential_protocol_digest == [0; 32]
+        || witness.eq_hash_claim_protocol_digest == [0; 32]
+        || witness.ep_hash_claim_protocol_digest == [0; 32]
+        || witness.eq_hash_shard_protocol_digest == [0; 32]
+        || witness.ep_hash_shard_protocol_digest == [0; 32]
+        || witness.eq_credential_protocol_digest == witness.ep_credential_protocol_digest
+        || witness.eq_hash_claim_protocol_digest == witness.ep_hash_claim_protocol_digest
+        || witness.eq_hash_shard_protocol_digest == witness.ep_hash_shard_protocol_digest
+    {
+        return Err("mint-authorization protocol identity is absent or parity-aliased".to_owned());
+    }
+    let eq_credential_protocol_digest = native_parent_protocol_digest_v1(
+        witness.eq_credential_protocol,
+        KagemushaPastaParityV1::Eq,
+    )?;
+    let ep_credential_protocol_digest = native_parent_protocol_digest_v1(
+        witness.ep_credential_protocol,
+        KagemushaPastaParityV1::Ep,
+    )?;
+    let eq_hash_claim_protocol_digest = native_parent_protocol_digest_v1(
+        witness.eq_hash_claim_protocol,
+        KagemushaPastaParityV1::Eq,
+    )?;
+    let ep_hash_claim_protocol_digest = native_parent_protocol_digest_v1(
+        witness.ep_hash_claim_protocol,
+        KagemushaPastaParityV1::Ep,
+    )?;
+    if eq_credential_protocol_digest != witness.eq_credential_protocol_digest
+        || ep_credential_protocol_digest != witness.ep_credential_protocol_digest
+        || eq_hash_claim_protocol_digest != witness.eq_hash_claim_protocol_digest
+        || ep_hash_claim_protocol_digest != witness.ep_hash_claim_protocol_digest
+    {
+        return Err(
+            "mint-authorization recursive protocol differs from its authenticated identity"
+                .to_owned(),
+        );
+    }
+    let credential_digest = witness.relation.platform_credential.canonical_digest();
+    validate_credential_public_instances_v1(
+        KagemushaPastaParityV1::Eq,
+        witness.eq_credential_instances,
+        credential_digest,
+        witness.eq_credential_claim_history.as_bytes(),
+    )?;
+    validate_credential_public_instances_v1(
+        KagemushaPastaParityV1::Ep,
+        witness.ep_credential_instances,
+        credential_digest,
+        witness.ep_credential_claim_history.as_bytes(),
+    )?;
+    let eq_hash_claim_carrier_binding = validate_hash_claim_public_instances_v1(
+        KagemushaPastaParityV1::Eq,
+        witness.eq_hash_claim_instances,
+        witness.eq_hash_claim_history.as_bytes(),
+    )?;
+    let ep_hash_claim_carrier_binding = validate_hash_claim_public_instances_v1(
+        KagemushaPastaParityV1::Ep,
+        witness.ep_hash_claim_instances,
+        witness.ep_hash_claim_history.as_bytes(),
+    )?;
+    if eq_hash_claim_carrier_binding != ep_hash_claim_carrier_binding {
+        return Err("mint-authorization Eq/Ep hash-claim carrier bindings do not match".to_owned());
+    }
+    witness.relation.hardware_authorization_digest()
+}
+
 /// Build the release-pinned, mutually audited mint-authorization pair.
 pub(crate) fn build_kagemusha_mint_authorization_pair_v1(
+    eq_parameters: &ParamsIPA<EqAffine>,
+    ep_parameters: &ParamsIPA<EpAffine>,
     eq_svk: &IpaSuccinctVerifyingKey<EqAffine>,
     ep_svk: &IpaSuccinctVerifyingKey<EpAffine>,
-    witness: KagemushaMintAuthorizationRecursiveWitnessV1<'_>,
+    witness: &KagemushaMintAuthorizationRecursiveWitnessV1<'_>,
 ) -> Result<
     (
         KagemushaMintAuthorizationEqCircuitV1,
@@ -390,98 +700,363 @@ pub(crate) fn build_kagemusha_mint_authorization_pair_v1(
     ),
     String,
 > {
-    witness.relation.validate_shape()?;
-    validate_enabled_profiles(&witness.enabled_hardware_profiles)?;
-    validate_audits(witness.eq_deferred_audit, witness.ep_deferred_audit)?;
-    let hardware_authorization = witness.relation.hardware_authorization_digest()?;
-    let (mut eq_builder, eq_sha, eq_output) = build_scalar_half_v1::<EqAffine>(
+    let audits = derive_kagemusha_mint_authorization_deferred_audits_v1(
+        eq_parameters,
+        ep_parameters,
+        eq_svk,
+        ep_svk,
+        witness,
+    )?;
+    let (eq, _) =
+        build_kagemusha_mint_authorization_eq_v1(ep_parameters, eq_svk, witness, &audits)?;
+    let (ep, _) =
+        build_kagemusha_mint_authorization_ep_v1(eq_parameters, ep_svk, witness, &audits)?;
+    Ok((eq, ep, audits.eq_digest, audits.ep_digest))
+}
+
+/// Discover both deferred recursive audits while retaining no paired Base circuit graphs.
+///
+/// Eq is reduced to its compact native equation witness and digest before Ep construction starts.
+pub(crate) fn derive_kagemusha_mint_authorization_deferred_audits_v1(
+    eq_parameters: &ParamsIPA<EqAffine>,
+    ep_parameters: &ParamsIPA<EpAffine>,
+    eq_svk: &IpaSuccinctVerifyingKey<EqAffine>,
+    ep_svk: &IpaSuccinctVerifyingKey<EpAffine>,
+    witness: &KagemushaMintAuthorizationRecursiveWitnessV1<'_>,
+) -> Result<KagemushaMintAuthorizationDeferredAuditsV1, String> {
+    let hardware_authorization = validate_recursive_witness_v1(&witness)?;
+    let eq_credential_claim_history =
+        witness
+            .eq_credential_claim_history
+            .to_native()
+            .map_err(|error| {
+                format!("failed to decode Eq PlatformCredential claim history: {error}")
+            })?;
+    let eq_hash_claim_history = witness.eq_hash_claim_history.to_native().map_err(|error| {
+        format!("failed to decode Eq MintAuthorization hash-claim history: {error}")
+    })?;
+    let (mut eq_builder, eq_output) = build_scalar_half_v1::<EqAffine>(
         eq_svk,
         KagemushaPastaParityV1::Eq,
         &witness.relation,
         &witness.enabled_hardware_profiles,
+        witness.eq_credential_protocol_digest,
         witness.eq_credential_protocol,
+        witness.eq_credential_instances,
         witness.eq_credential_proof,
-        witness.eq_credential_history.as_bytes(),
+        &eq_credential_claim_history,
+        witness.eq_credential_history_fold_proof.as_bytes(),
+        witness.eq_hash_claim_protocol_digest,
+        witness.ep_hash_claim_protocol_digest,
+        witness.eq_hash_shard_protocol_digest,
+        witness.ep_hash_shard_protocol_digest,
+        witness.eq_hash_claim_protocol,
+        witness.eq_hash_claim_instances,
+        witness.eq_hash_claim_proof,
+        &eq_hash_claim_history,
+        witness.eq_hash_claim_history_fold_proof.as_bytes(),
+        witness.eq_hash_claim_merge_fold_proof.as_bytes(),
+        witness.eq_successor_history.as_bytes(),
         hardware_authorization,
         witness.eq_deferred_audit,
         witness.ep_deferred_audit,
+        None,
     )?;
-    let (mut ep_builder, ep_sha, ep_output) = build_scalar_half_v1::<EpAffine>(
+    eq_builder.calculate_params(Some(MINIMUM_UNUSABLE_ROWS));
+    let eq_digest = super::composite::assigned_digest_bytes(&eq_output.challenge_limbs)?;
+    drop(eq_builder);
+    halo2_proofs::release_allocator_slack();
+
+    let ep_credential_claim_history =
+        witness
+            .ep_credential_claim_history
+            .to_native()
+            .map_err(|error| {
+                format!("failed to decode Ep PlatformCredential claim history: {error}")
+            })?;
+    let ep_hash_claim_history = witness.ep_hash_claim_history.to_native().map_err(|error| {
+        format!("failed to decode Ep MintAuthorization hash-claim history: {error}")
+    })?;
+    let (mut ep_builder, ep_output) = build_scalar_half_v1::<EpAffine>(
         ep_svk,
         KagemushaPastaParityV1::Ep,
         &witness.relation,
         &witness.enabled_hardware_profiles,
+        witness.ep_credential_protocol_digest,
         witness.ep_credential_protocol,
+        witness.ep_credential_instances,
         witness.ep_credential_proof,
-        witness.ep_credential_history.as_bytes(),
+        &ep_credential_claim_history,
+        witness.ep_credential_history_fold_proof.as_bytes(),
+        witness.eq_hash_claim_protocol_digest,
+        witness.ep_hash_claim_protocol_digest,
+        witness.eq_hash_shard_protocol_digest,
+        witness.ep_hash_shard_protocol_digest,
+        witness.ep_hash_claim_protocol,
+        witness.ep_hash_claim_instances,
+        witness.ep_hash_claim_proof,
+        &ep_hash_claim_history,
+        witness.ep_hash_claim_history_fold_proof.as_bytes(),
+        witness.ep_hash_claim_merge_fold_proof.as_bytes(),
+        witness.ep_successor_history.as_bytes(),
         hardware_authorization,
         witness.eq_deferred_audit,
         witness.ep_deferred_audit,
+        None,
     )?;
-
-    let eq_expected_ep = audit_cells(&eq_builder, public_instance::EP_AUDIT_LO)?;
-    let mut eq_dense = PastaDenseMsmJobsV1::default();
-    constrain_reciprocal_tagged_audit_v1::<EpAffine>(
-        &mut eq_builder,
-        &ep_output.audit,
-        &ep_output.equation_selectors,
-        &eq_expected_ep,
-        MINT_AUTHORIZATION_CREDENTIAL_EQUATION_TAG_V1,
-        &mut eq_dense,
-    )?;
-    let ep_expected_eq = audit_cells(&ep_builder, public_instance::EQ_AUDIT_LO)?;
-    let mut ep_dense = PastaDenseMsmJobsV1::default();
-    constrain_reciprocal_tagged_audit_v1::<EqAffine>(
-        &mut ep_builder,
-        &eq_output.audit,
-        &eq_output.equation_selectors,
-        &ep_expected_eq,
-        MINT_AUTHORIZATION_CREDENTIAL_EQUATION_TAG_V1,
-        &mut ep_dense,
-    )?;
-
-    eq_builder.calculate_params(Some(MINIMUM_UNUSABLE_ROWS));
+    if eq_output.bound_values.len() != KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_BINDING_COUNT_V1
+        || eq_output.bound_u128_values.len() != KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_BINDING_COUNT_V1
+        || ep_output.bound_values.len() != KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_BINDING_COUNT_V1
+        || ep_output.bound_u128_values.len() != KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_BINDING_COUNT_V1
+    {
+        return Err("mint-authorization hash-claim carrier binding count drifted".to_owned());
+    }
     ep_builder.calculate_params(Some(MINIMUM_UNUSABLE_ROWS));
+    let ep_digest = super::composite::assigned_digest_bytes(&ep_output.challenge_limbs)?;
+    drop(ep_builder);
+    halo2_proofs::release_allocator_slack();
+
+    let eq_carrier_commitment = canonical_carrier_commitment_v1(eq_parameters, &eq_output)?;
+    let ep_carrier_commitment = canonical_carrier_commitment_v1(ep_parameters, &ep_output)?;
+    Ok(KagemushaMintAuthorizationDeferredAuditsV1 {
+        eq: eq_output,
+        ep: ep_output,
+        eq_digest,
+        ep_digest,
+        eq_carrier_commitment,
+        ep_carrier_commitment,
+    })
+}
+
+/// Build one exact Eq mint-authorization circuit from compact reciprocal audit material.
+pub(crate) fn build_kagemusha_mint_authorization_eq_v1(
+    ep_parameters: &ParamsIPA<EpAffine>,
+    eq_svk: &IpaSuccinctVerifyingKey<EqAffine>,
+    witness: &KagemushaMintAuthorizationRecursiveWitnessV1<'_>,
+    audits: &KagemushaMintAuthorizationDeferredAuditsV1,
+) -> Result<(KagemushaMintAuthorizationEqCircuitV1, Vec<Vec<Fp>>), String> {
+    let hardware_authorization = validate_recursive_witness_v1(&witness)?;
+    if witness.eq_deferred_audit != audits.eq_digest
+        || witness.ep_deferred_audit != audits.ep_digest
+    {
+        return Err("mint-authorization metadata does not bind the derived audit pair".to_owned());
+    }
+    let mut semantic_instances = mint_authorization_public_instances_v1::<Fp>(
+        &witness.relation.statement,
+        hardware_authorization,
+        witness.eq_deferred_audit,
+        witness.ep_deferred_audit,
+        witness.eq_successor_history.as_bytes(),
+    )?;
+    append_inner_carrier_commitments_v1(
+        &mut semantic_instances,
+        audits.eq_carrier_commitment,
+        audits.ep_carrier_commitment,
+    )?;
+    let credential_claim_history =
+        witness
+            .eq_credential_claim_history
+            .to_native()
+            .map_err(|error| {
+                format!("failed to decode Eq PlatformCredential claim history: {error}")
+            })?;
+    let hash_claim_history = witness.eq_hash_claim_history.to_native().map_err(|error| {
+        format!("failed to decode Eq MintAuthorization hash-claim history: {error}")
+    })?;
+    let (mut builder, output) = build_scalar_half_v1::<EqAffine>(
+        eq_svk,
+        KagemushaPastaParityV1::Eq,
+        &witness.relation,
+        &witness.enabled_hardware_profiles,
+        witness.eq_credential_protocol_digest,
+        witness.eq_credential_protocol,
+        witness.eq_credential_instances,
+        witness.eq_credential_proof,
+        &credential_claim_history,
+        witness.eq_credential_history_fold_proof.as_bytes(),
+        witness.eq_hash_claim_protocol_digest,
+        witness.ep_hash_claim_protocol_digest,
+        witness.eq_hash_shard_protocol_digest,
+        witness.ep_hash_shard_protocol_digest,
+        witness.eq_hash_claim_protocol,
+        witness.eq_hash_claim_instances,
+        witness.eq_hash_claim_proof,
+        &hash_claim_history,
+        witness.eq_hash_claim_history_fold_proof.as_bytes(),
+        witness.eq_hash_claim_merge_fold_proof.as_bytes(),
+        witness.eq_successor_history.as_bytes(),
+        hardware_authorization,
+        witness.eq_deferred_audit,
+        witness.ep_deferred_audit,
+        Some((audits.eq_carrier_commitment, audits.ep_carrier_commitment)),
+    )?;
+    let expected_ep = audit_cells(&builder, public_instance::EP_AUDIT_LO)?;
+    let expected_ep_commitment = audit_cells(&builder, public_instance::EP_CARRIER_COMMITMENT_LO)?;
+    let mut dense_jobs = PastaDenseMsmJobsV1::default();
+    let ep_carrier_len = native_carrier_values_v1(&audits.ep)?.len();
+    let ep_lagrange_bases = ep_parameters
+        .get_g_lagrange()
+        .get(..ep_carrier_len)
+        .ok_or_else(|| "Ep mint-authorization carrier exceeds the IPA domain".to_owned())?;
+    constrain_reciprocal_native_batch_with_carrier_v1::<EpAffine>(
+        &mut builder,
+        &audits.ep,
+        &expected_ep,
+        ep_lagrange_bases,
+        ep_parameters.get_blind_base(),
+        audits.ep_carrier_commitment,
+        &expected_ep_commitment,
+        &output.bound_values,
+        &mut dense_jobs,
+    )?;
+    builder.calculate_params(Some(MINIMUM_UNUSABLE_ROWS));
     let usable_rows = (1_usize << KAGEMUSHA_HALO2_K_V1) - MINIMUM_UNUSABLE_ROWS;
-    eq_sha.validate_capacity(usable_rows)?;
-    ep_sha.validate_capacity(usable_rows)?;
-    eq_dense.validate_capacity(usable_rows)?;
-    ep_dense.validate_capacity(usable_rows)?;
-    let eq_audit = super::composite::assigned_digest_bytes(&eq_output.audit_digest_limbs)?;
-    let ep_audit = super::composite::assigned_digest_bytes(&ep_output.audit_digest_limbs)?;
+    dense_jobs.validate_capacity(usable_rows)?;
+    if super::composite::assigned_digest_bytes(&output.challenge_limbs)? != audits.eq_digest
+        || native_carrier_values_v1(&output)? != native_carrier_values_v1(&audits.eq)?
+    {
+        return Err("Eq mint-authorization audit changed after exact public rebinding".to_owned());
+    }
+    let public_instances = vec![semantic_instances, native_carrier_values_v1(&output)?];
     Ok((
         KagemushaMintAuthorizationEqCircuitV1 {
-            builder: eq_builder,
-            sha_jobs: eq_sha,
-            dense_jobs: eq_dense,
+            builder,
+            dense_jobs,
         },
-        KagemushaMintAuthorizationEpCircuitV1 {
-            builder: ep_builder,
-            sha_jobs: ep_sha,
-            dense_jobs: ep_dense,
-        },
-        eq_audit,
-        ep_audit,
+        public_instances,
     ))
 }
 
-#[allow(clippy::too_many_arguments)]
+/// Build one exact Ep mint-authorization circuit from compact reciprocal audit material.
+pub(crate) fn build_kagemusha_mint_authorization_ep_v1(
+    eq_parameters: &ParamsIPA<EqAffine>,
+    ep_svk: &IpaSuccinctVerifyingKey<EpAffine>,
+    witness: &KagemushaMintAuthorizationRecursiveWitnessV1<'_>,
+    audits: &KagemushaMintAuthorizationDeferredAuditsV1,
+) -> Result<(KagemushaMintAuthorizationEpCircuitV1, Vec<Vec<Fq>>), String> {
+    let hardware_authorization = validate_recursive_witness_v1(&witness)?;
+    if witness.eq_deferred_audit != audits.eq_digest
+        || witness.ep_deferred_audit != audits.ep_digest
+    {
+        return Err("mint-authorization metadata does not bind the derived audit pair".to_owned());
+    }
+    let mut semantic_instances = mint_authorization_public_instances_v1::<Fq>(
+        &witness.relation.statement,
+        hardware_authorization,
+        witness.eq_deferred_audit,
+        witness.ep_deferred_audit,
+        witness.ep_successor_history.as_bytes(),
+    )?;
+    append_inner_carrier_commitments_v1(
+        &mut semantic_instances,
+        audits.eq_carrier_commitment,
+        audits.ep_carrier_commitment,
+    )?;
+    let credential_claim_history =
+        witness
+            .ep_credential_claim_history
+            .to_native()
+            .map_err(|error| {
+                format!("failed to decode Ep PlatformCredential claim history: {error}")
+            })?;
+    let hash_claim_history = witness.ep_hash_claim_history.to_native().map_err(|error| {
+        format!("failed to decode Ep MintAuthorization hash-claim history: {error}")
+    })?;
+    let (mut builder, output) = build_scalar_half_v1::<EpAffine>(
+        ep_svk,
+        KagemushaPastaParityV1::Ep,
+        &witness.relation,
+        &witness.enabled_hardware_profiles,
+        witness.ep_credential_protocol_digest,
+        witness.ep_credential_protocol,
+        witness.ep_credential_instances,
+        witness.ep_credential_proof,
+        &credential_claim_history,
+        witness.ep_credential_history_fold_proof.as_bytes(),
+        witness.eq_hash_claim_protocol_digest,
+        witness.ep_hash_claim_protocol_digest,
+        witness.eq_hash_shard_protocol_digest,
+        witness.ep_hash_shard_protocol_digest,
+        witness.ep_hash_claim_protocol,
+        witness.ep_hash_claim_instances,
+        witness.ep_hash_claim_proof,
+        &hash_claim_history,
+        witness.ep_hash_claim_history_fold_proof.as_bytes(),
+        witness.ep_hash_claim_merge_fold_proof.as_bytes(),
+        witness.ep_successor_history.as_bytes(),
+        hardware_authorization,
+        witness.eq_deferred_audit,
+        witness.ep_deferred_audit,
+        Some((audits.eq_carrier_commitment, audits.ep_carrier_commitment)),
+    )?;
+    let expected_eq = audit_cells(&builder, public_instance::EQ_AUDIT_LO)?;
+    let expected_eq_commitment = audit_cells(&builder, public_instance::EQ_CARRIER_COMMITMENT_LO)?;
+    let mut dense_jobs = PastaDenseMsmJobsV1::default();
+    let eq_carrier_len = native_carrier_values_v1(&audits.eq)?.len();
+    let eq_lagrange_bases = eq_parameters
+        .get_g_lagrange()
+        .get(..eq_carrier_len)
+        .ok_or_else(|| "Eq mint-authorization carrier exceeds the IPA domain".to_owned())?;
+    constrain_reciprocal_native_batch_with_carrier_v1::<EqAffine>(
+        &mut builder,
+        &audits.eq,
+        &expected_eq,
+        eq_lagrange_bases,
+        eq_parameters.get_blind_base(),
+        audits.eq_carrier_commitment,
+        &expected_eq_commitment,
+        &output.bound_values,
+        &mut dense_jobs,
+    )?;
+    builder.calculate_params(Some(MINIMUM_UNUSABLE_ROWS));
+    let usable_rows = (1_usize << KAGEMUSHA_HALO2_K_V1) - MINIMUM_UNUSABLE_ROWS;
+    dense_jobs.validate_capacity(usable_rows)?;
+    if super::composite::assigned_digest_bytes(&output.challenge_limbs)? != audits.ep_digest
+        || native_carrier_values_v1(&output)? != native_carrier_values_v1(&audits.ep)?
+    {
+        return Err("Ep mint-authorization audit changed after exact public rebinding".to_owned());
+    }
+    let public_instances = vec![semantic_instances, native_carrier_values_v1(&output)?];
+    Ok((
+        KagemushaMintAuthorizationEpCircuitV1 {
+            builder,
+            dense_jobs,
+        },
+        public_instances,
+    ))
+}
+
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn build_scalar_half_v1<C>(
     succinct_vk: &IpaSuccinctVerifyingKey<C>,
     parity: KagemushaPastaParityV1,
     relation: &KagemushaMintAuthorizationRelationWitnessV1,
     enabled_profiles: &[DigestV1; KAGEMUSHA_ENABLED_HARDWARE_PROFILE_SLOTS_V1],
+    credential_protocol_digest: DigestV1,
     credential_protocol: &PlonkProtocol<C>,
+    credential_public_instances: &[Vec<C::ScalarExt>],
     credential_proof: &[u8],
-    credential_history: &[u8; KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1],
+    credential_claim_history: &IpaAccumulator<C, NativeLoader>,
+    credential_history_fold_proof: &[u8],
+    eq_hash_claim_protocol_digest: DigestV1,
+    ep_hash_claim_protocol_digest: DigestV1,
+    eq_hash_shard_protocol_digest: DigestV1,
+    ep_hash_shard_protocol_digest: DigestV1,
+    hash_claim_protocol: &PlonkProtocol<C>,
+    hash_claim_public_instances: &[Vec<C::ScalarExt>],
+    hash_claim_proof: &[u8],
+    hash_claim_history: &IpaAccumulator<C, NativeLoader>,
+    hash_claim_history_fold_proof: &[u8],
+    hash_claim_merge_fold_proof: &[u8],
+    successor_history: &[u8; KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1],
     hardware_authorization: DigestV1,
     eq_audit: DigestV1,
     ep_audit: DigestV1,
+    carrier_commitments: Option<(EqAffine, EpAffine)>,
 ) -> Result<
     (
         BaseCircuitBuilder<C::ScalarExt>,
-        PastaSha256JobsV1<C::ScalarExt>,
-        super::deferred_parent::KagemushaDeferredParentOutputV1<C>,
+        KagemushaNativeDeferredBatchV1<C>,
     ),
     String,
 >
@@ -490,8 +1065,30 @@ where
     C::Base: BigPrimeField,
     C::ScalarExt: KagemushaPoseidonFieldV1,
 {
-    if credential_protocol.num_instance != [2] {
+    if credential_protocol.num_instance != [KAGEMUSHA_PLATFORM_CREDENTIAL_PUBLIC_INSTANCE_COUNT_V1]
+        || credential_public_instances.len() != 1
+        || credential_public_instances[0].len()
+            != KAGEMUSHA_PLATFORM_CREDENTIAL_PUBLIC_INSTANCE_COUNT_V1
+    {
         return Err("mint-authorization credential proof has wrong fixed shape".to_owned());
+    }
+    if hash_claim_protocol.num_instance
+        != [
+            KAGEMUSHA_MINT_HASH_CLAIM_INNER_SEMANTIC_INSTANCE_COUNT_V1,
+            KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_INSTANCE_COUNT_V1,
+            KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_INSTANCE_COUNT_V1,
+        ]
+        || hash_claim_public_instances.len() != 3
+        || hash_claim_public_instances[0].len()
+            != KAGEMUSHA_MINT_HASH_CLAIM_INNER_SEMANTIC_INSTANCE_COUNT_V1
+        || hash_claim_public_instances[1].len()
+            != KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_INSTANCE_COUNT_V1
+        || hash_claim_public_instances[2].len()
+            != KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_INSTANCE_COUNT_V1
+    {
+        return Err(
+            "mint-authorization terminal hash-claim proof has wrong fixed shape".to_owned(),
+        );
     }
     let credential_proof_len = ordinary_ipa_proof_profile_v1(credential_protocol)
         .map_err(|error| {
@@ -501,23 +1098,25 @@ where
     if credential_proof.len() != credential_proof_len {
         return Err("mint-authorization credential proof has wrong fixed shape".to_owned());
     }
-    let mut builder = BaseCircuitBuilder::new(false)
-        .use_k(usize::try_from(KAGEMUSHA_HALO2_K_V1).expect("k fits usize"))
-        .use_lookup_bits(usize::try_from(KAGEMUSHA_HALO2_K_V1 - 1).expect("lookup bits fit usize"))
-        .use_instance_columns(1);
-    let mut sha_jobs = PastaSha256JobsV1::default();
-    let assigned = constrain_relation_v1(
-        &mut builder,
-        &mut sha_jobs,
-        relation,
-        enabled_profiles,
-        hardware_authorization,
-    )?;
+    let (mut builder, claimed_sha, assigned) =
+        mint_authorization_relation_builder_v1(relation, enabled_profiles, hardware_authorization)?;
+    if claimed_sha.compression_blocks()? == 0 {
+        return Err("mint-authorization emitted an empty typed SHA queue".to_owned());
+    }
     let range = builder.range_chip();
     let ctx = builder.main(0);
     let eq_audit_bytes = assign_digest(ctx, &range, eq_audit);
     let ep_audit_bytes = assign_digest(ctx, &range, ep_audit);
-    let history_instances = credential_history
+    let expected_credential_protocol = digest_limbs::<C::ScalarExt>(credential_protocol_digest)
+        .map(|value| ctx.load_constant(value));
+    // These four identities have no state-public cells. Fixed columns make them properties of the
+    // release-authenticated MintAuthorization VKs. Both parity claim columns expose all four and
+    // are equality-bound below, so a mismatched claim/shard suite cannot cross the pair boundary.
+    let eq_hash_claim_protocol = constant_digest(ctx, eq_hash_claim_protocol_digest);
+    let ep_hash_claim_protocol = constant_digest(ctx, ep_hash_claim_protocol_digest);
+    let eq_hash_shard_protocol = constant_digest(ctx, eq_hash_shard_protocol_digest);
+    let ep_hash_shard_protocol = constant_digest(ctx, ep_hash_shard_protocol_digest);
+    let history_instances = successor_history
         .chunks_exact(16)
         .map(|chunk| {
             let value = C::ScalarExt::from_u128(u128::from_le_bytes(
@@ -529,7 +1128,7 @@ where
         })
         .collect::<Vec<_>>();
     if history_instances.len() != accumulator_limb_count() {
-        return Err("mint-authorization credential history has wrong shape".to_owned());
+        return Err("mint-authorization successor history has wrong shape".to_owned());
     }
     builder.assigned_instances = vec![
         assigned
@@ -543,42 +1142,322 @@ where
 
     let (coordinate, scalar_integer) = deferred_field_chips_v1::<C>(&range);
     let loader = deferred_loader_v1(&mut builder, &coordinate, &scalar_integer);
-    let loaded_protocol = credential_protocol.loaded(&loader);
-    let credential_instances = assigned
-        .platform_credential_digest
-        .into_iter()
-        .map(|value| loader.scalar_from_assigned(value))
+    let structure = kagemusha_protocol_structure_digest_v1(credential_protocol, parity)?;
+    let loaded_protocol = load_and_constrain_parent_protocol_v1(
+        &loader,
+        credential_protocol,
+        parity,
+        structure,
+        &expected_credential_protocol,
+    )
+    .map_err(|error| format!("mint-authorization credential protocol binding failed: {error:?}"))?;
+    let credential_instances = credential_public_instances
+        .iter()
+        .map(|column| {
+            column
+                .iter()
+                .map(|value| loader.assign_scalar(*value))
+                .collect::<Vec<_>>()
+        })
         .collect::<Vec<_>>();
+    let credential_column = credential_instances
+        .first()
+        .ok_or_else(|| "mint-authorization credential public column is absent".to_owned())?;
+    for (actual, expected) in credential_column
+        .get(
+            platform_credential_public_instance::CREDENTIAL_LO
+                ..platform_credential_public_instance::CREDENTIAL_LO + 2,
+        )
+        .ok_or_else(|| "mint-authorization credential digest rows are absent".to_owned())?
+        .iter()
+        .zip(assigned.platform_credential_digest)
+    {
+        loader
+            .ctx_mut()
+            .main()
+            .constrain_equal(&actual.assigned(), &expected);
+    }
     let credential_accumulator: DeferredAccumulator<'_, C> = verify_ordinary_proof_v1(
         &loader,
         succinct_vk,
-        &loaded_protocol,
-        &[credential_instances],
+        &loaded_protocol.protocol,
+        &credential_instances,
         credential_proof,
     )
     .map_err(|error| format!("mint-authorization credential verifier failed: {error:?}"))?;
-    bind_accumulator_limbs(&loader, &credential_accumulator, &history_instances)
-        .map_err(|error| format!("mint-authorization credential history failed: {error:?}"))?;
-    let output = finalize_tagged_deferred_audit_v1(
+    let credential_proof_equation_count = loader.ecc_chip().equation_count();
+    if credential_proof_equation_count == 0 {
+        return Err("mint-authorization credential verifier emitted no equations".to_owned());
+    }
+    let carried_history = load_native_accumulator(&loader, credential_claim_history)
+        .map_err(|error| format!("mint-authorization claim history load failed: {error:?}"))?;
+    let carried_history_cells = credential_column
+        .get(platform_credential_public_instance::HISTORY_START..)
+        .ok_or_else(|| "mint-authorization credential claim-history rows are absent".to_owned())?
+        .iter()
+        .map(|value| *value.assigned())
+        .collect::<Vec<_>>();
+    bind_accumulator_limbs(&loader, &carried_history, &carried_history_cells)
+        .map_err(|error| format!("mint-authorization claim history binding failed: {error:?}"))?;
+    drop(carried_history_cells);
+    drop(credential_instances);
+    let credential_complete = verify_fold(
+        &loader,
+        succinct_vk,
+        &[credential_accumulator, carried_history],
+        credential_history_fold_proof,
+    )
+    .map_err(|error| format!("mint-authorization credential history fold failed: {error:?}"))?;
+    let credential_equation_count = loader.ecc_chip().equation_count();
+    if credential_equation_count <= credential_proof_equation_count {
+        return Err("mint-authorization credential-history fold emitted no equation".to_owned());
+    }
+
+    let expected_hash_claim_protocol = match parity {
+        KagemushaPastaParityV1::Eq => eq_hash_claim_protocol,
+        KagemushaPastaParityV1::Ep => ep_hash_claim_protocol,
+    };
+    let hash_claim_structure = kagemusha_protocol_structure_digest_v1(hash_claim_protocol, parity)?;
+    let loaded_hash_claim = load_and_constrain_parent_protocol_v1(
+        &loader,
+        hash_claim_protocol,
+        parity,
+        hash_claim_structure,
+        &expected_hash_claim_protocol,
+    )
+    .map_err(|error| format!("mint-authorization hash-claim protocol binding failed: {error:?}"))?;
+    if loaded_hash_claim.protocol.num_instance
+        != [
+            KAGEMUSHA_MINT_HASH_CLAIM_INNER_SEMANTIC_INSTANCE_COUNT_V1,
+            KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_INSTANCE_COUNT_V1,
+            KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_INSTANCE_COUNT_V1,
+        ]
+    {
+        return Err("mint-authorization terminal hash-claim protocol shape changed".to_owned());
+    }
+    let hash_claim_semantic = hash_claim_public_instances[0]
+        .iter()
+        .map(|value| loader.assign_scalar(*value))
+        .collect::<Vec<_>>();
+    let hash_claim_current = verify_two_carrier_hybrid_ordinary_proof_and_stream_v1(
+        &loader,
+        succinct_vk,
+        &loaded_hash_claim.protocol,
+        &hash_claim_semantic,
+        match parity {
+            KagemushaPastaParityV1::Eq => [
+                [
+                    hash_claim_public::EQ_PROOF_EQ_CARRIER_COMMITMENT_LO,
+                    hash_claim_public::EQ_PROOF_EQ_CARRIER_COMMITMENT_LO + 1,
+                ],
+                [
+                    hash_claim_public::EQ_PROOF_EP_CARRIER_COMMITMENT_LO,
+                    hash_claim_public::EQ_PROOF_EP_CARRIER_COMMITMENT_LO + 1,
+                ],
+            ],
+            KagemushaPastaParityV1::Ep => [
+                [
+                    hash_claim_public::EP_PROOF_EQ_CARRIER_COMMITMENT_LO,
+                    hash_claim_public::EP_PROOF_EQ_CARRIER_COMMITMENT_LO + 1,
+                ],
+                [
+                    hash_claim_public::EP_PROOF_EP_CARRIER_COMMITMENT_LO,
+                    hash_claim_public::EP_PROOF_EP_CARRIER_COMMITMENT_LO + 1,
+                ],
+            ],
+        },
+        hash_claim_proof,
+    )
+    .map_err(|error| format!("mint-authorization hash-claim verifier failed: {error:?}"))?;
+    let hash_claim_carrier_binding = hash_claim_semantic
+        .get(
+            KAGEMUSHA_MINT_HASH_CLAIM_PUBLIC_INSTANCE_COUNT_V1
+                ..hash_claim_public::CARRIER_BINDING_END,
+        )
+        .ok_or_else(|| "mint-authorization hash-claim carrier binding is absent".to_owned())?
+        .iter()
+        .map(|value| *value.assigned())
+        .collect::<Vec<_>>();
+    if hash_claim_carrier_binding.len() != KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_BINDING_COUNT_V1 {
+        return Err("mint-authorization hash-claim carrier binding shape drifted".to_owned());
+    }
+    let hash_claim_verifier_equation_count = loader.ecc_chip().equation_count();
+    if hash_claim_verifier_equation_count <= credential_equation_count {
+        return Err("mint-authorization hash-claim verifier emitted no equation".to_owned());
+    }
+    let hash_claim_column =
+        &hash_claim_semantic[..KAGEMUSHA_MINT_HASH_CLAIM_PUBLIC_INSTANCE_COUNT_V1];
+    let carried_hash_claim_history = load_native_accumulator(&loader, hash_claim_history)
+        .map_err(|error| format!("mint-authorization hash-claim history load failed: {error:?}"))?;
+    let hash_claim_history_cells = hash_claim_column
+        .get(hash_claim_public::HISTORY_START..)
+        .ok_or_else(|| "mint-authorization hash-claim history rows are absent".to_owned())?
+        .iter()
+        .map(|value| *value.assigned())
+        .collect::<Vec<_>>();
+    bind_accumulator_limbs(
+        &loader,
+        &carried_hash_claim_history,
+        &hash_claim_history_cells,
+    )
+    .map_err(|error| format!("mint-authorization hash-claim history binding failed: {error:?}"))?;
+    {
+        let chip = loader.ecc_chip();
+        let mut loader_ctx = loader.ctx_mut();
+        let assigned_claim = hash_claim_column
+            .iter()
+            .map(|value| *value.assigned())
+            .collect::<Vec<_>>();
+        constrain_complete_claim_against_sha_jobs_v1(
+            loader_ctx.main(),
+            chip.range(),
+            &claimed_sha,
+            &assigned_claim,
+            parity,
+            assigned.release_id,
+            eq_hash_claim_protocol,
+            ep_hash_claim_protocol,
+            eq_hash_shard_protocol,
+            ep_hash_shard_protocol,
+        )?;
+    }
+    drop(claimed_sha);
+    drop(hash_claim_history_cells);
+    drop(hash_claim_semantic);
+    let complete_hash_claim = verify_fold(
+        &loader,
+        succinct_vk,
+        &[hash_claim_current.accumulator, carried_hash_claim_history],
+        hash_claim_history_fold_proof,
+    )
+    .map_err(|error| format!("mint-authorization hash-claim history fold failed: {error:?}"))?;
+    let hash_claim_fold_equation_count = loader.ecc_chip().equation_count();
+    if hash_claim_fold_equation_count <= hash_claim_verifier_equation_count {
+        return Err("mint-authorization hash-claim history fold emitted no equation".to_owned());
+    }
+    let successor = verify_fold(
+        &loader,
+        succinct_vk,
+        &[credential_complete, complete_hash_claim],
+        hash_claim_merge_fold_proof,
+    )
+    .map_err(|error| format!("mint-authorization hash-claim merge fold failed: {error:?}"))?;
+    bind_accumulator_limbs(&loader, &successor, &history_instances)
+        .map_err(|error| format!("mint-authorization successor history failed: {error:?}"))?;
+
+    let equation_count = loader.ecc_chip().equation_count();
+    if equation_count <= hash_claim_fold_equation_count {
+        return Err("mint-authorization hash-claim merge fold emitted no equation".to_owned());
+    }
+    let mut equation_tags =
+        vec![MINT_AUTHORIZATION_CREDENTIAL_EQUATION_TAG_V1; credential_equation_count];
+    equation_tags.resize(
+        equation_count,
+        MINT_AUTHORIZATION_HASH_CLAIM_EQUATION_TAG_V1,
+    );
+    let assigned_selectors = (0..equation_count)
+        .map(|_| loader.ctx_mut().main().load_constant(C::ScalarExt::ONE))
+        .collect::<Vec<_>>();
+    let output = derive_native_deferred_batch_with_u128_binding_v1(
         &mut builder,
         loader,
-        MINT_AUTHORIZATION_CREDENTIAL_EQUATION_TAG_V1,
+        equation_tags,
+        assigned_selectors,
+        &hash_claim_carrier_binding,
     )
-    .map_err(|error| format!("mint-authorization credential audit failed: {error:?}"))?;
+    .map_err(|error| format!("mint-authorization recursive audit failed: {error:?}"))?;
     let expected_offset = match parity {
         KagemushaPastaParityV1::Eq => public_instance::EQ_AUDIT_LO,
         KagemushaPastaParityV1::Ep => public_instance::EP_AUDIT_LO,
     };
     let expected = audit_cells(&builder, expected_offset)?;
-    for (actual, expected) in output.audit_digest_limbs.iter().zip(expected) {
+    for (actual, expected) in output.challenge_limbs.iter().zip(expected) {
         builder.main(0).constrain_equal(actual, &expected);
     }
-    Ok((builder, sha_jobs, output))
+    let (eq_commitment, ep_commitment) =
+        carrier_commitments.unwrap_or_else(|| (EqAffine::generator(), EpAffine::generator()));
+    let commitment_values = point_u128_limbs_v1(eq_commitment)
+        .into_iter()
+        .chain(point_u128_limbs_v1(ep_commitment))
+        .map(C::ScalarExt::from_u128)
+        .map(|value| {
+            let assigned = builder.main(0).load_witness(value);
+            range.range_check(builder.main(0), assigned, 128);
+            assigned
+        })
+        .collect::<Vec<_>>();
+    builder
+        .assigned_instances
+        .first_mut()
+        .ok_or_else(|| "mint-authorization semantic instance is missing".to_owned())?
+        .extend(commitment_values);
+    if builder.assigned_instances[0].len() != MINT_AUTHORIZATION_INNER_SEMANTIC_INSTANCE_COUNT_V1 {
+        return Err("mint-authorization inner semantic instance has wrong shape".to_owned());
+    }
+    let carrier = output
+        .carrier_cells_v1()
+        .map_err(|error| format!("mint-authorization carrier failed: {error:?}"))?;
+    builder.assigned_instances.push(carrier);
+    Ok((builder, output))
 }
 
 struct AssignedAuthorizationV1<F: KagemushaPoseidonFieldV1> {
     public_prefix: Vec<AssignedValue<F>>,
     platform_credential_digest: [AssignedValue<F>; 2],
+    release_id: [AssignedValue<F>; 2],
+}
+
+fn mint_authorization_relation_builder_v1<F: KagemushaPoseidonFieldV1>(
+    witness: &KagemushaMintAuthorizationRelationWitnessV1,
+    enabled_profiles: &[DigestV1; KAGEMUSHA_ENABLED_HARDWARE_PROFILE_SLOTS_V1],
+    hardware_authorization: DigestV1,
+) -> Result<
+    (
+        BaseCircuitBuilder<F>,
+        PastaSha256JobsV1<F>,
+        AssignedAuthorizationV1<F>,
+    ),
+    String,
+> {
+    let mut builder = BaseCircuitBuilder::new(false)
+        .use_k(usize::try_from(KAGEMUSHA_HALO2_K_V1).expect("k fits usize"))
+        .use_lookup_bits(usize::try_from(KAGEMUSHA_HALO2_K_V1 - 1).expect("lookup bits fit usize"))
+        .use_instance_columns(2);
+    let mut jobs = PastaSha256JobsV1::default();
+    let assigned = constrain_relation_v1(
+        &mut builder,
+        &mut jobs,
+        witness,
+        enabled_profiles,
+        hardware_authorization,
+    )?;
+    Ok((builder, jobs, assigned))
+}
+
+/// Extract the exact typed SHA queue emitted by the production mint-authorization relation.
+///
+/// This shares the relation builder used by the real recursive circuit, so the shard plan cannot
+/// drift onto a second host encoder. The bytes remain a private proof plan and grant no authority
+/// until the recursive consumer constrains this assigned queue against a completed claim.
+#[cfg(feature = "zk-halo2-ipa")]
+pub(super) fn mint_authorization_sha_messages_v1<F>(
+    witness: &KagemushaMintAuthorizationRelationWitnessV1,
+    enabled_profiles: &[DigestV1; KAGEMUSHA_ENABLED_HARDWARE_PROFILE_SLOTS_V1],
+    hardware_authorization: DigestV1,
+) -> Result<Vec<Vec<u8>>, String>
+where
+    F: KagemushaPoseidonFieldV1,
+{
+    let (builder, jobs, assigned) = mint_authorization_relation_builder_v1::<F>(
+        witness,
+        enabled_profiles,
+        hardware_authorization,
+    )?;
+    let messages = jobs.canonical_messages()?;
+    drop(assigned);
+    drop(jobs);
+    drop(builder);
+    Ok(messages)
 }
 
 fn constrain_relation_v1<F: KagemushaPoseidonFieldV1>(
@@ -859,11 +1738,12 @@ fn constrain_relation_v1<F: KagemushaPoseidonFieldV1>(
         &hardware_authorization,
     );
 
+    let release_id = digest_limbs_assigned(ctx, &release);
     let public_prefix = [
         vec![version.value],
         digest_limbs_assigned(ctx, &semantic).to_vec(),
         digest_limbs_assigned(ctx, &operation).to_vec(),
-        digest_limbs_assigned(ctx, &release).to_vec(),
+        release_id.to_vec(),
         digest_limbs_assigned(ctx, &suite).to_vec(),
         digest_limbs_assigned(ctx, &vk).to_vec(),
         digest_limbs_assigned(ctx, &manifest).to_vec(),
@@ -893,6 +1773,7 @@ fn constrain_relation_v1<F: KagemushaPoseidonFieldV1>(
     Ok(AssignedAuthorizationV1 {
         public_prefix,
         platform_credential_digest: digest_limbs_assigned(ctx, &platform.digest),
+        release_id,
     })
 }
 
@@ -1191,11 +2072,10 @@ fn audit_cells<F: KagemushaPoseidonFieldV1>(
     builder: &BaseCircuitBuilder<F>,
     offset: usize,
 ) -> Result<[AssignedValue<F>; 2], String> {
-    if builder
-        .assigned_instances
-        .first()
-        .is_none_or(|column| column.len() != MINT_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1)
-    {
+    if builder.assigned_instances.first().is_none_or(|column| {
+        column.len() != MINT_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1
+            && column.len() != MINT_AUTHORIZATION_INNER_SEMANTIC_INSTANCE_COUNT_V1
+    }) {
         return Err("mint-authorization public instance has wrong shape".to_owned());
     }
     builder.assigned_instances[0][offset..offset + 2]
@@ -1236,6 +2116,13 @@ fn assign_digest<F: KagemushaPoseidonFieldV1>(
     assign_bytes(ctx, range, &digest)
         .try_into()
         .expect("digest width")
+}
+
+fn constant_digest<F: KagemushaPoseidonFieldV1>(
+    ctx: &mut Context<F>,
+    digest: DigestV1,
+) -> [AssignedValue<F>; 2] {
+    digest_limbs::<F>(digest).map(|limb| ctx.load_constant(limb))
 }
 
 fn assert_nonzero<F: KagemushaPoseidonFieldV1>(

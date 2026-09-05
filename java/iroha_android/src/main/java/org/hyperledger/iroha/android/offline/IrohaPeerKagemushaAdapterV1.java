@@ -3,7 +3,9 @@ package org.hyperledger.iroha.android.offline;
 import java.util.Arrays;
 import java.util.Objects;
 
-/** Bounded handoff adapter for the frozen three-message KAGEMUSHA V1 IPM1 exchange. */
+/**
+ * Bounded handoff adapter for the frozen three-message KAGEMUSHA V1 IPM1 exchange.
+ */
 public final class IrohaPeerKagemushaAdapterV1 {
   public static final int ARCHIVE_SCHEMA_VERSION = 1;
 

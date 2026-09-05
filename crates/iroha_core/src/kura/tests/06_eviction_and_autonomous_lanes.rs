@@ -2828,3 +2828,104 @@ fn autonomous_lane_slot_retirement_is_terminal_idempotent_and_restart_durable() 
         "restart must not resurrect the retired executable payload",
     );
 }
+
+#[test]
+fn consensus_body_read_bypasses_warm_cache_and_rejects_occupied_corruption() {
+    let (_temp_dir, _config, kura) = kura_root_fixture(nonzero!(4_usize));
+    let blocks = store_dummy_block_arcs(&kura, 2);
+    let height = nonzero!(2_usize);
+    assert!(
+        kura.read_block_body(nonzero!(3_usize))
+            .expect("uncommitted height")
+            .is_none()
+    );
+    assert!(matches!(
+        kura.read_block_body(height),
+        Err(Error::MissingV2FinalityArtifact { height: 2 })
+    ));
+    finalize_chain_through_for_eviction(&kura, height);
+    assert_eq!(kura.get_block(height).as_deref(), Some(blocks[1].as_ref()));
+    assert!(
+        kura.block_data.lock().cached_body(1).is_some(),
+        "test requires warm body cache"
+    );
+    assert_eq!(
+        kura.read_block_body(height)
+            .expect("strict valid body")
+            .as_deref(),
+        Some(blocks[1].as_ref())
+    );
+    let (data_path, slot) = {
+        let mut store = kura.block_store.lock();
+        (
+            store.path_to_blockchain.join(DATA_FILE_NAME),
+            store.read_block_index(1).expect("occupied body slot"),
+        )
+    };
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .open(&data_path)
+        .expect("open actual data file");
+    file.seek(SeekFrom::Start(slot.start))
+        .expect("seek exact body slot");
+    file.write_all(&vec![
+        0;
+        usize::try_from(slot.length)
+            .expect("bounded body length")
+    ])
+    .expect("corrupt occupied bytes");
+    assert!(
+        kura.read_block_body(height).is_err(),
+        "cached decoded body must not hide corrupt durable bytes"
+    );
+}
+
+#[test]
+fn consensus_body_read_rejects_decodable_same_header_wire_substitution() {
+    let (_temp_dir, _config, kura) = kura_root_fixture(nonzero!(4_usize));
+    let blocks = store_dummy_block_arcs(&kura, 2);
+    let height = nonzero!(2_usize);
+    finalize_chain_through_for_eviction(&kura, height);
+    let canonical = &blocks[1];
+    assert_eq!(kura.get_block(height).as_deref(), Some(canonical.as_ref()));
+    let mut substituted = canonical.as_ref().clone();
+    let key = KeyPair::try_random_with_algorithm(Algorithm::Ed25519).expect("substitute key");
+    substituted
+        .replace_signatures(
+            [BlockSignature::new(
+                0,
+                SignatureOf::try_from_hash(key.private_key(), substituted.hash())
+                    .expect("sign unchanged header"),
+            )]
+            .into_iter()
+            .collect(),
+        )
+        .expect("replace only envelope signature");
+    let wire = substituted
+        .encode_wire()
+        .expect("substitute canonical wire");
+    assert_eq!(substituted.hash(), canonical.hash());
+    assert_eq!(
+        wire.len(),
+        canonical.encode_wire().expect("original wire").len()
+    );
+    let (path, slot) = {
+        let mut store = kura.block_store.lock();
+        (
+            store.path_to_blockchain.join(DATA_FILE_NAME),
+            store.read_block_index(1).expect("occupied slot"),
+        )
+    };
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .open(&path)
+        .expect("data file");
+    file.seek(SeekFrom::Start(slot.start)).expect("seek slot");
+    file.write_all(&wire)
+        .expect("substitute actual durable wire");
+    assert!(matches!(
+        kura.read_block_body(height),
+        Err(Error::CanonicalBlockWireMismatch { height: 2 })
+    ));
+    assert!(kura.block_data.lock().cached_body(1).is_some());
+}

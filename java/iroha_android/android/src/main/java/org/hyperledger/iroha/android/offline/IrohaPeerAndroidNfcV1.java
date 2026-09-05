@@ -25,7 +25,7 @@ public final class IrohaPeerAndroidNfcV1 {
 
   /**
    * Builds the serialized async HCE boundary. Every state-changing command returns 9000 only
-   * after its callback returns the exact durable payment-and-acknowledgement transition record.
+   * after its callback returns the exact durable payment admission record.
    */
   public static IrohaPeerNfcReceiverApduBridgeV1 receiverBridge(
       final IrohaPeerNfcReceiverSessionV1 receiver,

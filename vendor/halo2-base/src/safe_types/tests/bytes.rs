@@ -1,6 +1,5 @@
 use crate::{
-    Context,
-    gates::{RangeInstructions, circuit::builder::RangeCircuitBuilder},
+    gates::{circuit::builder::RangeCircuitBuilder, RangeInstructions},
     halo2_proofs::{
         halo2curves::bn256::{Bn256, Fr},
         plonk::{keygen_pk, keygen_vk},
@@ -8,9 +7,10 @@ use crate::{
     },
     safe_types::SafeTypeChip,
     utils::{
-        ScalarField,
         testing::{base_test, check_proof, gen_proof},
+        ScalarField,
     },
+    Context,
 };
 use rand::rngs::OsRng;
 use std::vec;

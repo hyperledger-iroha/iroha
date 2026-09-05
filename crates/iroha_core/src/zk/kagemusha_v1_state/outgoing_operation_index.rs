@@ -416,7 +416,7 @@ pub enum KagemushaOutgoingOperationPhaseV1 {
     Committed,
     /// Core authenticated and durably installed the final retry envelope.
     Installed,
-    /// A verified terminal delivery acknowledgement retired the retry envelope.
+    /// A verified payment acknowledgement or redemption settlement retired the retry envelope.
     Released,
 }
 
@@ -449,8 +449,11 @@ pub struct KagemushaOutgoingOperationRecordV1 {
     pub commit_certificate_digest: Option<DigestV1>,
     /// Exact terminal retry-envelope digest, when installed.
     pub envelope_digest: Option<DigestV1>,
-    /// Verified terminal acknowledgement digest, when released.
-    pub acknowledgement_digest: Option<DigestV1>,
+    /// Verified terminal receipt digest, when released.
+    ///
+    /// This is the accepted peer acknowledgement for `SendSplit` or the
+    /// Core-authenticated finalized settlement receipt for `RedeemSplit`.
+    pub terminal_receipt_digest: Option<DigestV1>,
     /// Physical bytes reserved before accepting this operation.
     pub(super) reserved_record_bytes: u64,
 }
@@ -494,35 +497,35 @@ impl KagemushaOutgoingOperationRecordV1 {
                     && self.candidate_digest.is_none()
                     && self.commit_certificate_digest.is_none()
                     && self.envelope_digest.is_none()
-                    && self.acknowledgement_digest.is_none()
+                    && self.terminal_receipt_digest.is_none()
             }
             KagemushaOutgoingOperationPhaseV1::CandidatePersisted => {
                 self.inputs.is_some()
                     && nonzero_option(self.candidate_digest)
                     && self.commit_certificate_digest.is_none()
                     && self.envelope_digest.is_none()
-                    && self.acknowledgement_digest.is_none()
+                    && self.terminal_receipt_digest.is_none()
             }
             KagemushaOutgoingOperationPhaseV1::Committed => {
                 self.inputs.is_some()
                     && nonzero_option(self.candidate_digest)
                     && nonzero_option(self.commit_certificate_digest)
                     && self.envelope_digest.is_none()
-                    && self.acknowledgement_digest.is_none()
+                    && self.terminal_receipt_digest.is_none()
             }
             KagemushaOutgoingOperationPhaseV1::Installed => {
                 self.inputs.is_some()
                     && nonzero_option(self.candidate_digest)
                     && nonzero_option(self.commit_certificate_digest)
                     && nonzero_option(self.envelope_digest)
-                    && self.acknowledgement_digest.is_none()
+                    && self.terminal_receipt_digest.is_none()
             }
             KagemushaOutgoingOperationPhaseV1::Released => {
                 self.inputs.is_none()
                     && nonzero_option(self.candidate_digest)
                     && nonzero_option(self.commit_certificate_digest)
                     && nonzero_option(self.envelope_digest)
-                    && nonzero_option(self.acknowledgement_digest)
+                    && nonzero_option(self.terminal_receipt_digest)
             }
         };
         if !valid_phase
@@ -533,6 +536,17 @@ impl KagemushaOutgoingOperationRecordV1 {
             return Err(KagemushaOutgoingOperationIndexErrorV1::SnapshotIntegrity);
         }
         Ok(())
+    }
+
+    /// Recheck the authenticated record before an operation-specific terminal release.
+    ///
+    /// The payment and redemption release modules must validate their own external receipt, but
+    /// neither may bypass the retained operation-index invariants first established during
+    /// snapshot recovery.
+    pub(super) fn validate_terminal_release_state(
+        &self,
+    ) -> KagemushaOutgoingOperationIndexResultV1<()> {
+        self.validate()
     }
 
     pub(super) fn validate_against_prepared(
@@ -571,7 +585,7 @@ impl KagemushaOutgoingOperationRecordV1 {
     /// Redemption cannot use this path: it requires a distinct authenticated settlement receipt.
     /// The returned digest is only a replay anchor for [`KagemushaOutgoingOperationIndexV1`]; the
     /// caller must still release the exact Core journal envelope in the same atomic successor.
-    pub(super) fn verified_payment_acknowledgement_digest(
+    pub(super) fn verified_payment_terminal_receipt_digest(
         &self,
         durable: &DurableOutgoingEnvelopeV1,
         acknowledgement_bytes: &[u8],
@@ -619,7 +633,7 @@ impl KagemushaOutgoingOperationRecordV1 {
         self.validate()?;
         let digest = digest_bytes(ACCEPTED_ACKNOWLEDGEMENT_DOMAIN_V1, acknowledgement_bytes);
         if self.phase != KagemushaOutgoingOperationPhaseV1::Released
-            || self.acknowledgement_digest != Some(digest)
+            || self.terminal_receipt_digest != Some(digest)
         {
             return Err(KagemushaOutgoingOperationIndexErrorV1::Conflict);
         }
@@ -796,7 +810,7 @@ impl KagemushaOutgoingOperationIndexV1 {
             candidate_digest: None,
             commit_certificate_digest: None,
             envelope_digest: None,
-            acknowledgement_digest: None,
+            terminal_receipt_digest: None,
             reserved_record_bytes: 0,
         };
         record.reserved_record_bytes = terminal_record_allocation(&record)?;
@@ -898,18 +912,18 @@ impl KagemushaOutgoingOperationIndexV1 {
         )
     }
 
-    /// Retain a terminal tombstone after a separately verified delivery ACK.
+    /// Retain a terminal tombstone after a separately verified terminal receipt.
     ///
-    /// This method does not validate or authorize an acknowledgement. The state
-    /// machine may call it only after verifying the operation-specific ACK and
-    /// atomically releasing the exact journal envelope.
+    /// This method does not validate or authorize a receipt. The state machine
+    /// may call it only after verifying the operation-specific peer ACK or finalized redemption
+    /// receipt and atomically releasing the exact journal envelope.
     pub(super) fn release_successor(
         &self,
         reservation_id: DigestV1,
         envelope_digest: DigestV1,
-        verified_acknowledgement_digest: DigestV1,
+        verified_terminal_receipt_digest: DigestV1,
     ) -> KagemushaOutgoingOperationIndexResultV1<Self> {
-        if envelope_digest == [0; 32] || verified_acknowledgement_digest == [0; 32] {
+        if envelope_digest == [0; 32] || verified_terminal_receipt_digest == [0; 32] {
             return Err(KagemushaOutgoingOperationIndexErrorV1::InvalidBinding);
         }
         let operation_id = self
@@ -924,7 +938,7 @@ impl KagemushaOutgoingOperationIndexV1 {
             .ok_or(KagemushaOutgoingOperationIndexErrorV1::InvalidStage)?;
         if existing.phase == KagemushaOutgoingOperationPhaseV1::Released {
             return if existing.envelope_digest == Some(envelope_digest)
-                && existing.acknowledgement_digest == Some(verified_acknowledgement_digest)
+                && existing.terminal_receipt_digest == Some(verified_terminal_receipt_digest)
             {
                 Ok(self.clone())
             } else {
@@ -945,7 +959,7 @@ impl KagemushaOutgoingOperationIndexV1 {
         record.phase = KagemushaOutgoingOperationPhaseV1::Released;
         record.record_revision = revision;
         record.inputs = None;
-        record.acknowledgement_digest = Some(verified_acknowledgement_digest);
+        record.terminal_receipt_digest = Some(verified_terminal_receipt_digest);
         record.validate()?;
         next.revision = revision;
         next.validate_internal(None)?;
@@ -956,15 +970,6 @@ impl KagemushaOutgoingOperationIndexV1 {
     #[must_use]
     pub fn lookup(&self, operation_id: DigestV1) -> Option<&KagemushaOutgoingOperationRecordV1> {
         self.records.get(&operation_id)
-    }
-
-    pub(super) fn record_by_reservation(
-        &self,
-        reservation_id: DigestV1,
-    ) -> Option<&KagemushaOutgoingOperationRecordV1> {
-        self.records
-            .values()
-            .find(|record| record.outbox_reservation_id == reservation_id)
     }
 
     pub(super) fn records(&self) -> impl Iterator<Item = &KagemushaOutgoingOperationRecordV1> {
@@ -1036,11 +1041,8 @@ impl KagemushaOutgoingOperationIndexV1 {
             .values()
             .find(|record| record.preparation_id == preparation_id)
             .map(|record| record.operation_id);
-        let Some(operation_id) = operation_id else {
-            // Legacy callers remain functional. Once a preparation is indexed,
-            // every later journal transition finds it and must update it.
-            return Ok(self.clone());
-        };
+        let operation_id =
+            operation_id.ok_or(KagemushaOutgoingOperationIndexErrorV1::InvalidStage)?;
         let existing = self
             .records
             .get(&operation_id)
@@ -1122,7 +1124,7 @@ fn terminal_record_allocation(
     terminal.candidate_digest = Some([0xff; 32]);
     terminal.commit_certificate_digest = Some([0xff; 32]);
     terminal.envelope_digest = Some([0xff; 32]);
-    terminal.acknowledgement_digest = None;
+    terminal.terminal_receipt_digest = None;
     canonical_len(&terminal)?
         .checked_add(RECORD_ALLOCATION_SAFETY_BYTES_V1)
         .ok_or(KagemushaOutgoingOperationIndexErrorV1::CanonicalEncoding)
@@ -1182,4 +1184,104 @@ fn digest_bytes(domain: &[u8], bytes: &[u8]) -> DigestV1 {
     hasher.update((bytes.len() as u64).to_le_bytes());
     hasher.update(bytes);
     hasher.finalize().into()
+}
+
+#[cfg(test)]
+mod tests {
+    use iroha_crypto::{Hash, HashOf};
+    use iroha_data_model::{block::BlockHeader, domain::DomainId, nexus::AxtAssetIncarnationV1};
+
+    use super::*;
+
+    fn released_redemption_index() -> KagemushaOutgoingOperationIndexV1 {
+        let operation_id = [0x31; 32];
+        let network_id = iroha_data_model::NetworkId::from_genesis_hash(
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+                b"kagemusha-released-redemption-index",
+            )),
+        );
+        let incarnation = AxtAssetIncarnationV1::try_from_bytes(*Hash::new([0x32]).as_ref())
+            .expect("valid incarnation");
+        let record = KagemushaOutgoingOperationRecordV1 {
+            operation_id,
+            context: KagemushaOutgoingOperationContextV1 {
+                lane: super::KagemushaLaneIdV1 {
+                    network_id,
+                    device_lane_id: [0x33; 32],
+                    asset: iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                        DomainId::try_new("redemption", "universal").expect("valid domain"),
+                        "cash".parse().expect("valid asset name"),
+                    ),
+                    scale: 2,
+                },
+                release: KagemushaStateContextV1 {
+                    protocol_version: KAGEMUSHA_STATE_VERSION_V1,
+                    suite_id: [0x34; 32],
+                    vk_digest: [0x35; 32],
+                    release_id: [0x36; 32],
+                    asset_incarnation: incarnation,
+                    hardware_profile_id: [0x37; 32],
+                    policy_epoch: 1,
+                },
+                credential_id: [0x38; 32],
+                hardware_epoch: HardwareEpochV1 {
+                    generation: 1,
+                    epoch_id: [0x39; 32],
+                },
+                device_policy_binding: DevicePolicyBindingV1 {
+                    device_key_reference: [0x3a; 32],
+                    hardware_policy_id: [0x3b; 32],
+                },
+            },
+            inputs_digest: [0x3c; 32],
+            operation_kind: KagemushaOperationKindV1::RedeemSplit,
+            preparation_id: [0x3d; 32],
+            outbox_reservation_id: [0x3e; 32],
+            outcome_id: [0x3f; 32],
+            phase: KagemushaOutgoingOperationPhaseV1::Released,
+            record_revision: 5,
+            inputs: None,
+            candidate_digest: Some([0x40; 32]),
+            commit_certificate_digest: Some([0x41; 32]),
+            envelope_digest: Some([0x42; 32]),
+            terminal_receipt_digest: Some([0x43; 32]),
+            reserved_record_bytes: u64::MAX,
+        };
+        let records = [(operation_id, record)].into_iter().collect();
+        KagemushaOutgoingOperationIndexV1 {
+            revision: 5,
+            reserved_bytes: u64::MAX,
+            records,
+        }
+    }
+
+    #[test]
+    fn unindexed_preparation_can_never_advance() {
+        let index = KagemushaOutgoingOperationIndexV1::default();
+        assert_eq!(
+            index.progress_successor(
+                [0x51; 32],
+                KagemushaOutgoingOperationPhaseV1::Prepared,
+                |_, _| Ok(()),
+            ),
+            Err(KagemushaOutgoingOperationIndexErrorV1::InvalidStage)
+        );
+    }
+
+    #[test]
+    fn released_redemption_terminal_receipt_retry_is_exact_and_conflicts_fail_closed() {
+        let index = released_redemption_index();
+        let exact = index
+            .release_successor([0x3e; 32], [0x42; 32], [0x43; 32])
+            .expect("byte-identical terminal retry");
+        assert_eq!(exact, index);
+        assert_eq!(
+            index.release_successor([0x3e; 32], [0x42; 32], [0x44; 32]),
+            Err(KagemushaOutgoingOperationIndexErrorV1::Conflict)
+        );
+        assert_eq!(
+            index.release_successor([0x3e; 32], [0x45; 32], [0x43; 32]),
+            Err(KagemushaOutgoingOperationIndexErrorV1::Conflict)
+        );
+    }
 }

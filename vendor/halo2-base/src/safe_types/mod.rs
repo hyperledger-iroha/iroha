@@ -4,13 +4,13 @@ use std::{
 };
 
 use crate::{
-    AssignedValue, Context,
-    QuantumCell::Constant,
     gates::{
         flex_gate::GateInstructions,
         range::{RangeChip, RangeInstructions},
     },
     utils::ScalarField,
+    AssignedValue, Context,
+    QuantumCell::Constant,
 };
 
 use itertools::Itertools;

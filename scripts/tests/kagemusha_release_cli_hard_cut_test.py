@@ -125,22 +125,22 @@ class KagemushaReleaseCliHardCutTests(unittest.TestCase):
         )
         self.assertNotIn("--abi-version", match.group(1))
 
-    def test_cli_and_model_pin_the_complete_42_role_inventory(self) -> None:
+    def test_cli_and_model_pin_the_complete_50_role_inventory(self) -> None:
         command_source = COMMAND.read_text(encoding="utf-8")
         model_source = RELEASE_MODEL.read_text(encoding="utf-8")
         self.assertIn(
-            "const KAGEMUSHA_RELEASE_ARTIFACT_ROLE_COUNT_V1: usize = 42;",
+            "const KAGEMUSHA_RELEASE_ARTIFACT_ROLE_COUNT_V1: usize = 50;",
             command_source,
         )
         self.assertIn("KagemushaArtifactRoleV1::ALL.len()", command_source)
         all_match = re.search(
-            r"pub const ALL: \[Self; 42\] = \[(.*?)\n    \];",
+            r"pub const ALL: \[Self; 50\] = \[(.*?)\n    \];",
             model_source,
             re.S,
         )
         self.assertIsNotNone(all_match)
         assert all_match is not None
-        self.assertEqual(len(re.findall(r"\bSelf::[A-Za-z0-9_]+", all_match.group(1))), 42)
+        self.assertEqual(len(re.findall(r"\bSelf::[A-Za-z0-9_]+", all_match.group(1))), 50)
 
     def test_success_requires_projection_artifacts_runtime_and_native_evidence(self) -> None:
         source = COMMAND.read_text(encoding="utf-8").split("#[cfg(test)]", 1)[0]

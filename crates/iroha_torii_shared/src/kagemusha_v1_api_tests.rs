@@ -296,7 +296,7 @@ fn trust_anchor() -> KagemushaFinalityTrustAnchorV1 {
 }
 
 #[test]
-fn peer_boundary_roundtrips_only_the_exact_context_bound_three_message_exchange() {
+fn peer_boundary_roundtrips_only_the_exact_request_payment_ack_exchange() {
     let (request, payment, acknowledgement) = peer_fixture();
     let request_bytes = norito::encode_canonical(&request).expect("encode request");
     let payment_bytes = norito::encode_canonical(&payment).expect("encode payment");
@@ -362,6 +362,26 @@ fn peer_boundary_pre_caps_every_message_and_rejects_trailing_bytes() {
 }
 
 #[test]
+fn peer_request_owns_one_exact_amount_and_recipient_encryption_key() {
+    let request = payment_request();
+    assert!(request.amount > 0);
+    assert_ne!(request.recipient_encryption_key, [0; 32]);
+    let encrypted = encrypted_credit(request.recipient_encryption_key, 0x27);
+    KagemushaEncryptedCreditEnvelopeV1::decode_canonical_shape_exact_against_recipient_key(
+        &encrypted,
+        request.recipient_encryption_key,
+    )
+    .expect("request-owned recipient key validates encrypted credit shape");
+
+    let mut invalid = request.clone();
+    invalid.amount = 0;
+    assert!(invalid.validate_shape().is_err());
+    let mut invalid = request;
+    invalid.recipient_encryption_key = [0; 32];
+    assert!(invalid.validate_shape().is_err());
+}
+
+#[test]
 fn peer_payment_rejects_post_commit_proof_and_certificate_substitution() {
     let (request, payment, _) = peer_fixture();
     assert_eq!(
@@ -397,7 +417,7 @@ fn payment_request_has_no_receiver_balance_or_history_shape() {
         "input_count",
         "note_inventory",
         "recipient_hardware_epoch_id",
-        "recipient_one_time_key",
+        "request_mode",
     ] {
         assert!(
             !json.contains(forbidden),

@@ -30,11 +30,27 @@ Features:
 `KagemushaWalletV1.open(provider:)` accepts only a provider attesting the complete
 non-forking hardware contract. The wallet stages incoming payments before returning
 their durable acknowledgement, treats exact delivery duplicates idempotently, folds
-an opaque durable inbox prefix without a note-count limit, and drains pending credits
-synchronously before each send or redemption. Sender successors are usable immediately;
+an opaque durable inbox prefix without a note-count limit, and folds only the pending
+credits needed to fund a send or redemption. Sender successors are usable immediately;
 a missing acknowledgement only leaves the byte-identical payment in the retry outbox.
-Apps can call `foldNextPendingCredit()` from their background-work scheduler and use
-`foldAllPendingCredits()` at explicit synchronization points.
+Apps can call `foldPendingCredit(selector:)` for one authenticated pending selector
+and `drainStagedCredits()` at explicit synchronization points.
+
+Before requesting, sending, minting, or redeeming offline value, the app must durably
+save a fresh nonzero 32-byte operation identity and its exact action parameters, then
+pass that identity to the corresponding reservation and execution calls. An identical
+retry retains the same identity; a lost native return must never cause the app to
+allocate a replacement. The authenticated provider rejects a substituted reservation
+identity before executing a device operation. Payment and redemption reservations
+carry the canonical tagged `iroha.kagemusha.device.v1.sender-public-inputs` Norito
+archive, shared with the native outgoing-operation index.
+
+`KagemushaCoreCoordinatorBridgeV1.open(storagePath:)` provides the strict native
+schema-2 transport. It checks the complete ABI-23 inventory and correlates method
+responses with the caller's request. It fails closed when the native coordinator
+is unavailable. Embedded preparation/candidate/recovery archives remain opaque;
+the typed wallet coordinator integration still requires the canonical native
+archive codecs described in [the source contract](../specs/kagemusha_device_bridge_v1.md).
 
 Online top-up is payer-signed. Build a transaction containing exactly one
 `KagemushaNoritoV1.topUpInstructionFrame(_:)` result with `QueuePlanSynced`
@@ -532,14 +548,16 @@ convenience APIs are Ed25519-only while native-backed algorithms use
 ### KAGEMUSHA peer transport V1
 
 `KagemushaNoritoV1` is the sole peer-payment codec namespace. It carries the
-canonical three-message exchange—an exact-amount request, its receiver-bound
-proof-bearing payment, and the durable acknowledgement—plus independently
-framed mint authorization, mint credit, and redemption voucher values through
-bounded Norito archives or `kgm1:` text. The payment carries the terminal
-commit certificate and paired proof; its proof-independent body digest binds
-the output and actual encrypted credit. QR, NFC, and Nearby all use the same
-canonical bytes from `../fixtures/offline/kagemusha_v1.json`; no transport has
-a second codec.
+canonical three-message exchange—direct request, proof-bearing payment, and
+durable acknowledgement—plus independently framed mint authorization, mint credit,
+and redemption voucher values through bounded Norito archives or `kgm1:` text.
+The payment carries the terminal commit certificate and paired proof; its
+proof-independent body digest binds the output and actual encrypted credit.
+Each request binds one exact amount and a fresh recipient encryption key;
+distinct valid payments against the same request remain acceptable. Exposed
+credits cannot be cancelled. QR, NFC, and Nearby
+all use the same canonical bytes from
+`../fixtures/offline/kagemusha_v1.json`; no transport has a second codec.
 Public proofs and payment envelopes remain constant-size as aggregate history
 grows, and there is no hop, input, origin, ancestry, or proof-depth field.
 

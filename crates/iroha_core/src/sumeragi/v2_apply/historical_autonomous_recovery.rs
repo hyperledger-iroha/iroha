@@ -181,7 +181,7 @@ fn preflight_historical_autonomous_lane_recovery_inner(
         || finality.commit_qc.execution_commitment != input.canonical_body.execution_commitment
         || finality.verify().is_err()
         || finality.validate_for_header(&retained_header).is_err()
-        || kura.durable_block_payload_len_by_hash(input.canonical_body.block_hash)
+        || kura.durable_block_payload_len_by_hash(input.canonical_body.block_hash)?
             != Some((height, input.canonical_body.executed_block_wire_len))
         || (retained_record.is_none() && state_context.as_ref() != Some(&input.historical_context))
     {

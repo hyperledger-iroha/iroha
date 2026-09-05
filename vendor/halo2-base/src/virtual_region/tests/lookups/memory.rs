@@ -1,28 +1,28 @@
 use crate::{
-    AssignedValue, ContextCell,
     halo2_proofs::{
         arithmetic::Field,
         circuit::{Layouter, SimpleFloorPlanner},
         dev::MockProver,
         halo2curves::bn256::Fr,
-        plonk::{Assigned, Circuit, ConstraintSystem, Error, FirstPhase, keygen_pk, keygen_vk},
+        plonk::{keygen_pk, keygen_vk, Assigned, Circuit, ConstraintSystem, Error, FirstPhase},
     },
     virtual_region::{
         copy_constraints::EXTERNAL_CELL_TYPE_ID, lookups::basic::BasicDynLookupConfig,
     },
+    AssignedValue, ContextCell,
 };
-use rand::{Rng, SeedableRng, rngs::StdRng};
+use rand::{rngs::StdRng, Rng, SeedableRng};
 use test_log::test;
 
 use crate::{
     gates::{
+        flex_gate::{threads::SinglePhaseCoreManager, FlexGateConfig, FlexGateConfigParams},
         GateChip, GateInstructions,
-        flex_gate::{FlexGateConfig, FlexGateConfigParams, threads::SinglePhaseCoreManager},
     },
     utils::{
-        ScalarField,
         fs::gen_srs,
         testing::{check_proof, gen_proof},
+        ScalarField,
     },
     virtual_region::manager::VirtualRegionManager,
 };

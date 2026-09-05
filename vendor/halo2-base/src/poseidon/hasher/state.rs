@@ -3,12 +3,12 @@ use std::iter;
 use itertools::Itertools;
 
 use crate::{
-    AssignedValue, Context,
-    QuantumCell::{Constant, Existing},
     gates::GateInstructions,
     poseidon::hasher::{mds::SparseMDSMatrix, spec::OptimizedPoseidonSpec},
     safe_types::SafeBool,
     utils::ScalarField,
+    AssignedValue, Context,
+    QuantumCell::{Constant, Existing},
 };
 
 #[derive(Clone, Debug)]

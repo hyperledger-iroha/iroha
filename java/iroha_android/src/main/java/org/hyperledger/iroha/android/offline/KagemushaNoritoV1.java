@@ -44,8 +44,8 @@ import org.hyperledger.iroha.sdk.offline.KagemushaX25519PublicKeyV1;
  * Java mirror of the sole KAGEMUSHA V1 canonical shape codec.
  *
  * <p>The peer exchange is exactly request, payment, and acknowledgement. These methods validate
- * framing and cross-field bindings only; monetary authority remains in the shared native core and
- * qualified device service.
+ * framing and cross-field bindings only;
+ * monetary authority remains in the shared native core and qualified device service.
  */
 public final class KagemushaNoritoV1 {
   /** Maximum canonical bytes for the request embedded in {@code TopUpKagemushaV1}. */

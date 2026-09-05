@@ -35,8 +35,13 @@ KAGEMUSHA_V1_C_SYMBOLS = {
     "connect_norito_kagemusha_v1_redemption_voucher_text_validate",
     "connect_norito_kagemusha_device_mint_stage_command_v1_validate",
     "connect_norito_kagemusha_device_mint_stage_result_v1_validate",
+    "connect_norito_kagemusha_contract_vector_v1",
+    "connect_norito_kagemusha_core_coordinator_contract_v1",
+    "connect_norito_kagemusha_core_coordinator_open_v1",
+    "connect_norito_kagemusha_core_coordinator_invoke_v1",
     "connect_norito_kagemusha_device_capabilities_v1",
     "connect_norito_kagemusha_device_execute_v1",
+    "connect_norito_kagemusha_device_response_authenticator_v1_verify",
 }
 RETIRED_KAGEMUSHA_C_PREFIX = (
     "connect_norito_" + "_".join(reversed(("cash", "offline"))) + "_"
@@ -44,7 +49,7 @@ RETIRED_KAGEMUSHA_C_PREFIX = (
 
 
 def test_native_c_contracts_require_complete_kagemusha_v1() -> None:
-    assert len(KAGEMUSHA_V1_C_SYMBOLS) == 20
+    assert len(KAGEMUSHA_V1_C_SYMBOLS) == 25
     for sdk in ("c-jni", "csharp"):
         required = [
             symbol for symbol in MODULE.REQUIRED_SYMBOLS[sdk]
@@ -54,11 +59,29 @@ def test_native_c_contracts_require_complete_kagemusha_v1() -> None:
         assert set(required) == KAGEMUSHA_V1_C_SYMBOLS
 
 
-def test_native_c_probe_rejects_either_missing_mint_stage_export() -> None:
+def test_android_coordinator_jni_uses_only_kagemusha_product_identity() -> None:
+    required = set(MODULE.REQUIRED_SYMBOLS["c-jni"])
+    assert {
+        "Java_pg_bpng_digitalkina_KagemushaNativeCoreJniV1_nativeContractV1",
+        "Java_pg_bpng_digitalkina_KagemushaNativeCoreJniV1_nativeOpenV1",
+        "Java_pg_bpng_digitalkina_KagemushaNativeCoreJniV1_nativeInvokeV1",
+        "Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoordinatorJniV1_nativeContractV1",
+        "Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoordinatorJniV1_nativeOpenV1",
+        "Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoordinatorJniV1_nativeInvokeV1",
+    } <= required
+    retired = "".join(reversed(("NativeCore", "Offline")))
+    assert not any(retired in symbol for symbol in required)
+
+
+def test_native_c_probe_rejects_required_kagemusha_export() -> None:
     for sdk in ("c-jni", "csharp"):
         for missing in (
             "connect_norito_kagemusha_device_mint_stage_command_v1_validate",
             "connect_norito_kagemusha_device_mint_stage_result_v1_validate",
+            "connect_norito_kagemusha_contract_vector_v1",
+            "connect_norito_kagemusha_core_coordinator_contract_v1",
+            "connect_norito_kagemusha_core_coordinator_open_v1",
+            "connect_norito_kagemusha_core_coordinator_invoke_v1",
         ):
             library = types.SimpleNamespace(**{
                 symbol: object() for symbol in MODULE.REQUIRED_SYMBOLS[sdk]
@@ -72,7 +95,7 @@ def test_native_c_probe_rejects_either_missing_mint_stage_export() -> None:
                         "native C ABI artifact is missing required symbols: " + missing
                     )
                 else:
-                    raise AssertionError(f"missing mint-stage export was accepted: {sdk}: {missing}")
+                    raise AssertionError(f"missing KAGEMUSHA export was accepted: {sdk}: {missing}")
 
 
 def test_kagemusha_required_symbols_are_declared_by_the_native_header() -> None:

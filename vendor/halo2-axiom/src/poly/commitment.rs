@@ -124,6 +124,20 @@ pub trait Prover<'params, Scheme: CommitmentScheme> {
     /// Query instance or not
     const QUERY_INSTANCE: bool;
 
+    /// Bit mask of instance columns whose commitments are carried by the
+    /// proof instead of being supplied to the transcript as common input.
+    ///
+    /// This is only meaningful when [`Self::QUERY_INSTANCE`] is `true`. Bit
+    /// `i` selects instance column `i`; unselected columns retain the legacy
+    /// verifier-computed commitment behavior.
+    const PROOF_SUPPLIED_INSTANCE_COMMITMENT_MASK: u64 = 0;
+
+    /// Returns whether `column` has a proof-supplied instance commitment.
+    fn proof_supplied_instance_commitment(column: usize) -> bool {
+        column < u64::BITS as usize
+            && Self::PROOF_SUPPLIED_INSTANCE_COMMITMENT_MASK & (1_u64 << column) != 0
+    }
+
     /// Creates new prover instance
     fn new(params: &'params Scheme::ParamsProver) -> Self;
 
@@ -156,6 +170,20 @@ pub trait Verifier<'params, Scheme: CommitmentScheme> {
 
     /// Query instance or not
     const QUERY_INSTANCE: bool;
+
+    /// Bit mask of instance columns whose commitments are carried by the
+    /// proof instead of being supplied to the transcript as common input.
+    ///
+    /// This is only meaningful when [`Self::QUERY_INSTANCE`] is `true`. Bit
+    /// `i` selects instance column `i`; unselected columns retain the legacy
+    /// verifier-computed commitment behavior.
+    const PROOF_SUPPLIED_INSTANCE_COMMITMENT_MASK: u64 = 0;
+
+    /// Returns whether `column` has a proof-supplied instance commitment.
+    fn proof_supplied_instance_commitment(column: usize) -> bool {
+        column < u64::BITS as usize
+            && Self::PROOF_SUPPLIED_INSTANCE_COMMITMENT_MASK & (1_u64 << column) != 0
+    }
 
     /// Creates new verifier instance
     fn new(params: &'params Scheme::ParamsVerifier) -> Self;

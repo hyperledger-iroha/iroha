@@ -1587,6 +1587,7 @@ pub(crate) trait V2EffectServices {
     fn finish_runtime_step_reconciliation(
         &mut self,
         decided_subject: Option<wire::BlockSubject>,
+        authority: Option<super::serviced_candidate_store::LeaderWireRecoveryAuthority>,
     ) -> Result<(), Self::Error>;
     /// Retire one exact receiver-side leader-wire lifecycle after the runtime
     /// retained all of its causal successor ownership. A volatile terminal is
@@ -2166,6 +2167,13 @@ pub(crate) trait EffectRuntime {
             decision: self.decided_body()?,
         })
     }
+    /// Only the concrete adapter may project the receiver's WAL consumer.
+    /// Synthetic runtimes have no authority over a production ingress gate.
+    fn leader_wire_recovery_authority(
+        &self,
+    ) -> Result<Option<super::serviced_candidate_store::LeaderWireRecoveryAuthority>, String> {
+        Ok(None)
+    }
     /// Return the exact durable Decision currently owned by the reducer.
     fn decided_body(
         &self,
@@ -2555,6 +2563,14 @@ impl EffectRuntime for SerializedV2Runtime {
     }
     fn authoritative_tag(&self) -> Option<EventTag> {
         Some(self.round_tag())
+    }
+    fn leader_wire_recovery_authority(
+        &self,
+    ) -> Result<Option<super::serviced_candidate_store::LeaderWireRecoveryAuthority>, String> {
+        self.driver()
+            .leader_wire_recovery_authority()
+            .map(Some)
+            .map_err(|error| error.to_string())
     }
     fn reconciliation_frontier(&self) -> Result<RuntimeReconciliationFrontier, String> {
         let directive = self
@@ -8962,6 +8978,9 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         services: &mut S,
     ) -> Result<EffectExecutorStep, EffectExecutorError> {
         self.ensure_open()?;
+        if let Err(error) = self.finish_runtime_step_reconciliation(services) {
+            return Err(self.close_after_transferring_runtime_terminals(error, services));
+        }
         if self.pending_runner_decision_cleanup.is_some()
             && self.retained_effect_batch.is_none()
             && self.parked_effect_batch.is_none()
@@ -13992,8 +14011,12 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             }
             None => None,
         };
+        let authority = self
+            .runtime
+            .leader_wire_recovery_authority()
+            .map_err(EffectExecutorError::Runtime)?;
         services
-            .finish_runtime_step_reconciliation(decided_subject)
+            .finish_runtime_step_reconciliation(decided_subject, authority)
             .map_err(service_error)
     }
     /// Reconcile volatile ownership immediately after the reducer installs a

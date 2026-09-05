@@ -181,10 +181,15 @@ native dispatch. Fixture-bundle and Governance DAG block entries use `bytes`.
 ## KAGEMUSHA SDK boundary
 
 The JavaScript package exposes the sole `Kagemusha` namespace. It models the
-three-message signed request, committed payment, and acknowledgement exchange, plus mint
+three-message direct request, committed payment, and durable acknowledgement
+exchange, plus mint
 authorization/credit binding and typed encrypted-credit opening, AAD, and
 envelope codecs. Sender recovery reproduces the same hardware-committed
 canonical payment bytes from the durable outbox.
+
+Model fields are immutable after validation. Byte getters return defensive
+copies, including fields reached through nested models; canonical backing
+values remain private to the codec module.
 
 ```js
 import { Kagemusha } from "@iroha/iroha-js/kagemusha";
@@ -193,14 +198,17 @@ import { Kagemusha } from "@iroha/iroha-js/kagemusha";
 The root entry point re-exports that same namespace; no parallel product alias
 or version-suffixed product subpath is published.
 
-Requests carry the exact positive amount and non-zero recipient encryption key.
-Strict canonical Norito and unpadded `kgm1:` decoders enforce per-message bounds.
-`validateCompleteExchange` is the sole public spend-exchange validator: it
-requires the exact request, payment, and acknowledgement and caps their combined
-transport at 9,211 raw bytes or 12,288 `kgm1:` text bytes. A committed payment
-carries its hardware commit certificate and post-commit `PaymentProof`, whose
-semantic digest binds the output and actual ciphertext. There is no intent,
-ticket, request-mode, or alternate compatibility path.
+Requests bind one exact positive amount and the recipient's fresh encryption
+key. Strict canonical Norito and unpadded `kgm1:` decoders enforce per-message
+bounds. `validateCompleteExchange` is the sole public spend-exchange validator: it
+requires the exact request, payment, and acknowledgement
+and caps their combined transport at 9,211 raw bytes or 12,288 `kgm1:` text
+bytes.
+
+A committed payment carries its hardware commit certificate and post-commit
+`PaymentProof`, whose semantic digest binds the request, output, and actual
+ciphertext. Distinct valid payments against the same reusable request remain
+acceptable; exposed credits cannot be cancelled.
 
 The namespace is codec and orchestration support only. Monetary proving,
 signing, encryption, decryption, and hardware state changes must come from the

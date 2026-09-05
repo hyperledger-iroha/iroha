@@ -1,7 +1,6 @@
 use std::iter::zip;
 
 use crate::{
-    AssignedValue,
     halo2_proofs::{
         circuit::{Layouter, Region, Value},
         halo2curves::ff::Field,
@@ -9,10 +8,11 @@ use crate::{
         poly::Rotation,
     },
     utils::{
-        ScalarField,
         halo2::{constrain_virtual_equals_external, raw_assign_advice, raw_assign_fixed},
+        ScalarField,
     },
     virtual_region::copy_constraints::SharedCopyConstraintManager,
+    AssignedValue,
 };
 
 /// A simple dynamic lookup table for when you want to verify some length `KEY_COL` key

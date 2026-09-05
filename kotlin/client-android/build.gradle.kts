@@ -1595,6 +1595,7 @@ val mobileSdkRepoDir = providers.gradleProperty("irohaSdkRepoDir")
 android {
     namespace = "org.hyperledger.iroha.sdk.android"
     compileSdk = 35
+    ndkVersion = NativeBridgeBuildContract.pinnedAndroidNdkBaseRevision
 
     defaultConfig {
         minSdk = 24
@@ -1758,6 +1759,9 @@ tasks.register("verifyAndroidNdkIdentityContract") {
     group = "verification"
     description = "Exercises the strict Android NDK package identity parser"
     doLast {
+        check(android.ndkVersion == NativeBridgeBuildContract.pinnedAndroidNdkBaseRevision) {
+            "Gradle must select the same NDK installation required by native artifact verification"
+        }
         val canonicalText = listOf(
             "Pkg.Desc = Android NDK",
             "Pkg.Revision = 28.0.12674087-beta2",

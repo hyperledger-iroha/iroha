@@ -13,6 +13,57 @@ import org.hyperledger.iroha.sdk.norito.NoritoHeader
 import org.hyperledger.iroha.sdk.norito.SchemaHash
 import org.hyperledger.iroha.sdk.norito.TypeAdapter
 
+/** Authenticated inbox holding one pending monetary credit. */
+enum class KagemushaPendingCreditKindV1 { MINT, RECEIVE }
+
+/** One deterministic pending-credit selection returned by qualified hardware. */
+class KagemushaPendingCreditSelectorV1(
+    @JvmField val kind: KagemushaPendingCreditKindV1,
+    creditId: ByteArray,
+) {
+    private val credit = nonzeroDigest(creditId, "credit_id")
+    fun creditId(): ByteArray = credit.copyOf()
+}
+
+/** Epoch-qualified inclusive inbox boundary retained for one selection pass. */
+class KagemushaPendingCreditWatermarkV1(
+    @JvmField val hardwareEpochGeneration: BigInteger,
+    hardwareEpochId: ByteArray,
+    @JvmField val inboxRevision: BigInteger,
+) {
+    private val epochId = nonzeroDigest(hardwareEpochId, "hardware_epoch_id")
+
+    init {
+        requireU128(hardwareEpochGeneration, "hardware_epoch_generation")
+        require(hardwareEpochGeneration.signum() != 0) { "hardware epoch generation must be nonzero" }
+        requireU128(inboxRevision, "inbox_revision")
+    }
+
+    fun hardwareEpochId(): ByteArray = epochId.copyOf()
+
+    fun sameAs(other: KagemushaPendingCreditWatermarkV1): Boolean =
+        hardwareEpochGeneration == other.hardwareEpochGeneration &&
+            epochId.contentEquals(other.epochId) && inboxRevision == other.inboxRevision
+}
+
+/** Amount-aware objective for one finite pending-credit selection pass. */
+sealed class KagemushaPendingCreditTargetV1(@JvmField val ordinal: Int) {
+    object DrainAll : KagemushaPendingCreditTargetV1(0)
+
+    class RequiredBalance(@JvmField val amount: BigInteger) : KagemushaPendingCreditTargetV1(1) {
+        init {
+            requireU128(amount, "required_balance")
+            require(amount.signum() != 0) { "required balance must be nonzero" }
+        }
+    }
+}
+
+/** One authenticated operation-18 result. */
+class KagemushaPendingCreditSelectionV1(
+    @JvmField val watermark: KagemushaPendingCreditWatermarkV1,
+    @JvmField val nextPending: KagemushaPendingCreditSelectorV1?,
+)
+
 /** Public, non-authoritative command bodies for secure-device receiver operations 2 through 4. */
 sealed class KagemushaDeviceReceiverCommandV1(
     @JvmField val operation: Int,
@@ -121,17 +172,24 @@ sealed class KagemushaDeviceControlCommandV1(@JvmField val operation: Int) {
     /** Operation 17: fold exactly one staged credit into the aggregate balance. */
     class FoldReceiveCredit(
         operationId: ByteArray,
-        creditId: ByteArray,
+        @JvmField val selector: KagemushaPendingCreditSelectorV1,
     ) : KagemushaDeviceControlCommandV1(17) {
         private val id = nonzeroDigest(operationId, "operation_id")
-        private val credit = nonzeroDigest(creditId, "credit_id")
 
         fun operationId(): ByteArray = id.copyOf()
-        fun creditId(): ByteArray = credit.copyOf()
     }
 
-    /** Operation 18: read the inclusive pending-credit watermark. */
-    object ReadPendingCreditWatermark : KagemushaDeviceControlCommandV1(18)
+    /** Operation 18: select one authenticated pending credit under a finite target. */
+    class ReadPendingCreditWatermark(
+        @JvmField val watermark: KagemushaPendingCreditWatermarkV1?,
+        @JvmField val target: KagemushaPendingCreditTargetV1,
+    ) : KagemushaDeviceControlCommandV1(18) {
+        init {
+            require(target !is KagemushaPendingCreditTargetV1.RequiredBalance || watermark == null) {
+                "required-balance selection must capture a fresh watermark"
+            }
+        }
+    }
 
     /** Operation 19: rotate into the next qualified hardware epoch. */
     class RotateHardwareEpoch(operationId: ByteArray) : KagemushaDeviceControlCommandV1(19) {
@@ -252,9 +310,15 @@ class KagemushaDeviceSenderWalletContextV1(
     credentialId: ByteArray,
     @JvmField val hardwareEpoch: KagemushaDeviceHardwareEpochV1,
     @JvmField val devicePolicyBinding: KagemushaDevicePolicyBindingV1,
+    coreAuthorizationKeyReference: ByteArray,
 ) {
     private val credential = nonzeroDigest(credentialId, "credential_id")
+    private val coreAuthorizationKey = nonzeroDigest(
+        coreAuthorizationKeyReference,
+        "core_authorization_key_reference",
+    )
     fun credentialId(): ByteArray = credential.copyOf()
+    fun coreAuthorizationKeyReference(): ByteArray = coreAuthorizationKey.copyOf()
 }
 
 /** Public inputs fixed before an outgoing operation is prepared. Variant order is wire order. */
@@ -323,6 +387,58 @@ sealed class KagemushaDeviceSenderRecoverySelectorV1(@JvmField val ordinal: Int)
     }
 }
 
+/** Compact Core-authenticated redemption settlement selected by sender operation 12. */
+class KagemushaDeviceRedemptionTerminalReceiptV1(
+    @JvmField val version: Int = VERSION,
+    networkId: ByteArray,
+    operationId: ByteArray,
+    redemptionId: ByteArray,
+    terminalNullifier: ByteArray,
+    envelopeDigest: ByteArray,
+    reserveReceiptDigest: ByteArray,
+    authenticatedStatusDigest: ByteArray,
+    @JvmField val finalizedBlockHeight: Long,
+    heightContextId: ByteArray,
+) {
+    private val network = nonzeroDigest(networkId, "network_id")
+    private val operation = nonzeroDigest(operationId, "operation_id")
+    private val redemption = nonzeroDigest(redemptionId, "redemption_id")
+    private val nullifier = nonzeroDigest(terminalNullifier, "terminal_nullifier")
+    private val envelope = nonzeroDigest(envelopeDigest, "envelope_digest")
+    private val reserveReceipt = nonzeroDigest(reserveReceiptDigest, "reserve_receipt_digest")
+    private val status = nonzeroDigest(authenticatedStatusDigest, "authenticated_status_digest")
+    private val heightContext = nonzeroDigest(heightContextId, "height_context_id")
+
+    init {
+        require(version == VERSION && finalizedBlockHeight > 0)
+    }
+
+    fun networkId(): ByteArray = network.copyOf()
+    fun operationId(): ByteArray = operation.copyOf()
+    fun redemptionId(): ByteArray = redemption.copyOf()
+    fun terminalNullifier(): ByteArray = nullifier.copyOf()
+    fun envelopeDigest(): ByteArray = envelope.copyOf()
+    fun reserveReceiptDigest(): ByteArray = reserveReceipt.copyOf()
+    fun authenticatedStatusDigest(): ByteArray = status.copyOf()
+    fun heightContextId(): ByteArray = heightContext.copyOf()
+}
+
+/** Closed terminal receipt admitted by sender operation 12. */
+sealed class KagemushaDeviceSenderTerminalReceiptV1(@JvmField val ordinal: Int) {
+    class PaymentAcknowledgement(canonicalAcknowledgement: ByteArray) :
+        KagemushaDeviceSenderTerminalReceiptV1(0) {
+        private val acknowledgement = boundedCopy(
+            canonicalAcknowledgement,
+            ACKNOWLEDGEMENT_MAX,
+            "acknowledgement",
+        )
+        fun canonicalAcknowledgement(): ByteArray = acknowledgement.copyOf()
+    }
+
+    class RedemptionSettlement(@JvmField val receipt: KagemushaDeviceRedemptionTerminalReceiptV1) :
+        KagemushaDeviceSenderTerminalReceiptV1(1)
+}
+
 /** Sender operation-specific command body. Variant ordinal is not the ABI operation code. */
 sealed class KagemushaDeviceSenderCommandBodyV1(
     @JvmField val ordinal: Int,
@@ -339,9 +455,16 @@ sealed class KagemushaDeviceSenderCommandBodyV1(
     class Commit(
         @JvmField val selector: KagemushaDeviceSenderPreparationSelectorV1,
         candidateDigest: ByteArray,
+        hardwareAuthorization: ByteArray,
     ) : KagemushaDeviceSenderCommandBodyV1(2, 7) {
         private val candidate = nonzeroDigest(candidateDigest, "candidate_digest")
+        private val authorization = boundedCopy(
+            hardwareAuthorization,
+            HARDWARE_AUTHORIZATION_MAX,
+            "hardware_authorization",
+        )
         fun candidateDigest(): ByteArray = candidate.copyOf()
+        fun hardwareAuthorization(): ByteArray = authorization.copyOf()
     }
 
     class RecoverTerminal(inputsDigest: ByteArray) : KagemushaDeviceSenderCommandBodyV1(3, 8) {
@@ -369,21 +492,22 @@ sealed class KagemushaDeviceSenderCommandBodyV1(
         envelopeDigest: ByteArray,
         @JvmField val inputs: KagemushaDeviceSenderPublicInputsV1,
         canonicalEnvelope: ByteArray,
-        canonicalAcknowledgement: ByteArray,
+        @JvmField val terminalReceipt: KagemushaDeviceSenderTerminalReceiptV1,
+        hardwareAuthorization: ByteArray,
     ) : KagemushaDeviceSenderCommandBodyV1(6, 12) {
         private val inputsHash = nonzeroDigest(inputsDigest, "inputs_digest")
         private val envelopeHash = nonzeroDigest(envelopeDigest, "envelope_digest")
         private val envelope = boundedCopy(canonicalEnvelope, TERMINAL_ENVELOPE_MAX, "envelope")
-        private val acknowledgement = boundedCopy(
-            canonicalAcknowledgement,
-            ACKNOWLEDGEMENT_MAX,
-            "acknowledgement",
+        private val authorization = boundedCopy(
+            hardwareAuthorization,
+            HARDWARE_AUTHORIZATION_MAX,
+            "hardware_authorization",
         )
 
         fun inputsDigest(): ByteArray = inputsHash.copyOf()
         fun envelopeDigest(): ByteArray = envelopeHash.copyOf()
         fun canonicalEnvelope(): ByteArray = envelope.copyOf()
-        fun canonicalAcknowledgement(): ByteArray = acknowledgement.copyOf()
+        fun hardwareAuthorization(): ByteArray = authorization.copyOf()
     }
 }
 
@@ -464,10 +588,15 @@ object KagemushaDeviceOperationCodecV1 {
                 u16(VERSION),
                 u8(value.operation),
                 value.operationId(),
-                value.creditId(),
+                enumPayload(value.selector.kind.ordinal),
+                value.selector.creditId(),
             )
-            KagemushaDeviceControlCommandV1.ReadPendingCreditWatermark ->
-                fields(u16(VERSION), u8(value.operation))
+            is KagemushaDeviceControlCommandV1.ReadPendingCreditWatermark -> fields(
+                u16(VERSION),
+                u8(value.operation),
+                option(value.watermark?.let(::pendingCreditWatermark)),
+                pendingCreditTarget(value.target),
+            )
             is KagemushaDeviceControlCommandV1.RotateHardwareEpoch -> fields(
                 u16(VERSION), u8(value.operation), value.operationId(),
             )
@@ -518,9 +647,15 @@ object KagemushaDeviceOperationCodecV1 {
             )
             15 -> KagemushaDeviceControlCommandV1.RecoverMintAuthorization(reader.exactField(32))
             17 -> KagemushaDeviceControlCommandV1.FoldReceiveCredit(
-                reader.exactField(32), reader.exactField(32),
+                reader.exactField(32),
+                KagemushaPendingCreditSelectorV1(
+                    pendingCreditKind(reader.field()), reader.exactField(32),
+                ),
             )
-            18 -> KagemushaDeviceControlCommandV1.ReadPendingCreditWatermark
+            18 -> KagemushaDeviceControlCommandV1.ReadPendingCreditWatermark(
+                reader.optionField(::decodePendingCreditWatermark),
+                decodePendingCreditTarget(reader.field()),
+            )
             19 -> KagemushaDeviceControlCommandV1.RotateHardwareEpoch(reader.exactField(32))
             20 -> KagemushaDeviceControlCommandV1.BootstrapAggregateState(reader.exactField(32))
             21 -> KagemushaDeviceControlCommandV1.RecoverWalletSnapshot
@@ -631,6 +766,11 @@ object KagemushaDeviceOperationCodecV1 {
         return value
     }
 
+    /** Canonical operation-5 reservation binding shared with the native outgoing-operation index. */
+    @JvmStatic
+    fun encodeSenderPublicInputs(value: KagemushaDeviceSenderPublicInputsV1): ByteArray =
+        frame("iroha.kagemusha.device.v1.sender-public-inputs", 16, senderInputs(value), SENDER_COMMAND_MAX_BYTES)
+
     /** Encode the shared canonical sender command schema. */
     @JvmStatic
     fun encodeSenderCommand(value: KagemushaDeviceSenderCommandV1): ByteArray {
@@ -692,7 +832,7 @@ object KagemushaDeviceOperationCodecV1 {
         14 -> DeviceArchiveDescriptor(CONTROL_PREPARE_MINT_SCHEMA, 16, CONTROL_MINT_COMMAND_MAX_BYTES)
         15 -> DeviceArchiveDescriptor(CONTROL_RECOVER_MINT_SCHEMA, 2, CONTROL_READ_COMMAND_MAX_BYTES)
         17 -> DeviceArchiveDescriptor(CONTROL_FOLD_RECEIVE_SCHEMA, 16, CONTROL_FOLD_COMMAND_MAX_BYTES)
-        18 -> DeviceArchiveDescriptor(CONTROL_READ_WATERMARK_SCHEMA, 2, CONTROL_READ_COMMAND_MAX_BYTES)
+        18 -> DeviceArchiveDescriptor(CONTROL_READ_WATERMARK_SCHEMA, 16, CONTROL_READ_COMMAND_MAX_BYTES)
         19 -> DeviceArchiveDescriptor(CONTROL_ROTATE_EPOCH_SCHEMA, 2, CONTROL_READ_COMMAND_MAX_BYTES)
         20 -> DeviceArchiveDescriptor(CONTROL_BOOTSTRAP_SCHEMA, 2, CONTROL_READ_COMMAND_MAX_BYTES)
         21 -> DeviceArchiveDescriptor(CONTROL_RECOVER_WALLET_SCHEMA, 2, CONTROL_READ_COMMAND_MAX_BYTES)
@@ -745,6 +885,7 @@ object KagemushaDeviceOperationCodecV1 {
         }
         val releaseId = reader.exactField(32)
         val hardwarePolicyDigest = reader.exactField(32)
+        val coreAuthorizationKeyReference = reader.exactField(32)
         val profile = KagemushaNoritoV1.decodeHardwareProfileShapeExact(
             frame(HARDWARE_PROFILE_SCHEMA, 8, reader.field(512), 512),
         )
@@ -755,6 +896,7 @@ object KagemushaDeviceOperationCodecV1 {
         return KagemushaDeviceQualificationReplyV1(
             releaseId,
             hardwarePolicyDigest,
+            coreAuthorizationKeyReference,
             profile,
             credential,
         )
@@ -824,17 +966,28 @@ object KagemushaDeviceOperationCodecV1 {
             1 -> {
                 reader.exactField(32)
                 reader.exactField(32)
+                reader.exactField(32)
                 require(reader.field(512).isNotEmpty()) { "empty hardware profile" }
                 require(reader.field(768).isNotEmpty()) { "empty hardware credential" }
             }
             11 -> reader.byteVectorField(ACKNOWLEDGEMENT_MAX)
             13 -> validateCommitEvidence(reader.field())
-            14, 15 -> reader.byteVectorField(MINT_AUTHORIZATION_MAX)
+            14, 15 -> {
+                reader.byteVectorField(MINT_AUTHORIZATION_MAX)
+                reader.byteVectorField(KagemushaWireV1.MAXIMUM_ENCRYPTED_CREDIT_BYTES)
+            }
             17 -> {
+                pendingCreditKind(reader.field())
                 reader.exactField(32)
                 reader.byteVectorField(AGGREGATE_STATE_MAX)
             }
-            18 -> reader.u128Field()
+            18 -> {
+                decodePendingCreditWatermark(DeviceReader(reader.field()))
+                reader.optionField {
+                    pendingCreditKind(it.field())
+                    it.exactField(32)
+                }
+            }
             19, 20 -> reader.byteVectorField(AGGREGATE_STATE_MAX)
             21 -> {
                 reader.optionField { it.byteVectorRaw(AGGREGATE_STATE_MAX) }
@@ -892,6 +1045,7 @@ object KagemushaDeviceOperationCodecV1 {
         value.credentialId(),
         hardwareEpoch(value.hardwareEpoch),
         policyBinding(value.devicePolicyBinding),
+        value.coreAuthorizationKeyReference(),
     )
 
     private fun inboxReceipt(value: KagemushaInboxReceiptV1): ByteArray = fields(
@@ -963,7 +1117,10 @@ object KagemushaDeviceOperationCodecV1 {
         is KagemushaDeviceSenderCommandBodyV1.Prepare -> enumPayload(value.ordinal, senderInputs(value.inputs))
         is KagemushaDeviceSenderCommandBodyV1.RecoverPrepared -> enumPayload(value.ordinal, value.inputsDigest())
         is KagemushaDeviceSenderCommandBodyV1.Commit -> enumPayload(
-            value.ordinal, preparationSelector(value.selector), value.candidateDigest(),
+            value.ordinal,
+            preparationSelector(value.selector),
+            value.candidateDigest(),
+            vectorBytes(value.hardwareAuthorization()),
         )
         is KagemushaDeviceSenderCommandBodyV1.RecoverTerminal -> enumPayload(value.ordinal, value.inputsDigest())
         is KagemushaDeviceSenderCommandBodyV1.Install -> enumPayload(
@@ -982,7 +1139,30 @@ object KagemushaDeviceOperationCodecV1 {
             value.envelopeDigest(),
             senderInputs(value.inputs),
             vectorBytes(value.canonicalEnvelope()),
+            terminalReceipt(value.terminalReceipt),
+            vectorBytes(value.hardwareAuthorization()),
+        )
+    }
+
+    private fun terminalReceipt(value: KagemushaDeviceSenderTerminalReceiptV1): ByteArray = when (value) {
+        is KagemushaDeviceSenderTerminalReceiptV1.PaymentAcknowledgement -> enumPayload(
+            value.ordinal,
             vectorBytes(value.canonicalAcknowledgement()),
+        )
+        is KagemushaDeviceSenderTerminalReceiptV1.RedemptionSettlement -> enumPayload(
+            value.ordinal,
+            fields(
+                u16(value.receipt.version),
+                value.receipt.networkId(),
+                value.receipt.operationId(),
+                value.receipt.redemptionId(),
+                value.receipt.terminalNullifier(),
+                value.receipt.envelopeDigest(),
+                value.receipt.reserveReceiptDigest(),
+                value.receipt.authenticatedStatusDigest(),
+                u64(value.receipt.finalizedBlockHeight),
+                value.receipt.heightContextId(),
+            ),
         )
     }
 
@@ -993,8 +1173,11 @@ object KagemushaDeviceOperationCodecV1 {
         val credential = reader.exactField(32)
         val epoch = decodeHardwareEpoch(reader.field())
         val policy = decodePolicyBinding(reader.field())
+        val coreAuthorizationKeyReference = reader.exactField(32)
         reader.finish()
-        return KagemushaDeviceSenderWalletContextV1(lane, release, credential, epoch, policy)
+        return KagemushaDeviceSenderWalletContextV1(
+            lane, release, credential, epoch, policy, coreAuthorizationKeyReference,
+        )
     }
 
     private fun decodeLane(payload: ByteArray): KagemushaDeviceLaneIdV1 {
@@ -1094,6 +1277,7 @@ object KagemushaDeviceOperationCodecV1 {
             2 -> KagemushaDeviceSenderCommandBodyV1.Commit(
                 decodePreparationSelector(reader.field()),
                 reader.exactField(32),
+                reader.byteVectorField(HARDWARE_AUTHORIZATION_MAX),
             )
             3 -> KagemushaDeviceSenderCommandBodyV1.RecoverTerminal(reader.exactField(32))
             4 -> KagemushaDeviceSenderCommandBodyV1.Install(
@@ -1110,8 +1294,38 @@ object KagemushaDeviceOperationCodecV1 {
                 reader.exactField(32),
                 decodeSenderInputs(reader.field()),
                 reader.byteVectorField(TERMINAL_ENVELOPE_MAX),
+                decodeTerminalReceipt(reader.field()),
+                reader.byteVectorField(HARDWARE_AUTHORIZATION_MAX),
+            )
+            else -> error("unreachable")
+        }
+        reader.finish()
+        return value
+    }
+
+    private fun decodeTerminalReceipt(payload: ByteArray): KagemushaDeviceSenderTerminalReceiptV1 {
+        val reader = DeviceReader(payload)
+        val value = when (reader.enumTag(2)) {
+            0 -> KagemushaDeviceSenderTerminalReceiptV1.PaymentAcknowledgement(
                 reader.byteVectorField(ACKNOWLEDGEMENT_MAX),
             )
+            1 -> {
+                val receipt = DeviceReader(reader.field())
+                val value = KagemushaDeviceRedemptionTerminalReceiptV1(
+                    receipt.u16Field(),
+                    receipt.exactField(32),
+                    receipt.exactField(32),
+                    receipt.exactField(32),
+                    receipt.exactField(32),
+                    receipt.exactField(32),
+                    receipt.exactField(32),
+                    receipt.exactField(32),
+                    receipt.u64Field(),
+                    receipt.exactField(32),
+                )
+                receipt.finish()
+                KagemushaDeviceSenderTerminalReceiptV1.RedemptionSettlement(value)
+            }
             else -> error("unreachable")
         }
         reader.finish()
@@ -1180,13 +1394,19 @@ internal class KagemushaDeviceAuthenticatedReplyV1(
 internal class KagemushaDeviceQualificationReplyV1(
     releaseId: ByteArray,
     hardwarePolicyDigest: ByteArray,
+    coreAuthorizationKeyReference: ByteArray,
     @JvmField val profile: KagemushaHardwareProfileV1,
     @JvmField val credential: KagemushaHardwareCredentialV1,
 ) {
     private val release = nonzeroDigest(releaseId, "release_id")
     private val policy = nonzeroDigest(hardwarePolicyDigest, "hardware_policy_digest")
+    private val coreAuthorizationKey = nonzeroDigest(
+        coreAuthorizationKeyReference,
+        "core_authorization_key_reference",
+    )
     fun releaseId(): ByteArray = release.copyOf()
     fun hardwarePolicyDigest(): ByteArray = policy.copyOf()
+    fun coreAuthorizationKeyReference(): ByteArray = coreAuthorizationKey.copyOf()
 }
 
 private data class DeviceArchiveDescriptor(
@@ -1205,6 +1425,7 @@ private const val INBOX_STAGING_METADATA_MAX = 1_024
 private const val REDEMPTION_VOUCHER_MAX = 7_936
 private const val TERMINAL_ENVELOPE_MAX = REDEMPTION_VOUCHER_MAX
 private const val ACKNOWLEDGEMENT_MAX = 256
+private const val HARDWARE_AUTHORIZATION_MAX = 2 * 1024
 private const val AGGREGATE_STATE_MAX = 768
 private const val MINT_AUTHORIZATION_MAX = 7_936
 private const val ACCOUNT_MAX = 512
@@ -1238,7 +1459,7 @@ private const val CONTROL_ACK_REPLY_SCHEMA =
 private const val CONTROL_TIME_REPLY_SCHEMA =
     "iroha.kagemusha.device.v1.trusted-time-or-lease-reply"
 private const val CONTROL_MINT_REPLY_SCHEMA =
-    "iroha.kagemusha.device.v1.mint-authorization-reply"
+    "iroha.kagemusha.device.v1.mint-construction-bundle-reply"
 private const val CONTROL_FOLD_REPLY_SCHEMA =
     "iroha.kagemusha.device.v1.fold-receive-credit-reply"
 private const val CONTROL_WATERMARK_REPLY_SCHEMA =
@@ -1311,6 +1532,42 @@ private fun unframe(bytes: ByteArray, descriptor: DeviceArchiveDescriptor): Byte
 private fun fields(vararg values: ByteArray): ByteArray = DeviceWriter().apply {
     values.forEach(::field)
 }.bytes()
+
+private fun pendingCreditWatermark(value: KagemushaPendingCreditWatermarkV1): ByteArray = fields(
+    u128(value.hardwareEpochGeneration),
+    value.hardwareEpochId(),
+    u128(value.inboxRevision),
+)
+
+private fun decodePendingCreditWatermark(reader: DeviceReader): KagemushaPendingCreditWatermarkV1 =
+    KagemushaPendingCreditWatermarkV1(
+        reader.u128Field(), reader.exactField(32), reader.u128Field(),
+    ).also { reader.finish() }
+
+private fun pendingCreditTarget(value: KagemushaPendingCreditTargetV1): ByteArray = when (value) {
+    KagemushaPendingCreditTargetV1.DrainAll -> enumPayload(value.ordinal)
+    is KagemushaPendingCreditTargetV1.RequiredBalance -> enumPayload(
+        value.ordinal, u128(value.amount),
+    )
+}
+
+private fun decodePendingCreditTarget(payload: ByteArray): KagemushaPendingCreditTargetV1 {
+    val reader = DeviceReader(payload)
+    val target = when (reader.enumTag(2)) {
+        0 -> KagemushaPendingCreditTargetV1.DrainAll
+        1 -> KagemushaPendingCreditTargetV1.RequiredBalance(reader.u128Field())
+        else -> error("unreachable")
+    }
+    reader.finish()
+    return target
+}
+
+private fun pendingCreditKind(payload: ByteArray): KagemushaPendingCreditKindV1 {
+    val reader = DeviceReader(payload)
+    val kind = KagemushaPendingCreditKindV1.entries[reader.enumTag(2)]
+    reader.finish()
+    return kind
+}
 
 private fun enumPayload(tag: Int, vararg values: ByteArray): ByteArray = DeviceWriter().apply {
     raw(u32(tag))

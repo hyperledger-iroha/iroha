@@ -6,7 +6,7 @@ package org.hyperledger.iroha.android.offline;
 /**
  * Canonical KAGEMUSHA V1 value whose opaque Norito bytes are transported.
  *
- * <p>Request, payment, and acknowledgement form the complete IPM1 payment exchange.
+ * <p>The first three values form the IPM1 request, payment, acknowledgement exchange.
  */
 public enum KagemushaWirePayloadKindV1 {
   PAYMENT_REQUEST(

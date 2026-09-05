@@ -1168,6 +1168,7 @@ impl V2EffectServices for FakeServices {
     fn finish_runtime_step_reconciliation(
         &mut self,
         decided_subject: Option<wire::BlockSubject>,
+        _authority: Option<super::super::serviced_candidate_store::LeaderWireRecoveryAuthority>,
     ) -> Result<(), Self::Error> {
         self.check("finish-runtime-step-reconciliation")?;
         match (self.durable_runtime_decision, decided_subject) {

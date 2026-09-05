@@ -2776,7 +2776,7 @@ required_production_liveness_tests=(
   parameters::user::duration_clamp_tests::sumeragi_authenticated_non_validator_sources_must_fit_network_geometry
   parameters::user::duration_clamp_tests::sumeragi_authenticated_non_validator_sources_use_effective_lane_profile_geometry
 )
-readonly expected_production_liveness_test_count=867
+readonly expected_production_liveness_test_count=866
 if (( ${#required_production_liveness_tests[@]} != expected_production_liveness_test_count )); then
   echo "expected exactly ${expected_production_liveness_test_count} production Sumeragi v2 liveness tests, found ${#required_production_liveness_tests[@]}" >&2
   exit 1
@@ -2798,7 +2798,7 @@ production_data_model_ignored_unit_list="$(
 # This source-bound corridor intentionally exercises `iroha_p2p`'s production
 # default feature set (`default = []`). Feature-gated QUIC first-packet geometry
 # tests remain useful transport regressions, but are not claimed by this
-# 44-module pre-network inventory.
+# 42-module pre-network inventory.
 production_p2p_unit_list="$(run_cargo test --locked --offline -p iroha_p2p --lib -- --list)"
 production_p2p_ignored_unit_list="$(
   run_cargo test --locked --offline -p iroha_p2p --lib -- --list --ignored
@@ -2866,7 +2866,7 @@ for required_test in "${required_production_liveness_tests[@]}"; do
 done
 
 # Keep the multilane closure-critical focused tests explicit even when they do
-# not belong to the canonical 864-test liveness inventory above. The later
+# not belong to the canonical 866-test liveness inventory above. The later
 # source-sealed workspace leg executes these non-ignored tests; this preflight
 # prevents a rename, deletion, or accidental `#[ignore]` from hiding behind
 # Cargo's successful zero-test filtering.
@@ -4493,10 +4493,10 @@ publish_corridor_completion() {
     echo "source-bound localnet binary bundle changed before corridor completion" >&2
     return 1
   fi
-  # 44 production-module + 9 G-UNIT + 2 exact data-model + 6 source-sealed
+  # 42 production-module + 9 G-UNIT + 2 exact data-model + 6 source-sealed
   # command + 1 cross-SDK Rust + 1 Native AMX fixture + 6 grouped SDK +
-  # 6 diagnostics + 10 pytest legs = 85.
-  readonly expected_corridor_leg_count=85
+  # 6 diagnostics + 10 pytest legs = 83.
+  readonly expected_corridor_leg_count=83
   if ((corridor_leg_index != expected_corridor_leg_count)); then
     echo "release corridor recorded ${corridor_leg_index} legs, expected ${expected_corridor_leg_count}" >&2
     exit 1
@@ -4683,44 +4683,51 @@ if [[ "$profile" == "--release" && ! -s "$seed_completion_path_file" ]]; then
 fi
 verify_release_identity "after deterministic seed matrix"
 
+verify_bpng_native_bootstrap_release_identity() {
+  local checkpoint="$1"
+  if [[ "${PATH:-}" != "${IROHA_RELEASE_INVOCATION_ROOT:-}/runtime/bin" \
+    || "${IROHA_RELEASE_PYTHON_BIN:-}" != "${PATH:-}/python3" \
+    || "${IROHA_RELEASE_GIT_BIN:-}" != "${PATH:-}/git" ]]; then
+    echo "native BPNG release runtime escaped its pinned PATH at ${checkpoint}" >&2
+    return 1
+  fi
+  verify_release_identity "$checkpoint" || return $?
+  if [[ "${IROHA_TEST_SKIP_BUILD:-}" != 1 \
+    || "${IROHA_TEST_BUILD_PROFILE:-}" != release \
+    || "${PROFILE:-}" != release \
+    || "${TEST_NETWORK_BIN_IROHAD:-}" \
+      != "${IROHA_TEST_TARGET_DIR:-}/release/iroha3d" \
+    || "${TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL:-}" \
+      != "${IROHA_TEST_TARGET_DIR:-}/message-control/release/iroha3d" \
+    || "${TEST_NETWORK_BIN_IROHA:-}" \
+      != "${IROHA_TEST_TARGET_DIR:-}/release/iroha" \
+    || "${KAGAMI_BIN:-}" != "${IROHA_TEST_TARGET_DIR:-}/release/kagami" ]]; then
+    echo "native BPNG release binary exports changed at ${checkpoint}" >&2
+    return 1
+  fi
+  if ! localnet_binary_attestation_valid; then
+    echo "native BPNG release binary bundle changed at ${checkpoint}" >&2
+    return 1
+  fi
+}
+
 run_bpng_native_bootstrap_release_gate() {
   local test_list ignored_test_list run_log
   local -a run_pipeline_status
-  if ! test_list="$(
-    run_cargo test --locked --offline -p integration_tests \
-      --test network_functional -- --list
-  )"; then
-    echo "native BPNG release-test discovery failed" >&2
-    return 1
-  fi
-  if ! ignored_test_list="$(
-    run_cargo test --locked --offline -p integration_tests \
-      --test network_functional -- --list --ignored
-  )"; then
-    echo "native BPNG ignored-test discovery failed" >&2
-    return 1
-  fi
-  if [[ "$(grep -Fxc -- "${bpng_native_bootstrap_release_test}: test" \
-    <<<"$test_list" || true)" != 1 ]]; then
-    echo "missing or renamed native BPNG release test: ${bpng_native_bootstrap_release_test}" >&2
-    return 1
-  fi
+  test_list="$(run_cargo test --locked --offline -p integration_tests --test network_functional -- --list)" || { echo "native BPNG release-test discovery failed" >&2; return 1; }
+  ignored_test_list="$(run_cargo test --locked --offline -p integration_tests --test network_functional -- --list --ignored)" || { echo "native BPNG ignored-test discovery failed" >&2; return 1; }
+  [[ "$(grep -Fxc -- "${bpng_native_bootstrap_release_test}: test" <<<"$test_list" || true)" == 1 ]] \
+    || { echo "missing or renamed native BPNG release test: ${bpng_native_bootstrap_release_test}" >&2; return 1; }
   if grep -Fqx -- "${bpng_native_bootstrap_release_test}: test" \
     <<<"$ignored_test_list"; then
     echo "native BPNG release test is ignored: ${bpng_native_bootstrap_release_test}" >&2
     return 1
   fi
-
-  if ! run_log="$(
-    mktemp "${TMPDIR%/}/bpng-native-bootstrap-release.XXXXXX.log"
-  )"; then
-    echo "native BPNG release gate could not allocate its private transcript" >&2
-    return 1
-  fi
+  run_log="$(mktemp "${TMPDIR%/}/bpng-native-bootstrap-release.log.XXXXXX")" \
+    || { echo "native BPNG release gate could not allocate its private transcript" >&2; return 1; }
   set +e
   (
-    export IROHA_TEST_SERIALIZE_NETWORKS=1
-    export IROHA_TEST_NETWORK_START_ATTEMPTS=1
+    export IROHA_TEST_SERIALIZE_NETWORKS=1 IROHA_TEST_NETWORK_START_ATTEMPTS=1
     run_cargo test --locked --offline -p integration_tests \
       --test network_functional "$bpng_native_bootstrap_release_test" -- \
       --exact --show-output --test-threads=1
@@ -4731,7 +4738,9 @@ run_bpng_native_bootstrap_release_gate() {
     echo "native BPNG release gate failed (cargo=${run_pipeline_status[0]}, tee=${run_pipeline_status[1]}); log retained at ${run_log}" >&2
     return 1
   fi
-  if [[ "$(grep -Fxc -- "running 1 test" "$run_log" || true)" != 1 \
+  if [[ "$(grep -Ec '^running [0-9]+ tests?$' "$run_log" || true)" != 1 \
+    || "$(grep -Ec '^test result:' "$run_log" || true)" != 1 \
+    || "$(grep -Fxc -- "running 1 test" "$run_log" || true)" != 1 \
     || "$(grep -Fxc -- "test ${bpng_native_bootstrap_release_test} ... ok" \
       "$run_log" || true)" != 1 \
     || "$(grep -Ec \
@@ -4740,17 +4749,17 @@ run_bpng_native_bootstrap_release_gate() {
     echo "native BPNG release gate lacks one unambiguous passing result; log retained at ${run_log}" >&2
     return 1
   fi
-  if ! rm -f -- "$run_log"; then
-    echo "native BPNG release gate could not remove its validated temporary transcript" >&2
-    return 1
-  fi
+  rm -f -- "$run_log" \
+    || { echo "native BPNG release gate could not remove its validated temporary transcript" >&2; return 1; }
 }
 
 if [[ "$profile" == "--release" ]]; then
-  verify_release_identity "before native BPNG bootstrap release gate"
+  verify_bpng_native_bootstrap_release_identity \
+    "before native BPNG bootstrap release gate"
   run_cooperative_gate bpng-native-bootstrap-release \
     run_bpng_native_bootstrap_release_gate
-  verify_release_identity "after native BPNG bootstrap release gate"
+  verify_bpng_native_bootstrap_release_identity \
+    "after native BPNG bootstrap release gate"
 fi
 
 if [[ "$profile" == "--release" ]]; then

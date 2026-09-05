@@ -82,7 +82,8 @@ use iroha_data_model::kagemusha::{
 const COMMIT_CERTIFICATE_DIGEST_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:commit-certificate";
 const COMMIT_CERTIFICATE_ID_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:commit-certificate-id";
 const OUTBOX_RESERVATION_COMMITMENT_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:outbox-reservation";
-const PRECOMMIT_BINDING_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:precommit-binding\0";
+const PREPARED_TRANSITION_BINDING_DOMAIN_V1: &[u8] =
+    b"iroha:kagemusha:v1:prepared-transition-binding\0";
 const PREPARED_ONE_USE_AUTHORIZATION_DOMAIN_V1: &[u8] =
     b"iroha:kagemusha:v1:prepared-one-use-authorization\0";
 const COMMIT_EVIDENCE_OPENING_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:commit-evidence-opening\0";
@@ -521,7 +522,7 @@ impl KagemushaTerminalAuthorizationPrivateTransitionV1 {
             self.journal_revision_before,
             self.authorization_counter_before,
         );
-        let expected_precommit = canonical_precommit_binding_digest_v1(
+        let expected_prepared_transition = canonical_prepared_transition_binding_digest_v1(
             public.lifecycle_binding_digest,
             public.request_digest,
             self.send
@@ -536,8 +537,8 @@ impl KagemushaTerminalAuthorizationPrivateTransitionV1 {
             reservation_commitment,
             prepared_authorization,
         );
-        if expected_precommit == [0; 32] {
-            return Err("terminal authorization precommit binding is zero".to_owned());
+        if expected_prepared_transition == [0; 32] {
+            return Err("terminal authorization prepared-transition binding is zero".to_owned());
         }
         if operation_from_wire_v1(self.outbox_reservation.operation_kind) != public.operation
             || self.outbox_reservation.issued_at_ms >= self.outbox_reservation.expires_at_ms
@@ -639,12 +640,10 @@ impl KagemushaTerminalSendPrivateV1 {
             output_digest,
             self.encrypted_credit_digest,
         );
-        let mut state_pair_hasher = Sha256::new();
-        state_pair_hasher.update(b"iroha:kagemusha:v1:incoming-sender-state-pair");
-        state_pair_hasher.update([0]);
-        state_pair_hasher.update(self.output.sender_before_commitment);
-        state_pair_hasher.update(self.output.sender_after_commitment);
-        let state_pair_digest = state_pair_hasher.finalize().into();
+        let state_pair_digest = super::canonical_sender_state_pair_digest_v1(
+            self.output.sender_before_commitment,
+            self.output.sender_after_commitment,
+        );
         let expected_output = canonical_terminal_send_output_binding_v1(
             self.output.credit_id,
             self.request.recipient_encryption_key,
@@ -748,7 +747,8 @@ pub(super) fn canonical_predecessor_conflict_nullifier_v1(
 /// Return the terminal send-output binding consumed by a receiver fold.
 ///
 /// The sender authorization opens the request credential ID to its recipient lane and binds this
-/// value to the recursively verified state-candidate output, including the request encryption key.
+/// value to the recursively verified state-candidate output, including the recipient encryption
+/// key bound directly by the request.
 /// A receiver recomputes it from the accepted payment and its own lane before admitting value,
 /// preventing one terminal proof from being replayed under a substituted credit identity or lane.
 /// The prepared-transfer input is its 32-byte digest, not its 210-byte canonical transcript.
@@ -951,8 +951,8 @@ pub(crate) fn canonical_prepared_one_use_authorization_digest_v1(
     )
 }
 
-/// Return the exact candidate precommit binding shared by State and terminal Guard proofs.
-pub(crate) fn canonical_precommit_binding_digest_v1(
+/// Return the exact prepared-transition binding shared by State and terminal Guard proofs.
+pub(crate) fn canonical_prepared_transition_binding_digest_v1(
     lifecycle_binding_digest: DigestV1,
     request_digest: DigestV1,
     sender_before_commitment: DigestV1,
@@ -962,7 +962,7 @@ pub(crate) fn canonical_precommit_binding_digest_v1(
     prepared_authorization_digest: DigestV1,
 ) -> DigestV1 {
     hash_fixed_v1(
-        PRECOMMIT_BINDING_DOMAIN_V1,
+        PREPARED_TRANSITION_BINDING_DOMAIN_V1,
         &[
             &1_u16.to_le_bytes(),
             &lifecycle_binding_digest,
@@ -980,7 +980,7 @@ pub(crate) fn canonical_precommit_binding_digest_v1(
 pub(crate) fn canonical_terminal_commit_binding_digest_v1(
     public: &KagemushaTerminalAuthorizationPublicInputsV1,
     private: &KagemushaTerminalAuthorizationPrivateTransitionV1,
-    precommit_binding_digest: DigestV1,
+    prepared_transition_binding_digest: DigestV1,
     sender_authorization_digest: DigestV1,
     transition_intent_digest: DigestV1,
     transition_effect_digest: DigestV1,
@@ -1001,7 +1001,7 @@ pub(crate) fn canonical_terminal_commit_binding_digest_v1(
             &1_u16.to_le_bytes(),
             &[operation_tag_v1(public.operation) as u8],
             &public.lifecycle_binding_digest,
-            &precommit_binding_digest,
+            &prepared_transition_binding_digest,
             &public.candidate_envelope_digest,
             &public.commit_certificate_digest,
             &private.commit_certificate.certificate_id,
@@ -1331,6 +1331,16 @@ macro_rules! impl_terminal_authorization_circuit {
                 unreachable!(concat!($label, " uses authenticated Base parameters"))
             }
 
+            fn synthesize_for_measurement(
+                &self,
+                config: Self::Config,
+                layouter: impl Layouter<$field>,
+            ) -> Result<(), PlonkError> {
+                let result = self.synthesize(config, layouter);
+                self.builder.reset_synthesis_state();
+                result
+            }
+
             fn synthesize(
                 &self,
                 config: Self::Config,
@@ -1406,6 +1416,16 @@ macro_rules! impl_commit_wrapper_circuit {
                 unreachable!(concat!($label, " uses authenticated Base parameters"))
             }
 
+            fn synthesize_for_measurement(
+                &self,
+                config: Self::Config,
+                layouter: impl Layouter<$field>,
+            ) -> Result<(), PlonkError> {
+                let result = self.synthesize(config, layouter);
+                self.builder.reset_synthesis_state();
+                result
+            }
+
             fn synthesize(
                 &self,
                 config: Self::Config,
@@ -1479,7 +1499,7 @@ fn validate_terminal_guard_relation_v1(
             "terminal transition nullifier does not identify its exact predecessor".to_owned(),
         );
     }
-    let precommit = canonical_precommit_binding_digest_v1(
+    let prepared_transition = canonical_prepared_transition_binding_digest_v1(
         public.lifecycle_binding_digest,
         public.request_digest,
         private
@@ -1504,7 +1524,7 @@ fn validate_terminal_guard_relation_v1(
     let terminal = canonical_terminal_commit_binding_digest_v1(
         public,
         private,
-        precommit,
+        prepared_transition,
         sender_authorization,
         guard.transition_intent_digest,
         guard.transition_effect_digest,
@@ -1514,7 +1534,7 @@ fn validate_terminal_guard_relation_v1(
     )?;
     if let Some(send) = &private.send
         && (guard.peer_credit_id != send.output.credit_id
-            || guard.peer_recipient_lane_id != send.request.recipient_encryption_key)
+            || guard.recipient_encryption_key_binding != send.request.recipient_encryption_key)
     {
         return Err(
             "terminal Guard does not bind the request's exact credit and recipient key".to_owned(),
@@ -1538,7 +1558,7 @@ fn validate_terminal_guard_relation_v1(
         || guard.hardware_profile_id != public.hardware_profile_id
         || guard.policy_epoch != public.policy_epoch
         || guard.lifecycle_binding_digest != public.lifecycle_binding_digest
-        || guard.precommit_binding_digest != precommit
+        || guard.prepared_transition_binding_digest != prepared_transition
         || guard.terminal_commit_binding_digest != terminal
         || guard.sender_one_time_authorization_digest != sender_authorization
         || guard.predecessor_state_commitment != predecessor.state_commitment
@@ -1597,21 +1617,54 @@ fn validate_candidate_guard_protocol_binding_v1<F: KagemushaPoseidonFieldV1>(
     Ok(())
 }
 
-/// Build the mutually audited terminal-authorization pair.
+/// Compact native deferred audits retained after the discovery builders are dropped.
 #[cfg(feature = "zk-halo2-ipa")]
-pub(crate) fn build_kagemusha_terminal_authorization_pair_v1(
-    eq_params: &ParamsIPA<EqAffine>,
-    ep_params: &ParamsIPA<EpAffine>,
-    witness: KagemushaTerminalAuthorizationWitnessV1<'_>,
-) -> Result<
-    (
-        KagemushaTerminalAuthorizationEqCircuitV1,
-        KagemushaTerminalAuthorizationEpCircuitV1,
-        DigestV1,
-        DigestV1,
-    ),
-    String,
-> {
+pub(crate) struct KagemushaTerminalAuthorizationDeferredAuditsV1 {
+    eq: KagemushaDeferredParentOutputV1<EqAffine>,
+    ep: KagemushaDeferredParentOutputV1<EpAffine>,
+    eq_digest: DigestV1,
+    ep_digest: DigestV1,
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+impl KagemushaTerminalAuthorizationDeferredAuditsV1 {
+    #[must_use]
+    pub(crate) const fn eq_digest(&self) -> DigestV1 {
+        self.eq_digest
+    }
+
+    #[must_use]
+    pub(crate) const fn ep_digest(&self) -> DigestV1 {
+        self.ep_digest
+    }
+}
+
+/// Compact native deferred audits for the key-distinct postcommit wrapper.
+#[cfg(feature = "zk-halo2-ipa")]
+pub(crate) struct KagemushaCommitWrapperDeferredAuditsV1 {
+    eq: KagemushaDeferredParentOutputV1<EqAffine>,
+    ep: KagemushaDeferredParentOutputV1<EpAffine>,
+    eq_digest: DigestV1,
+    ep_digest: DigestV1,
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+impl KagemushaCommitWrapperDeferredAuditsV1 {
+    #[must_use]
+    pub(crate) const fn eq_digest(&self) -> DigestV1 {
+        self.eq_digest
+    }
+
+    #[must_use]
+    pub(crate) const fn ep_digest(&self) -> DigestV1 {
+        self.ep_digest
+    }
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn validate_terminal_authorization_pair_witness_v1(
+    witness: &KagemushaTerminalAuthorizationWitnessV1<'_>,
+) -> Result<(DigestV1, DigestV1), String> {
     validate_enabled_hardware_profiles_v1(&witness.enabled_hardware_profiles)?;
     let terminal_guard_eq_protocol_digest = native_parent_protocol_digest_v1(
         witness.eq.terminal_guard_protocol,
@@ -1647,13 +1700,28 @@ pub(crate) fn build_kagemusha_terminal_authorization_pair_v1(
     {
         return Err("terminal sender hardware profile is not release-enabled".to_owned());
     }
+    Ok((
+        terminal_guard_eq_protocol_digest,
+        terminal_guard_ep_protocol_digest,
+    ))
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn build_terminal_authorization_eq_scalar_from_witness_v1(
+    eq_params: &ParamsIPA<EqAffine>,
+    witness: &KagemushaTerminalAuthorizationWitnessV1<'_>,
+    terminal_guard_eq_protocol_digest: DigestV1,
+    terminal_guard_ep_protocol_digest: DigestV1,
+) -> Result<
+    (
+        BaseCircuitBuilder<Fp>,
+        PastaSha256JobsV1<Fp>,
+        KagemushaDeferredParentOutputV1<EqAffine>,
+    ),
+    String,
+> {
     let eq_candidate_history = witness
         .eq
-        .candidate_history
-        .to_native()
-        .map_err(|error| error.to_string())?;
-    let ep_candidate_history = witness
-        .ep
         .candidate_history
         .to_native()
         .map_err(|error| error.to_string())?;
@@ -1662,126 +1730,260 @@ pub(crate) fn build_kagemusha_terminal_authorization_pair_v1(
         .terminal_guard_history
         .to_native()
         .map_err(|error| error.to_string())?;
+    let eq_svk = super::composite::eq_succinct_vk(eq_params);
+    build_terminal_authorization_scalar_half_v1::<EqAffine>(
+        &eq_svk,
+        KagemushaPastaParityV1::Eq,
+        KagemushaTerminalRelationV1::TerminalAuthorization,
+        &witness.public,
+        TerminalAuthorizationParityWitnessV1 {
+            private_transition: &witness.private_transition,
+            terminal_guard_relation: &witness.terminal_guard_relation,
+            enabled_hardware_profiles: &witness.enabled_hardware_profiles,
+            candidate_protocol: witness.eq.candidate_protocol,
+            candidate_instances: witness.eq.candidate_instances,
+            candidate_proof: witness.eq.candidate_proof,
+            candidate_history: &eq_candidate_history,
+            candidate_history_fold_proof: witness.eq.candidate_history_fold_proof.as_bytes(),
+            terminal_guard_protocol: witness.eq.terminal_guard_protocol,
+            terminal_guard_eq_protocol_digest,
+            terminal_guard_ep_protocol_digest,
+            terminal_guard_instances: witness.eq.terminal_guard_instances,
+            terminal_guard_proof: witness.eq.terminal_guard_proof,
+            terminal_guard_history: &eq_terminal_history,
+            terminal_guard_history_fold_proof: witness
+                .eq
+                .terminal_guard_history_fold_proof
+                .as_bytes(),
+            merge_fold_proof: witness.eq.merge_fold_proof.as_bytes(),
+            successor_history: witness.eq.successor_history.as_bytes(),
+        },
+    )
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn build_terminal_authorization_ep_scalar_from_witness_v1(
+    ep_params: &ParamsIPA<EpAffine>,
+    witness: &KagemushaTerminalAuthorizationWitnessV1<'_>,
+    terminal_guard_eq_protocol_digest: DigestV1,
+    terminal_guard_ep_protocol_digest: DigestV1,
+) -> Result<
+    (
+        BaseCircuitBuilder<Fq>,
+        PastaSha256JobsV1<Fq>,
+        KagemushaDeferredParentOutputV1<EpAffine>,
+    ),
+    String,
+> {
+    let ep_candidate_history = witness
+        .ep
+        .candidate_history
+        .to_native()
+        .map_err(|error| error.to_string())?;
     let ep_terminal_history = witness
         .ep
         .terminal_guard_history
         .to_native()
         .map_err(|error| error.to_string())?;
-    let eq_svk = super::composite::eq_succinct_vk(eq_params);
     let ep_svk = super::composite::ep_succinct_vk(ep_params);
-    let (mut eq_builder, eq_sha, eq_output) =
-        build_terminal_authorization_scalar_half_v1::<EqAffine>(
-            &eq_svk,
-            KagemushaPastaParityV1::Eq,
-            KagemushaTerminalRelationV1::TerminalAuthorization,
-            &witness.public,
-            TerminalAuthorizationParityWitnessV1 {
-                private_transition: &witness.private_transition,
-                terminal_guard_relation: &witness.terminal_guard_relation,
-                enabled_hardware_profiles: &witness.enabled_hardware_profiles,
-                candidate_protocol: witness.eq.candidate_protocol,
-                candidate_instances: witness.eq.candidate_instances,
-                candidate_proof: witness.eq.candidate_proof,
-                candidate_history: &eq_candidate_history,
-                candidate_history_fold_proof: witness.eq.candidate_history_fold_proof.as_bytes(),
-                terminal_guard_protocol: witness.eq.terminal_guard_protocol,
-                terminal_guard_eq_protocol_digest,
-                terminal_guard_ep_protocol_digest,
-                terminal_guard_instances: witness.eq.terminal_guard_instances,
-                terminal_guard_proof: witness.eq.terminal_guard_proof,
-                terminal_guard_history: &eq_terminal_history,
-                terminal_guard_history_fold_proof: witness
-                    .eq
-                    .terminal_guard_history_fold_proof
-                    .as_bytes(),
-                merge_fold_proof: witness.eq.merge_fold_proof.as_bytes(),
-                successor_history: witness.eq.successor_history.as_bytes(),
-            },
-        )?;
-    let (mut ep_builder, ep_sha, ep_output) =
-        build_terminal_authorization_scalar_half_v1::<EpAffine>(
-            &ep_svk,
-            KagemushaPastaParityV1::Ep,
-            KagemushaTerminalRelationV1::TerminalAuthorization,
-            &witness.public,
-            TerminalAuthorizationParityWitnessV1 {
-                private_transition: &witness.private_transition,
-                terminal_guard_relation: &witness.terminal_guard_relation,
-                enabled_hardware_profiles: &witness.enabled_hardware_profiles,
-                candidate_protocol: witness.ep.candidate_protocol,
-                candidate_instances: witness.ep.candidate_instances,
-                candidate_proof: witness.ep.candidate_proof,
-                candidate_history: &ep_candidate_history,
-                candidate_history_fold_proof: witness.ep.candidate_history_fold_proof.as_bytes(),
-                terminal_guard_protocol: witness.ep.terminal_guard_protocol,
-                terminal_guard_eq_protocol_digest,
-                terminal_guard_ep_protocol_digest,
-                terminal_guard_instances: witness.ep.terminal_guard_instances,
-                terminal_guard_proof: witness.ep.terminal_guard_proof,
-                terminal_guard_history: &ep_terminal_history,
-                terminal_guard_history_fold_proof: witness
-                    .ep
-                    .terminal_guard_history_fold_proof
-                    .as_bytes(),
-                merge_fold_proof: witness.ep.merge_fold_proof.as_bytes(),
-                successor_history: witness.ep.successor_history.as_bytes(),
-            },
-        )?;
-
-    let mut eq_dense = PastaDenseMsmJobsV1::default();
-    constrain_reciprocal_parent_pass_v1::<EpAffine>(
-        &mut eq_builder,
+    build_terminal_authorization_scalar_half_v1::<EpAffine>(
+        &ep_svk,
         KagemushaPastaParityV1::Ep,
-        &ep_output,
-        &mut eq_dense,
+        KagemushaTerminalRelationV1::TerminalAuthorization,
+        &witness.public,
+        TerminalAuthorizationParityWitnessV1 {
+            private_transition: &witness.private_transition,
+            terminal_guard_relation: &witness.terminal_guard_relation,
+            enabled_hardware_profiles: &witness.enabled_hardware_profiles,
+            candidate_protocol: witness.ep.candidate_protocol,
+            candidate_instances: witness.ep.candidate_instances,
+            candidate_proof: witness.ep.candidate_proof,
+            candidate_history: &ep_candidate_history,
+            candidate_history_fold_proof: witness.ep.candidate_history_fold_proof.as_bytes(),
+            terminal_guard_protocol: witness.ep.terminal_guard_protocol,
+            terminal_guard_eq_protocol_digest,
+            terminal_guard_ep_protocol_digest,
+            terminal_guard_instances: witness.ep.terminal_guard_instances,
+            terminal_guard_proof: witness.ep.terminal_guard_proof,
+            terminal_guard_history: &ep_terminal_history,
+            terminal_guard_history_fold_proof: witness
+                .ep
+                .terminal_guard_history_fold_proof
+                .as_bytes(),
+            merge_fold_proof: witness.ep.merge_fold_proof.as_bytes(),
+            successor_history: witness.ep.successor_history.as_bytes(),
+        },
+    )
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn terminal_authorization_public_values_v1<F: KagemushaPoseidonFieldV1>(
+    public: &KagemushaTerminalAuthorizationPublicInputsV1,
+    successor_history: &[u8; super::KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1],
+) -> Result<Vec<F>, String> {
+    use crate::zk::kagemusha_v1_poseidon::from_u128;
+
+    let mut values = public.public_prefix::<F>()?;
+    values.extend(successor_history.chunks_exact(16).map(|chunk| {
+        from_u128::<F>(u128::from_le_bytes(
+            chunk
+                .try_into()
+                .expect("fixed history chunks are sixteen bytes"),
+        ))
+    }));
+    if values.len() != TERMINAL_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1 {
+        return Err("terminal-authorization public instance ABI mismatch".to_owned());
+    }
+    Ok(values)
+}
+
+/// Discover both terminal-authorization audits while retaining no scalar Base graph.
+#[cfg(feature = "zk-halo2-ipa")]
+pub(crate) fn derive_kagemusha_terminal_authorization_deferred_audits_v1(
+    eq_params: &ParamsIPA<EqAffine>,
+    ep_params: &ParamsIPA<EpAffine>,
+    witness: &KagemushaTerminalAuthorizationWitnessV1<'_>,
+) -> Result<KagemushaTerminalAuthorizationDeferredAuditsV1, String> {
+    let (terminal_guard_eq_protocol_digest, terminal_guard_ep_protocol_digest) =
+        validate_terminal_authorization_pair_witness_v1(witness)?;
+    let (eq_builder, eq_sha, eq_output) = build_terminal_authorization_eq_scalar_from_witness_v1(
+        eq_params,
+        witness,
+        terminal_guard_eq_protocol_digest,
+        terminal_guard_ep_protocol_digest,
     )?;
-    let mut ep_dense = PastaDenseMsmJobsV1::default();
-    constrain_reciprocal_parent_pass_v1::<EqAffine>(
-        &mut ep_builder,
-        KagemushaPastaParityV1::Eq,
-        &eq_output,
-        &mut ep_dense,
+    let eq_digest = super::composite::assigned_digest_bytes(&eq_output.audit_digest_limbs)?;
+    drop(eq_builder);
+    drop(eq_sha);
+    halo2_proofs::release_allocator_slack();
+
+    let (ep_builder, ep_sha, ep_output) = build_terminal_authorization_ep_scalar_from_witness_v1(
+        ep_params,
+        witness,
+        terminal_guard_eq_protocol_digest,
+        terminal_guard_ep_protocol_digest,
     )?;
-    eq_builder.calculate_params(Some(MINIMUM_UNUSABLE_ROWS));
-    ep_builder.calculate_params(Some(MINIMUM_UNUSABLE_ROWS));
+    let ep_digest = super::composite::assigned_digest_bytes(&ep_output.audit_digest_limbs)?;
+    drop(ep_builder);
+    drop(ep_sha);
+    halo2_proofs::release_allocator_slack();
+
+    Ok(KagemushaTerminalAuthorizationDeferredAuditsV1 {
+        eq: eq_output,
+        ep: ep_output,
+        eq_digest,
+        ep_digest,
+    })
+}
+
+/// Build the exact Eq terminal-authorization circuit from compact reciprocal audits.
+#[cfg(feature = "zk-halo2-ipa")]
+pub(crate) fn build_kagemusha_terminal_authorization_eq_v1(
+    eq_params: &ParamsIPA<EqAffine>,
+    witness: &KagemushaTerminalAuthorizationWitnessV1<'_>,
+    audits: &KagemushaTerminalAuthorizationDeferredAuditsV1,
+) -> Result<(KagemushaTerminalAuthorizationEqCircuitV1, Vec<Fp>), String> {
+    let (terminal_guard_eq_protocol_digest, terminal_guard_ep_protocol_digest) =
+        validate_terminal_authorization_pair_witness_v1(witness)?;
+    if witness.public.eq_deferred_audit != audits.eq_digest
+        || witness.public.ep_deferred_audit != audits.ep_digest
+    {
+        return Err(
+            "terminal authorization public values do not bind the derived audit pair".to_owned(),
+        );
+    }
+    let public_values = terminal_authorization_public_values_v1::<Fp>(
+        &witness.public,
+        witness.eq.successor_history.as_bytes(),
+    )?;
+    let (mut builder, sha_jobs, output) = build_terminal_authorization_eq_scalar_from_witness_v1(
+        eq_params,
+        witness,
+        terminal_guard_eq_protocol_digest,
+        terminal_guard_ep_protocol_digest,
+    )?;
+    let mut dense_jobs = PastaDenseMsmJobsV1::default();
+    constrain_reciprocal_parent_pass_v1::<EpAffine>(
+        &mut builder,
+        KagemushaPastaParityV1::Ep,
+        &audits.ep,
+        &mut dense_jobs,
+    )?;
+    builder.calculate_params(Some(MINIMUM_UNUSABLE_ROWS));
     let usable_rows = (1_usize << super::KAGEMUSHA_RECURSION_IPA_K_V1) - MINIMUM_UNUSABLE_ROWS;
-    eq_sha.validate_capacity(usable_rows)?;
-    ep_sha.validate_capacity(usable_rows)?;
-    eq_dense.validate_capacity(usable_rows)?;
-    ep_dense.validate_capacity(usable_rows)?;
-    let eq_audit = super::composite::assigned_digest_bytes(&eq_output.audit_digest_limbs)?;
-    let ep_audit = super::composite::assigned_digest_bytes(&ep_output.audit_digest_limbs)?;
+    sha_jobs.validate_capacity(usable_rows)?;
+    dense_jobs.validate_capacity(usable_rows)?;
+    if super::composite::assigned_digest_bytes(&output.audit_digest_limbs)? != audits.eq_digest {
+        return Err(
+            "Eq terminal-authorization audit changed after exact public rebinding".to_owned(),
+        );
+    }
     Ok((
         KagemushaTerminalAuthorizationEqCircuitV1 {
-            builder: eq_builder,
-            sha_jobs: eq_sha,
-            dense_jobs: eq_dense,
+            builder,
+            sha_jobs,
+            dense_jobs,
         },
-        KagemushaTerminalAuthorizationEpCircuitV1 {
-            builder: ep_builder,
-            sha_jobs: ep_sha,
-            dense_jobs: ep_dense,
-        },
-        eq_audit,
-        ep_audit,
+        public_values,
     ))
 }
 
-/// Build the mutually audited, key-distinct postcommit wrapper pair.
+/// Build the exact Ep terminal-authorization circuit from compact reciprocal audits.
 #[cfg(feature = "zk-halo2-ipa")]
-pub(crate) fn build_kagemusha_commit_wrapper_pair_v1(
-    eq_params: &ParamsIPA<EqAffine>,
+pub(crate) fn build_kagemusha_terminal_authorization_ep_v1(
     ep_params: &ParamsIPA<EpAffine>,
-    witness: KagemushaCommitWrapperWitnessV1<'_>,
-) -> Result<
-    (
-        KagemushaCommitWrapperEqCircuitV1,
-        KagemushaCommitWrapperEpCircuitV1,
-        DigestV1,
-        DigestV1,
-    ),
-    String,
-> {
+    witness: &KagemushaTerminalAuthorizationWitnessV1<'_>,
+    audits: &KagemushaTerminalAuthorizationDeferredAuditsV1,
+) -> Result<(KagemushaTerminalAuthorizationEpCircuitV1, Vec<Fq>), String> {
+    let (terminal_guard_eq_protocol_digest, terminal_guard_ep_protocol_digest) =
+        validate_terminal_authorization_pair_witness_v1(witness)?;
+    if witness.public.eq_deferred_audit != audits.eq_digest
+        || witness.public.ep_deferred_audit != audits.ep_digest
+    {
+        return Err(
+            "terminal authorization public values do not bind the derived audit pair".to_owned(),
+        );
+    }
+    let public_values = terminal_authorization_public_values_v1::<Fq>(
+        &witness.public,
+        witness.ep.successor_history.as_bytes(),
+    )?;
+    let (mut builder, sha_jobs, output) = build_terminal_authorization_ep_scalar_from_witness_v1(
+        ep_params,
+        witness,
+        terminal_guard_eq_protocol_digest,
+        terminal_guard_ep_protocol_digest,
+    )?;
+    let mut dense_jobs = PastaDenseMsmJobsV1::default();
+    constrain_reciprocal_parent_pass_v1::<EqAffine>(
+        &mut builder,
+        KagemushaPastaParityV1::Eq,
+        &audits.eq,
+        &mut dense_jobs,
+    )?;
+    builder.calculate_params(Some(MINIMUM_UNUSABLE_ROWS));
+    let usable_rows = (1_usize << super::KAGEMUSHA_RECURSION_IPA_K_V1) - MINIMUM_UNUSABLE_ROWS;
+    sha_jobs.validate_capacity(usable_rows)?;
+    dense_jobs.validate_capacity(usable_rows)?;
+    if super::composite::assigned_digest_bytes(&output.audit_digest_limbs)? != audits.ep_digest {
+        return Err(
+            "Ep terminal-authorization audit changed after exact public rebinding".to_owned(),
+        );
+    }
+    Ok((
+        KagemushaTerminalAuthorizationEpCircuitV1 {
+            builder,
+            sha_jobs,
+            dense_jobs,
+        },
+        public_values,
+    ))
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn validate_commit_wrapper_pair_witness_v1(
+    witness: &KagemushaCommitWrapperWitnessV1<'_>,
+) -> Result<(DigestV1, DigestV1), String> {
     witness.public.validate()?;
     let terminal_authorization_eq_protocol_digest = native_parent_protocol_digest_v1(
         witness.eq.terminal_authorization_protocol,
@@ -1794,53 +1996,154 @@ pub(crate) fn build_kagemusha_commit_wrapper_pair_v1(
     if terminal_authorization_eq_protocol_digest == terminal_authorization_ep_protocol_digest {
         return Err("terminal-authorization parity protocols alias".to_owned());
     }
+    Ok((
+        terminal_authorization_eq_protocol_digest,
+        terminal_authorization_ep_protocol_digest,
+    ))
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn build_commit_wrapper_eq_scalar_from_witness_v1(
+    eq_params: &ParamsIPA<EqAffine>,
+    witness: &KagemushaCommitWrapperWitnessV1<'_>,
+    terminal_authorization_eq_protocol_digest: DigestV1,
+    terminal_authorization_ep_protocol_digest: DigestV1,
+) -> Result<
+    (
+        BaseCircuitBuilder<Fp>,
+        KagemushaDeferredParentOutputV1<EqAffine>,
+        Vec<AssignedValue<Fp>>,
+    ),
+    String,
+> {
     let eq_terminal_history = witness
         .eq
         .terminal_authorization_history
         .to_native()
         .map_err(|error| error.to_string())?;
+    let eq_svk = super::composite::eq_succinct_vk(eq_params);
+    build_commit_wrapper_scalar_half_v1::<EqAffine>(
+        &eq_svk,
+        KagemushaPastaParityV1::Eq,
+        &witness.public,
+        terminal_authorization_eq_protocol_digest,
+        terminal_authorization_ep_protocol_digest,
+        witness.eq.terminal_authorization_protocol,
+        witness.eq.terminal_authorization_instances,
+        witness.eq.terminal_authorization_proof,
+        &eq_terminal_history,
+        witness
+            .eq
+            .terminal_authorization_history_fold_proof
+            .as_bytes(),
+        witness.eq.successor_history.as_bytes(),
+    )
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn build_commit_wrapper_ep_scalar_from_witness_v1(
+    ep_params: &ParamsIPA<EpAffine>,
+    witness: &KagemushaCommitWrapperWitnessV1<'_>,
+    terminal_authorization_eq_protocol_digest: DigestV1,
+    terminal_authorization_ep_protocol_digest: DigestV1,
+) -> Result<
+    (
+        BaseCircuitBuilder<Fq>,
+        KagemushaDeferredParentOutputV1<EpAffine>,
+        Vec<AssignedValue<Fq>>,
+    ),
+    String,
+> {
     let ep_terminal_history = witness
         .ep
         .terminal_authorization_history
         .to_native()
         .map_err(|error| error.to_string())?;
-    let eq_svk = super::composite::eq_succinct_vk(eq_params);
     let ep_svk = super::composite::ep_succinct_vk(ep_params);
-    let (mut eq_builder, eq_output, eq_inner_binding_cells) =
-        build_commit_wrapper_scalar_half_v1::<EqAffine>(
-            &eq_svk,
-            KagemushaPastaParityV1::Eq,
-            &witness.public,
-            terminal_authorization_eq_protocol_digest,
-            terminal_authorization_ep_protocol_digest,
-            witness.eq.terminal_authorization_protocol,
-            witness.eq.terminal_authorization_instances,
-            witness.eq.terminal_authorization_proof,
-            &eq_terminal_history,
-            witness
-                .eq
-                .terminal_authorization_history_fold_proof
-                .as_bytes(),
-            witness.eq.successor_history.as_bytes(),
-        )?;
-    let (mut ep_builder, ep_output, ep_inner_binding_cells) =
-        build_commit_wrapper_scalar_half_v1::<EpAffine>(
-            &ep_svk,
-            KagemushaPastaParityV1::Ep,
-            &witness.public,
-            terminal_authorization_eq_protocol_digest,
-            terminal_authorization_ep_protocol_digest,
-            witness.ep.terminal_authorization_protocol,
-            witness.ep.terminal_authorization_instances,
-            witness.ep.terminal_authorization_proof,
-            &ep_terminal_history,
-            witness
-                .ep
-                .terminal_authorization_history_fold_proof
-                .as_bytes(),
-            witness.ep.successor_history.as_bytes(),
-        )?;
+    build_commit_wrapper_scalar_half_v1::<EpAffine>(
+        &ep_svk,
+        KagemushaPastaParityV1::Ep,
+        &witness.public,
+        terminal_authorization_eq_protocol_digest,
+        terminal_authorization_ep_protocol_digest,
+        witness.ep.terminal_authorization_protocol,
+        witness.ep.terminal_authorization_instances,
+        witness.ep.terminal_authorization_proof,
+        &ep_terminal_history,
+        witness
+            .ep
+            .terminal_authorization_history_fold_proof
+            .as_bytes(),
+        witness.ep.successor_history.as_bytes(),
+    )
+}
 
+/// Discover both commit-wrapper audits while retaining no scalar Base graph.
+#[cfg(feature = "zk-halo2-ipa")]
+pub(crate) fn derive_kagemusha_commit_wrapper_deferred_audits_v1(
+    eq_params: &ParamsIPA<EqAffine>,
+    ep_params: &ParamsIPA<EpAffine>,
+    witness: &KagemushaCommitWrapperWitnessV1<'_>,
+) -> Result<KagemushaCommitWrapperDeferredAuditsV1, String> {
+    let (terminal_authorization_eq_protocol_digest, terminal_authorization_ep_protocol_digest) =
+        validate_commit_wrapper_pair_witness_v1(witness)?;
+    let (eq_builder, eq_output, eq_inner_binding_cells) =
+        build_commit_wrapper_eq_scalar_from_witness_v1(
+            eq_params,
+            witness,
+            terminal_authorization_eq_protocol_digest,
+            terminal_authorization_ep_protocol_digest,
+        )?;
+    let eq_digest = super::composite::assigned_digest_bytes(&eq_output.audit_digest_limbs)?;
+    drop(eq_builder);
+    drop(eq_inner_binding_cells);
+    halo2_proofs::release_allocator_slack();
+
+    let (ep_builder, ep_output, ep_inner_binding_cells) =
+        build_commit_wrapper_ep_scalar_from_witness_v1(
+            ep_params,
+            witness,
+            terminal_authorization_eq_protocol_digest,
+            terminal_authorization_ep_protocol_digest,
+        )?;
+    let ep_digest = super::composite::assigned_digest_bytes(&ep_output.audit_digest_limbs)?;
+    drop(ep_builder);
+    drop(ep_inner_binding_cells);
+    halo2_proofs::release_allocator_slack();
+
+    Ok(KagemushaCommitWrapperDeferredAuditsV1 {
+        eq: eq_output,
+        ep: ep_output,
+        eq_digest,
+        ep_digest,
+    })
+}
+
+/// Build the exact Eq commit-wrapper circuit from compact reciprocal audits.
+#[cfg(feature = "zk-halo2-ipa")]
+pub(crate) fn build_kagemusha_commit_wrapper_eq_v1(
+    eq_params: &ParamsIPA<EqAffine>,
+    witness: &KagemushaCommitWrapperWitnessV1<'_>,
+    audits: &KagemushaCommitWrapperDeferredAuditsV1,
+) -> Result<(KagemushaCommitWrapperEqCircuitV1, Vec<Fp>), String> {
+    let (terminal_authorization_eq_protocol_digest, terminal_authorization_ep_protocol_digest) =
+        validate_commit_wrapper_pair_witness_v1(witness)?;
+    if witness.public.eq_deferred_audit != audits.eq_digest
+        || witness.public.ep_deferred_audit != audits.ep_digest
+    {
+        return Err("commit wrapper public values do not bind the derived audit pair".to_owned());
+    }
+    let public_values = terminal_authorization_public_values_v1::<Fp>(
+        &witness.public,
+        witness.eq.successor_history.as_bytes(),
+    )?;
+    let (mut eq_builder, eq_output, eq_inner_binding_cells) =
+        build_commit_wrapper_eq_scalar_from_witness_v1(
+            eq_params,
+            witness,
+            terminal_authorization_eq_protocol_digest,
+            terminal_authorization_ep_protocol_digest,
+        )?;
     let eq_expected_ep_audit: [AssignedValue<Fp>; 2] = eq_builder
         .assigned_instances
         .first()
@@ -1854,10 +2157,47 @@ pub(crate) fn build_kagemusha_commit_wrapper_pair_v1(
         .map_err(|_| "Eq authorization Ep audit has the wrong shape".to_owned())?;
     constrain_reciprocal_output_with_u128_binding_serialized_v1::<EpAffine>(
         &mut eq_builder,
-        &ep_output,
+        &audits.ep,
         &eq_expected_ep_audit,
         &eq_inner_binding_cells,
     )?;
+    eq_builder.calculate_params(Some(MINIMUM_UNUSABLE_ROWS));
+    if super::composite::assigned_digest_bytes(&eq_output.audit_digest_limbs)? != audits.eq_digest {
+        return Err("Eq commit-wrapper audit changed after exact public rebinding".to_owned());
+    }
+    Ok((
+        KagemushaCommitWrapperEqCircuitV1 {
+            builder: eq_builder,
+        },
+        public_values,
+    ))
+}
+
+/// Build the exact Ep commit-wrapper circuit from compact reciprocal audits.
+#[cfg(feature = "zk-halo2-ipa")]
+pub(crate) fn build_kagemusha_commit_wrapper_ep_v1(
+    ep_params: &ParamsIPA<EpAffine>,
+    witness: &KagemushaCommitWrapperWitnessV1<'_>,
+    audits: &KagemushaCommitWrapperDeferredAuditsV1,
+) -> Result<(KagemushaCommitWrapperEpCircuitV1, Vec<Fq>), String> {
+    let (terminal_authorization_eq_protocol_digest, terminal_authorization_ep_protocol_digest) =
+        validate_commit_wrapper_pair_witness_v1(witness)?;
+    if witness.public.eq_deferred_audit != audits.eq_digest
+        || witness.public.ep_deferred_audit != audits.ep_digest
+    {
+        return Err("commit wrapper public values do not bind the derived audit pair".to_owned());
+    }
+    let public_values = terminal_authorization_public_values_v1::<Fq>(
+        &witness.public,
+        witness.ep.successor_history.as_bytes(),
+    )?;
+    let (mut ep_builder, ep_output, ep_inner_binding_cells) =
+        build_commit_wrapper_ep_scalar_from_witness_v1(
+            ep_params,
+            witness,
+            terminal_authorization_eq_protocol_digest,
+            terminal_authorization_ep_protocol_digest,
+        )?;
     let ep_expected_eq_audit: [AssignedValue<Fq>; 2] = ep_builder
         .assigned_instances
         .first()
@@ -1871,23 +2211,19 @@ pub(crate) fn build_kagemusha_commit_wrapper_pair_v1(
         .map_err(|_| "Ep authorization Eq audit has the wrong shape".to_owned())?;
     constrain_reciprocal_output_with_u128_binding_serialized_v1::<EqAffine>(
         &mut ep_builder,
-        &eq_output,
+        &audits.eq,
         &ep_expected_eq_audit,
         &ep_inner_binding_cells,
     )?;
-    eq_builder.calculate_params(Some(MINIMUM_UNUSABLE_ROWS));
     ep_builder.calculate_params(Some(MINIMUM_UNUSABLE_ROWS));
-    let eq_audit = super::composite::assigned_digest_bytes(&eq_output.audit_digest_limbs)?;
-    let ep_audit = super::composite::assigned_digest_bytes(&ep_output.audit_digest_limbs)?;
+    if super::composite::assigned_digest_bytes(&ep_output.audit_digest_limbs)? != audits.ep_digest {
+        return Err("Ep commit-wrapper audit changed after exact public rebinding".to_owned());
+    }
     Ok((
-        KagemushaCommitWrapperEqCircuitV1 {
-            builder: eq_builder,
-        },
         KagemushaCommitWrapperEpCircuitV1 {
             builder: ep_builder,
         },
-        eq_audit,
-        ep_audit,
+        public_values,
     ))
 }
 
@@ -2188,15 +2524,19 @@ where
         "terminal authorization terminal Guard public column is absent".to_owned()
     })?;
     let gate = halo2_base::gates::GateChip::default();
-    let ticket_low_zero = gate.is_zero(
+    let receiver_binding_low_zero = gate.is_zero(
         loader.ctx_mut().main(),
         public_cells[public_instance::RECEIVER_BINDING_LO],
     );
-    let ticket_high_zero = gate.is_zero(
+    let receiver_binding_high_zero = gate.is_zero(
         loader.ctx_mut().main(),
         public_cells[public_instance::RECEIVER_BINDING_LO + 1],
     );
-    let ticket_zero = gate.and(loader.ctx_mut().main(), ticket_low_zero, ticket_high_zero);
+    let receiver_binding_zero = gate.and(
+        loader.ctx_mut().main(),
+        receiver_binding_low_zero,
+        receiver_binding_high_zero,
+    );
     let nullifier_low_zero = gate.is_zero(
         loader.ctx_mut().main(),
         public_cells[public_instance::TRANSITION_NULLIFIER_LO],
@@ -2210,7 +2550,11 @@ where
         nullifier_low_zero,
         nullifier_high_zero,
     );
-    let authorization_branch = gate.and(loader.ctx_mut().main(), ticket_zero, nullifier_zero);
+    let authorization_branch = gate.and(
+        loader.ctx_mut().main(),
+        receiver_binding_zero,
+        nullifier_zero,
+    );
     for (guard_offset, authorization_offset) in [
         (GUARD_EQ_AUDIT_OFFSET_V1, public_instance::CIPHERTEXT_LO),
         (GUARD_EP_AUDIT_OFFSET_V1, public_instance::OUTPUT_BINDING_LO),
@@ -2737,9 +3081,10 @@ pub(super) fn constrain_receiver_credential_lane_v1<F: KagemushaPoseidonFieldV1>
 
 /// Shared private transcript for the sender's terminal proof and each receiver slot.
 ///
-/// The six digests are credit ID, fresh ticket key, receiver lane, prepared transfer, payment
-/// output, and incoming claims. Only the resulting digest is public, never the lane. Amount,
-/// request, ticket, and opening commitment also retain their direct public-instance equalities.
+/// The six digests are credit ID, recipient encryption key, receiver lane, prepared transfer,
+/// payment output, and incoming claims. Only the resulting digest is public, never the lane.
+/// Amount, request, sender-state pair, and opening commitment also retain their direct
+/// public-instance equalities.
 #[cfg(feature = "zk-halo2-ipa")]
 pub(super) fn hash_terminal_send_output_binding_v1<F: KagemushaPoseidonFieldV1>(
     ctx: &mut Context<F>,
@@ -2933,8 +3278,15 @@ fn constrain_terminal_send_opening_v1<F: KagemushaPoseidonFieldV1>(
     let peer_credit = assigned_limbs_to_bytes_v1(ctx, range, guard.peer_credit_id);
     constrain_transcript_bytes_if_v1(ctx, range, send, &output[146..178], &peer_credit);
     // SendSplit's peer-recipient cell carries the request-owned encryption key.
-    let peer_recipient = assigned_limbs_to_bytes_v1(ctx, range, guard.peer_recipient_lane_id);
-    constrain_transcript_bytes_if_v1(ctx, range, send, &request[214..246], &peer_recipient);
+    let recipient_encryption_key =
+        assigned_limbs_to_bytes_v1(ctx, range, guard.recipient_encryption_key_binding);
+    constrain_transcript_bytes_if_v1(
+        ctx,
+        range,
+        send,
+        &request[214..246],
+        &recipient_encryption_key,
+    );
     let evidence_tag = assign_fixed_uint_v1(
         ctx,
         range,
@@ -3630,8 +3982,8 @@ fn constrain_terminal_commit_semantics_v1<F: KagemushaPoseidonFieldV1>(
     );
     let amount_bytes =
         assigned_value_to_bytes_v1(ctx, &range, public[public_instance::AMOUNT], 128);
-    let precommit_message = [
-        constant_bytes(PRECOMMIT_BINDING_DOMAIN_V1),
+    let prepared_transition_message = [
+        constant_bytes(PREPARED_TRANSITION_BINDING_DOMAIN_V1),
         constant_bytes(&1_u16.to_le_bytes()),
         lifecycle_bytes.clone(),
         request_digest_bytes.clone(),
@@ -3642,10 +3994,10 @@ fn constrain_terminal_commit_semantics_v1<F: KagemushaPoseidonFieldV1>(
         prepared_authorization.to_vec(),
     ]
     .concat();
-    let precommit = hash(ctx, jobs, precommit_message)?;
-    for (actual, expected) in digest_limbs_assigned(ctx, &precommit)
+    let prepared_transition = hash(ctx, jobs, prepared_transition_message)?;
+    for (actual, expected) in digest_limbs_assigned(ctx, &prepared_transition)
         .into_iter()
-        .zip(guard.precommit_binding_digest)
+        .zip(guard.prepared_transition_binding_digest)
     {
         constrain_equal_if_v1(ctx, &range, terminal_branch, actual, expected);
     }
@@ -3682,7 +4034,7 @@ fn constrain_terminal_commit_semantics_v1<F: KagemushaPoseidonFieldV1>(
         constant_bytes(&1_u16.to_le_bytes()),
         vec![operation_byte],
         lifecycle_bytes,
-        precommit.to_vec(),
+        prepared_transition.to_vec(),
         candidate_envelope.to_vec(),
         certificate_digest.to_vec(),
         certificate_id.to_vec(),
@@ -3846,8 +4198,8 @@ where
             guard.peer_credit_id,
         ),
         (
-            state_relation::public_instance::PEER_RECIPIENT_LANE_LO,
-            guard.peer_recipient_lane_id,
+            state_relation::public_instance::RECIPIENT_ENCRYPTION_KEY_LO,
+            guard.recipient_encryption_key_binding,
         ),
         (
             state_relation::public_instance::MINT_PROOF_BINDING_LO,
@@ -3858,8 +4210,8 @@ where
             guard.lifecycle_binding_digest,
         ),
         (
-            state_relation::public_instance::PRECOMMIT_LO,
-            guard.precommit_binding_digest,
+            state_relation::public_instance::PREPARED_TRANSITION_LO,
+            guard.prepared_transition_binding_digest,
         ),
         (
             state_relation::public_instance::PREDECESSOR_SUITE_LO,
@@ -4130,13 +4482,13 @@ mod tests {
     fn terminal_public_requires_postcommit_send_and_preserves_redemption_padding() {
         let send = terminal_public();
         send.validate().expect("actual postcommit send projection");
-        let mut missing_transition = send.clone();
-        missing_transition.transition_nullifier = [0; 32];
-        missing_transition.receiver_binding_digest = [0; 32];
-        assert!(missing_transition.validate().is_err());
-        let mut missing_receiver = send.clone();
-        missing_receiver.receiver_binding_digest = [0; 32];
-        assert!(missing_receiver.validate().is_err());
+        let mut missing_nullifier = send.clone();
+        missing_nullifier.transition_nullifier = [0; 32];
+        missing_nullifier.receiver_binding_digest = [0; 32];
+        assert!(missing_nullifier.validate().is_err());
+        let mut missing_receiver_binding = send.clone();
+        missing_receiver_binding.receiver_binding_digest = [0; 32];
+        assert!(missing_receiver_binding.validate().is_err());
         let mut missing_commit = send.clone();
         missing_commit.commit_certificate_digest = [0; 32];
         assert!(missing_commit.validate().is_err());
@@ -4178,7 +4530,7 @@ mod tests {
 
     #[cfg(feature = "zk-halo2-ipa")]
     #[test]
-    fn terminal_public_circuit_accepts_send_and_redeem() {
+    fn terminal_public_circuit_accepts_direct_request_send_and_redeem() {
         use halo2_base::gates::circuit::builder::BaseCircuitBuilder;
         use halo2_proofs::{dev::MockProver, halo2curves::pasta::Fp};
 
@@ -4309,8 +4661,8 @@ mod tests {
                 .expect("exact Ep semantic column")
         );
 
-        // The old state widths are deliberately literal regression cases. A complete current
-        // recursive column is also invalid here: this helper consumes only semantic state cells.
+        // Representative malformed widths remain literal regression cases. A complete recursive
+        // column is also invalid here: this helper consumes only semantic state cells.
         for length in [
             0,
             81,
@@ -4340,9 +4692,9 @@ mod tests {
     fn predecessor_conflict_nullifier_is_successor_independent() {
         let prepared = [0x51; 32];
         let terminal = canonical_predecessor_conflict_nullifier_v1(prepared);
-        let cancellation = canonical_predecessor_conflict_nullifier_v1(prepared);
+        let repeated = canonical_predecessor_conflict_nullifier_v1(prepared);
         assert_ne!(terminal, [0; 32]);
-        assert_eq!(terminal, cancellation);
+        assert_eq!(terminal, repeated);
         assert_ne!(
             terminal,
             canonical_predecessor_conflict_nullifier_v1([0x52; 32])

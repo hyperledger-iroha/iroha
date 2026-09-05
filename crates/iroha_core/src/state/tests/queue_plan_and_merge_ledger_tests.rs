@@ -555,7 +555,7 @@ state_test! { sync same_block_merge_and_lane_replacement_preserves_history_and_p
     );
 }
 state_test! { sync empty_and_zero_activation_merge_entries_fail_live_and_recovery_with_same_rule
-    let_row! { empty = MergeLedgerEntry { version: MergeLedgerEntry::VERSION, epoch_id: 1, lane_catalog_hash: Hash::new(b"catalog"), active_lanes: Vec::new(), incarnation_root: Hash::new(b"incarnations"), activation_root: Hash::new(b"activations"), lane_snapshots: Vec::new(), execution_batch: None, lane_drain_certificates: Vec::new(), global_state_root: Hash::new(b"root"), merge_qc: dummy_merge_qc(), } };
+    let_row! { empty = MergeLedgerEntry { version: MergeLedgerEntry::VERSION, epoch_id: 1, lane_catalog_hash: Hash::new(b"catalog"), active_lanes: Vec::new(), lane_authority_catalog: iroha_data_model::merge::MergeLaneAuthorityCatalogV1::default(), incarnation_root: Hash::new(b"incarnations"), activation_root: Hash::new(b"activations"), lane_snapshots: Vec::new(), execution_batch: None, lane_drain_certificates: Vec::new(), global_state_root: Hash::new(b"root"), merge_qc: dummy_merge_qc(), } };
     let_row! { mut zero_activation = merge_entry_from_candidate(merge_candidate_with_lanes(1, 1), dummy_merge_qc()) };
     zero_activation.active_lanes[0].activation_height = 0;
     for (label, entry, expected_live, expected_recovery) in [
@@ -1978,8 +1978,13 @@ state_test! { sync commit_merge_entry_rejects_unknown_catalog_lane
     let state = State::new_for_testing(World::default(), kura, query);
 
     let commit_keypairs = configure_commit_topology(&state, 1);
-    let (_, validator_keypair) = bls_account_in("validators");
-    let signers = [&validator_keypair];
+    let (validator_ids, validator_keypairs) = bls_accounts_in("validators", 4);
+    seed_consensus_keys_with_pops(&state, &validator_keypairs);
+    install_lane_manifest_registry(
+        &state,
+        &[(LaneId::SINGLE, DataSpaceId::UNIVERSAL, validator_ids)],
+    );
+    let signers = validator_keypairs.iter().collect::<Vec<_>>();
     let_row! { envelope = sample_lane_relay_envelope( 2, LaneId::new(1), &signers, full_signer_bitmap(signers.len()), ) };
     state
         .lane_relays
@@ -2005,6 +2010,25 @@ state_test! { sync commit_merge_entry_rejects_stale_geometry_for_removed_catalog
     let state = State::new_for_testing(World::default(), kura, query);
     let stale_lane = LaneId::new(1);
     let_row! { stale_geometry_catalog = LaneCatalog::new( nonzero!(2_u32), vec![ LaneConfig::default(), LaneConfig { id: stale_lane, alias: "stale-merge".to_owned(), ..LaneConfig::default() }, ], ) .expect("stale lane geometry") };
+    let commit_keypairs = configure_commit_topology(&state, 1);
+    let (validator_ids, validator_keypairs) = bls_accounts_in("validators", 4);
+    seed_consensus_keys_with_pops(&state, &validator_keypairs);
+    install_lane_manifest_registry(
+        &state,
+        &[(LaneId::SINGLE, DataSpaceId::UNIVERSAL, validator_ids)],
+    );
+    let signers = validator_keypairs.iter().collect::<Vec<_>>();
+    let_row! { envelope = sample_lane_relay_envelope(2, stale_lane, &signers, full_signer_bitmap(signers.len())) };
+    state
+        .lane_relays
+        .write()
+        .insert(envelope.clone())
+        .expect("seed stale relay cache");
+    ensure_merge_carrier_parent_for_test(&state);
+    let candidate = merge_candidate_from_relay(&state, 1, &envelope);
+    let qc = merge_qc_for_candidate(&state, &candidate, &commit_keypairs, &[0]);
+    let entry = merge_entry_from_candidate(candidate, qc);
+    // Seed stale derived geometry after binding the candidate to valid primary-lane authority.
     {
         let mut nexus = state.nexus.write();
         install_test_nexus_lane_catalog(
@@ -2026,19 +2050,6 @@ state_test! { sync commit_merge_entry_rejects_stale_geometry_for_removed_catalog
             "test must keep stale lane out of the authoritative catalog"
         );
     }
-    let commit_keypairs = configure_commit_topology(&state, 1);
-    let (_, validator_keypair) = bls_account_in("validators");
-    let signers = [&validator_keypair];
-    let_row! { envelope = sample_lane_relay_envelope(2, stale_lane, &signers, full_signer_bitmap(signers.len())) };
-    state
-        .lane_relays
-        .write()
-        .insert(envelope.clone())
-        .expect("seed stale relay cache");
-    ensure_merge_carrier_parent_for_test(&state);
-    let candidate = merge_candidate_from_relay(&state, 1, &envelope);
-    let qc = merge_qc_for_candidate(&state, &candidate, &commit_keypairs, &[0]);
-    let entry = merge_entry_from_candidate(candidate, qc);
     let_row! { err = state .commit_merge_entry(entry) .expect_err("stale geometry must not make a removed lane merge-active") };
     assert!(matches!(
         err,
@@ -2051,13 +2062,22 @@ state_test! { sync commit_merge_entry_rejects_future_created_autoscale_lane_snap
     let query = LiveQueryStore::start_test();
     let state = State::new_for_testing(World::default(), kura, query);
     let future_lane = LaneId::new(1);
+    let commit_keypairs = configure_commit_topology(&state, 1);
+    let (validator_ids, validator_keypairs) = bls_accounts_in("validators", 4);
+    seed_consensus_keys_with_pops(&state, &validator_keypairs);
     install_autoscale_elastic_catalog_for_test(
         &state,
-        autoscale_elastic_catalog_lane_for_test(future_lane, 7),
+        autoscale_elastic_catalog_lane_with_committee_for_test(
+            future_lane,
+            1,
+            &validator_keypairs,
+        ),
     );
-    let commit_keypairs = configure_commit_topology(&state, 1);
-    let (_, validator_keypair) = bls_account_in("validators");
-    let signers = [&validator_keypair];
+    install_lane_manifest_registry(
+        &state,
+        &[(LaneId::SINGLE, DataSpaceId::UNIVERSAL, validator_ids)],
+    );
+    let signers = validator_keypairs.iter().collect::<Vec<_>>();
     let_row! { incarnation = state .lane_incarnation(future_lane) .expect("future-created catalog lane has a committed incarnation") };
     let_row! { stale_relay = sample_lane_relay_envelope_with_network_dataspace_view_and_incarnation( 1, future_lane, DataSpaceId::UNIVERSAL, state.network_id_ref(), 0, incarnation, &signers, full_signer_bitmap(signers.len()), ) };
     state
@@ -2069,11 +2089,37 @@ state_test! { sync commit_merge_entry_rejects_future_created_autoscale_lane_snap
     let candidate = merge_candidate_from_relay(&state, 1, &stale_relay);
     let qc = merge_qc_for_candidate(&state, &candidate, &commit_keypairs, &[0]);
     let entry = merge_entry_from_candidate(candidate, qc);
+    let authority_height = entry.merge_qc.carrier_height;
+    // Build the candidate while authority is valid, then make only the lane creation height stale.
+    {
+        let mut nexus = state.nexus.write();
+        let mut lanes = nexus.lane_catalog.lanes().to_vec();
+        lanes
+            .iter_mut()
+            .find(|lane| lane.id == future_lane)
+            .expect("fixture elastic lane")
+            .metadata
+            .insert(
+                iroha_data_model::nexus::AUTOSCALE_META_CREATED_HEIGHT.to_owned(),
+                "7".to_owned(),
+            );
+        nexus.lane_catalog = LaneCatalog::new(nexus.lane_catalog.lane_count(), lanes)
+            .expect("catalog with future-created lane");
+        nexus.lane_config = RuntimeLaneConfig::from_catalog(&nexus.lane_catalog);
+    }
+    let expected_authority_error = LaneAuthorityError::InactiveRoute {
+        lane_id: future_lane,
+        dataspace_id: DataSpaceId::UNIVERSAL,
+        authority_height,
+    };
     let_row! { err = state .commit_merge_entry(entry) .expect_err("merge commit must reject future-created autoscale lane snapshots") };
     assert!(
         matches!(
-            err,
-            MergeLedgerCommitError::UnknownLane { lane_id } if lane_id == future_lane
+            &err,
+            MergeLedgerCommitError::ExecutionBatchInvalid(reason)
+                if reason == &format!(
+                    "merge lane {future_lane} authority is unavailable at height {authority_height}: {expected_authority_error}"
+                )
         ),
         "future-created merge returned unexpected error: {err:?}"
     );
@@ -2085,8 +2131,13 @@ state_test! { sync commit_merge_entry_rejects_catalog_dataspace_mismatch
     let state = State::new_for_testing(World::default(), kura, query);
 
     let commit_keypairs = configure_commit_topology(&state, 1);
-    let (_, validator_keypair) = bls_account_in("validators");
-    let signers = [&validator_keypair];
+    let (validator_ids, validator_keypairs) = bls_accounts_in("validators", 4);
+    seed_consensus_keys_with_pops(&state, &validator_keypairs);
+    install_lane_manifest_registry(
+        &state,
+        &[(LaneId::SINGLE, DataSpaceId::UNIVERSAL, validator_ids)],
+    );
+    let signers = validator_keypairs.iter().collect::<Vec<_>>();
     let unexpected_dataspace = DataSpaceId::new(99);
     let_row! { envelope = sample_lane_relay_envelope_with_dataspace( 2, LaneId::new(0), unexpected_dataspace, &signers, full_signer_bitmap(signers.len()), ) };
     state
@@ -2114,14 +2165,14 @@ state_test! { sync commit_merge_entry_rejects_unknown_dataspace_catalog_entry
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let state = State::new_for_testing(World::default(), kura, query);
-    {
-        let mut nexus = state.nexus.write();
-        nexus.dataspace_catalog =
-            DataSpaceCatalog::new(Vec::new()).expect("empty dataspace catalog");
-    }
     let commit_keypairs = configure_commit_topology(&state, 1);
-    let (_, validator_keypair) = bls_account_in("validators");
-    let signers = [&validator_keypair];
+    let (validator_ids, validator_keypairs) = bls_accounts_in("validators", 4);
+    seed_consensus_keys_with_pops(&state, &validator_keypairs);
+    install_lane_manifest_registry(
+        &state,
+        &[(LaneId::SINGLE, DataSpaceId::UNIVERSAL, validator_ids)],
+    );
+    let signers = validator_keypairs.iter().collect::<Vec<_>>();
     let_row! { envelope = sample_lane_relay_envelope_with_state_incarnation_unchecked( &state, 1, LaneId::new(0), &signers, full_signer_bitmap(signers.len()), ) };
     state
         .lane_relays
@@ -2131,12 +2182,24 @@ state_test! { sync commit_merge_entry_rejects_unknown_dataspace_catalog_entry
     let candidate = merge_candidate_from_relay(&state, 1, &envelope);
     let qc = merge_qc_for_candidate(&state, &candidate, &commit_keypairs, &[0]);
     let entry = merge_entry_from_candidate(candidate, qc);
+    let authority_height = entry.merge_qc.carrier_height;
+    // Remove the dataspace only after binding the candidate to valid lane authority.
+    {
+        let mut nexus = state.nexus.write();
+        nexus.dataspace_catalog =
+            DataSpaceCatalog::new(Vec::new()).expect("empty dataspace catalog");
+    }
+    let expected_authority_error = LaneAuthorityError::UnknownDataspace {
+        dataspace_id: DataSpaceId::UNIVERSAL,
+    };
     let_row! { err = state .commit_merge_entry(entry) .expect_err("merge commit must reject snapshots for missing dataspace catalog entries") };
     assert!(matches!(
         err,
-        MergeLedgerCommitError::UnknownDataspace {
-            dataspace_id
-        } if dataspace_id == DataSpaceId::UNIVERSAL
+        MergeLedgerCommitError::ExecutionBatchInvalid(reason)
+            if reason == format!(
+                "merge lane {} authority is unavailable at height {authority_height}: {expected_authority_error}",
+                LaneId::SINGLE,
+            )
     ));
     assert!(state.merge_ledger().is_empty());
 }
@@ -2144,7 +2207,7 @@ state_test! { sync commit_merge_entry_rejects_empty_entry
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let state = State::new(World::default(), kura, query);
-    let_row! { entry = MergeLedgerEntry { version: MergeLedgerEntry::VERSION, epoch_id: 1, lane_catalog_hash: Hash::new(b"catalog"), active_lanes: Vec::new(), incarnation_root: Hash::new(b"incarnations"), activation_root: Hash::new(b"activations"), lane_snapshots: Vec::new(), execution_batch: None, lane_drain_certificates: Vec::new(), global_state_root: iroha_crypto::Hash::new(b"root"), merge_qc: dummy_merge_qc(), } };
+    let_row! { entry = MergeLedgerEntry { version: MergeLedgerEntry::VERSION, epoch_id: 1, lane_catalog_hash: Hash::new(b"catalog"), active_lanes: Vec::new(), lane_authority_catalog: iroha_data_model::merge::MergeLaneAuthorityCatalogV1::default(), incarnation_root: Hash::new(b"incarnations"), activation_root: Hash::new(b"activations"), lane_snapshots: Vec::new(), execution_batch: None, lane_drain_certificates: Vec::new(), global_state_root: iroha_crypto::Hash::new(b"root"), merge_qc: dummy_merge_qc(), } };
     let_row! { err = state .commit_merge_entry(entry) .expect_err("empty merge entry must be rejected") };
     assert!(matches!(err, MergeLedgerCommitError::EmptyEntry));
 }

@@ -3,7 +3,62 @@
 
 import Foundation
 
-/// A canonical, public-input-only receiver command for ABI-23 operations 2 through 4.
+/// Authenticated inbox holding one pending monetary credit.
+public enum KagemushaPendingCreditKindV1: UInt32, Equatable, Sendable {
+  case mint = 0
+  case receive = 1
+}
+
+/// One deterministic pending-credit selection returned by qualified hardware.
+public struct KagemushaPendingCreditSelectorV1: Equatable, Sendable {
+  public let kind: KagemushaPendingCreditKindV1
+  public let creditID: Data
+
+  public init(kind: KagemushaPendingCreditKindV1, creditID: Data) throws {
+    self.kind = kind
+    self.creditID = try deviceDigest(creditID, "creditID")
+  }
+}
+
+/// Epoch-qualified inclusive inbox boundary retained for one selection pass.
+public struct KagemushaPendingCreditWatermarkV1: Equatable, Sendable {
+  public let hardwareEpochGeneration: KagemushaUInt128V1
+  public let hardwareEpochID: Data
+  public let inboxRevision: KagemushaUInt128V1
+
+  public init(
+    hardwareEpochGeneration: KagemushaUInt128V1,
+    hardwareEpochID: Data,
+    inboxRevision: KagemushaUInt128V1
+  ) throws {
+    guard !hardwareEpochGeneration.isZero else { throw deviceInvalid("hardwareEpochGeneration") }
+    self.hardwareEpochGeneration = hardwareEpochGeneration
+    self.hardwareEpochID = try deviceDigest(hardwareEpochID, "hardwareEpochID")
+    self.inboxRevision = inboxRevision
+  }
+}
+
+/// Amount-aware objective for one finite pending-credit selection pass.
+public enum KagemushaPendingCreditTargetV1: Equatable, Sendable {
+  case drainAll
+  case requiredBalance(KagemushaUInt128V1)
+}
+
+/// One authenticated operation-18 result.
+public struct KagemushaPendingCreditSelectionV1: Equatable, Sendable {
+  public let watermark: KagemushaPendingCreditWatermarkV1
+  public let nextPending: KagemushaPendingCreditSelectorV1?
+
+  public init(
+    watermark: KagemushaPendingCreditWatermarkV1,
+    nextPending: KagemushaPendingCreditSelectorV1?
+  ) {
+    self.watermark = watermark
+    self.nextPending = nextPending
+  }
+}
+
+/// A canonical, public-input-only receiver command for operations 2 through 4.
 public enum KagemushaDeviceReceiverCommandV1: Equatable, Sendable {
   case stage(
     canonicalRequest: Data,
@@ -26,7 +81,7 @@ public enum KagemushaDeviceReceiverCommandV1: Equatable, Sendable {
   }
 }
 
-/// A canonical, public-input-only control command for ABI-23 operations outside the sender lane.
+/// A canonical, public-input-only control command outside the sender lane.
 public enum KagemushaDeviceControlCommandV1: Equatable, Sendable {
   case readActiveHardwareCredential
   case signReceiveAcknowledgement(
@@ -42,8 +97,11 @@ public enum KagemushaDeviceControlCommandV1: Equatable, Sendable {
     recipient: KagemushaAccountIDV1
   )
   case recoverMintAuthorization(operationID: Data)
-  case foldReceiveCredit(operationID: Data, creditID: Data)
-  case readPendingCreditWatermark
+  case foldReceiveCredit(operationID: Data, selector: KagemushaPendingCreditSelectorV1)
+  case readPendingCreditWatermark(
+    watermark: KagemushaPendingCreditWatermarkV1?,
+    target: KagemushaPendingCreditTargetV1
+  )
   case rotateHardwareEpoch(operationID: Data)
   case bootstrapAggregateState(operationID: Data)
   case recoverWalletSnapshot
@@ -154,19 +212,23 @@ public struct KagemushaDeviceSenderWalletContextV1: Equatable, Sendable {
   public let credentialID: Data
   public let hardwareEpoch: KagemushaDeviceHardwareEpochV1
   public let devicePolicyBinding: KagemushaDevicePolicyBindingV1
+  public let coreAuthorizationKeyReference: Data
 
   public init(
     lane: KagemushaDeviceLaneIDV1,
     release: KagemushaDeviceStateContextV1,
     credentialID: Data,
     hardwareEpoch: KagemushaDeviceHardwareEpochV1,
-    devicePolicyBinding: KagemushaDevicePolicyBindingV1
+    devicePolicyBinding: KagemushaDevicePolicyBindingV1,
+    coreAuthorizationKeyReference: Data
   ) throws {
     self.lane = lane
     self.release = release
     self.credentialID = try deviceDigest(credentialID, "credentialID")
     self.hardwareEpoch = hardwareEpoch
     self.devicePolicyBinding = devicePolicyBinding
+    self.coreAuthorizationKeyReference = try deviceDigest(
+      coreAuthorizationKeyReference, "coreAuthorizationKeyReference")
   }
 }
 
@@ -197,11 +259,56 @@ public enum KagemushaDeviceSenderRecoverySelectorV1: Equatable, Sendable {
   )
 }
 
+/// Compact Core-authenticated redemption settlement selected by sender operation 12.
+public struct KagemushaDeviceRedemptionTerminalReceiptV1: Equatable, Sendable {
+  public let version: UInt16
+  public let networkID: Data
+  public let operationID: Data
+  public let redemptionID: Data
+  public let terminalNullifier: Data
+  public let envelopeDigest: Data
+  public let reserveReceiptDigest: Data
+  public let authenticatedStatusDigest: Data
+  public let finalizedBlockHeight: UInt64
+  public let heightContextID: Data
+
+  public init(
+    version: UInt16 = 1, networkID: Data, operationID: Data, redemptionID: Data,
+    terminalNullifier: Data, envelopeDigest: Data, reserveReceiptDigest: Data,
+    authenticatedStatusDigest: Data, finalizedBlockHeight: UInt64, heightContextID: Data
+  ) throws {
+    guard version == 1, finalizedBlockHeight != 0 else {
+      throw deviceInvalid("redemptionTerminalReceipt.header")
+    }
+    self.version = version
+    self.networkID = try deviceDigest(networkID, "networkID")
+    self.operationID = try deviceDigest(operationID, "operationID")
+    self.redemptionID = try deviceDigest(redemptionID, "redemptionID")
+    self.terminalNullifier = try deviceDigest(terminalNullifier, "terminalNullifier")
+    self.envelopeDigest = try deviceDigest(envelopeDigest, "envelopeDigest")
+    self.reserveReceiptDigest = try deviceDigest(reserveReceiptDigest, "reserveReceiptDigest")
+    self.authenticatedStatusDigest = try deviceDigest(
+      authenticatedStatusDigest, "authenticatedStatusDigest")
+    self.finalizedBlockHeight = finalizedBlockHeight
+    self.heightContextID = try deviceDigest(heightContextID, "heightContextID")
+  }
+}
+
+/// Closed terminal receipt admitted by sender operation 12.
+public enum KagemushaDeviceSenderTerminalReceiptV1: Equatable, Sendable {
+  case paymentAcknowledgement(canonicalAcknowledgement: Data)
+  case redemptionSettlement(KagemushaDeviceRedemptionTerminalReceiptV1)
+}
+
 /// Sender command body. Case ordinal and ABI operation code are intentionally distinct.
 public enum KagemushaDeviceSenderCommandBodyV1: Equatable, Sendable {
   case prepare(inputs: KagemushaDeviceSenderPublicInputsV1)
   case recoverPrepared(inputsDigest: Data)
-  case commit(selector: KagemushaDeviceSenderPreparationSelectorV1, candidateDigest: Data)
+  case commit(
+    selector: KagemushaDeviceSenderPreparationSelectorV1,
+    candidateDigest: Data,
+    hardwareAuthorization: Data
+  )
   case recoverTerminal(inputsDigest: Data)
   case install(
     selector: KagemushaDeviceSenderPreparationSelectorV1,
@@ -215,7 +322,8 @@ public enum KagemushaDeviceSenderCommandBodyV1: Equatable, Sendable {
     envelopeDigest: Data,
     inputs: KagemushaDeviceSenderPublicInputsV1,
     canonicalEnvelope: Data,
-    canonicalAcknowledgement: Data
+    terminalReceipt: KagemushaDeviceSenderTerminalReceiptV1,
+    hardwareAuthorization: Data
   )
 
   public var operation: UInt8 {
@@ -243,7 +351,7 @@ public enum KagemushaDeviceSenderCommandBodyV1: Equatable, Sendable {
   }
 }
 
-/// One exact sender command shared by ABI-23 operations 5 through 10 and 12.
+/// One exact sender command shared by operations 5 through 10 and 12.
 public struct KagemushaDeviceSenderCommandV1: Equatable, Sendable {
   public let version: UInt16
   public let operation: UInt8
@@ -269,7 +377,7 @@ public struct KagemushaDeviceSenderCommandV1: Equatable, Sendable {
   }
 }
 
-/// Canonical Norito body codecs for secure-device ABI-23 operations.
+/// Canonical Norito body codecs for the KAGEMUSHA V1 secure-device operations.
 ///
 /// These methods validate public byte shape only. Reply parsing is kept internal until the
 /// native P-256 response-authenticator verifier has admitted the complete response transcript.
@@ -290,14 +398,12 @@ public enum KagemushaDeviceOperationCodecV1 {
     let payload: Data
     switch value {
     case .stage(let request, let payment, let metadata):
-      guard metadata.count <= inboxStagingMetadataMaximum else {
-        throw deviceInvalid("stagingMetadata.size")
-      }
       payload = deviceFields([
         deviceU16(1), Data([value.operation]),
         try deviceVector(try bounded(request, paymentRequestMaximum, "request")),
         try deviceVector(try bounded(payment, paymentMaximum, "payment")),
-        try deviceVector(metadata),
+        try deviceVector(try boundedAllowEmpty(
+          metadata, inboxStagingMetadataMaximum, "stagingMetadata")),
       ])
     case .recoverStaged(let creditID):
       payload = deviceFields([
@@ -305,11 +411,10 @@ public enum KagemushaDeviceOperationCodecV1 {
         try deviceDigest(creditID, "creditID"),
       ])
     case .page(let revision, let after, let maximumEntries):
-      guard (1...receiverPageCountMaximum).contains(maximumEntries),
-        after == nil || revision != nil
-      else {
+      guard (1...receiverPageCountMaximum).contains(maximumEntries) else {
         throw deviceInvalid("maximumEntries")
       }
+      guard after == nil || revision != nil else { throw deviceInvalid("page.cursor") }
       payload = deviceFields([
         deviceU16(1), Data([value.operation]),
         try deviceOption(revision?.littleEndianBytes),
@@ -339,8 +444,7 @@ public enum KagemushaDeviceOperationCodecV1 {
         canonicalRequest: try reader.byteVectorField(maximum: paymentRequestMaximum),
         canonicalPayment: try reader.byteVectorField(maximum: paymentMaximum),
         stagingMetadata: try reader.byteVectorField(
-          maximum: inboxStagingMetadataMaximum,
-          allowEmpty: true)
+          maximum: inboxStagingMetadataMaximum, allowEmpty: true)
       )
     case 3:
       value = .recoverStaged(creditID: try reader.digestField())
@@ -381,8 +485,7 @@ public enum KagemushaDeviceOperationCodecV1 {
   ) throws -> Data {
     let payload: Data
     switch value {
-    case .readActiveHardwareCredential, .readTrustedTimeOrLease,
-      .readPendingCreditWatermark, .recoverWalletSnapshot:
+    case .readActiveHardwareCredential, .readTrustedTimeOrLease, .recoverWalletSnapshot:
       payload = deviceFields([deviceU16(1), Data([value.operation])])
     case .signReceiveAcknowledgement(let request, let payment, let receipt):
       payload = deviceFields([
@@ -400,15 +503,22 @@ public enum KagemushaDeviceOperationCodecV1 {
     case .recoverMintAuthorization(let operationID), .rotateHardwareEpoch(let operationID),
       .bootstrapAggregateState(let operationID):
       payload = deviceFields([deviceU16(1), Data([value.operation]), try deviceDigest(operationID, "operationID")])
-    case .foldReceiveCredit(let operationID, let creditID):
+    case .foldReceiveCredit(let operationID, let selector):
       payload = deviceFields([
         deviceU16(1), Data([value.operation]), try deviceDigest(operationID, "operationID"),
-        try deviceDigest(creditID, "creditID"),
+        deviceEnum(selector.kind.rawValue, []), try deviceDigest(selector.creditID, "creditID"),
+      ])
+    case .readPendingCreditWatermark(let watermark, let target):
+      if case .requiredBalance = target, watermark != nil {
+        throw deviceInvalid("requiredBalance.watermark")
+      }
+      payload = deviceFields([
+        deviceU16(1), Data([value.operation]),
+        try deviceOption(watermark.map(encodePendingCreditWatermark)),
+        try encodePendingCreditTarget(target),
       ])
     case .createSignedPaymentRequest(let requestID, let recipient, let amount, let window):
-      guard !amount.isZero,
-        (1...KagemushaWireV1.requestMaximumTTLMS).contains(window)
-      else {
+      guard !amount.isZero, (1...KagemushaWireV1.requestMaximumTTLMS).contains(window) else {
         throw deviceInvalid("validityWindowMS")
       }
       payload = deviceFields([
@@ -450,9 +560,15 @@ public enum KagemushaDeviceOperationCodecV1 {
     case 17:
       value = .foldReceiveCredit(
         operationID: try reader.digestField(),
-        creditID: try reader.digestField()
+        selector: try KagemushaPendingCreditSelectorV1(
+          kind: decodePendingCreditKind(reader.field()), creditID: reader.digestField()
+        )
       )
-    case 18: value = .readPendingCreditWatermark
+    case 18:
+      value = .readPendingCreditWatermark(
+        watermark: try reader.optionField { try decodePendingCreditWatermark(&$0) },
+        target: try decodePendingCreditTarget(reader.field())
+      )
     case 19: value = .rotateHardwareEpoch(operationID: try reader.digestField())
     case 20: value = .bootstrapAggregateState(operationID: try reader.digestField())
     case 21: value = .recoverWalletSnapshot
@@ -463,9 +579,7 @@ public enum KagemushaDeviceOperationCodecV1 {
       )
       let amount = try reader.u128Field()
       let window = try reader.u64Field()
-      guard !amount.isZero,
-        (1...KagemushaWireV1.requestMaximumTTLMS).contains(window)
-      else {
+      guard !amount.isZero, (1...KagemushaWireV1.requestMaximumTTLMS).contains(window) else {
         throw deviceInvalid("validityWindowMS")
       }
       value = .createSignedPaymentRequest(
@@ -491,6 +605,17 @@ public enum KagemushaDeviceOperationCodecV1 {
       throw deviceInvalid("controlCommand.canonical")
     }
     return value
+  }
+
+  /// Canonical operation-5 reservation binding shared with the native outgoing-operation index.
+  public static func encodeSenderPublicInputs(
+    _ value: KagemushaDeviceSenderPublicInputsV1
+  ) throws -> Data {
+    try deviceFrame(
+      encodeSenderInputs(value),
+      DeviceOperationArchiveDescriptor(
+        schema: "iroha.kagemusha.device.v1.sender-public-inputs",
+        alignment: 16, maximum: senderCommandMaximumBytes))
   }
 
   public static func encodeSenderCommand(
@@ -564,6 +689,7 @@ extension KagemushaDeviceOperationCodecV1 {
         value.devicePolicyBinding.deviceKeyReference,
         value.devicePolicyBinding.hardwarePolicyID,
       ]),
+      value.coreAuthorizationKeyReference,
     ])
   }
 
@@ -613,10 +739,12 @@ extension KagemushaDeviceOperationCodecV1 {
       hardwarePolicyID: policyReader.digestField()
     )
     try policyReader.finish()
+    let coreAuthorizationKeyReference = try reader.digestField()
     try reader.finish()
     return try KagemushaDeviceSenderWalletContextV1(
       lane: lane, release: release, credentialID: credentialID,
-      hardwareEpoch: epoch, devicePolicyBinding: policy
+      hardwareEpoch: epoch, devicePolicyBinding: policy,
+      coreAuthorizationKeyReference: coreAuthorizationKeyReference
     )
   }
 
@@ -729,10 +857,13 @@ extension KagemushaDeviceOperationCodecV1 {
       fields = [try encodeSenderInputs(inputs)]
     case .recoverPrepared(let digest), .recoverTerminal(let digest):
       fields = [try deviceDigest(digest, "inputsDigest")]
-    case .commit(let selector, let candidateDigest):
+    case .commit(let selector, let candidateDigest, let hardwareAuthorization):
       fields = [
         try encodePreparationSelector(selector),
         try deviceDigest(candidateDigest, "candidateDigest"),
+        try deviceVector(
+          try bounded(hardwareAuthorization, hardwareAuthorizationMaximum, "hardwareAuthorization")
+        ),
       ]
     case .install(let selector, let candidateDigest, let inputs, let envelope):
       fields = [
@@ -743,13 +874,19 @@ extension KagemushaDeviceOperationCodecV1 {
       ]
     case .recoverInstalled(let selector):
       fields = [try encodeRecoverySelector(selector)]
-    case .release(let inputsDigest, let envelopeDigest, let inputs, let envelope, let acknowledgement):
+    case .release(
+      let inputsDigest, let envelopeDigest, let inputs, let envelope, let terminalReceipt,
+      let hardwareAuthorization
+    ):
       fields = [
         try deviceDigest(inputsDigest, "inputsDigest"),
         try deviceDigest(envelopeDigest, "envelopeDigest"),
         try encodeSenderInputs(inputs),
         try deviceVector(try bounded(envelope, terminalEnvelopeMaximum, "envelope")),
-        try deviceVector(try bounded(acknowledgement, acknowledgementMaximum, "acknowledgement")),
+        try encodeTerminalReceipt(terminalReceipt),
+        try deviceVector(
+          try bounded(hardwareAuthorization, hardwareAuthorizationMaximum, "hardwareAuthorization")
+        ),
       ]
     }
     return deviceEnum(value.ordinal, fields)
@@ -766,7 +903,8 @@ extension KagemushaDeviceOperationCodecV1 {
     case 2:
       value = .commit(
         selector: try decodePreparationSelector(reader.field()),
-        candidateDigest: try reader.digestField()
+        candidateDigest: try reader.digestField(),
+        hardwareAuthorization: try reader.byteVectorField(maximum: hardwareAuthorizationMaximum)
       )
     case 3: value = .recoverTerminal(inputsDigest: try reader.digestField())
     case 4:
@@ -783,9 +921,55 @@ extension KagemushaDeviceOperationCodecV1 {
         inputsDigest: try reader.digestField(), envelopeDigest: try reader.digestField(),
         inputs: try decodeSenderInputs(reader.field()),
         canonicalEnvelope: try reader.byteVectorField(maximum: terminalEnvelopeMaximum),
-        canonicalAcknowledgement: try reader.byteVectorField(maximum: acknowledgementMaximum)
+        terminalReceipt: try decodeTerminalReceipt(reader.field()),
+        hardwareAuthorization: try reader.byteVectorField(maximum: hardwareAuthorizationMaximum)
       )
     default: throw deviceInvalid("senderBody.tag")
+    }
+    try reader.finish()
+    return value
+  }
+
+  fileprivate static func encodeTerminalReceipt(
+    _ value: KagemushaDeviceSenderTerminalReceiptV1
+  ) throws -> Data {
+    switch value {
+    case .paymentAcknowledgement(let acknowledgement):
+      return deviceEnum(0, [
+        try deviceVector(try bounded(acknowledgement, acknowledgementMaximum, "acknowledgement"))
+      ])
+    case .redemptionSettlement(let receipt):
+      return deviceEnum(1, [deviceFields([
+        deviceU16(receipt.version), receipt.networkID, receipt.operationID,
+        receipt.redemptionID, receipt.terminalNullifier, receipt.envelopeDigest,
+        receipt.reserveReceiptDigest, receipt.authenticatedStatusDigest,
+        deviceU64(receipt.finalizedBlockHeight), receipt.heightContextID,
+      ])])
+    }
+  }
+
+  fileprivate static func decodeTerminalReceipt(
+    _ payload: Data
+  ) throws -> KagemushaDeviceSenderTerminalReceiptV1 {
+    var reader = DeviceOperationReader(payload)
+    let value: KagemushaDeviceSenderTerminalReceiptV1
+    switch try reader.enumTag(variants: 2) {
+    case 0:
+      value = .paymentAcknowledgement(
+        canonicalAcknowledgement: try reader.byteVectorField(maximum: acknowledgementMaximum)
+      )
+    case 1:
+      var receipt = DeviceOperationReader(try reader.field())
+      value = .redemptionSettlement(try KagemushaDeviceRedemptionTerminalReceiptV1(
+        version: receipt.u16Field(), networkID: receipt.digestField(),
+        operationID: receipt.digestField(), redemptionID: receipt.digestField(),
+        terminalNullifier: receipt.digestField(), envelopeDigest: receipt.digestField(),
+        reserveReceiptDigest: receipt.digestField(),
+        authenticatedStatusDigest: receipt.digestField(),
+        finalizedBlockHeight: receipt.u64Field(), heightContextID: receipt.digestField()
+      ))
+      try receipt.finish()
+    default: throw deviceInvalid("senderTerminalReceipt.tag")
     }
     try reader.finish()
     return value
@@ -831,6 +1015,7 @@ private let inboxStagingMetadataMaximum = 1_024
 private let redemptionVoucherMaximum = 7_936
 private let terminalEnvelopeMaximum = redemptionVoucherMaximum
 private let acknowledgementMaximum = 256
+private let hardwareAuthorizationMaximum = 2 * 1024
 private let aggregateStateMaximum = 768
 private let accountMaximum = 512
 private let receiverPageCountMaximum: UInt16 = 4
@@ -876,7 +1061,7 @@ private func controlCommandDescriptor(
   case 17:
     .init(schema: deviceSchemaPrefix + "fold-receive-credit-command", alignment: 16, maximum: 256)
   case 18:
-    .init(schema: deviceSchemaPrefix + "read-pending-credit-watermark-command", alignment: 2, maximum: 256)
+    .init(schema: deviceSchemaPrefix + "read-pending-credit-watermark-command", alignment: 16, maximum: 256)
   case 19:
     .init(schema: deviceSchemaPrefix + "rotate-hardware-epoch-command", alignment: 2, maximum: 256)
   case 20:
@@ -940,6 +1125,63 @@ private func deviceOption(_ value: Data?) throws -> Data {
   writer.raw(Data([1]))
   writer.field(value)
   return writer.data
+}
+
+private func encodePendingCreditWatermark(
+  _ value: KagemushaPendingCreditWatermarkV1
+) throws -> Data {
+  deviceFields([
+    value.hardwareEpochGeneration.littleEndianBytes,
+    try deviceDigest(value.hardwareEpochID, "hardwareEpochID"),
+    value.inboxRevision.littleEndianBytes,
+  ])
+}
+
+private func decodePendingCreditWatermark(
+  _ reader: inout DeviceOperationReader
+) throws -> KagemushaPendingCreditWatermarkV1 {
+  try KagemushaPendingCreditWatermarkV1(
+    hardwareEpochGeneration: reader.u128Field(),
+    hardwareEpochID: reader.digestField(),
+    inboxRevision: reader.u128Field()
+  )
+}
+
+private func encodePendingCreditTarget(_ value: KagemushaPendingCreditTargetV1) throws -> Data {
+  switch value {
+  case .drainAll:
+    return deviceEnum(0, [])
+  case .requiredBalance(let amount):
+    guard !amount.isZero else { throw deviceInvalid("requiredBalance") }
+    return deviceEnum(1, [amount.littleEndianBytes])
+  }
+}
+
+private func decodePendingCreditTarget(_ payload: Data) throws -> KagemushaPendingCreditTargetV1 {
+  var reader = DeviceOperationReader(payload)
+  let target: KagemushaPendingCreditTargetV1
+  switch try reader.enumTag(variants: 2) {
+  case 0:
+    target = .drainAll
+  case 1:
+    let amount = try reader.u128Field()
+    guard !amount.isZero else { throw deviceInvalid("requiredBalance") }
+    target = .requiredBalance(amount)
+  default:
+    throw deviceInvalid("pendingCreditTarget")
+  }
+  try reader.finish()
+  return target
+}
+
+private func decodePendingCreditKind(_ payload: Data) throws -> KagemushaPendingCreditKindV1 {
+  var reader = DeviceOperationReader(payload)
+  let raw = try reader.enumTag(variants: 2)
+  try reader.finish()
+  guard let kind = KagemushaPendingCreditKindV1(rawValue: raw) else {
+    throw deviceInvalid("pendingCreditKind")
+  }
+  return kind
 }
 
 private func deviceVector(_ value: Data) throws -> Data {
@@ -1146,6 +1388,11 @@ private func bounded(_ value: Data, _ maximum: Int, _ label: String) throws -> D
   return Data(value)
 }
 
+private func boundedAllowEmpty(_ value: Data, _ maximum: Int, _ label: String) throws -> Data {
+  guard value.count <= maximum else { throw deviceInvalid(label + ".size") }
+  return Data(value)
+}
+
 private func deviceDigest(_ value: Data, _ label: String) throws -> Data {
   guard value.count == 32, value.contains(where: { $0 != 0 }) else {
     throw deviceInvalid(label)
@@ -1167,6 +1414,7 @@ internal struct KagemushaDeviceAuthenticatedReplyV1: Equatable, Sendable {
 internal struct KagemushaDeviceQualificationReplyV1: Equatable, Sendable {
   let releaseID: Data
   let hardwarePolicyDigest: Data
+  let coreAuthorizationKeyReference: Data
   let profile: KagemushaHardwareProfileV1
   let credential: KagemushaHardwareCredentialV1
 }
@@ -1207,6 +1455,7 @@ extension KagemushaDeviceOperationCodecV1 {
     }
     let releaseID = try reader.digestField()
     let hardwarePolicyDigest = try reader.digestField()
+    let coreAuthorizationKeyReference = try reader.digestField()
     let profilePayload = try reader.field(maximum: 512)
     let credentialPayload = try reader.field(maximum: 768)
     try reader.finish()
@@ -1225,6 +1474,7 @@ extension KagemushaDeviceOperationCodecV1 {
     return try .init(
       releaseID: releaseID,
       hardwarePolicyDigest: hardwarePolicyDigest,
+      coreAuthorizationKeyReference: coreAuthorizationKeyReference,
       profile: KagemushaNoritoV1.decodeHardwareProfileShapeExact(profileArchive),
       credential: KagemushaNoritoV1.decodeHardwareCredentialShapeExact(credentialArchive)
     )
@@ -1261,6 +1511,7 @@ extension KagemushaDeviceOperationCodecV1 {
     case 1:
       _ = try reader.digestField()
       _ = try reader.digestField()
+      _ = try reader.digestField()
       guard !(try reader.field(maximum: 512)).isEmpty,
         !(try reader.field(maximum: 768)).isEmpty
       else { throw deviceInvalid("qualificationReply.empty") }
@@ -1270,11 +1521,19 @@ extension KagemushaDeviceOperationCodecV1 {
       try validateCommitEvidence(reader.field())
     case 14, 15:
       _ = try reader.byteVectorField(maximum: redemptionVoucherMaximum)
+      _ = try reader.byteVectorField(maximum: KagemushaWireV1.maximumEncryptedCreditBytes)
     case 17:
+      _ = try decodePendingCreditKind(reader.field())
       _ = try reader.digestField()
       _ = try reader.byteVectorField(maximum: aggregateStateMaximum)
     case 18:
-      _ = try reader.u128Field()
+      var watermark = DeviceOperationReader(try reader.field())
+      _ = try decodePendingCreditWatermark(&watermark)
+      try watermark.finish()
+      _ = try reader.optionField { item in
+        _ = try decodePendingCreditKind(item.field())
+        _ = try item.digestField()
+      }
     case 19, 20:
       _ = try reader.byteVectorField(maximum: aggregateStateMaximum)
     case 21:
@@ -1380,7 +1639,7 @@ private func receiverReplyDescriptor(
 ) throws -> DeviceOperationArchiveDescriptor {
   switch operation {
   case 2, 3:
-    .init(schema: deviceSchemaPrefix + "staged-inbound-payment-reply", alignment: 16, maximum: 64 * 1024)
+    .init(schema: deviceSchemaPrefix + "staged-inbound-payment-reply", alignment: 16, maximum: 24 * 1024)
   case 4:
     .init(schema: deviceSchemaPrefix + "inbound-inbox-page-reply", alignment: 16, maximum: 64 * 1024)
   default: throw deviceInvalid("receiverReply.operation")
@@ -1398,7 +1657,7 @@ private func controlReplyDescriptor(
   case 13:
     .init(schema: deviceSchemaPrefix + "trusted-time-or-lease-reply", alignment: 8, maximum: 512)
   case 14, 15:
-    .init(schema: deviceSchemaPrefix + "mint-authorization-reply", alignment: 8, maximum: 12 * 1024)
+    .init(schema: deviceSchemaPrefix + "mint-construction-bundle-reply", alignment: 8, maximum: 12 * 1024)
   case 17:
     .init(schema: deviceSchemaPrefix + "fold-receive-credit-reply", alignment: 16, maximum: 2 * 1024)
   case 18:

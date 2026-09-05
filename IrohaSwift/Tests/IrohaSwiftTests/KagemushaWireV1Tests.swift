@@ -15,6 +15,9 @@ final class KagemushaWireV1Tests: XCTestCase {
 
   func testRustCanonicalThreeMessageFixtureRoundTripsByteForByte() throws {
     let fixture = try loadCanonicalFixture()
+    XCTAssertNil(fixture["acceptance_intent"])
+    XCTAssertNil(fixture["acceptance_ticket"])
+    XCTAssertNil(fixture["complete_five_message"])
     XCTAssertEqual(try XCTUnwrap(fixture["fixture_version"] as? Int), 1)
     XCTAssertEqual(try XCTUnwrap(fixture["protocol"] as? String), "KAGEMUSHA")
     XCTAssertEqual(try XCTUnwrap(fixture["text_prefix"] as? String), "kgm1:")

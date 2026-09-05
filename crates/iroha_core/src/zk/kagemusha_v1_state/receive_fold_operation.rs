@@ -270,10 +270,17 @@ where
                 effect_digest,
             },
         )?;
-        let insert = [(credit_id, staged.envelope_digest)];
         let authenticated_history_transaction = match self
             .authenticated_history
-            .prepare_replay_batch_and_terminal_decision(&insert, decision_id, decision_digest)
+            .prepare_replay_and_terminal_decision(
+                credit_id,
+                staged.envelope_digest,
+                decision_id,
+                decision_digest,
+                transition
+                    .hardware_statement
+                    .normalized_guard_statement_digest,
+            )
             .map_err(map_authenticated_history_error)?
         {
             KagemushaHistoryDualInsertPreparationV1::Prepared {
@@ -331,6 +338,9 @@ where
         preview: &PeerCreditFoldPreviewV1,
     ) -> Result<Vec<u8>, KagemushaStateErrorV1> {
         self.validate_receive_fold_history_preview(preview)?;
+        self.authenticated_history
+            .require_prepared(&preview.authenticated_history_transaction)
+            .map_err(map_authenticated_history_error)?;
         KagemushaHistoryRootSelectionSubjectV1::new(
             &preview.authenticated_history_transaction,
             self.state.hardware_profile_id,
@@ -350,6 +360,9 @@ where
         root_selection_signature: KagemushaDeviceSignatureV1,
     ) -> Result<TransitionAuthorizationV1, KagemushaStateErrorV1> {
         self.validate_receive_fold_history_preview(preview)?;
+        self.authenticated_history
+            .require_prepared(&preview.authenticated_history_transaction)
+            .map_err(map_authenticated_history_error)?;
         if authorization.authenticated_history.is_some()
             || kagemusha_device_key_reference_v1(device_public_key)
                 != self.state.device_policy_binding.device_key_reference
@@ -477,7 +490,14 @@ where
                 )
             },
         )?;
-        if expected_transition != preview.transition {
+        if preview
+            .authenticated_history_transaction
+            .attempt_binding_digest()
+            != expected_transition
+                .hardware_statement
+                .normalized_guard_statement_digest
+            || expected_transition != preview.transition
+        {
             return Err(KagemushaStateErrorV1::StateInvariant);
         }
 
@@ -584,7 +604,14 @@ where
         preview: &PeerCreditFoldPreviewV1,
     ) -> Result<(), KagemushaStateErrorV1> {
         let bridge_request = preview.proof_root_bridge_request;
-        if preview.transition.proof_statement.kind != KagemushaTransitionKindV1::ReceiveFold
+        if preview
+            .authenticated_history_transaction
+            .attempt_binding_digest()
+            != preview
+                .transition
+                .hardware_statement
+                .normalized_guard_statement_digest
+            || preview.transition.proof_statement.kind != KagemushaTransitionKindV1::ReceiveFold
             || preview.transition.proof_statement.predecessor_commitment
                 != self.state.state_commitment
             || preview.transition.proof_statement.journal_revision_before != self.journal_revision

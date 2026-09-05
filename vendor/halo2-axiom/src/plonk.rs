@@ -8,17 +8,17 @@
 use blake2b_simd::Params as Blake2bParams;
 use group::ff::{Field, FromUniformBytes, PrimeField};
 
+use crate::SerdeFormat;
 use crate::arithmetic::CurveAffine;
 use crate::helpers::{
-    polynomial_slice_byte_length, read_polynomial_vec, write_polynomial_slice,
-    write_polynomial_slice_streaming, SerdeCurveAffine, SerdePrimeField,
+    SerdeCurveAffine, SerdePrimeField, polynomial_slice_byte_length, read_polynomial_vec,
+    write_polynomial_slice, write_polynomial_slice_streaming,
 };
 use crate::poly::{
-    read_polynomial_vec_checked, Coeff, EvaluationDomain, LagrangeCoeff, PinnedEvaluationDomain,
-    Polynomial,
+    Coeff, EvaluationDomain, LagrangeCoeff, PinnedEvaluationDomain, Polynomial,
+    read_polynomial_vec_checked,
 };
 use crate::transcript::{ChallengeScalar, EncodedChallenge, Transcript};
-use crate::SerdeFormat;
 
 mod assigned;
 mod circuit;
@@ -42,10 +42,62 @@ pub use verifier::*;
 
 use evaluation::Evaluator;
 
-use std::io;
+use std::{fmt, io};
 
 // Version byte + domain degree + selector-compression flag + fixed-column count.
 const VERIFYING_KEY_SERIALIZED_HEADER_BYTES: usize = 1 + 4 + 1 + 4;
+
+#[derive(Default)]
+struct DebugByteCounter {
+    len: u64,
+}
+
+impl fmt::Write for DebugByteCounter {
+    fn write_str(&mut self, value: &str) -> fmt::Result {
+        self.len = self
+            .len
+            .checked_add(u64::try_from(value.len()).map_err(|_| fmt::Error)?)
+            .ok_or(fmt::Error)?;
+        Ok(())
+    }
+}
+
+struct Blake2bDebugWriter<'a> {
+    state: &'a mut blake2b_simd::State,
+}
+
+impl fmt::Write for Blake2bDebugWriter<'_> {
+    fn write_str(&mut self, value: &str) -> fmt::Result {
+        self.state.update(value.as_bytes());
+        Ok(())
+    }
+}
+
+/// Preserve Halo2's historical length-prefixed `Debug` transcript representation without ever
+/// materializing that representation as one contiguous allocation.
+///
+/// Large recursive constraint systems can render to tens of gigabytes even though their live
+/// circuit and key data are much smaller. Formatting once into a `String` therefore makes key
+/// generation consume memory proportional to the rendered text and can double capacity during a
+/// final reallocation. Two allocation-free formatting passes retain the exact historical bytes:
+/// the first determines the required prefix and the second streams those bytes into Blake2b.
+fn hash_debug_repr<T: fmt::Debug>(value: &T) -> [u8; 64] {
+    let mut counter = DebugByteCounter::default();
+    fmt::write(&mut counter, format_args!("{value:?}"))
+        .expect("counting a Debug representation cannot fail");
+
+    let mut hasher = Blake2bParams::new()
+        .hash_length(64)
+        .personal(b"Halo2-Verify-Key")
+        .to_state();
+    hasher.update(&counter.len.to_le_bytes());
+    fmt::write(
+        &mut Blake2bDebugWriter { state: &mut hasher },
+        format_args!("{value:?}"),
+    )
+    .expect("hashing a Debug representation cannot fail");
+    *hasher.finalize().as_array()
+}
 
 /// This is a verifying key which allows for the verification of proofs for a
 /// particular circuit.
@@ -432,18 +484,9 @@ impl<C: CurveAffine> VerifyingKey<C> {
             compress_selectors,
         };
 
-        let mut hasher = Blake2bParams::new()
-            .hash_length(64)
-            .personal(b"Halo2-Verify-Key")
-            .to_state();
-
-        let s = format!("{:?}", vk.pinned());
-
-        hasher.update(&(s.len() as u64).to_le_bytes());
-        hasher.update(s.as_bytes());
-
-        // Hash in final Blake2bState
-        vk.transcript_repr = C::Scalar::from_uniform_bytes(hasher.finalize().as_array());
+        // Hash in the historical length-prefixed Debug encoding without allocating the complete
+        // rendering. Recursive circuits can otherwise need tens of gigabytes for this temporary.
+        vk.transcript_repr = C::Scalar::from_uniform_bytes(&hash_debug_repr(&vk.pinned()));
 
         vk
     }
@@ -766,25 +809,27 @@ type ChallengeX<F> = ChallengeScalar<F, X>;
 #[cfg(test)]
 mod tests {
     use super::{
-        keygen_pk, keygen_pk2, keygen_pk_consuming_with, keygen_vk, keygen_vk_consuming_with,
-        keygen_vk_custom, Advice, Circuit, Column, ConstraintSystem, Error,
-        KeygenWithExtractorError, ProvingKey, Selector, SerdeFormat, VerifyingKey,
+        Advice, Circuit, Column, ConstraintSystem, Error, KeygenWithExtractorError, ProvingKey,
+        Selector, SerdeFormat, VerifyingKey, keygen_pk, keygen_pk_consuming_with, keygen_pk2,
+        keygen_pk2_consuming, keygen_pk2_consuming_with_profile, keygen_vk,
+        keygen_vk_consuming_with, keygen_vk_consuming_with_profile, keygen_vk_custom,
     };
     use crate::{
+        SerdeCurveAffine, SerdePrimeField,
         circuit::{Layouter, SimpleFloorPlanner, Value},
         halo2curves::{
             bn256::G1Affine,
-            pasta::{EpAffine, EqAffine},
+            pasta::{EpAffine, EqAffine, Fp},
         },
-        poly::{commitment::ParamsProver, ipa::commitment::ParamsIPA, Rotation},
-        SerdeCurveAffine, SerdePrimeField,
+        poly::{Rotation, commitment::ParamsProver, ipa::commitment::ParamsIPA},
     };
+    use blake2b_simd::Params as Blake2bParams;
     use group::ff::{Field, FromUniformBytes};
     use std::{
         io,
         sync::{
-            atomic::{AtomicBool, Ordering},
             Arc,
+            atomic::{AtomicBool, Ordering},
         },
     };
 
@@ -922,6 +967,37 @@ mod tests {
             },
             lifetime,
         )
+    }
+
+    fn legacy_debug_hash<T: std::fmt::Debug>(value: &T) -> [u8; 64] {
+        let rendered = format!("{value:?}");
+        let mut hasher = Blake2bParams::new()
+            .hash_length(64)
+            .personal(b"Halo2-Verify-Key")
+            .to_state();
+        hasher.update(&(rendered.len() as u64).to_le_bytes());
+        hasher.update(rendered.as_bytes());
+        *hasher.finalize().as_array()
+    }
+
+    #[test]
+    fn streamed_debug_vk_hash_is_byte_exact_with_legacy_encoding() {
+        let parameters = ParamsIPA::<EqAffine>::new(6);
+        let key = keygen_pk2(
+            &parameters,
+            &TrackedCircuit {
+                lifetime: None,
+                fail_synthesis: false,
+            },
+            false,
+        )
+        .expect("tiny proving key");
+        let pinned = key.get_vk().pinned();
+        assert_eq!(super::hash_debug_repr(&pinned), legacy_debug_hash(&pinned));
+        assert_eq!(
+            key.get_vk().transcript_repr(),
+            Fp::from_uniform_bytes(&legacy_debug_hash(&pinned)),
+        );
     }
 
     fn assert_checked_processed_roundtrip<C: SerdeCurveAffine>()
@@ -1181,7 +1257,17 @@ mod tests {
             borrowed_pk.to_bytes(SerdeFormat::Processed),
             combined_pk.to_bytes(SerdeFormat::Processed),
             "streaming permutation VK commitments before fixed expansion and reusing a supplied \
-             VK domain must preserve processed key bytes"
+            VK domain must preserve processed key bytes"
+        );
+
+        let (circuit, lifetime) = tracked_circuit(false);
+        let consuming_combined_pk = keygen_pk2_consuming(&params, circuit, false)
+            .expect("consuming combined PK generation");
+        assert!(lifetime.dropped.load(Ordering::SeqCst));
+        assert_eq!(
+            combined_pk.to_bytes(SerdeFormat::Processed),
+            consuming_combined_pk.to_bytes(SerdeFormat::Processed),
+            "consuming combined keygen must preserve canonical key bytes"
         );
         let compressed_vk =
             keygen_vk_custom(&params, &reference, true).expect("compressed VK generation");
@@ -1193,6 +1279,46 @@ mod tests {
                 .get_vk()
                 .to_bytes(SerdeFormat::Processed),
             "permutation-first VK generation must preserve compressed-selector bytes"
+        );
+
+        let (circuit, lifetime) = tracked_circuit(false);
+        let (consuming_compressed_vk, vk_profile) = keygen_vk_consuming_with_profile(
+            &params,
+            circuit,
+            true,
+            |circuit, profile| {
+                let lifetime = circuit.lifetime.as_ref().expect("tracked circuit");
+                assert!(lifetime.synthesized.load(Ordering::SeqCst));
+                assert!(!lifetime.dropped.load(Ordering::SeqCst));
+                Ok::<_, &'static str>(profile)
+            },
+        )
+        .expect("compressed consuming VK generation");
+        assert!(lifetime.dropped.load(Ordering::SeqCst));
+        assert!(vk_profile.compress_selectors);
+        assert_eq!(vk_profile.domain_rows, 8);
+        assert_eq!(vk_profile.selector_columns, 1);
+        assert_eq!(vk_profile.materialized_selector_columns, 1);
+        assert_eq!(
+            consuming_compressed_vk.to_bytes(SerdeFormat::Processed),
+            compressed_vk.to_bytes(SerdeFormat::Processed),
+            "compressed consuming VK generation must preserve canonical bytes"
+        );
+
+        let (circuit, lifetime) = tracked_circuit(false);
+        let (consuming_compressed_pk, pk_profile) = keygen_pk2_consuming_with_profile(
+            &params,
+            circuit,
+            true,
+            |_circuit, profile| Ok::<_, &'static str>(profile),
+        )
+        .expect("compressed consuming combined PK generation");
+        assert!(lifetime.dropped.load(Ordering::SeqCst));
+        assert_eq!(pk_profile, vk_profile);
+        assert_eq!(
+            consuming_compressed_pk.to_bytes(SerdeFormat::Processed),
+            compressed_combined_pk.to_bytes(SerdeFormat::Processed),
+            "compressed consuming combined keygen must preserve canonical PK/VK bytes"
         );
 
         let (circuit, lifetime) = tracked_circuit(false);

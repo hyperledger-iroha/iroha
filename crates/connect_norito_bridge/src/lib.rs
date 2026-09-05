@@ -136,6 +136,38 @@ use std::{
 use zeroize::{Zeroize, Zeroizing};
 mod account_onboarding;
 pub use account_onboarding::connect_norito_encode_account_onboarding_plan_body_v1;
+mod kagemusha_contract_vector_v1;
+pub use kagemusha_contract_vector_v1::{
+    KAGEMUSHA_NATIVE_CONTRACT_VECTOR_DIGEST_V1, KAGEMUSHA_NATIVE_CONTRACT_VECTOR_DOMAIN_V1,
+    KAGEMUSHA_NATIVE_CONTRACT_VECTOR_MAX_BYTES_V1, KAGEMUSHA_NATIVE_CONTRACT_VECTOR_VERSION_V1,
+    KAGEMUSHA_NATIVE_HARDWARE_CAPABILITY_BITS_V1, KagemushaNativeContractInventoryEntryV1,
+    KagemushaNativeContractVectorBodyV1, KagemushaNativeContractVectorErrorV1,
+    KagemushaNativeContractVectorV1, kagemusha_native_contract_vector_bytes_v1,
+};
+mod kagemusha_core_coordinator_v1;
+pub use kagemusha_core_coordinator_v1::{
+    KAGEMUSHA_CORE_COORDINATOR_ARCHIVE_MAX_BYTES_V1, KagemushaCoreCoordinatorArchiveErrorV1,
+    KagemushaCoreSenderCandidateArchiveV1, KagemushaCoreSenderPreparationArchiveV1,
+    KagemushaCoreSenderRecoveryArchiveV1, KagemushaCoreSenderPreparationSelectorV1,
+    KagemushaCoreSenderWalletContextV1,
+    KAGEMUSHA_CORE_COORDINATOR_CONTRACT_WORDS_V1, KAGEMUSHA_CORE_COORDINATOR_FRAME_HEADER_BYTES_V1,
+    KAGEMUSHA_CORE_COORDINATOR_FRAME_MAGIC_V1, KAGEMUSHA_CORE_COORDINATOR_FRAME_VERSION_V1,
+    KAGEMUSHA_CORE_COORDINATOR_MAX_FIELD_BYTES_V1, KAGEMUSHA_CORE_COORDINATOR_MAX_FIELDS_V1,
+    KAGEMUSHA_CORE_COORDINATOR_MAX_REQUEST_BYTES_V1,
+    KAGEMUSHA_CORE_COORDINATOR_MAX_RESPONSE_BYTES_V1,
+    KAGEMUSHA_CORE_COORDINATOR_MAX_STORAGE_PATH_BYTES_V1,
+    KAGEMUSHA_CORE_COORDINATOR_RECOVER_BY_OPERATION_ID_V1,
+    KAGEMUSHA_CORE_COORDINATOR_RECOVER_BY_TERMINAL_ID_V1,
+    KAGEMUSHA_CORE_COORDINATOR_WIRE_PAYLOAD_COUNT_V1, KagemushaCoreCoordinatorBackendErrorV1,
+    KagemushaCoreCoordinatorBackendV1, KagemushaCoreCoordinatorFrameErrorV1,
+    KagemushaCoreCoordinatorInstallErrorV1, KagemushaCoreCoordinatorMethodV1,
+    install_kagemusha_core_coordinator_backend_v1, kagemusha_core_coordinator_decode_request_v1,
+    kagemusha_core_coordinator_decode_response_v1, kagemusha_core_coordinator_encode_request_v1,
+    kagemusha_core_coordinator_encode_response_v1,
+    kagemusha_core_coordinator_validate_method_request_v1,
+    kagemusha_core_coordinator_validate_method_response_v1,
+    kagemusha_core_coordinator_validate_storage_path_v1,
+};
 mod kagemusha_device_bridge_v1;
 #[cfg(test)]
 mod kagemusha_fixture_tests;
@@ -1286,6 +1318,177 @@ pub unsafe extern "C" fn connect_norito_kagemusha_v1_redemption_voucher_text_val
             .map_err(|_| BridgeError::KagemushaV1)
     })()
     .map_or_else(BridgeError::code, |()| 0)
+}
+
+/// Export the canonical KAGEMUSHA V1 native/mobile contract vector.
+///
+/// The returned Norito archive pins the exact compiled inventories and carries
+/// a domain-separated ABI/tamper digest. The digest is not monetary authority.
+/// `output_len` is always set to the required length when encoding succeeds.
+/// A null `output_ptr` with zero capacity is a supported length probe and
+/// returns `ERR_BUFFER_TOO_SMALL`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_contract_vector_v1(
+    output_ptr: *mut c_uchar,
+    output_capacity: usize,
+    output_len: *mut usize,
+) -> c_int {
+    if output_len.is_null() {
+        return ERR_NULL_PTR;
+    }
+    unsafe { *output_len = 0 };
+    let Ok(vector) = kagemusha_native_contract_vector_bytes_v1() else {
+        return ERR_KAGEMUSHA_V1;
+    };
+    unsafe { *output_len = vector.len() };
+    if output_capacity < vector.len() {
+        return ERR_BUFFER_TOO_SMALL;
+    }
+    if output_ptr.is_null() {
+        return ERR_NULL_PTR;
+    }
+    unsafe { ptr::copy_nonoverlapping(vector.as_ptr(), output_ptr, vector.len()) };
+    0
+}
+
+/// Copy the exact ten-word KAGEMUSHA Core coordinator contract.
+///
+/// Success returns the written word count, not a generic zero status. The
+/// vector is an ABI compatibility probe and grants no monetary authority.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_core_coordinator_contract_v1(
+    output_ptr: *mut u32,
+    output_capacity_words: usize,
+) -> c_int {
+    if output_ptr.is_null() {
+        return ERR_NULL_PTR;
+    }
+    if output_capacity_words < KAGEMUSHA_CORE_COORDINATOR_CONTRACT_WORDS_V1.len() {
+        return ERR_BUFFER_TOO_SMALL;
+    }
+    unsafe {
+        ptr::copy_nonoverlapping(
+            KAGEMUSHA_CORE_COORDINATOR_CONTRACT_WORDS_V1.as_ptr(),
+            output_ptr,
+            KAGEMUSHA_CORE_COORDINATOR_CONTRACT_WORDS_V1.len(),
+        );
+    }
+    KAGEMUSHA_CORE_COORDINATOR_CONTRACT_WORDS_V1.len() as c_int
+}
+
+/// Open a qualified authenticated durable KAGEMUSHA Core coordinator.
+///
+/// This generic bridge contains no monetary coordinator and never substitutes
+/// host storage or a software key for qualified non-forking hardware. It
+/// validates the path, then delegates only to the process's install-once Rust
+/// backend. With no explicitly installed backend it fails closed as unavailable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_core_coordinator_open_v1(
+    storage_path_ptr: *const c_uchar,
+    storage_path_len: usize,
+    output_handle: *mut u64,
+) -> c_int {
+    if output_handle.is_null() {
+        return ERR_NULL_PTR;
+    }
+    unsafe { *output_handle = 0 };
+    if storage_path_ptr.is_null() {
+        return ERR_NULL_PTR;
+    }
+    if storage_path_len == 0
+        || storage_path_len > KAGEMUSHA_CORE_COORDINATOR_MAX_STORAGE_PATH_BYTES_V1
+    {
+        return ERR_KAGEMUSHA_V1;
+    }
+    let storage_path = unsafe { slice::from_raw_parts(storage_path_ptr, storage_path_len) };
+    let Ok(storage_path) = kagemusha_core_coordinator_validate_storage_path_v1(storage_path) else {
+        return ERR_KAGEMUSHA_V1;
+    };
+    let Some(backend) =
+        kagemusha_core_coordinator_v1::installed_kagemusha_core_coordinator_backend_v1()
+    else {
+        return ERR_KAGEMUSHA_DEVICE_UNAVAILABLE_V1;
+    };
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| backend.open(storage_path))) {
+        Ok(Ok(handle)) if handle != 0 => {
+            unsafe { *output_handle = handle };
+            0
+        }
+        Ok(Ok(_)) | Ok(Err(KagemushaCoreCoordinatorBackendErrorV1::Rejected)) | Err(_) => {
+            ERR_KAGEMUSHA_V1
+        }
+        Ok(Err(KagemushaCoreCoordinatorBackendErrorV1::Unavailable)) => {
+            ERR_KAGEMUSHA_DEVICE_UNAVAILABLE_V1
+        }
+    }
+}
+
+/// Invoke one bounded method on a qualified KAGEMUSHA Core coordinator.
+///
+/// The bridge strictly validates the closed method and request frame before
+/// dispatch to the process's install-once backend. It then bounds and validates
+/// the complete response frame before exposure. A monetary result is never
+/// synthesized from host input, and no installed backend means unavailable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_core_coordinator_invoke_v1(
+    handle: u64,
+    method: c_uchar,
+    request_frame_ptr: *const c_uchar,
+    request_frame_len: usize,
+    output_ptr: *mut *mut c_uchar,
+    output_len: *mut usize,
+) -> c_int {
+    if output_ptr.is_null() || output_len.is_null() {
+        return ERR_NULL_PTR;
+    }
+    unsafe {
+        *output_ptr = ptr::null_mut();
+        *output_len = 0;
+    }
+    if request_frame_ptr.is_null() {
+        return ERR_NULL_PTR;
+    }
+    let Some(method) = KagemushaCoreCoordinatorMethodV1::from_code(method) else {
+        return ERR_KAGEMUSHA_V1;
+    };
+    if handle == 0
+        || request_frame_len == 0
+        || request_frame_len > KAGEMUSHA_CORE_COORDINATOR_MAX_REQUEST_BYTES_V1
+    {
+        return ERR_KAGEMUSHA_V1;
+    }
+    let request_frame = unsafe { slice::from_raw_parts(request_frame_ptr, request_frame_len) };
+    if kagemusha_core_coordinator_validate_method_request_v1(method, request_frame).is_err() {
+        return ERR_KAGEMUSHA_V1;
+    }
+    let Some(backend) =
+        kagemusha_core_coordinator_v1::installed_kagemusha_core_coordinator_backend_v1()
+    else {
+        return ERR_KAGEMUSHA_DEVICE_UNAVAILABLE_V1;
+    };
+    let response_frame = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        backend.invoke(handle, method, request_frame)
+    })) {
+        Ok(Ok(response_frame)) => response_frame,
+        Ok(Err(KagemushaCoreCoordinatorBackendErrorV1::Unavailable)) => {
+            return ERR_KAGEMUSHA_DEVICE_UNAVAILABLE_V1;
+        }
+        Ok(Err(KagemushaCoreCoordinatorBackendErrorV1::Rejected)) | Err(_) => {
+            return ERR_KAGEMUSHA_V1;
+        }
+    };
+    if response_frame.len() > KAGEMUSHA_CORE_COORDINATOR_MAX_RESPONSE_BYTES_V1
+        || kagemusha_core_coordinator_validate_method_response_v1(
+            method,
+            request_frame,
+            &response_frame,
+        )
+        .is_err()
+    {
+        return ERR_KAGEMUSHA_V1;
+    }
+    unsafe { write_bytes_usize(output_ptr, output_len, &response_frame) }
+        .map_or_else(|error| error, |()| 0)
 }
 
 /// Query the optional audited KAGEMUSHA V1 device service.
@@ -9782,11 +9985,265 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaDeviceLif
         _ => {
             let _ = env.throw_new(
                 "java/lang/IllegalStateException",
-                "native Offline device capabilities failed",
+                "native KAGEMUSHA device capabilities failed",
             );
             ptr::null_mut()
         }
     }
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaDeviceLifecycleBridgeV1_00024NativeEndpoint_nativeContractVectorV1(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+) -> jni::sys::jbyteArray {
+    match kagemusha_native_contract_vector_bytes_v1() {
+        Ok(vector) => env
+            .byte_array_from_slice(&vector)
+            .map(jni::objects::JByteArray::into_raw)
+            .unwrap_or(ptr::null_mut()),
+        Err(_) => {
+            let _ = env.throw_new(
+                "java/lang/IllegalStateException",
+                "native KAGEMUSHA contract vector failed validation",
+            );
+            ptr::null_mut()
+        }
+    }
+}
+
+/// Return the exact KAGEMUSHA Core coordinator contract to the signed-app JNI adapter.
+///
+/// The generic Kotlin SDK entry point below delegates to the same implementation.
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_pg_bpng_digitalkina_KagemushaNativeCoreJniV1_nativeContractV1(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+) -> jni::sys::jintArray {
+    let mut words = [0_u32; KAGEMUSHA_CORE_COORDINATOR_CONTRACT_WORDS_V1.len()];
+    let written = unsafe {
+        connect_norito_kagemusha_core_coordinator_contract_v1(words.as_mut_ptr(), words.len())
+    };
+    if written != words.len() as c_int {
+        return ptr::null_mut();
+    }
+    let words = words.map(|word| word as jni::sys::jint);
+    let Ok(output) = env.new_int_array(words.len() as jni::sys::jsize) else {
+        return ptr::null_mut();
+    };
+    if env.set_int_array_region(&output, 0, &words).is_err() {
+        return ptr::null_mut();
+    }
+    output.into_raw()
+}
+
+/// Open the qualified KAGEMUSHA Core coordinator from the signed-app JNI adapter.
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_pg_bpng_digitalkina_KagemushaNativeCoreJniV1_nativeOpenV1(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    storage_path: jni::objects::JString<'_>,
+) -> jni::sys::jlong {
+    let Ok(storage_path) = env.get_string(&storage_path) else {
+        return 0;
+    };
+    let Ok(storage_path) = storage_path.to_str() else {
+        return 0;
+    };
+    let mut handle = 0_u64;
+    let status = unsafe {
+        connect_norito_kagemusha_core_coordinator_open_v1(
+            storage_path.as_ptr(),
+            storage_path.len(),
+            &mut handle,
+        )
+    };
+    if status == 0 && handle != 0 {
+        handle as jni::sys::jlong
+    } else {
+        0
+    }
+}
+
+/// Invoke one closed KAGEMUSHA Core coordinator method from the signed-app JNI adapter.
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_pg_bpng_digitalkina_KagemushaNativeCoreJniV1_nativeInvokeV1(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    handle: jni::sys::jlong,
+    method: jni::sys::jint,
+    fields: jni::objects::JObjectArray<'_>,
+) -> jni::sys::jobjectArray {
+    let Ok(method) = u8::try_from(method) else {
+        return ptr::null_mut();
+    };
+    if KagemushaCoreCoordinatorMethodV1::from_code(method).is_none() {
+        return ptr::null_mut();
+    }
+    let Ok(field_count) = env.get_array_length(&fields) else {
+        return ptr::null_mut();
+    };
+    let Ok(field_count) = usize::try_from(field_count) else {
+        return ptr::null_mut();
+    };
+    if field_count > KAGEMUSHA_CORE_COORDINATOR_MAX_FIELDS_V1 {
+        return ptr::null_mut();
+    }
+    let mut request_fields = Vec::with_capacity(field_count);
+    for index in 0..field_count {
+        let Ok(field) = env.get_object_array_element(&fields, index as jni::sys::jsize) else {
+            return ptr::null_mut();
+        };
+        if field.is_null() {
+            return ptr::null_mut();
+        }
+        let field = jni::objects::JByteArray::from(field);
+        let Ok(field_len) = env.get_array_length(&field) else {
+            return ptr::null_mut();
+        };
+        let Ok(field_len) = usize::try_from(field_len) else {
+            return ptr::null_mut();
+        };
+        if field_len > KAGEMUSHA_CORE_COORDINATOR_MAX_FIELD_BYTES_V1 {
+            return ptr::null_mut();
+        }
+        let Ok(field) = env.convert_byte_array(&field) else {
+            return ptr::null_mut();
+        };
+        if field.len() != field_len {
+            return ptr::null_mut();
+        }
+        request_fields.push(field);
+    }
+    let Ok(request_frame) = kagemusha_core_coordinator_encode_request_v1(&request_fields) else {
+        return ptr::null_mut();
+    };
+
+    let handle = u64::from_ne_bytes(handle.to_ne_bytes());
+    let mut output_ptr = ptr::null_mut();
+    let mut output_len = 0_usize;
+    let status = unsafe {
+        connect_norito_kagemusha_core_coordinator_invoke_v1(
+            handle,
+            method,
+            request_frame.as_ptr(),
+            request_frame.len(),
+            &mut output_ptr,
+            &mut output_len,
+        )
+    };
+    if status != 0 {
+        connect_norito_free(output_ptr);
+        return ptr::null_mut();
+    }
+    if output_ptr.is_null()
+        || output_len == 0
+        || output_len > KAGEMUSHA_CORE_COORDINATOR_MAX_RESPONSE_BYTES_V1
+    {
+        connect_norito_free(output_ptr);
+        return ptr::null_mut();
+    }
+    let response_frame = unsafe { slice::from_raw_parts(output_ptr, output_len) }.to_vec();
+    connect_norito_free(output_ptr);
+    let Ok(response_fields) = kagemusha_core_coordinator_decode_response_v1(&response_frame) else {
+        return ptr::null_mut();
+    };
+
+    let Ok(byte_array_class) = env.find_class("[B") else {
+        return ptr::null_mut();
+    };
+    let Ok(output) = env.new_object_array(
+        response_fields.len() as jni::sys::jsize,
+        byte_array_class,
+        jni::objects::JObject::null(),
+    ) else {
+        return ptr::null_mut();
+    };
+    for (index, field) in response_fields.iter().enumerate() {
+        let Ok(field) = env.byte_array_from_slice(field) else {
+            return ptr::null_mut();
+        };
+        if env
+            .set_object_array_element(&output, index as jni::sys::jsize, &field)
+            .is_err()
+        {
+            return ptr::null_mut();
+        }
+    }
+    output.into_raw()
+}
+
+/// Return the native coordinator contract to the generic Kotlin Android SDK.
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoordinatorJniV1_nativeContractV1(
+    env: jni::JNIEnv<'_>,
+    class: jni::objects::JClass<'_>,
+) -> jni::sys::jintArray {
+    Java_pg_bpng_digitalkina_KagemushaNativeCoreJniV1_nativeContractV1(env, class)
+}
+
+/// Open the same qualified native coordinator through the generic Kotlin Android SDK.
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoordinatorJniV1_nativeOpenV1(
+    env: jni::JNIEnv<'_>,
+    class: jni::objects::JClass<'_>,
+    storage_path: jni::objects::JString<'_>,
+) -> jni::sys::jlong {
+    Java_pg_bpng_digitalkina_KagemushaNativeCoreJniV1_nativeOpenV1(env, class, storage_path)
+}
+
+/// Invoke the closed coordinator schema through the generic Kotlin Android SDK.
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoordinatorJniV1_nativeInvokeV1(
+    env: jni::JNIEnv<'_>,
+    class: jni::objects::JClass<'_>,
+    handle: jni::sys::jlong,
+    method: jni::sys::jint,
+    fields: jni::objects::JObjectArray<'_>,
+) -> jni::sys::jobjectArray {
+    Java_pg_bpng_digitalkina_KagemushaNativeCoreJniV1_nativeInvokeV1(env, class, handle, method, fields)
 }
 
 #[cfg(any(
@@ -9809,7 +10266,7 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaDeviceLif
     else {
         let _ = env.throw_new(
             "java/lang/IllegalArgumentException",
-            "Offline device command length is outside the ABI-23 bound",
+            "KAGEMUSHA device command length is outside the V1 bound",
         );
         return ptr::null_mut();
     };
@@ -9820,7 +10277,7 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaDeviceLif
     if command_bytes.len() != command_length {
         let _ = env.throw_new(
             "java/lang/IllegalArgumentException",
-            "Offline device command length changed during JNI transfer",
+            "KAGEMUSHA device command length changed during JNI transfer",
         );
         return ptr::null_mut();
     }
@@ -9849,14 +10306,14 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaDeviceLif
         kagemusha_device_bridge_v1::JniExecutionDispositionV1::Malformed => {
             let _ = env.throw_new(
                 "java/lang/IllegalArgumentException",
-                "Offline device command is malformed",
+                "KAGEMUSHA device command is malformed",
             );
             ptr::null_mut()
         }
         kagemusha_device_bridge_v1::JniExecutionDispositionV1::Failed => {
             let _ = env.throw_new(
                 "java/lang/IllegalStateException",
-                "native Offline device execution failed",
+                "native KAGEMUSHA device execution failed",
             );
             ptr::null_mut()
         }
@@ -11804,7 +12261,10 @@ mod tests {
             );
             assert_eq!(output_len, 0);
         }
-        assert!(validated >= 10, "expected broad operation-family coverage");
+        assert_eq!(
+            validated, 22,
+            "every closed V1 operation must fail unavailable"
+        );
     }
 
     #[test]

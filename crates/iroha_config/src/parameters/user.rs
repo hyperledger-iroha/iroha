@@ -19042,7 +19042,7 @@ impl ToriiFaucet {
 }
 /// KAGEMUSHA V1 command-admission configuration for app-facing KAGEMUSHA V1 routes.
 ///
-/// The whole table is optional. When present, every policy and capacity field is required.
+/// The whole table is optional. When present, every capacity field is required.
 /// The redemption signer fields are an optional all-or-none group; payer-signed top-ups do not
 /// require Torii to hold an issuer key.
 #[derive(Debug, Clone, norito::JsonDeserialize)]
@@ -19057,8 +19057,6 @@ pub struct ToriiKagemushaV1Commands {
     /// This is required and must be positive when a redemption key is configured, and must be
     /// absent when no redemption issuer is configured.
     pub redemption_minimum_xor_balance: Option<Quantity>,
-    /// Maximum value accepted for one KAGEMUSHA V1 command.
-    pub max_tx_value: Quantity,
     /// Maximum number of admitted and in-flight operations retained in memory.
     pub operation_registry_max_entries: usize,
     /// Maximum canonical bytes reserved by admitted and in-flight operations.
@@ -19070,7 +19068,6 @@ impl ToriiKagemushaV1Commands {
             redemption_private_key,
             redemption_private_key_file,
             redemption_minimum_xor_balance,
-            max_tx_value,
             operation_registry_max_entries,
             operation_registry_max_bytes,
         } = self;
@@ -19167,13 +19164,6 @@ impl ToriiKagemushaV1Commands {
             }
             (None, None) => None,
         };
-        let max_tx_value_valid = !max_tx_value.is_zero();
-        if !max_tx_value_valid {
-            emit_torii_config_error(
-                emitter,
-                "torii.kagemusha_v1_commands.max_tx_value must be greater than zero",
-            );
-        }
         let operation_registry_max_entries = NonZeroUsize::new(operation_registry_max_entries);
         if operation_registry_max_entries.is_none() {
             emit_torii_config_error(
@@ -19200,16 +19190,13 @@ impl ToriiKagemushaV1Commands {
             );
             return None;
         }
-        let (true, Some(operation_registry_max_entries), Some(operation_registry_max_bytes)) = (
-            max_tx_value_valid,
-            operation_registry_max_entries,
-            operation_registry_max_bytes,
-        ) else {
+        let (Some(operation_registry_max_entries), Some(operation_registry_max_bytes)) =
+            (operation_registry_max_entries, operation_registry_max_bytes)
+        else {
             return None;
         };
         Some(actual::ToriiKagemushaV1Commands {
             redemption_issuer,
-            max_tx_value,
             operation_registry_max_entries,
             operation_registry_max_bytes,
         })
@@ -35301,7 +35288,6 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             redemption_private_key: Some(private_key.clone()),
             redemption_private_key_file: None,
             redemption_minimum_xor_balance: Some(Quantity::from(1_u64)),
-            max_tx_value: defaults::torii::kagemusha_v1_commands::max_tx_value(),
             operation_registry_max_entries:
                 defaults::torii::kagemusha_v1_commands::OPERATION_REGISTRY_MAX_ENTRIES,
             operation_registry_max_bytes:
@@ -35644,7 +35630,6 @@ policy_digest_hex = "{policy_digest_hex}"
                     "redemption_minimum_xor_balance".into(),
                     Value::String("1".into()),
                 ),
-                ("max_tx_value".into(), Value::String("1000000000".into())),
                 (
                     "operation_registry_max_entries".into(),
                     Value::Integer(4096),
@@ -35724,7 +35709,6 @@ policy_digest_hex = "{policy_digest_hex}"
                     "redemption_minimum_xor_balance".into(),
                     Value::String("1".into()),
                 ),
-                ("max_tx_value".into(), Value::String("1000000000".into())),
                 (
                     "operation_registry_max_entries".into(),
                     Value::Integer(4096),

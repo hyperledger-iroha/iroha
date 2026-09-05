@@ -6,6 +6,15 @@ import org.junit.jupiter.api.Test
 
 class KagemushaDeviceLifecycleBridgeV1Test {
     @Test
+    fun `native contract vector probe is bounded when linked`() {
+        assertEquals(4 * 1024, KagemushaDeviceLifecycleBridgeV1.MAXIMUM_NATIVE_CONTRACT_VECTOR_BYTES)
+        KagemushaDeviceLifecycleBridgeV1.nativeContractVector()?.let { vector ->
+            assertTrue(vector.isNotEmpty())
+            assertTrue(vector.size <= KagemushaDeviceLifecycleBridgeV1.MAXIMUM_NATIVE_CONTRACT_VECTOR_BYTES)
+        }
+    }
+
+    @Test
     fun `device operations are contiguous and complete`() {
         val operations = KagemushaDeviceLifecycleBridgeV1.Operation.values()
         assertEquals((1..22).toList(), operations.map { it.code })

@@ -189,7 +189,7 @@ mod halo2_bundle {
             use std::io::Cursor;
             let cursor = Cursor::new(proof_raw.as_slice());
             let mut transcript = Blake2bRead::<_, Curve, Challenge255<Curve>>::init(cursor);
-            let strategy = halo2_proofs::poly::ipa::strategy::SingleStrategy::new(&params);
+            let strategy = halo2_proofs::poly::ipa::strategy::SingleStrategy::<Curve>::new(&params);
             let res = halo2_proofs::plonk::verify_proof(
                 &params,
                 &vk_h2,
@@ -204,7 +204,8 @@ mod halo2_bundle {
                 let mut transcript_alt = Blake2bRead::<_, Curve, Challenge255<Curve>>::init(
                     Cursor::new(proof_raw.as_slice()),
                 );
-                let strategy_alt = halo2_proofs::poly::ipa::strategy::SingleStrategy::new(&params);
+                let strategy_alt =
+                    halo2_proofs::poly::ipa::strategy::SingleStrategy::<Curve>::new(&params);
                 let res_swapped = halo2_proofs::plonk::verify_proof(
                     &params,
                     &vk_h2,

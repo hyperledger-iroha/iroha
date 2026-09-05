@@ -183,6 +183,19 @@ struct PastaSha256BoundedJobV1<F: ScalarField> {
     #[cfg(test)]
     final_block_selectors: Vec<AssignedValue<F>>,
 }
+
+/// Circuit-owned inputs needed to equality-bind an ordered hash-claim proof.
+///
+/// This view never exposes an unconstrained host digest.  Every dynamic byte and every terminal
+/// word is the exact Base cell already consumed or produced by [`PastaSha256JobsV1`].  The mint
+/// claim consumer uses it to reconstruct the typed-plan roots in-circuit before it accepts the
+/// recursively verified terminal claim.
+pub(super) struct PastaSha256ClaimJobV1<'a, F: ScalarField> {
+    /// Exact, unpadded SHA message cells.
+    pub(super) message: &'a [PastaSha256ByteV1<F>],
+    /// Exact eight terminal digest-word cells produced for this message.
+    pub(super) output_words: &'a [AssignedValue<F>; DIGEST_SIZE],
+}
 /// Explicit, circuit-owned SHA jobs. There is deliberately no global or
 /// thread-local queue: witness stripping clones this exact job shape.
 #[derive(Clone, Debug)]
@@ -495,6 +508,30 @@ where
                         })
                     })
                     .collect()
+            })
+            .collect()
+    }
+
+    /// Borrow the exact ordinary SHA jobs for recursive claim consumption.
+    ///
+    /// Bounded jobs expose intermediate selected states and therefore need a distinct typed-plan
+    /// relation.  Reject them here instead of silently treating their capacity padding as an
+    /// ordinary message.  The current mint-authority certificate queue contains ordinary jobs
+    /// only, so this is a fail-closed protocol invariant rather than a history or count limit.
+    pub(crate) fn claim_jobs(&self) -> Result<Vec<PastaSha256ClaimJobV1<'_, F>>, String> {
+        self.jobs
+            .iter()
+            .enumerate()
+            .map(|(index, job)| {
+                if job.bounded.is_some() {
+                    return Err(format!(
+                        "Paired Pasta SHA-256 job {index} uses bounded padding and cannot enter the ordinary mint claim"
+                    ));
+                }
+                Ok(PastaSha256ClaimJobV1 {
+                    message: &job.message,
+                    output_words: &job.output_words,
+                })
             })
             .collect()
     }

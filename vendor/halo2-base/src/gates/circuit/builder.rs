@@ -4,15 +4,14 @@ use getset::{Getters, MutGetters, Setters};
 use itertools::Itertools;
 
 use crate::{
-    AssignedValue, Context,
     gates::{
-        RangeChip,
         circuit::CircuitBuilderStage,
         flex_gate::{
-            MAX_PHASE, MultiPhaseThreadBreakPoints,
             threads::{GateStatistics, MultiPhaseCoreManager, SinglePhaseCoreManager},
+            MultiPhaseThreadBreakPoints, MAX_PHASE,
         },
         range::RangeConfig,
+        RangeChip,
     },
     halo2_proofs::{
         circuit::{Layouter, Region},
@@ -24,6 +23,7 @@ use crate::{
         lookups::LookupAnyManager,
         manager::VirtualRegionManager,
     },
+    AssignedValue, Context,
 };
 
 use super::BaseCircuitParams;

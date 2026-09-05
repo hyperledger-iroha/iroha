@@ -385,7 +385,11 @@ fn unknown_hash_has_no_body_status_or_durable_payload_len() {
     assert_eq!(kura.get_block_height_by_hash(unknown_hash), None);
     assert_eq!(kura.block_body_status_by_hash(unknown_hash), None);
     assert!(!kura.block_payload_available_by_hash(unknown_hash));
-    assert_eq!(kura.durable_block_payload_len_by_hash(unknown_hash), None);
+    assert_eq!(
+        kura.durable_block_payload_len_by_hash(unknown_hash)
+            .expect("unknown hash lookup"),
+        None
+    );
 }
 fn store_dummy_block_arcs(kura: &Kura, count: usize) -> Vec<Arc<SignedBlock>> {
     let mut generator = DummyBlocks::new();
@@ -452,6 +456,17 @@ fn advertise_required_replicas(kura: &Kura, height: NonZeroUsize) -> (HashOf<Blo
     metadata
 }
 fn sample_merge_entry(epoch: u64) -> MergeLedgerEntry {
+    let mut lane_validators = (0..4)
+        .map(|seed| {
+            PeerId::new(
+                iroha_crypto::KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                    .expect("deterministic merge fixture lane validator")
+                    .public_key()
+                    .clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    lane_validators.sort();
     let epoch_u8 = u8::try_from(epoch).expect("test epoch must fit in a u8");
     let epoch_plus_one = epoch_u8
         .checked_add(1)
@@ -519,6 +534,11 @@ fn sample_merge_entry(epoch: u64) -> MergeLedgerEntry {
             incarnation: Hash::new(b"kura-merge-test-lane-incarnation"),
             activation_height: 1,
         }],
+        lane_authority_catalog:
+            iroha_data_model::merge::MergeLaneAuthorityCatalogV1::from_lane_committees(&[
+                lane_validators,
+            ])
+            .expect("canonical Kura fixture lane authority"),
         incarnation_root: Hash::new(b"kura-merge-test-incarnation-root"),
         activation_root: Hash::new(b"kura-merge-test-activation-root"),
         lane_snapshots,
