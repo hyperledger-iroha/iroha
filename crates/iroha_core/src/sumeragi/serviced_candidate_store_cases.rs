@@ -46,9 +46,7 @@ mod tests {
             )),
         );
         let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
-            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
-                network_id, 1, &roster,
-            );
+            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(network_id, 1, &roster);
         let context = wire::HeightContext {
             network_id,
             protocol_version: wire::PROTOCOL_VERSION,
@@ -264,6 +262,8 @@ mod tests {
                 phase,
                 semantic_origin: origin.clone(),
                 canonical_wire_hash: Hash::new([0x52, discriminator]),
+                vote_statement_hash: Some(Hash::new([0x53, discriminator])),
+                timeout_prepare_view: None,
             },
             slot: FairV2IngressLeaderWireSlot {
                 semantic_origin: origin,
@@ -300,6 +300,13 @@ mod tests {
                 phase,
                 semantic_origin: origin.clone(),
                 canonical_wire_hash: Hash::new(b"shared leader-wire bytes"),
+                vote_statement_hash: matches!(
+                    phase,
+                    FairV2IngressLeaderWirePhase::PrepareVote
+                        | FairV2IngressLeaderWirePhase::CommitVote
+                )
+                .then(|| Hash::new(b"shared leader-wire vote statement")),
+                timeout_prepare_view: None,
             },
             slot: FairV2IngressLeaderWireSlot {
                 semantic_origin: origin.clone(),
@@ -329,6 +336,8 @@ mod tests {
                 phase,
                 semantic_origin: origin.clone(),
                 canonical_wire_hash: Hash::new(b"durable body terminal response"),
+                vote_statement_hash: None,
+                timeout_prepare_view: None,
             },
             slot: FairV2IngressLeaderWireSlot {
                 semantic_origin: origin,

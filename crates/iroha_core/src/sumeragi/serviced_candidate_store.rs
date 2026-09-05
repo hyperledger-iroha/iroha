@@ -50,7 +50,7 @@ const FIXED_FRAME_HEADROOM_BYTES: u64 = 4 * 1024;
 const RECORD_FRAME_HEADROOM_BYTES: u64 = 192;
 const PRODUCER_CONTINUATION_FRAME_HEADROOM_BYTES: u64 = 1024;
 const MAX_PRODUCER_CONTINUATION_HANDOFFS: usize = 3;
-const LEADER_WIRE_FORMAT_VERSION: u16 = 2;
+const LEADER_WIRE_FORMAT_VERSION: u16 = 3;
 const LEADER_WIRE_FRAME_MAGIC: &[u8; 8] = b"SUMVWIRE";
 const LEADER_WIRE_RECORD_HEADROOM_BYTES: u64 = 8 * 1024;
 /// Closed service-stage carrier shared by adapter policy and durable records.
@@ -598,177 +598,7 @@ impl From<ProducerContinuationTerminalToken> for LeaderWireStableTerminalEvidenc
         Self::Producer(terminal)
     }
 }
-/// Opaque durable epoch boundary reconstructed by the already-opened adapter.
-///
-/// The generic ingress snapshot is opened only after safety-WAL replay. This
-/// capability lets it retire view-scoped control records made obsolete by a
-/// certified view advance or durable Decision without treating its own
-/// terminal projection as authority. The exact durable-lock Commit statement
-/// and any CommitQC remain reducer progress across view changes. Manifest
-/// chunks and historical certified-body responses are transport completions;
-/// the reducer can make Decision durable before obtaining the exact body, so
-/// neither cut can obsolete them. The capability is process-local and never
-/// enters either snapshot format.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct LeaderWireRecoveryAuthority {
-    context_id: wire::HeightContextId,
-    height: wire::Height,
-    owner: [u8; 32],
-    durable_view: wire::View,
-    decision_durable: bool,
-    /// Exact durable lock whose historical Commit votes remain reducer inputs.
-    ///
-    /// This projection is process-local safety-WAL authority. It is deliberately
-    /// absent from the leader-wire snapshot: replay reconstructs it from the
-    /// authenticated PrepareQC before opening this adjacent store.
-    protected_lock: Option<(wire::ConsensusRound, wire::BlockSubject)>,
-}
-impl LeaderWireRecoveryAuthority {
-    /// Mint the recovery cut only from a replay-complete adapter.
-    pub(super) const fn from_replayed_adapter(
-        context_id: wire::HeightContextId,
-        height: wire::Height,
-        owner: [u8; 32],
-        durable_view: wire::View,
-        decision_durable: bool,
-    ) -> Self {
-        Self {
-            context_id,
-            height,
-            owner,
-            durable_view,
-            decision_durable,
-            protected_lock: None,
-        }
-    }
-    fn protected_lock_is_well_formed(
-        self,
-        protected_lock: (wire::ConsensusRound, wire::BlockSubject),
-    ) -> bool {
-        let (round, _) = protected_lock;
-        round.context_id == self.context_id
-            && round.height == self.height
-            && round.view <= self.durable_view
-    }
-    fn protected_lock_monotonically_extends(self, previous: Self) -> bool {
-        match (previous.protected_lock, self.protected_lock) {
-            (None, _) => true,
-            (Some(_), None) => false,
-            (Some(previous), Some(next)) => next == previous || next.0.view > previous.0.view,
-        }
-    }
-    /// Attach the exact replayed durable lock before opening the adjacent store.
-    pub(super) fn with_protected_lock(
-        self,
-        protected_lock: Option<(wire::ConsensusRound, wire::BlockSubject)>,
-    ) -> Result<Self, String> {
-        let next = Self {
-            protected_lock,
-            ..self
-        };
-        if protected_lock.is_some_and(|lock| !next.protected_lock_is_well_formed(lock)) {
-            return Err(
-                "leader-wire recovery authority carried a future protected lock".to_owned(),
-            );
-        }
-        if !next.protected_lock_monotonically_extends(self) {
-            return Err("leader-wire recovery authority regressed its protected lock".to_owned());
-        }
-        Ok(next)
-    }
-    fn matches_geometry(
-        self,
-        context_id: wire::HeightContextId,
-        height: wire::Height,
-        owner: [u8; 32],
-    ) -> bool {
-        self.context_id == context_id && self.height == height && self.owner == owner
-    }
-    /// Advance this WAL-derived authority to a certified durable view.
-    pub(super) fn advance_view(
-        self,
-        durable_view: wire::View,
-        protected_lock: Option<(wire::ConsensusRound, wire::BlockSubject)>,
-    ) -> Result<Self, String> {
-        if durable_view < self.durable_view {
-            return Err("leader-wire recovery authority regressed its durable view".to_owned());
-        }
-        let next = Self {
-            durable_view,
-            protected_lock,
-            ..self
-        };
-        if protected_lock.is_some_and(|lock| !next.protected_lock_is_well_formed(lock)) {
-            return Err(
-                "leader-wire recovery authority carried a future protected lock".to_owned(),
-            );
-        }
-        if !next.protected_lock_monotonically_extends(self) {
-            return Err("leader-wire recovery authority regressed its protected lock".to_owned());
-        }
-        Ok(next)
-    }
-    /// Refine this WAL-derived authority after Decision is durable.
-    pub(super) const fn with_durable_decision(self) -> Self {
-        Self {
-            decision_durable: true,
-            ..self
-        }
-    }
-    fn monotonically_extends(self, previous: Self) -> bool {
-        self.context_id == previous.context_id
-            && self.height == previous.height
-            && self.owner == previous.owner
-            && self.durable_view >= previous.durable_view
-            && (!previous.decision_durable || self.decision_durable)
-            && self
-                .protected_lock
-                .is_none_or(|lock| self.protected_lock_is_well_formed(lock))
-            && self.protected_lock_monotonically_extends(previous)
-    }
-    fn protects_commit_vote(self, identity: &FairV2IngressLeaderWireIdentity) -> bool {
-        identity.phase == FairV2IngressLeaderWirePhase::CommitVote
-            && self.protected_lock.is_some_and(|(round, subject)| {
-                identity.context_id == round.context_id
-                    && identity.height == round.height
-                    && identity.view == round.view
-                    && identity.subject_hash == Hash::new(subject.encode())
-            })
-    }
-    /// Return whether this durable cut retires one stored lifecycle owner.
-    pub(super) fn retires(self, token: &FairV2IngressLeaderWireToken) -> bool {
-        self.retires_stored_identity(&token.identity)
-    }
-    fn retires_stored_identity(self, identity: &FairV2IngressLeaderWireIdentity) -> bool {
-        if identity.phase.source_class() != FairV2IngressLeaderWireSourceClass::Control {
-            return false;
-        }
-        self.decision_durable
-            || (identity.view < self.durable_view
-                && identity.phase != FairV2IngressLeaderWirePhase::CommitQc
-                && !self.protects_commit_vote(identity))
-    }
-    /// Return whether this durable cut still admits new ingress of this identity.
-    fn admits_ingress_identity(self, identity: &FairV2IngressLeaderWireIdentity) -> bool {
-        // A certified view closes ordinary old-view control, but the reducer
-        // still accepts the exact locked Commit statement and terminal
-        // CommitQC. Decision closes every control class, not transport
-        // completion. The selected block can still be missing when Decision
-        // becomes durable, so its exact chunk/body response must reach the
-        // downstream fetch, manifest, request, and subject checks.
-        if identity.phase.source_class() != FairV2IngressLeaderWireSourceClass::Control {
-            return true;
-        }
-        if self.decision_durable {
-            return false;
-        }
-        identity.phase == FairV2IngressLeaderWirePhase::CommitQc
-            || self.protects_commit_vote(identity)
-            || identity.view >= self.durable_view
-            || (identity.phase == FairV2IngressLeaderWirePhase::TimeoutCertificate
-                && identity.view.saturating_add(1) == self.durable_view)
-    }
-}
+pub(crate) use super::v2::LeaderWireRecoveryAuthority;
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 #[norito(deny_unknown_fields)]
 struct PersistedLeaderWireLifecycleRecord {
@@ -806,6 +636,8 @@ struct LeaderWireLifecycleState {
     /// `admit_ingress` atomically reactivates the slot. A newer live safety-WAL
     /// cut can retire them first without requiring requester retransmission.
     replay_dormant: BTreeSet<FairV2IngressLeaderWireSlot>,
+    /// Actual reducer epoch which consumed each live runtime carrier.
+    runtime_consumer_epochs: BTreeMap<FairV2IngressLeaderWireSlot, super::v2_core::EventTag>,
 }
 fn leader_wire_lifecycle_identity_projection(
     token: &FairV2IngressLeaderWireToken,
@@ -1000,6 +832,7 @@ impl LeaderWireLifecycleAdmissionReceipt {
 pub(crate) struct LeaderWireLifecycleRuntimeReceipt {
     token: FairV2IngressLeaderWireToken,
     owner: LeaderWireRuntimeOwner,
+    consumer_tag: super::v2_core::EventTag,
 }
 impl LeaderWireLifecycleRuntimeReceipt {
     /// Generic ingress token transferred to the runtime.
@@ -1364,6 +1197,7 @@ impl LeaderWireLifecycleStoreGate {
                 scheduler_ordinal_high_watermark: 0,
                 records: BTreeMap::new(),
                 replay_dormant: BTreeSet::new(),
+                runtime_consumer_epochs: BTreeMap::new(),
             }),
         });
         let changed =
@@ -1542,8 +1376,8 @@ impl LeaderWireLifecycleStoreGate {
     pub(crate) fn advance_recovery_cut(
         &self,
         next: LeaderWireRecoveryAuthority,
-        expected_dormant_slots: &BTreeSet<FairV2IngressLeaderWireSlot>,
-    ) -> Result<(), String> {
+        expected_retiring_slots: &BTreeSet<FairV2IngressLeaderWireSlot>,
+    ) -> Result<BTreeSet<FairV2IngressLeaderWireSlot>, String> {
         if !next.matches_geometry(self.context_id, self.height, self.owner) {
             return Err("leader-wire recovery cut changed immutable geometry".to_owned());
         }
@@ -1558,33 +1392,56 @@ impl LeaderWireLifecycleStoreGate {
             .records
             .iter()
             .filter_map(|(slot, record)| {
-                (record.status == LeaderWireLifecycleStatus::Dormant && next.retires(&record.token))
-                    .then(|| slot.clone())
+                (matches!(
+                    record.status,
+                    LeaderWireLifecycleStatus::Dormant
+                        | LeaderWireLifecycleStatus::VolatileTerminal
+                ) && next.retires(&record.token))
+                .then(|| slot.clone())
             })
             .collect::<BTreeSet<_>>();
-        if retiring != *expected_dormant_slots || !retiring.is_subset(&state.replay_dormant) {
+        if retiring != *expected_retiring_slots {
             return Err(
-                "leader-wire recovery cut disagreed with dormant ingress ownership".to_owned(),
+                "leader-wire recovery cut disagreed with carrierless ingress ownership".to_owned(),
             );
         }
+        let rearming = state
+            .records
+            .iter()
+            .filter_map(|(slot, record)| {
+                (record.status == LeaderWireLifecycleStatus::VolatileTerminal
+                    && state
+                        .runtime_consumer_epochs
+                        .get(slot)
+                        .is_some_and(|tag| next.rearms(&record.token, *tag)))
+                .then(|| slot.clone())
+            })
+            .collect::<BTreeSet<_>>();
         let previous = state.clone();
         state.recovery_authority = next;
         for slot in &retiring {
-            let removed = state
+            state
                 .records
                 .remove(slot)
-                .expect("preflighted dormant leader-wire slot remains indexed");
-            debug_assert_eq!(removed.status, LeaderWireLifecycleStatus::Dormant);
-            let was_dormant = state.replay_dormant.remove(slot);
-            debug_assert!(was_dormant);
+                .expect("preflighted carrierless leader-wire slot remains indexed");
+            state.replay_dormant.remove(slot);
+            state.runtime_consumer_epochs.remove(slot);
         }
-        if !retiring.is_empty()
+        for slot in &rearming {
+            state
+                .records
+                .get_mut(slot)
+                .expect("preflighted terminal remains indexed")
+                .status = LeaderWireLifecycleStatus::Dormant;
+            state.replay_dormant.insert(slot.clone());
+        }
+        if (!retiring.is_empty() || !rearming.is_empty())
             && let Err(error) = self.persist_locked(&state)
         {
             *state = previous;
             return Err(error);
         }
-        Ok(())
+        Ok(rearming)
     }
     /// Return every carrier still owned by a sealed fair queue to Dormant.
     ///
@@ -1838,7 +1695,7 @@ impl LeaderWireLifecycleStoreGate {
                 "leader-wire transfer changed its shared scheduler/token identity".to_owned(),
             );
         }
-        self.transition(token, |record| match record.status {
+        let (_, consumer_tag) = self.transition(token, |record, _, _| match record.status {
             LeaderWireLifecycleStatus::Ingress => {
                 if record
                     .runtime_owner
@@ -1861,6 +1718,7 @@ impl LeaderWireLifecycleStoreGate {
         Ok(LeaderWireLifecycleRuntimeReceipt {
             token: token.clone(),
             owner,
+            consumer_tag,
         })
     }
     /// Publish a same-process tombstone without claiming restart-stable proof.
@@ -1870,29 +1728,32 @@ impl LeaderWireLifecycleStoreGate {
     pub(crate) fn mark_volatile_terminal(
         &self,
         runtime: &LeaderWireLifecycleRuntimeReceipt,
-    ) -> Result<(), String> {
-        self.transition(&runtime.token, |record| match record.status {
-            LeaderWireLifecycleStatus::Runtime
-                if record.runtime_owner == Some(runtime.owner)
-                    && record.terminal_evidence.is_none() =>
+    ) -> Result<LeaderWireLifecycleStatus, String> {
+        self.transition(&runtime.token, |record, authority, consumed_by| {
+            if consumed_by != runtime.consumer_tag
+                || record.runtime_owner != Some(runtime.owner)
+                || record.terminal_evidence.is_some()
+                || !matches!(
+                    record.status,
+                    LeaderWireLifecycleStatus::Runtime
+                        | LeaderWireLifecycleStatus::VolatileTerminal
+                        | LeaderWireLifecycleStatus::Dormant
+                )
             {
-                record.status = LeaderWireLifecycleStatus::VolatileTerminal;
-                Ok(true)
+                return Err(
+                    "leader-wire volatile terminal changed exact consumer ownership".to_owned(),
+                );
             }
-            LeaderWireLifecycleStatus::VolatileTerminal
-                if record.runtime_owner == Some(runtime.owner)
-                    && record.terminal_evidence.is_none() =>
-            {
-                Ok(false)
-            }
-            LeaderWireLifecycleStatus::Dormant
-            | LeaderWireLifecycleStatus::Ingress
-            | LeaderWireLifecycleStatus::Runtime
-            | LeaderWireLifecycleStatus::VolatileTerminal
-            | LeaderWireLifecycleStatus::Terminal => {
-                Err("leader-wire volatile terminal changed exact ownership".to_owned())
-            }
+            let status = if authority.rearms(&record.token, consumed_by) {
+                LeaderWireLifecycleStatus::Dormant
+            } else {
+                LeaderWireLifecycleStatus::VolatileTerminal
+            };
+            let changed = record.status != status;
+            record.status = status;
+            Ok(changed)
         })
+        .map(|(status, _)| status)
     }
     /// Publish the generic Terminal after typed stable evidence exists.
     pub(crate) fn mark_terminal(
@@ -1911,29 +1772,34 @@ impl LeaderWireLifecycleStoreGate {
         ) {
             return Err("leader-wire terminal did not match its producer runtime owner".to_owned());
         }
-        self.transition(&runtime.token, |record| match record.status {
-            LeaderWireLifecycleStatus::Runtime | LeaderWireLifecycleStatus::VolatileTerminal
-                if record.runtime_owner == Some(runtime.owner)
-                    && record.terminal_evidence.is_none() =>
-            {
-                record.terminal_evidence = Some(terminal_evidence.clone());
-                record.status = LeaderWireLifecycleStatus::Terminal;
-                Ok(true)
-            }
-            LeaderWireLifecycleStatus::Terminal
-                if record.runtime_owner == Some(runtime.owner)
-                    && record.terminal_evidence.as_ref() == Some(&terminal_evidence) =>
-            {
-                Ok(false)
-            }
-            LeaderWireLifecycleStatus::Dormant
-            | LeaderWireLifecycleStatus::Ingress
-            | LeaderWireLifecycleStatus::Runtime
-            | LeaderWireLifecycleStatus::VolatileTerminal
-            | LeaderWireLifecycleStatus::Terminal => {
-                Err("leader-wire terminal transition changed exact ownership".to_owned())
+        self.transition(&runtime.token, |record, _, consumed_by| {
+            match record.status {
+                LeaderWireLifecycleStatus::Runtime
+                | LeaderWireLifecycleStatus::VolatileTerminal
+                    if consumed_by == runtime.consumer_tag
+                        && record.runtime_owner == Some(runtime.owner)
+                        && record.terminal_evidence.is_none() =>
+                {
+                    record.terminal_evidence = Some(terminal_evidence.clone());
+                    record.status = LeaderWireLifecycleStatus::Terminal;
+                    Ok(true)
+                }
+                LeaderWireLifecycleStatus::Terminal
+                    if record.runtime_owner == Some(runtime.owner)
+                        && record.terminal_evidence.as_ref() == Some(&terminal_evidence) =>
+                {
+                    Ok(false)
+                }
+                LeaderWireLifecycleStatus::Dormant
+                | LeaderWireLifecycleStatus::Ingress
+                | LeaderWireLifecycleStatus::Runtime
+                | LeaderWireLifecycleStatus::VolatileTerminal
+                | LeaderWireLifecycleStatus::Terminal => {
+                    Err("leader-wire terminal transition changed exact ownership".to_owned())
+                }
             }
         })
+        .map(|_| ())
     }
     /// Publish a producer-backed stable terminal after producer-first ordering.
     pub(crate) fn mark_producer_terminal(
@@ -1966,8 +1832,12 @@ impl LeaderWireLifecycleStoreGate {
     fn transition(
         &self,
         token: &FairV2IngressLeaderWireToken,
-        update: impl FnOnce(&mut PersistedLeaderWireLifecycleRecord) -> Result<bool, String>,
-    ) -> Result<(), String> {
+        update: impl FnOnce(
+            &mut PersistedLeaderWireLifecycleRecord,
+            LeaderWireRecoveryAuthority,
+            super::v2_core::EventTag,
+        ) -> Result<bool, String>,
+    ) -> Result<(LeaderWireLifecycleStatus, super::v2_core::EventTag), String> {
         if !token.validate_exact(
             self.context_id,
             self.height,
@@ -1981,6 +1851,12 @@ impl LeaderWireLifecycleStoreGate {
             .lock()
             .map_err(|_| "leader-wire lifecycle store lock was poisoned".to_owned())?;
         let previous = state.clone();
+        let authority = state.recovery_authority;
+        let consumed_by = state
+            .runtime_consumer_epochs
+            .get(&token.slot)
+            .copied()
+            .unwrap_or_else(|| authority.consumer_tag());
         let record = state
             .records
             .get_mut(&token.slot)
@@ -1988,14 +1864,30 @@ impl LeaderWireLifecycleStoreGate {
         if record.token != *token {
             return Err("leader-wire transition changed its immutable token".to_owned());
         }
-        if !update(record)? {
-            return Ok(());
+        let before = record.status;
+        if !update(record, authority, consumed_by)? {
+            return Ok((record.status, consumed_by));
+        }
+        let after = record.status;
+        let consumed_by = if before == LeaderWireLifecycleStatus::Ingress
+            && after == LeaderWireLifecycleStatus::Runtime
+        {
+            let tag = authority.consumer_tag();
+            state
+                .runtime_consumer_epochs
+                .insert(token.slot.clone(), tag);
+            tag
+        } else {
+            consumed_by
+        };
+        if after == LeaderWireLifecycleStatus::Dormant {
+            state.replay_dormant.insert(token.slot.clone());
         }
         if let Err(error) = self.persist_locked(&state) {
             *state = previous;
             return Err(error);
         }
-        Ok(())
+        Ok((after, consumed_by))
     }
     fn restore_from_state(state: &LeaderWireLifecycleState) -> LeaderWireLifecycleRestore {
         LeaderWireLifecycleRestore {

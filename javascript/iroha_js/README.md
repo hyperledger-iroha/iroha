@@ -187,6 +187,10 @@ authorization/credit binding and typed encrypted-credit opening, AAD, and
 envelope codecs. Sender recovery reproduces the same hardware-committed
 canonical payment bytes from the durable outbox.
 
+Model fields are immutable after validation. Byte getters return defensive
+copies, including fields reached through nested models; canonical backing
+values remain private to the codec module.
+
 ```js
 import { Kagemusha } from "@iroha/iroha-js/kagemusha";
 ```

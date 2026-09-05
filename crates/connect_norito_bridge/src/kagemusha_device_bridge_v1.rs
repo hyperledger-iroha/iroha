@@ -16,7 +16,7 @@ use crate::KagemushaDeviceLifecycleOperationV1;
 
 mod control_payload;
 mod receiver_payload;
-mod sender_payload;
+pub(crate) mod sender_payload;
 
 pub(super) const COMMAND_HEADER_BYTES_V1: usize = 80;
 pub(super) const MAX_COMMAND_PAYLOAD_BYTES_V1: usize = 64 * 1024;

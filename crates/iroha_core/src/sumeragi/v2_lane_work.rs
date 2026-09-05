@@ -4836,8 +4836,7 @@ impl V2LaneWorkAdapter {
                     return Err(V2LaneWorkError::StateHeightMismatch);
                 }
                 let parent = self
-                    .kura
-                    .get_block(parent_height)
+                    .canonical_block_body(parent_height)?
                     .ok_or(V2LaneWorkError::StateHeightMismatch)?;
                 if parent.hash() != parent_qc.subject.block_hash
                     || self.state.latest_block_hash_fast() != Some(parent.hash())
@@ -5334,6 +5333,33 @@ impl V2LaneWorkAdapter {
         self.retained_merge_carrier_state
             .is_some_and(|(_, _, decided)| decided.is_some())
     }
+    /// Preserve local durable corruption as a terminal consensus failure, even
+    /// when a protocol predicate represents ordinary absence with `false`.
+    fn consensus_storage_read<T>(
+        &self,
+        read: crate::kura::Result<T>,
+    ) -> Result<T, V2LaneWorkError> {
+        read.map_err(|error| {
+            self.output_guard.close_admission_for_restart();
+            V2LaneWorkError::Persistence(error.to_string())
+        })
+    }
+    fn canonical_block_body(
+        &self,
+        height: NonZeroUsize,
+    ) -> Result<Option<Arc<SignedBlock>>, V2LaneWorkError> {
+        if u64::try_from(height.get()).ok() == Some(self.context.height)
+            && self
+                .consensus_storage_read(self.kura.v2_finality_artifact(self.context.height))?
+                .is_none()
+        {
+            // Apply publishes the canonical body before its finality sidecar.
+            // Only a published execution commitment can authenticate its wire;
+            // the exact in-memory lock witness owns pre-publication progress.
+            return Ok(None);
+        }
+        self.consensus_storage_read(self.kura.read_block_body(height))
+    }
     fn proposal_is_bound_to_decided_carrier(&self, proposal: &LaneBlockProposalV1) -> bool {
         let Some((_, _, Some(decided))) = self.retained_merge_carrier_state else {
             return false;
@@ -5372,7 +5398,7 @@ impl V2LaneWorkAdapter {
         else {
             return false;
         };
-        let Some(block) = self.kura.get_block(height) else {
+        let Ok(Some(block)) = self.canonical_block_body(height) else {
             return false;
         };
         let Ok(canonical_payload_hash) = block.canonical_proposal_wire_hash() else {
@@ -5931,7 +5957,7 @@ impl V2LaneWorkAdapter {
             .kura
             .exact_durable_blocks_count()
             .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
-        let block = self.kura.get_block(height).ok_or_else(|| {
+        let block = self.canonical_block_body(height)?.ok_or_else(|| {
             V2LaneWorkError::Persistence(
                 "durably decided lane carrier is absent from Kura".to_owned(),
             )
@@ -6035,7 +6061,7 @@ impl V2LaneWorkAdapter {
                 let canonical_wire_matches = usize::try_from(self.context.height)
                     .ok()
                     .and_then(NonZeroUsize::new)
-                    .and_then(|height| self.kura.get_block(height))
+                    .and_then(|height| self.canonical_block_body(height).ok().flatten())
                     .and_then(|canonical| {
                         canonical.canonical_resultless_proposal().encode_wire().ok()
                     })
@@ -6661,8 +6687,10 @@ impl V2LaneWorkAdapter {
         let mut canonical_by_slot = BTreeMap::new();
         for (lane_id, lane_block_height) in slots {
             let ordinary = self
-                .kura
-                .read_lane_block_artifact(lane_id, lane_block_height)
+                .consensus_storage_read(
+                    self.kura
+                        .read_lane_block_artifact_read_only(lane_id, lane_block_height),
+                )?
                 .and_then(|artifact| {
                     proposal_from_ownership(&artifact.ownership, artifact.proposal_block_hash)
                 });
@@ -6805,7 +6833,7 @@ impl V2LaneWorkAdapter {
                 "lane rollover finality authority has an invalid zero height".to_owned(),
             ));
         };
-        let block = self.kura.get_block(height).ok_or_else(|| {
+        let block = self.canonical_block_body(height)?.ok_or_else(|| {
             V2LaneWorkError::Persistence(
                 "lane rollover finality authority has no canonical block body".to_owned(),
             )
@@ -6897,17 +6925,19 @@ impl V2LaneWorkAdapter {
         for proposal in winning_proposals.values() {
             let descriptor = &proposal.descriptor;
             let autonomous_anchor = self.canonical_autonomous_anchor_matches_kura(proposal);
-            let private_durable = self.kura.read_certified_lane_block_artifact(
-                descriptor.lane_id,
-                descriptor.lane_block_height,
-            );
-            let (durable, autonomous_payload) = if autonomous_anchor {
-                let private_payload = self.kura.read_autonomous_lane_block_artifact(
+            let private_durable =
+                self.consensus_storage_read(self.kura.read_lane_completion_certificate(
                     descriptor.lane_id,
                     descriptor.lane_block_height,
-                    network_id,
-                    self.context.epoch,
-                );
+                ))?;
+            let (durable, autonomous_payload) = if autonomous_anchor {
+                let private_payload = self.consensus_storage_read(
+                    self.kura.read_lane_completion_autonomous_artifact(
+                        proposal,
+                        network_id,
+                        self.context.epoch,
+                    ),
+                )?;
                 match (private_durable, private_payload) {
                     (Some(durable), Some(artifact)) => (durable, Some(artifact.executable_payload)),
                     (None, None) => {
@@ -6948,11 +6978,7 @@ impl V2LaneWorkAdapter {
                 None
             } else {
                 Some(
-                    self.kura
-                        .read_lane_block_application_receipt(
-                            descriptor.lane_id,
-                            descriptor.lane_block_height,
-                        )
+                    self.consensus_storage_read(self.kura.read_lane_completion_receipt(proposal))?
                         .ok_or_else(|| {
                             V2LaneWorkError::Persistence(
                                 "retained lane CommitQC has no durable application receipt"
@@ -7564,8 +7590,13 @@ impl V2LaneWorkAdapter {
     ) -> Result<BTreeMap<PublicKey, Vec<u8>>, String> {
         let descriptor = &session.proposal.descriptor;
         if let Some(durable) = self
-            .kura
-            .read_certified_lane_block_artifact(descriptor.lane_id, descriptor.lane_block_height)
+            .consensus_storage_read(
+                self.kura.read_lane_completion_certificate(
+                    descriptor.lane_id,
+                    descriptor.lane_block_height,
+                ),
+            )
+            .map_err(|error| error.to_string())?
         {
             if durable.proposal != session.proposal {
                 return Err(
@@ -7700,8 +7731,9 @@ impl V2LaneWorkAdapter {
             }
             HistoricalRecoveryRetry::AuthenticatedBlockSync => {
                 let Some(finality) = self
-                    .kura
-                    .v2_finality_artifact(identity.proposal_height)
+                    .consensus_storage_read(
+                        self.kura.v2_finality_artifact(identity.proposal_height),
+                    )
                     .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?
                 else {
                     // The authenticated global synchronizer owns recovery when
@@ -8060,8 +8092,9 @@ impl V2LaneWorkAdapter {
                         )
                     })?;
                     let finality = self
-                        .kura
-                        .v2_finality_artifact(hint.proposal_height)
+                        .consensus_storage_read(
+                            self.kura.v2_finality_artifact(hint.proposal_height),
+                        )
                         .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?
                         .ok_or_else(|| {
                             V2LaneWorkError::Persistence(
@@ -8277,7 +8310,7 @@ impl V2LaneWorkAdapter {
                     "historical autonomous proposal height is not representable".to_owned(),
                 )
             })?;
-        let block = self.kura.get_block(height).ok_or_else(|| {
+        let block = self.canonical_block_body(height)?.ok_or_else(|| {
             V2LaneWorkError::Persistence(
                 "historical autonomous carrier disappeared after anchor validation".to_owned(),
             )
@@ -8406,19 +8439,7 @@ impl V2LaneWorkAdapter {
                 "historical lane certificate conflicts with committed State".to_owned(),
             ));
         }
-        match self.kura.get_durable_block_hash(height) {
-            Some(hash) if hash == hint.proposal_block_hash => {}
-            Some(_) => {
-                return Err(V2LaneWorkError::Persistence(
-                    "historical lane certificate conflicts with Kura's canonical hash journal"
-                        .to_owned(),
-                ));
-            }
-            None => {
-                return Ok(Some(HistoricalRecoveryWaitReason::CanonicalBlockPending));
-            }
-        }
-        let Some(block) = self.kura.get_block(height) else {
+        let Some(block) = self.canonical_block_body(height)? else {
             return Ok(Some(HistoricalRecoveryWaitReason::CanonicalBlockPending));
         };
         if block.header().height().get() != hint.proposal_height
@@ -8505,8 +8526,9 @@ impl V2LaneWorkAdapter {
         else {
             return false;
         };
-        self.kura
-            .get_block(height)
+        self.canonical_block_body(height)
+            .ok()
+            .flatten()
             .is_some_and(|block| self.historical_block_anchors_proposal(&block, proposal))
     }
     fn proposal_anchor_is_committed_in_state(&self, proposal: &LaneBlockProposalV1) -> bool {
@@ -8530,7 +8552,7 @@ impl V2LaneWorkAdapter {
         else {
             return false;
         };
-        let Some(block) = self.kura.get_block(height) else {
+        let Ok(Some(block)) = self.canonical_block_body(height) else {
             return false;
         };
         if hint.proposal_height != proposal.descriptor.proposal_height
@@ -8563,13 +8585,21 @@ impl V2LaneWorkAdapter {
         &mut self,
         mut inbound: InboundBlockMessage,
         active_view: wire::View,
-    ) -> V2LaneIngressOutcome {
+    ) -> Result<V2LaneIngressOutcome, V2LaneWorkError> {
+        if self.output_guard.restart_required() {
+            return Err(V2LaneWorkError::RestartRequired);
+        }
         let Some(ingress_ownership) = inbound.take_ingress_ownership() else {
-            return V2LaneIngressOutcome::Rejected;
+            self.output_guard.close_admission_for_restart();
+            return Err(V2LaneWorkError::RestartRequired);
         };
-        self.accept_lane_message_owned(inbound, Some(ingress_ownership), active_view)
+        let outcome = self.accept_lane_message_owned(inbound, Some(ingress_ownership), active_view);
+        if self.output_guard.restart_required() {
+            return Err(V2LaneWorkError::RestartRequired);
+        }
+        Ok(outcome)
     }
-    /// Unit-test compatibility seam for constructing lane protocol fixtures
+    /// Unit-test seam for constructing lane protocol fixtures
     /// without the outer fair queue. Production calls the ownership-requiring
     /// method above.
     #[cfg(test)]
@@ -8598,6 +8628,7 @@ impl V2LaneWorkAdapter {
                 || !ownership.matches_semantic_origin(&sender)
                 || !ownership.matches_reply_routes(reply_routes.as_ref())
         }) {
+            self.output_guard.close_admission_for_restart();
             return V2LaneIngressOutcome::Rejected;
         }
         let finalized_proposal = match &message {
@@ -8645,6 +8676,9 @@ impl V2LaneWorkAdapter {
             }
         }
         if self.decision_pending() && !self.lane_message_is_allowed_after_decision(&message) {
+            return V2LaneIngressOutcome::Rejected;
+        }
+        if self.output_guard.restart_required() {
             return V2LaneIngressOutcome::Rejected;
         }
         let outcome = match message {
@@ -10073,8 +10107,9 @@ impl V2LaneWorkAdapter {
                     "historical canonical-body request lacks a global proposal hint".to_owned()
                 })?;
                 let finality = self
-                    .kura
-                    .v2_finality_artifact(identity.proposal_height)
+                    .consensus_storage_read(
+                        self.kura.v2_finality_artifact(identity.proposal_height),
+                    )
                     .map_err(|error| error.to_string())?
                     .ok_or_else(|| {
                         "historical recovery source lacks the requested finality artifact"
@@ -10147,7 +10182,12 @@ impl V2LaneWorkAdapter {
                 sender,
             ) {
                 Ok(response) => response,
-                Err(error) => {
+                Err(CanonicalRecoveryReadError::LocalPersistence(error)) => {
+                    self.output_guard.close_admission_for_restart();
+                    iroha_logger::error!(%error, "canonical executed-block recovery durable read failed");
+                    return V2LaneIngressOutcome::Rejected;
+                }
+                Err(CanonicalRecoveryReadError::Rejected(error)) => {
                     iroha_logger::debug!(
                         %error,
                         "rejected canonical executed-block recovery request"
@@ -10171,18 +10211,22 @@ impl V2LaneWorkAdapter {
                 return V2LaneIngressOutcome::Rejected;
             }
         };
+        if self.output_guard.restart_required() {
+            return V2LaneIngressOutcome::Rejected;
+        }
         let request_hash = HashOf::new(&request);
         let (response_payload, autonomous_epoch) = match &request.kind {
             LaneHistoricalRecoveryKindV1::CanonicalBlock { .. } => {
                 let height = session.proposal.descriptor.proposal_height;
-                let finality = match self.kura.v2_finality_artifact(height) {
-                    Ok(Some(finality)) => finality,
-                    _ => return V2LaneIngressOutcome::Rejected,
-                };
+                let finality =
+                    match self.consensus_storage_read(self.kura.v2_finality_artifact(height)) {
+                        Ok(Some(finality)) => finality,
+                        _ => return V2LaneIngressOutcome::Rejected,
+                    };
                 let Some(height) = usize::try_from(height).ok().and_then(NonZeroUsize::new) else {
                     return V2LaneIngressOutcome::Rejected;
                 };
-                let Some(block) = self.kura.get_block(height) else {
+                let Ok(Some(block)) = self.canonical_block_body(height) else {
                     return V2LaneIngressOutcome::Rejected;
                 };
                 if finality.validate_for_header(&block.header()).is_err()
@@ -10217,19 +10261,30 @@ impl V2LaneWorkAdapter {
                 }) else {
                     return V2LaneIngressOutcome::Rejected;
                 };
-                let certified = match self.kura.read_certified_lane_block_artifact(
-                    descriptor.lane_id,
-                    descriptor.lane_block_height,
+                let certified =
+                    match self.consensus_storage_read(self.kura.read_lane_completion_certificate(
+                        descriptor.lane_id,
+                        descriptor.lane_block_height,
+                    )) {
+                        Ok(Some(certified))
+                            if certified.proposal == session.proposal
+                                && certified.prepare_qc == session.prepare_qc
+                                && certified.commit_qc == session.commit_qc
+                                && certified.signer_pops == request.signer_pops =>
+                        {
+                            certified
+                        }
+                        _ => return V2LaneIngressOutcome::Rejected,
+                    };
+                let durable_availability = match self.consensus_storage_read(
+                    self.kura.read_lane_completion_autonomous_artifact(
+                        &session.proposal,
+                        self.native_network_id(),
+                        expected_epoch,
+                    ),
                 ) {
-                    Some(certified)
-                        if certified.proposal == session.proposal
-                            && certified.prepare_qc == session.prepare_qc
-                            && certified.commit_qc == session.commit_qc
-                            && certified.signer_pops == request.signer_pops =>
-                    {
-                        certified
-                    }
-                    _ => return V2LaneIngressOutcome::Rejected,
+                    Ok(artifact) => artifact,
+                    Err(_) => return V2LaneIngressOutcome::Rejected,
                 };
                 let Some((payload, _)) = self.kura.current_autonomous_lane_payload(
                     descriptor.lane_id,
@@ -10239,12 +10294,6 @@ impl V2LaneWorkAdapter {
                 ) else {
                     return V2LaneIngressOutcome::Rejected;
                 };
-                let durable_availability = self.kura.read_autonomous_lane_block_artifact(
-                    descriptor.lane_id,
-                    descriptor.lane_block_height,
-                    self.native_network_id(),
-                    expected_epoch,
-                );
                 if durable_availability
                     .as_ref()
                     .and_then(|artifact| artifact.availability_certificate.as_ref())
@@ -10427,7 +10476,9 @@ impl V2LaneWorkAdapter {
                 let Some(hint) = certificate.proposal.payload_block_hint else {
                     return V2LaneIngressOutcome::Rejected;
                 };
-                let local_finality = match self.kura.v2_finality_artifact(hint.proposal_height) {
+                let local_finality = match self
+                    .consensus_storage_read(self.kura.v2_finality_artifact(hint.proposal_height))
+                {
                     Ok(Some(finality)) => finality,
                     _ => return V2LaneIngressOutcome::Rejected,
                 };
@@ -10570,7 +10621,9 @@ impl V2LaneWorkAdapter {
                 let Some(hint) = proposal.payload_block_hint else {
                     return V2LaneIngressOutcome::Rejected;
                 };
-                let finality = match self.kura.v2_finality_artifact(hint.proposal_height) {
+                let finality = match self
+                    .consensus_storage_read(self.kura.v2_finality_artifact(hint.proposal_height))
+                {
                     Ok(Some(finality)) => finality,
                     _ => return V2LaneIngressOutcome::Rejected,
                 };
@@ -12109,7 +12162,7 @@ impl V2LaneWorkAdapter {
         entry: &MergeLedgerEntry,
         reference: &CertifiedMergeLedgerReference,
         requester: Option<&PeerId>,
-    ) -> bool {
+    ) -> Result<bool, V2LaneWorkError> {
         let requester_belongs_to = |context: &wire::HeightContext| {
             requester.is_none_or(|requester| {
                 context
@@ -12120,18 +12173,19 @@ impl V2LaneWorkAdapter {
         };
         let carrier_height = entry.merge_qc.carrier_height;
         if carrier_height == 0 || carrier_height > self.context.height {
-            return false;
+            return Ok(false);
         }
         if carrier_height == self.context.height {
-            return requester_belongs_to(&self.context)
+            return Ok(requester_belongs_to(&self.context)
                 && merge_entry_has_exact_carrier_binding(&self.context, entry)
-                && authenticate_merge_entry_for_height_context(&self.context, entry).is_ok();
+                && authenticate_merge_entry_for_height_context(&self.context, entry).is_ok());
         }
-        let Ok(Some((header, finality, canonical_reference))) = self
-            .kura
-            .v2_finality_artifact_with_merge_reference(carrier_height)
+        let Some((header, finality, canonical_reference)) = self.consensus_storage_read(
+            self.kura
+                .v2_finality_artifact_with_merge_reference(carrier_height),
+        )?
         else {
-            return false;
+            return Ok(false);
         };
         // The combined Kura read verifies the CommitQC, canonical header, and
         // separately retained proposal/executed wire hashes. The compact
@@ -12140,37 +12194,47 @@ impl V2LaneWorkAdapter {
         // The requester independently checks the same reference and QC against
         // its own canonical carrier before accepting any bytes.
         let historical_context = &finality.height_context;
-        (requester_belongs_to(&self.context) || requester_belongs_to(historical_context))
-            && finality.height == historical_context.height
-            && finality.height == header.height().get()
-            && historical_context.network_id == self.context.network_id
-            && historical_context.protocol_version == self.context.protocol_version
-            && header.hash() == finality.block_hash
-            && finality.subject.block_hash == header.hash()
-            && finality.subject.parent_block_hash == header.prev_block_hash()
-            && canonical_reference.as_ref() == Some(reference)
-            && entry.merge_qc.carrier_height == header.height().get()
-            && Some(entry.merge_qc.carrier_parent_hash) == header.prev_block_hash()
-            && entry.merge_qc.view == header.view_change_index()
-            && merge_entry_has_exact_carrier_binding(historical_context, entry)
-            && authenticate_merge_entry_for_height_context(historical_context, entry).is_ok()
+        Ok(
+            (requester_belongs_to(&self.context) || requester_belongs_to(historical_context))
+                && finality.height == historical_context.height
+                && finality.height == header.height().get()
+                && historical_context.network_id == self.context.network_id
+                && historical_context.protocol_version == self.context.protocol_version
+                && header.hash() == finality.block_hash
+                && finality.subject.block_hash == header.hash()
+                && finality.subject.parent_block_hash == header.prev_block_hash()
+                && canonical_reference.as_ref() == Some(reference)
+                && entry.merge_qc.carrier_height == header.height().get()
+                && Some(entry.merge_qc.carrier_parent_hash) == header.prev_block_hash()
+                && entry.merge_qc.view == header.view_change_index()
+                && merge_entry_has_exact_carrier_binding(historical_context, entry)
+                && authenticate_merge_entry_for_height_context(historical_context, entry).is_ok(),
+        )
     }
     /// Load the exact durable predecessor roster which owns the rollover corridor.
-    fn immediate_predecessor_sidecar_requesters(&mut self) -> Option<&BTreeSet<PeerId>> {
+    fn immediate_predecessor_sidecar_requesters(
+        &mut self,
+    ) -> Result<Option<&BTreeSet<PeerId>>, V2LaneWorkError> {
         if self.predecessor_sidecar_requesters.is_none() {
-            let predecessor_height = self
+            let Some(predecessor_height) = self
                 .context
                 .height
                 .checked_sub(1)
-                .filter(|height| *height > 0)?;
-            let parent_commit_qc = self.context.parent_commit_qc.as_ref()?.clone();
-            let Ok(Some((header, finality))) = self
-                .kura
-                .v2_finality_artifact_with_header(predecessor_height)
+                .filter(|height| *height > 0)
+            else {
+                return Ok(None);
+            };
+            let Some(parent_commit_qc) = self.context.parent_commit_qc.clone() else {
+                return Ok(None);
+            };
+            let Some((header, finality)) = self.consensus_storage_read(
+                self.kura
+                    .v2_finality_artifact_with_header(predecessor_height),
+            )?
             else {
                 // Finality may still be crossing its durable publication
                 // boundary. Do not negatively cache a transient absence.
-                return None;
+                return Ok(None);
             };
             if header.height().get() != predecessor_height
                 || header.hash() != parent_commit_qc.subject.block_hash
@@ -12181,7 +12245,7 @@ impl V2LaneWorkAdapter {
                 || finality.context_id() != parent_commit_qc.round.context_id
                 || finality.commit_qc != parent_commit_qc
             {
-                return None;
+                return Ok(None);
             }
             self.predecessor_sidecar_requesters = Some(
                 finality
@@ -12192,7 +12256,7 @@ impl V2LaneWorkAdapter {
                     .collect(),
             );
         }
-        self.predecessor_sidecar_requesters.as_ref()
+        Ok(self.predecessor_sidecar_requesters.as_ref())
     }
     /// Materialize at most one responder request selected by the transport's
     /// durable two-level round-robin scheduler.
@@ -12227,17 +12291,9 @@ impl V2LaneWorkAdapter {
                 return Ok(false);
             }
             Err(error) => {
-                self.merge_sidecars
-                    .retire_unmaterialized_server_request(&requester, &request)
-                    .map_err(|retire_error| {
-                        V2LaneWorkError::Persistence(retire_error.to_string())
-                    })?;
-                iroha_logger::warn!(
-                    %requester,
-                    ?error,
-                    "v2 merge-sidecar Kura read failed; retired the exact materialization gate"
-                );
-                return Ok(false);
+                // The exact admitted request remains owned by the scheduler.
+                // Corrupt local storage is never a completed remote request.
+                return self.consensus_storage_read(Err(error));
             }
         };
         let reference = CertifiedMergeLedgerReference::new(&entry);
@@ -12252,7 +12308,7 @@ impl V2LaneWorkAdapter {
         }
         let requester_has_corridor = self.frozen_roster_contains(&requester)
             || self
-                .immediate_predecessor_sidecar_requesters()
+                .immediate_predecessor_sidecar_requesters()?
                 .is_some_and(|requesters| requesters.contains(&requester));
         let local_is_authenticated_custodian = certified_merge_sidecar_holders(&reference)
             .is_ok_and(|holders| holders.contains(&self.local_peer))
@@ -12263,7 +12319,7 @@ impl V2LaneWorkAdapter {
                 &entry,
                 &reference,
                 Some(&requester),
-            )
+            )?
             && local_is_authenticated_custodian;
         if !local_is_holder {
             self.merge_sidecars
@@ -12347,7 +12403,7 @@ impl V2LaneWorkAdapter {
                 || request.encoded_len
                     > u64::try_from(MAX_MERGE_LEDGER_ENTRY_BYTES).unwrap_or(u64::MAX)
                 || !self
-                    .immediate_predecessor_sidecar_requesters()
+                    .immediate_predecessor_sidecar_requesters()?
                     .is_some_and(|requesters| requesters.contains(&sender))
             {
                 return Ok(V2LaneIngressOutcome::Rejected);
@@ -13334,141 +13390,190 @@ impl V2LaneWorkAdapter {
         proposal: &LaneBlockProposalV1,
         phase: CertPhase,
     ) -> Result<Option<LaneBlockVoteV1>, V2LaneWorkError> {
-        if !self.proposal_predecessor_is_ready_for_progress(proposal)
-            || !self.voting_enabled
-            || self.local_peer.public_key().try_algorithm().ok() != Some(Algorithm::BlsNormal)
-        {
+        let output_guard = Arc::clone(&self.output_guard);
+        let Some(_signing_permit) = output_guard.acquire() else {
             return Ok(None);
-        }
-        let body = proposal.vote_body(phase);
-        let payload_availability_vote = if phase == CertPhase::Prepare {
-            match self
-                .lane_sessions
-                .authorized_payload_availability_body_for(proposal)
+        };
+        let result = (|| -> Result<_, V2LaneWorkError> {
+            let descriptor = &proposal.descriptor;
+            if !self.voting_enabled
+                || self.local_peer.public_key().try_algorithm().ok() != Some(Algorithm::BlsNormal)
+                || !descriptor.validator_set.contains(&self.local_peer)
+                || validate_lane_block_proposal(proposal).is_err()
             {
-                Some(availability) => {
-                    let historical =
-                        self.historical_autonomous_recovery_record_for_proposal(proposal);
-                    if historical.is_none()
-                        && !self.lane_route_active(
-                            proposal.descriptor.lane_id,
-                            proposal.descriptor.dataspace_id,
-                            proposal.descriptor.lane_incarnation,
-                            proposal.descriptor.proposal_height,
-                        )
-                    {
-                        return Ok(None);
-                    }
-                    let height_context_id = historical
-                        .map_or_else(|| self.context.id(), |record| record.historical_context_id);
-                    let validator_set_pops = if let Some(record) = historical {
-                        record.validator_pops.clone()
-                    } else {
-                        let world = self.state.world_view();
-                        proposal
-                            .descriptor
-                            .validator_set
-                            .iter()
-                            .map(|validator| {
-                                crate::state::live_consensus_key_pop_for_peer(
-                                    &world,
-                                    validator,
-                                    proposal.descriptor.proposal_height,
-                                )
-                            })
-                            .collect::<Option<Vec<_>>>()
-                            .ok_or_else(|| {
-                                V2LaneWorkError::SigningGuard(
-                                    "autonomous READY committee is missing an active BLS proof of possession"
-                                        .to_owned(),
-                                )
-                            })?
-                    };
-                    let authorization = match self
-                        .lane_ready_authorizations
-                        .remove(&Self::lane_ready_session_key(proposal))
-                    {
-                        Some(authorization) => authorization,
-                        None if !self
-                            .lane_sessions
-                            .local_prepare_vote_needed_for(proposal, &self.local_peer) =>
+                return Ok(None);
+            }
+            if self.key_pair.public_key() != self.local_peer.public_key() {
+                output_guard.close_admission_for_restart();
+                return Err(V2LaneWorkError::SigningGuard(
+                    "lane signer key does not match its local validator identity".to_owned(),
+                ));
+            }
+            // A retained, authenticated historical payload pins its original committee.
+            // Every other signing request must resolve the exact State authority at
+            // its proposal height before touching READY or the durable Commit fence.
+            if self
+                .historical_autonomous_recovery_record_for_proposal(proposal)
+                .is_none()
+                && (!self.lane_route_active(
+                    descriptor.lane_id,
+                    descriptor.dataspace_id,
+                    descriptor.lane_incarnation,
+                    descriptor.proposal_height,
+                ) || !self
+                    .state
+                    .resolve_lane_committee_at_height(
+                        crate::state::LaneAuthorityRoute::new(
+                            descriptor.lane_id,
+                            descriptor.dataspace_id,
+                        ),
+                        descriptor.proposal_height,
+                    )
+                    .is_ok_and(|committee| {
+                        committee.validators() == descriptor.validator_set.as_slice()
+                    }))
+            {
+                return Ok(None);
+            }
+            if !self.proposal_predecessor_is_ready_for_progress(proposal) {
+                return Ok(None);
+            }
+            let body = proposal.vote_body(phase);
+            let payload_availability_vote = if phase == CertPhase::Prepare {
+                match self
+                    .lane_sessions
+                    .authorized_payload_availability_body_for(proposal)
+                {
+                    Some(availability) => {
+                        let historical =
+                            self.historical_autonomous_recovery_record_for_proposal(proposal);
+                        if historical.is_none()
+                            && !self.lane_route_active(
+                                proposal.descriptor.lane_id,
+                                proposal.descriptor.dataspace_id,
+                                proposal.descriptor.lane_incarnation,
+                                proposal.descriptor.proposal_height,
+                            )
                         {
                             return Ok(None);
                         }
-                        None => {
-                            return Err(V2LaneWorkError::SigningGuard(
-                                "autonomous READY session lost its durable one-shot authorization"
-                                    .to_owned(),
-                            ));
-                        }
-                    };
-                    Some(
-                        LanePayloadAvailabilityVoteV1::new_signed_with_authorization(
-                            authorization,
-                            proposal,
-                            availability,
-                            self.local_peer.clone(),
-                            validator_set_pops,
-                            self.key_pair.private_key(),
-                            height_context_id,
+                        let height_context_id = historical
+                            .map_or_else(|| self.context.id(), |record| record.historical_context_id);
+                        let validator_set_pops = if let Some(record) = historical {
+                            record.validator_pops.clone()
+                        } else {
+                            let world = self.state.world_view();
+                            proposal
+                                .descriptor
+                                .validator_set
+                                .iter()
+                                .map(|validator| {
+                                    crate::state::live_consensus_key_pop_for_peer(
+                                        &world,
+                                        validator,
+                                        proposal.descriptor.proposal_height,
+                                    )
+                                })
+                                .collect::<Option<Vec<_>>>()
+                                .ok_or_else(|| {
+                                    V2LaneWorkError::SigningGuard(
+                                        "autonomous READY committee is missing an active BLS proof of possession"
+                                            .to_owned(),
+                                    )
+                                })?
+                        };
+                        let authorization = match self
+                            .lane_ready_authorizations
+                            .remove(&Self::lane_ready_session_key(proposal))
+                        {
+                            Some(authorization) => authorization,
+                            None if !self
+                                .lane_sessions
+                                .local_prepare_vote_needed_for(proposal, &self.local_peer) =>
+                            {
+                                return Ok(None);
+                            }
+                            None => {
+                                return Err(V2LaneWorkError::SigningGuard(
+                                    "autonomous READY session lost its durable one-shot authorization"
+                                        .to_owned(),
+                                ));
+                            }
+                        };
+                        Some(
+                            LanePayloadAvailabilityVoteV1::new_signed_with_authorization(
+                                authorization,
+                                proposal,
+                                availability,
+                                self.local_peer.clone(),
+                                validator_set_pops,
+                                self.key_pair.private_key(),
+                                height_context_id,
+                            )
+                            .map_err(|error| {
+                                V2LaneWorkError::SigningGuard(format!(
+                                    "failed to construct durably authorized autonomous READY vote: {error}"
+                                ))
+                            })?,
                         )
-                        .map_err(|error| {
-                            V2LaneWorkError::SigningGuard(format!(
-                                "failed to construct durably authorized autonomous READY vote: {error}"
-                            ))
-                        })?,
-                    )
+                    }
+                    None if self.autonomous_payload_is_expected_for(proposal) => return Ok(None),
+                    None => None,
                 }
-                None if self.autonomous_payload_is_expected_for(proposal) => return Ok(None),
-                None => None,
-            }
-        } else {
-            None
-        };
-        let output_guard = Arc::clone(&self.output_guard);
-        let commit_signing_operation = if phase == CertPhase::Commit {
-            let Some(operation) = output_guard.begin_fail_stop_operation() else {
-                return Ok(None);
+            } else {
+                None
             };
-            let Some(signing_guard) = self.lane_drain_signing_guard.as_ref() else {
-                iroha_logger::error!(
-                    height = self.context.height,
-                    lane = %body.lane_id.as_u32(),
-                    lane_block_height = body.lane_block_height,
-                    "lane Commit validator has no durable drain/commit signing guard"
-                );
-                return Ok(None);
+            let commit_signing_operation = if phase == CertPhase::Commit {
+                let Some(operation) = output_guard.begin_fail_stop_operation() else {
+                    return Ok(None);
+                };
+                let Some(signing_guard) = self.lane_drain_signing_guard.as_ref() else {
+                    iroha_logger::error!(
+                        height = self.context.height,
+                        lane = %body.lane_id.as_u32(),
+                        lane_block_height = body.lane_block_height,
+                        "lane Commit validator has no durable drain/commit signing guard"
+                    );
+                    return Ok(None);
+                };
+                if let Err(error) = signing_guard.authorize_commit_vote(&body) {
+                    iroha_logger::error!(
+                        height = self.context.height,
+                        lane = %body.lane_id.as_u32(),
+                        lane_block_height = body.lane_block_height,
+                        %error,
+                        "durable lane drain/commit signing guard rejected a Commit vote"
+                    );
+                    return Ok(None);
+                }
+                Some(operation)
+            } else {
+                None
             };
-            if let Err(error) = signing_guard.authorize_commit_vote(&body) {
-                iroha_logger::error!(
-                    height = self.context.height,
-                    lane = %body.lane_id.as_u32(),
-                    lane_block_height = body.lane_block_height,
-                    %error,
-                    "durable lane drain/commit signing guard rejected a Commit vote"
-                );
-                return Ok(None);
+            let signature = Signature::try_new(self.key_pair.private_key(), &body.signature_preimage())
+                .map_err(|error| {
+                    V2LaneWorkError::SigningGuard(format!(
+                        "failed to create a lane vote signature: {error}"
+                    ))
+                })?;
+            let vote = LaneBlockVoteV1 {
+                body,
+                payload_availability_vote,
+                signer: self.local_peer.clone(),
+                bls_signature: signature.payload().to_vec(),
+            };
+            if let Some(operation) = commit_signing_operation {
+                operation.complete();
             }
-            Some(operation)
-        } else {
-            None
-        };
-        let signature = Signature::try_new(self.key_pair.private_key(), &body.signature_preimage())
-            .map_err(|error| {
-                V2LaneWorkError::SigningGuard(format!(
-                    "failed to create a lane vote signature: {error}"
-                ))
-            })?;
-        let vote = LaneBlockVoteV1 {
-            body,
-            payload_availability_vote,
-            signer: self.local_peer.clone(),
-            bls_signature: signature.payload().to_vec(),
-        };
-        if let Some(operation) = commit_signing_operation {
-            operation.complete();
+            Ok(Some(vote))
+        })();
+        if result.is_err() {
+            // Close admission while this operation still owns its output permit.
+            // A failed READY construction must not release its one-shot owner
+            // before another output can observe the fatal error.
+            output_guard.close_admission_for_restart();
         }
-        Ok(Some(vote))
+        result
     }
     fn outbound_lane_message_predecessor_is_ready(&self, message: &BlockMessage) -> bool {
         let proposal = match message {
@@ -13484,7 +13589,15 @@ impl V2LaneWorkAdapter {
                 .lane_sessions
                 .proposal_for_vote_body(&qc.body)
                 .or_else(|| self.historical_autonomous_recovery_proposal_for_vote_body(&qc.body))
-                .or_else(|| self.canonical_proposal_for_vote_body(&qc.body)),
+                .or_else(|| self.canonical_proposal_for_vote_body(&qc.body))
+                .or_else(|| {
+                    // Draining transfers the authenticated bundle to this bounded
+                    // output owner; ordinary cache eviction must not revoke it.
+                    self.committed_lane_outputs
+                        .iter()
+                        .find(|output| &output.session.commit_qc == qc)
+                        .map(|output| output.session.proposal.clone())
+                }),
             BlockMessage::LaneBlockCertificate(certificate) => Some(certificate.proposal.clone()),
             BlockMessage::LaneExecutablePayload(payload) => Some(payload.origin_proposal.clone()),
             BlockMessage::LaneBlockNewViewVote(vote) => self
@@ -14554,21 +14667,22 @@ impl V2LaneWorkAdapter {
         &self,
         proposal: &LaneBlockProposalV1,
     ) -> Option<crate::kura::LaneBlockArtifact> {
-        self.kura
-            .read_lane_block_artifact(
-                proposal.descriptor.lane_id,
-                proposal.descriptor.lane_block_height,
-            )
-            .filter(|artifact| {
-                let ownership = &artifact.ownership;
-                self.lane_route_active(
-                    ownership.lane_id,
-                    ownership.dataspace_id,
-                    ownership.lane_incarnation,
-                    ownership.proposal_height,
-                ) && proposal_from_ownership(ownership, artifact.proposal_block_hash).as_ref()
-                    == Some(proposal)
-            })
+        self.consensus_storage_read(self.kura.read_lane_block_artifact_read_only(
+            proposal.descriptor.lane_id,
+            proposal.descriptor.lane_block_height,
+        ))
+        .ok()
+        .flatten()
+        .filter(|artifact| {
+            let ownership = &artifact.ownership;
+            self.lane_route_active(
+                ownership.lane_id,
+                ownership.dataspace_id,
+                ownership.lane_incarnation,
+                ownership.proposal_height,
+            ) && proposal_from_ownership(ownership, artifact.proposal_block_hash).as_ref()
+                == Some(proposal)
+        })
     }
     fn historical_autonomous_recovery_record_for_proposal(
         &self,
@@ -14658,8 +14772,12 @@ impl V2LaneWorkAdapter {
             Err(_) => return None,
         }
         let artifact = self
-            .kura
-            .read_lane_block_artifact(body.lane_id, body.lane_block_height)?;
+            .consensus_storage_read(
+                self.kura
+                    .read_lane_block_artifact_read_only(body.lane_id, body.lane_block_height),
+            )
+            .ok()
+            .flatten()?;
         let proposal = proposal_from_ownership(&artifact.ownership, artifact.proposal_block_hash)?;
         (self.canonical_anchor_for_proposal(&proposal).is_some()
             && proposal.vote_body(body.phase) == *body)
@@ -14686,17 +14804,22 @@ impl V2LaneWorkAdapter {
             .and_then(NonZeroUsize::new)
             .ok_or_else(|| "finalized autonomous carrier height is not representable".to_owned())?;
         let Some((retained_header, finality)) = self
-            .kura
-            .v2_finality_artifact_with_header(body.proposal_height)
+            .consensus_storage_read(
+                self.kura
+                    .v2_finality_artifact_with_header(body.proposal_height),
+            )
             .map_err(|error| {
                 format!("failed to read finalized autonomous carrier authority: {error}")
             })?
         else {
             return Ok(None);
         };
-        let block = self.kura.get_block(height).ok_or_else(|| {
-            "finalized autonomous carrier body is not durably readable".to_owned()
-        })?;
+        let block = self
+            .canonical_block_body(height)
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| {
+                "finalized autonomous carrier body is not durably readable".to_owned()
+            })?;
         let block_hash = block.hash();
         let committed_height = u64::try_from(self.state.committed_height()).map_err(|_| {
             "committed State height is not representable during finalized carrier validation"
@@ -15008,9 +15131,12 @@ impl V2LaneWorkAdapter {
             .ok_or_else(|| {
                 "canonical autonomous proposal height is not representable".to_owned()
             })?;
-        let block = self.kura.get_block(height).ok_or_else(|| {
-            "canonical autonomous proposal has no durable global block body".to_owned()
-        })?;
+        let block = self
+            .canonical_block_body(height)
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| {
+                "canonical autonomous proposal has no durable global block body".to_owned()
+            })?;
         if hint.proposal_height != proposal.descriptor.proposal_height
             || block.header().height().get() != hint.proposal_height
             || block.header().view_change_index() != hint.proposal_view
@@ -15438,22 +15564,25 @@ impl V2LaneWorkAdapter {
         Ok(epoch)
     }
     fn native_coordinator_height_is_current(&self, body: &NativeAmxAttestationBodyV2) -> bool {
-        let expected = self
-            .kura
-            .latest_lane_block_artifact_matching(body.coordinator_lane_id, |artifact| {
-                let ownership = &artifact.ownership;
-                ownership.dataspace_id == body.coordinator_dataspace_id
-                    && ownership.lane_incarnation == body.coordinator_lane_incarnation
-                    && self.lane_route_active(
-                        ownership.lane_id,
-                        ownership.dataspace_id,
-                        ownership.lane_incarnation,
-                        ownership.proposal_height,
-                    )
-            })
-            .map_or(1, |artifact| {
-                artifact.ownership.lane_block_height.saturating_add(1)
-            });
+        let latest =
+            self.kura
+                .latest_lane_block_artifact_matching(body.coordinator_lane_id, |artifact| {
+                    let ownership = &artifact.ownership;
+                    ownership.dataspace_id == body.coordinator_dataspace_id
+                        && ownership.lane_incarnation == body.coordinator_lane_incarnation
+                        && self.lane_route_active(
+                            ownership.lane_id,
+                            ownership.dataspace_id,
+                            ownership.lane_incarnation,
+                            ownership.proposal_height,
+                        )
+                });
+        let Ok(latest) = self.consensus_storage_read(latest) else {
+            return false;
+        };
+        let expected = latest.map_or(1, |artifact| {
+            artifact.ownership.lane_block_height.saturating_add(1)
+        });
         body.planned_coordinator_block_height == expected
     }
     fn native_coordinator_predecessor_is_current(
@@ -15475,6 +15604,9 @@ impl V2LaneWorkAdapter {
                             ownership.proposal_height,
                         )
                 });
+        let Ok(latest) = self.consensus_storage_read(latest) else {
+            return false;
+        };
         match latest {
             None => {
                 descriptor.previous_lane_block_height == 0
@@ -18597,7 +18729,9 @@ enum DurableLaneCompletionReaders<'a, 'k> {
 impl DurableLaneCompletionReaders<'_, '_> {
     fn canonical_block(&self, height: NonZeroUsize) -> Result<Option<Arc<SignedBlock>>, String> {
         match self {
-            Self::Runtime(kura) => Ok(kura.get_block(height)),
+            Self::Runtime(kura) => kura
+                .read_block_body(height)
+                .map_err(|error| error.to_string()),
             Self::Startup(startup) => startup
                 .canonical_block(height)
                 .map_err(|error| error.to_string()),
@@ -18610,10 +18744,11 @@ impl DurableLaneCompletionReaders<'_, '_> {
         match self {
             Self::Runtime(kura) => {
                 let descriptor = &proposal.descriptor;
-                Ok(kura.read_certified_lane_block_artifact(
+                kura.read_lane_completion_certificate(
                     descriptor.lane_id,
                     descriptor.lane_block_height,
-                ))
+                )
+                .map_err(|error| error.to_string())
             }
             Self::Startup(startup) => startup
                 .certified_lane_block_artifact(proposal)
@@ -18625,13 +18760,9 @@ impl DurableLaneCompletionReaders<'_, '_> {
         proposal: &LaneBlockProposalV1,
     ) -> Result<Option<LaneBlockApplicationReceiptArtifact>, String> {
         match self {
-            Self::Runtime(kura) => {
-                let descriptor = &proposal.descriptor;
-                Ok(kura.read_lane_block_application_receipt(
-                    descriptor.lane_id,
-                    descriptor.lane_block_height,
-                ))
-            }
+            Self::Runtime(kura) => kura
+                .read_lane_completion_receipt(proposal)
+                .map_err(|error| error.to_string()),
             Self::Startup(startup) => startup
                 .lane_block_application_receipt(proposal)
                 .map_err(|error| error.to_string()),
@@ -18644,15 +18775,13 @@ impl DurableLaneCompletionReaders<'_, '_> {
         expected_epoch: u64,
     ) -> Result<Option<AutonomousLaneBlockArtifact>, String> {
         match self {
-            Self::Runtime(kura) => {
-                let descriptor = &proposal.descriptor;
-                Ok(kura.read_autonomous_lane_block_artifact(
-                    descriptor.lane_id,
-                    descriptor.lane_block_height,
+            Self::Runtime(kura) => kura
+                .read_lane_completion_autonomous_artifact(
+                    proposal,
                     expected_network_id,
                     expected_epoch,
-                ))
-            }
+                )
+                .map_err(|error| error.to_string()),
             Self::Startup(startup) => startup
                 .autonomous_lane_block_artifact(proposal, expected_network_id, expected_epoch)
                 .map_err(|error| error.to_string()),
@@ -19971,6 +20100,7 @@ pub(super) mod tests {
             Err(V2LaneWorkError::InvalidContext(_))
         ));
     }
+    include!("v2_lane_work/signing_authority_tests.rs");
     #[test]
     fn lane_commit_and_drain_signatures_share_one_durable_bidirectional_fence() {
         let drain_body_for = |adapter: &V2LaneWorkAdapter, proposal: &LaneBlockProposalV1| {
@@ -20499,9 +20629,25 @@ pub(super) mod tests {
             .kura
             .overwrite_v2_finality_without_validation_for_tests(corrupt.carrier_height, wrong)
             .expect("inject malformed historical finality");
+        let hub = PeerId::new(KeyPair::random().public_key().clone());
+        let mut routes = NetworkReplyRouteTestFixture::with_source_capacity(hub.clone(), 1);
+        let reply_route = routes.mint_via(corrupt.requester.clone(), hub);
+        assert!(matches!(
+            corrupt.adapter.accept_certified_merge_sidecar_for_test(
+                corrupt.requester.clone(),
+                reply_route,
+                corrupt.request.clone(),
+            ),
+            Err(V2LaneWorkError::Persistence(_))
+        ));
+        assert!(corrupt.adapter.output_guard.restart_required());
         assert_eq!(
-            dispatch_historical_sidecar_request(&mut corrupt),
-            V2LaneIngressOutcome::Rejected
+            corrupt
+                .adapter
+                .merge_sidecars
+                .server_request_gate_count_for_test(),
+            1,
+            "local corruption retains the exact admitted materialization owner"
         );
         assert!(corrupt.adapter.sidecar_effects.is_empty());
     }
@@ -27225,11 +27371,15 @@ pub(super) mod tests {
             )
         };
         assert_eq!(
-            adapter.accept_lane_message_with_ingress_ownership(admitted(hub_a, route_a.clone()), 0),
+            adapter
+                .accept_lane_message_with_ingress_ownership(admitted(hub_a, route_a.clone()), 0)
+                .expect("owned lane ingress remains available"),
             V2LaneIngressOutcome::Inserted
         );
         assert_eq!(
-            adapter.accept_lane_message_with_ingress_ownership(admitted(hub_b, route_b.clone()), 0),
+            adapter
+                .accept_lane_message_with_ingress_ownership(admitted(hub_b, route_b.clone()), 0)
+                .expect("owned lane ingress remains available"),
             V2LaneIngressOutcome::Inserted
         );
         let effect = adapter
@@ -27830,6 +27980,7 @@ pub(super) mod tests {
         };
         (successor, keys, request)
     }
+    include!("v2_lane_work/strict_historical_read_tests.rs");
     fn canonical_executed_block_recovery_fixture() -> (
         V2LaneWorkAdapter,
         Vec<KeyPair>,
@@ -27912,7 +28063,8 @@ pub(super) mod tests {
         let (durable_height, payload_len) = adapter
             .kura
             .durable_block_payload_len_by_hash(block.hash())
-            .expect("read canonical recovery durable length authority");
+            .expect("read canonical recovery durable length authority")
+            .expect("canonical recovery durable length exists");
         assert_eq!(durable_height, block_height);
         assert_eq!(
             adapter.kura.advertise_required_replicas_for_bench(height),
@@ -27938,7 +28090,10 @@ pub(super) mod tests {
                 .is_none()
         );
         assert_eq!(
-            adapter.kura.durable_block_payload_len_by_hash(block.hash()),
+            adapter
+                .kura
+                .durable_block_payload_len_by_hash(block.hash())
+                .expect("read durable canonical length"),
             Some((block_height, payload_len)),
             "eviction must retain the exact finality-bound wire length authority"
         );

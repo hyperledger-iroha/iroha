@@ -397,8 +397,13 @@ public interface IKagemushaNativeHardwareProviderV1
     KagemushaHardwareRecoveryV1 Recover();
     byte[] BootstrapState();
     byte[] CreatePaymentRequest(
+        byte[] operationId,
         byte[] recipientAccount,
         UInt128 amount,
+        ulong validityWindowMilliseconds);
+    /// <summary>Idempotently persist the exact caller-owned ID and request parameters.</summary>
+    byte[] ReservePaymentRequestOperationId(
+        byte[] operationId, byte[] recipientAccount, UInt128 amount,
         ulong validityWindowMilliseconds);
     /// <summary>
     /// Durably stage one credit and recover the same ACK on retry. Native inbox counters are
@@ -415,7 +420,7 @@ public interface IKagemushaNativeHardwareProviderV1
     /// <summary>Return the monetary transition revision, never the independent inbox revision.</summary>
     UInt128 JournalRevision();
     KagemushaHardwareReceiveFoldV1 FoldPendingCredit(KagemushaPendingCreditSelectorV1 selector);
-    byte[] ReservePaymentOperationId(byte[] canonicalRequest);
+    byte[] ReservePaymentOperationId(byte[] operationId, byte[] canonicalRequest);
     /// <summary>
     /// Prepare and verify the candidate, commit exactly once, then generate and persist the
     /// post-commit proof and payment under the caller-persisted operation identity.
@@ -423,7 +428,7 @@ public interface IKagemushaNativeHardwareProviderV1
     KagemushaHardwareTerminalResultV1 CommitPayment(byte[] operationId, byte[] canonicalRequest);
     byte[]? RecoverPayment(byte[] creditId);
     byte[]? RecoverPaymentByOperationId(byte[] operationId, byte[] canonicalRequest);
-    byte[] ReserveMintOperationId(UInt128 amount, byte[] payerAccount, byte[] recipientAccount);
+    byte[] ReserveMintOperationId(byte[] operationId, UInt128 amount, byte[] payerAccount, byte[] recipientAccount);
     KagemushaMintConstructionBundleV1 PrepareMintConstructionBundle(
         byte[] operationId,
         UInt128 amount,
@@ -439,7 +444,7 @@ public interface IKagemushaNativeHardwareProviderV1
     /// Atomically prepare, prove, commit, and persist one redemption under the caller-persisted
     /// operation identity.
     /// </summary>
-    byte[] ReserveRedemptionOperationId(UInt128 amount, byte[] beneficiaryAccount);
+    byte[] ReserveRedemptionOperationId(byte[] operationId, UInt128 amount, byte[] beneficiaryAccount);
     KagemushaHardwareTerminalResultV1 CommitRedemption(
         byte[] operationId,
         UInt128 amount,
@@ -491,31 +496,38 @@ public sealed class KagemushaWalletV1
     public static KagemushaWalletV1 Open(IKagemushaNativeHardwareProviderV1 provider)
     {
         ArgumentNullException.ThrowIfNull(provider);
-        _ = RequireQualified(provider.Qualification());
-        var recovery = provider.Recover();
-        // Recovery may complete a committed epoch rotation; bind its state to the recovered tuple.
-        var qualification = RequireQualified(provider.Qualification());
-        var stateBytes = recovery.AggregateState() ?? provider.BootstrapState();
-        var state = Kagemusha.DecodeAggregateState(stateBytes);
-        RequireStateQualification(state, qualification);
-        if (provider.JournalRevision() != recovery.JournalRevision)
-            throw new InvalidOperationException("Native recovery journal revision changed while opening the wallet.");
-        return new KagemushaWalletV1(provider, qualification, state, recovery.JournalRevision);
+        var snapshot = RecoverAuthoritativeSnapshot(provider, allowBootstrap: true);
+        return new KagemushaWalletV1(
+            provider, snapshot.Qualification, snapshot.State, snapshot.Recovery.JournalRevision);
     }
 
     public KagemushaHardwareRecoveryV1 Recover()
     {
         using (EnterForegroundTransition())
         {
-            _ = RequireQualified(provider.Qualification());
-            var recovery = provider.Recover();
-            var nextQualification = RequireQualified(provider.Qualification());
-            var stateBytes = recovery.AggregateState() ?? provider.BootstrapState();
-            var state = Kagemusha.DecodeAggregateState(stateBytes);
-            RequireStateQualification(state, nextQualification);
-            var revision = provider.JournalRevision();
-            if (revision != recovery.JournalRevision)
-                throw new InvalidOperationException("Native recovery journal revision changed during recovery.");
+            var snapshot = RecoverAuthoritativeSnapshot(provider, allowBootstrap: false);
+            var recovery = snapshot.Recovery;
+            var state = snapshot.State;
+            var nextQualification = snapshot.Qualification;
+            var revision = recovery.JournalRevision;
+            RequireSameAsset(aggregateState, state, includingRelease: false);
+            if (state.HardwareEpochId.Span.SequenceEqual(aggregateState.HardwareEpochId.Span))
+            {
+                if (nextQualification.Credential.HardwareEpochGeneration
+                        != qualification.Credential.HardwareEpochGeneration
+                    || !state.KeyReference.Span.SequenceEqual(aggregateState.KeyReference.Span)
+                    || revision < journalRevision)
+                    throw new InvalidOperationException("Native recovery rolled back the hardware epoch or journal.");
+                if (revision == journalRevision
+                    && !Kagemusha.EncodeAggregateState(state).AsSpan().SequenceEqual(
+                        Kagemusha.EncodeAggregateState(aggregateState)))
+                    throw new InvalidOperationException("Native recovery equivocated at the same journal revision.");
+            }
+            else if (nextQualification.Credential.HardwareEpochGeneration
+                <= qualification.Credential.HardwareEpochGeneration)
+                throw new InvalidOperationException("Native recovery did not advance the authenticated hardware epoch.");
+
+            // Keep the published snapshot intact until every native response has been checked.
             qualification = nextQualification;
             aggregateState = state;
             journalRevision = revision;
@@ -528,6 +540,7 @@ public sealed class KagemushaWalletV1
     }
 
     public KagemushaPaymentRequestV1 CreatePaymentRequest(
+        ReadOnlySpan<byte> operationId,
         KagemushaAccountIdV1 recipient,
         UInt128 amount,
         ulong validityWindowMilliseconds)
@@ -536,11 +549,14 @@ public sealed class KagemushaWalletV1
         if (amount == 0) throw new ArgumentOutOfRangeException(nameof(amount));
         if (validityWindowMilliseconds is 0 or > Kagemusha.RequestMaximumTtlMilliseconds)
             throw new ArgumentOutOfRangeException(nameof(validityWindowMilliseconds));
+        var expected = KagemushaModelValidation.Fixed32(operationId, nameof(operationId));
         using (EnterForegroundTransition())
         {
+            _ = ReservePaymentRequestOperationId(expected, recipient, amount, validityWindowMilliseconds);
             var request = Kagemusha.DecodePaymentRequest(provider.CreatePaymentRequest(
-                recipient.CanonicalPayload(), amount, validityWindowMilliseconds));
-            if (!request.Recipient.Equals(recipient)
+                expected.ToArray(), recipient.CanonicalPayload(), amount, validityWindowMilliseconds));
+            if (!request.RequestId.Span.SequenceEqual(expected)
+                || !request.Recipient.Equals(recipient)
                 || request.Amount != amount
                 || request.ExpiresAtMilliseconds - request.IssuedAtMilliseconds != validityWindowMilliseconds)
                 throw new InvalidOperationException("Native request output does not match the requested amount or lifetime.");
@@ -549,14 +565,27 @@ public sealed class KagemushaWalletV1
         }
     }
 
-    /// <summary>Reserve the nonzero identity the caller persists before a sender mutation.</summary>
-    public byte[] ReservePaymentOperationId(KagemushaPaymentRequestV1 request)
+    /// <summary>Persist only after the caller has saved this ID and its exact request parameters.</summary>
+    public byte[] ReservePaymentRequestOperationId(
+        ReadOnlySpan<byte> operationId, KagemushaAccountIdV1 recipient,
+        UInt128 amount, ulong validityWindowMilliseconds)
+    {
+        ArgumentNullException.ThrowIfNull(recipient);
+        if (amount == 0) throw new ArgumentOutOfRangeException(nameof(amount));
+        if (validityWindowMilliseconds is 0 or > Kagemusha.RequestMaximumTtlMilliseconds)
+            throw new ArgumentOutOfRangeException(nameof(validityWindowMilliseconds));
+        return ReserveChecked(operationId, expected => provider.ReservePaymentRequestOperationId(
+            expected, recipient.CanonicalPayload(), amount, validityWindowMilliseconds));
+    }
+
+    /// <summary>Persist the exact identity the caller saved before a sender mutation.</summary>
+    public byte[] ReservePaymentOperationId(
+        ReadOnlySpan<byte> operationId, KagemushaPaymentRequestV1 request)
     {
         ArgumentNullException.ThrowIfNull(request);
         var canonicalRequest = Kagemusha.EncodePaymentRequest(request);
-        return KagemushaModelValidation.Fixed32(
-            provider.ReservePaymentOperationId(canonicalRequest).AsSpan(),
-            "paymentOperationId");
+        return ReserveChecked(operationId,
+            expected => provider.ReservePaymentOperationId(expected, canonicalRequest));
     }
 
     /// <summary>Fold accepted credits, then commit a payment under a caller-persisted identity.</summary>
@@ -699,8 +728,9 @@ public sealed class KagemushaWalletV1
         return payment;
     }
 
-    /// <summary>Reserve the nonzero identity the caller persists before mint preparation.</summary>
+    /// <summary>Persist the exact identity the caller saved before mint preparation.</summary>
     public byte[] ReserveMintOperationId(
+        ReadOnlySpan<byte> operationId,
         UInt128 amount,
         KagemushaAccountIdV1 payer,
         KagemushaAccountIdV1 recipient)
@@ -708,12 +738,8 @@ public sealed class KagemushaWalletV1
         if (amount == 0) throw new ArgumentOutOfRangeException(nameof(amount));
         ArgumentNullException.ThrowIfNull(payer);
         ArgumentNullException.ThrowIfNull(recipient);
-        return KagemushaModelValidation.Fixed32(
-            provider.ReserveMintOperationId(
-                amount,
-                payer.CanonicalPayload(),
-                recipient.CanonicalPayload()).AsSpan(),
-            "mintOperationId");
+        return ReserveChecked(operationId, expected => provider.ReserveMintOperationId(
+            expected, amount, payer.CanonicalPayload(), recipient.CanonicalPayload()));
     }
 
     public KagemushaMintConstructionBundleV1 PrepareMintConstructionBundle(
@@ -776,16 +802,16 @@ public sealed class KagemushaWalletV1
             canonicalAcknowledgement);
     }
 
-    /// <summary>Reserve the nonzero identity the caller persists before redemption.</summary>
+    /// <summary>Persist the exact identity the caller saved before redemption.</summary>
     public byte[] ReserveRedemptionOperationId(
+        ReadOnlySpan<byte> operationId,
         UInt128 amount,
         KagemushaAccountIdV1 beneficiary)
     {
         if (amount == 0) throw new ArgumentOutOfRangeException(nameof(amount));
         ArgumentNullException.ThrowIfNull(beneficiary);
-        return KagemushaModelValidation.Fixed32(
-            provider.ReserveRedemptionOperationId(amount, beneficiary.CanonicalPayload()).AsSpan(),
-            "redemptionOperationId");
+        return ReserveChecked(operationId, expected => provider.ReserveRedemptionOperationId(
+            expected, amount, beneficiary.CanonicalPayload()));
     }
 
     public KagemushaRedemptionVoucherV1 Redeem(
@@ -985,6 +1011,42 @@ public sealed class KagemushaWalletV1
         return value;
     }
 
+    private static byte[] ReserveChecked(ReadOnlySpan<byte> operationId, Func<byte[], byte[]> reserve)
+    {
+        var expected = KagemushaModelValidation.Fixed32(operationId, nameof(operationId));
+        // Give the provider a copy so it cannot rewrite the expected identity during its call.
+        var returned = KagemushaModelValidation.Fixed32(reserve(expected.ToArray()).AsSpan(), "reservedOperationId");
+        if (!returned.AsSpan().SequenceEqual(expected))
+            throw new InvalidOperationException("Native reservation substituted the caller-owned operation ID.");
+        return expected;
+    }
+
+    private static (KagemushaHardwareQualificationV1 Qualification,
+        KagemushaAggregateStateCommitmentV1 State, KagemushaHardwareRecoveryV1 Recovery)
+        RecoverAuthoritativeSnapshot(IKagemushaNativeHardwareProviderV1 provider, bool allowBootstrap)
+    {
+        _ = RequireQualified(provider.Qualification());
+        var recovery = provider.Recover();
+        var qualification = RequireQualified(provider.Qualification());
+        var stateBytes = recovery.AggregateState();
+        if (stateBytes is null)
+        {
+            if (!allowBootstrap)
+                throw new InvalidOperationException("Native recovery lost an existing aggregate state.");
+            var bootstrapped = provider.BootstrapState().ToArray();
+            recovery = provider.Recover();
+            qualification = RequireQualified(provider.Qualification());
+            stateBytes = recovery.AggregateState();
+            if (stateBytes is null || !stateBytes.AsSpan().SequenceEqual(bootstrapped))
+                throw new InvalidOperationException("Native bootstrap differs from its durable recovery snapshot.");
+        }
+        var state = Kagemusha.DecodeAggregateState(stateBytes);
+        RequireStateQualification(state, qualification);
+        if (provider.JournalRevision() != recovery.JournalRevision)
+            throw new InvalidOperationException("Native recovery journal revision changed during recovery.");
+        return (qualification, state, recovery);
+    }
+
     private static void RequireStagingJournalUnchanged(UInt128 before, UInt128 after)
     {
         // Inbox exact-next/replay accounting is native-authoritative and separate from the
@@ -1021,10 +1083,11 @@ public sealed class KagemushaWalletV1
 
     private static void RequireSameAsset(
         KagemushaAggregateStateCommitmentV1 before,
-        KagemushaAggregateStateCommitmentV1 after)
+        KagemushaAggregateStateCommitmentV1 after,
+        bool includingRelease = true)
     {
         if (after.Version != before.Version
-            || !after.ReleaseId.Span.SequenceEqual(before.ReleaseId.Span)
+            || (includingRelease && !after.ReleaseId.Span.SequenceEqual(before.ReleaseId.Span))
             || after.NetworkId != before.NetworkId
             || !after.Asset.Equals(before.Asset)
             || !after.AssetIncarnation.Equals(before.AssetIncarnation)

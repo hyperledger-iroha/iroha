@@ -653,6 +653,7 @@ mod tests {
 
     use super::*;
     use crate::zk::kagemusha_v1_recursion::{
+        composite::{KagemushaRecursiveStateEpCircuitV1, KagemushaRecursiveStateEqCircuitV1},
         guard_bundle::KagemushaPlatformCredentialRelationCircuitV1,
         mint_authority::{KagemushaMintAuthorityEpCircuitV1, KagemushaMintAuthorityEqCircuitV1},
         mint_authorization::{
@@ -977,6 +978,38 @@ mod tests {
             )
             .expect("inner mint-authority auxiliary geometry fits helper key limits");
         }
+    }
+
+    #[test]
+    fn recursive_state_claim_consumer_has_no_k16_sha_auxiliary_columns() {
+        // The full typed canonical SHA queue is now authenticated by the ordered claim proof.
+        // Empty Base parameters isolate the exact unchanged reciprocal dense-MSM machine; a
+        // reintroduced inline Table8 machine would violate this configuration equality.
+        let params = BaseCircuitParams {
+            k: 16,
+            num_advice_per_phase: Vec::new(),
+            num_fixed: 0,
+            num_lookup_advice_per_phase: Vec::new(),
+            lookup_bits: None,
+            num_instance_columns: 0,
+        };
+        let eq = configured_minimum_compressed_key_resources_for_params_v1::<
+            EqAffine,
+            KagemushaRecursiveStateEqCircuitV1,
+        >(16, params.clone())
+        .expect("Eq recursive-state auxiliary profile");
+        let ep = configured_minimum_compressed_key_resources_for_params_v1::<
+            EpAffine,
+            KagemushaRecursiveStateEpCircuitV1,
+        >(16, params.clone())
+        .expect("Ep recursive-state auxiliary profile");
+        let dense_only = configured_minimum_compressed_key_resources_for_params_v1::<
+            EqAffine,
+            KagemushaMintAuthorityEqCircuitV1,
+        >(16, params)
+        .expect("existing dense-only authority auxiliary profile");
+        assert_eq!(eq, dense_only);
+        assert_eq!(ep, dense_only);
     }
 
     #[test]

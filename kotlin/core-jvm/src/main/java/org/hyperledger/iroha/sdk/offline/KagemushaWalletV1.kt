@@ -399,14 +399,16 @@ class KagemushaWalletV1 private constructor(
     ): ByteArray {
         requirePositiveU128(amount, "amount")
         require(validityWindowMillis in 1..KagemushaWireV1.REQUEST_MAX_TTL_MS)
-        return provider.reservePaymentRequestOperationId(
-            fixed32(operationId, "operationId"), recipient.canonicalPayload(), amount, validityWindowMillis
-        )
+        return reserveKagemushaOperationIdV1(operationId) { expected ->
+            provider.reservePaymentRequestOperationId(expected, recipient.canonicalPayload(), amount, validityWindowMillis)
+        }
     }
 
     /** Persist and echo the identity the caller has already saved before beginning a payment. */
     fun reservePaymentOperationId(operationId: ByteArray, request: KagemushaPaymentRequestV1): ByteArray =
-        provider.reservePaymentOperationId(fixed32(operationId, "operationId"), KagemushaNoritoV1.encodePaymentRequestShape(request))
+        reserveKagemushaOperationIdV1(operationId) { expected ->
+            provider.reservePaymentOperationId(expected, KagemushaNoritoV1.encodePaymentRequestShape(request))
+        }
 
     /** Prepare, prove, atomically commit, and return a receiver-bound payment. */
     fun send(
@@ -454,7 +456,7 @@ class KagemushaWalletV1 private constructor(
         KagemushaStagedPaymentV1(staged.disposition, acknowledgement, canonicalAcknowledgement)
     }
 
-    /** Reserve and return the ID the caller must persist before mint preparation. */
+    /** Persist the identity the caller has already saved before mint preparation. */
     fun reserveMintOperationId(
         operationId: ByteArray,
         amount: BigInteger,
@@ -462,12 +464,9 @@ class KagemushaWalletV1 private constructor(
         recipient: KagemushaAccountIdV1,
     ): ByteArray {
         requirePositiveU128(amount, "amount")
-        return provider.reserveMintOperationId(
-            fixed32(operationId, "operationId"),
-            amount,
-            payer.canonicalPayload(),
-            recipient.canonicalPayload(),
-        )
+        return reserveKagemushaOperationIdV1(operationId) { expected ->
+            provider.reserveMintOperationId(expected, amount, payer.canonicalPayload(), recipient.canonicalPayload())
+        }
     }
 
     /** Ask hardware for the proof-bearing authorization and exact encrypted credit. */
@@ -631,7 +630,9 @@ class KagemushaWalletV1 private constructor(
         beneficiary: KagemushaAccountIdV1,
     ): ByteArray {
         requirePositiveU128(amount, "amount")
-        return provider.reserveRedemptionOperationId(fixed32(operationId, "operationId"), amount, beneficiary.canonicalPayload())
+        return reserveKagemushaOperationIdV1(operationId) { expected ->
+            provider.reserveRedemptionOperationId(expected, amount, beneficiary.canonicalPayload())
+        }
     }
 
     /** Prepare, prove, commit, and install one full or partial terminal redemption. */
@@ -850,4 +851,13 @@ class KagemushaWalletV1 private constructor(
         }
 
     }
+}
+
+/** Check the wallet-provider boundary before publishing a durable operation identity. */
+internal fun reserveKagemushaOperationIdV1(operationId: ByteArray, reserve: (ByteArray) -> ByteArray): ByteArray {
+    val expected = fixed32(operationId, "operationId")
+    require(reserve(expected.copyOf()).contentEquals(expected)) {
+        "provider substituted reserved operation ID"
+    }
+    return expected
 }

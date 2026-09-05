@@ -1068,7 +1068,9 @@ fn canonical_rewrite_purges_equal_length_stale_sidecar_before_reeviction() {
 #[test]
 fn eviction_flushes_pending_fsync_before_rewrite() {
     let temp_dir = TempDir::new().unwrap();
-    let config = KuraConfig { init_mode: iroha_config::kura::InitMode::Strict, store_dir: WithOrigin::inline(temp_dir.path().to_str().unwrap().into()),
+    let config = KuraConfig {
+        init_mode: iroha_config::kura::InitMode::Strict,
+        store_dir: WithOrigin::inline(temp_dir.path().to_str().unwrap().into()),
         max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
         blocks_in_memory: NonZeroUsize::new(1).expect("non-zero"),
         debug_output_new_blocks: false,
@@ -1174,7 +1176,9 @@ fn evicted_block_caches_after_remote_rehydrate() {
     let temp_dir = TempDir::new().unwrap();
     populate_store(&temp_dir, 4);
     let (kura, _) = Kura::open_test_kura_with_configured_lane_config(
-        &KuraConfig { init_mode: iroha_config::kura::InitMode::Strict, store_dir: WithOrigin::inline(temp_dir.path().to_str().unwrap().into()),
+        &KuraConfig {
+            init_mode: iroha_config::kura::InitMode::Strict,
+            store_dir: WithOrigin::inline(temp_dir.path().to_str().unwrap().into()),
             max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: NonZeroUsize::new(1).expect("non-zero"),
             debug_output_new_blocks: false,
@@ -1248,7 +1252,8 @@ fn evicted_block_status_becomes_local_sidecar_after_cache() {
         Some(BlockBodyStatus::LocalSidecar)
     );
     assert_eq!(
-        kura.durable_block_payload_len_by_hash(block_hash),
+        kura.durable_block_payload_len_by_hash(block_hash)
+            .expect("read durable payload bound"),
         Some((height.get() as u64, payload_len)),
         "durable metadata must still expose payload length for sidecar bodies"
     );
@@ -1305,7 +1310,7 @@ fn zero_length_index_entry_makes_payload_unavailable() {
         Some(BlockBodyStatus::Missing)
     );
     assert!(!kura.block_payload_available_by_hash(block_hash));
-    assert_eq!(kura.durable_block_payload_len_by_hash(block_hash), None);
+    assert!(kura.durable_block_payload_len_by_hash(block_hash).is_err());
     assert!(
         kura.get_block(height).is_none(),
         "zero-length block index entries must not be decoded"
@@ -1342,7 +1347,7 @@ fn evicted_body_without_hash_metadata_is_missing_even_with_adverts() {
         "remote adverts must not make a body available when Kura lacks durable hash metadata"
     );
     assert!(!kura.block_payload_available_by_hash(block_hash));
-    assert_eq!(kura.durable_block_payload_len_by_hash(block_hash), None);
+    assert!(kura.durable_block_payload_len_by_hash(block_hash).is_err());
 }
 #[test]
 fn get_block_rejects_hash_mismatched_local_sidecar() {

@@ -65,6 +65,9 @@ def test_android_coordinator_jni_uses_only_kagemusha_product_identity() -> None:
         "Java_pg_bpng_digitalkina_KagemushaNativeCoreJniV1_nativeContractV1",
         "Java_pg_bpng_digitalkina_KagemushaNativeCoreJniV1_nativeOpenV1",
         "Java_pg_bpng_digitalkina_KagemushaNativeCoreJniV1_nativeInvokeV1",
+        "Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoordinatorJniV1_nativeContractV1",
+        "Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoordinatorJniV1_nativeOpenV1",
+        "Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoordinatorJniV1_nativeInvokeV1",
     } <= required
     retired = "".join(reversed(("NativeCore", "Offline")))
     assert not any(retired in symbol for symbol in required)

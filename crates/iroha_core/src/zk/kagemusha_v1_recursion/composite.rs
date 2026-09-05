@@ -40,17 +40,20 @@ use super::{
     KagemushaEqFoldProofV1, KagemushaGuardBundleRelationWitnessV1, KagemushaOperationV1,
     KagemushaPastaParityV1, KagemushaStateRelationWitnessV1,
     canonical_preimage::{
-        assemble_bounded_canonical_frame_v1, stream::KagemushaBoundedByteStreamV1,
+        assemble_bounded_canonical_frame_v1, assemble_canonical_preimage_v1,
+        stream::KagemushaBoundedByteStreamV1,
     },
     deferred_parent::{
         DeferredLoader, DeferredScalar, KagemushaDeferredParentOutputV1,
         KagemushaDeferredParentWitnessV1, accumulator_limb_count, bind_accumulator_limbs,
-        constrain_parent_and_history_into_loader_v1, constrain_reciprocal_parent_pass_v1,
-        deferred_field_chips_v1, deferred_loader_v1, finalize_deferred_audit_plan_v1,
+        constrain_parent_and_history_into_loader_v1,
+        constrain_reciprocal_output_with_u128_binding_v1, deferred_field_chips_v1,
+        deferred_loader_v1, finalize_deferred_audit_plan_with_u128_binding_v1,
         kagemusha_protocol_structure_digest_v1, load_and_constrain_parent_protocol_if_v1,
         load_and_constrain_parent_protocol_v1, load_native_accumulator,
         native_parent_protocol_digest_v1, select_accumulator_v1, verify_fold,
         verify_ordinary_proof_v1, verify_ordinary_proof_with_canonical_bytes_v1,
+        verify_two_carrier_hybrid_ordinary_proof_and_stream_v1,
     },
     guard_bundle::{
         GUARD_RECURSIVE_PUBLIC_INSTANCE_COUNT_V1, KagemushaAssignedGuardBundleV1,
@@ -64,11 +67,19 @@ use super::{
         MINT_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1, mint_authorization_public_instances_v1,
         public_instance as mint_authorization_public_instance,
     },
+    mint_hash_claim_fold::{
+        KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_BINDING_COUNT_V1,
+        KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_INSTANCE_COUNT_V1,
+        KAGEMUSHA_MINT_HASH_CLAIM_INNER_SEMANTIC_INSTANCE_COUNT_V1,
+        KAGEMUSHA_MINT_HASH_CLAIM_PUBLIC_INSTANCE_COUNT_V1,
+        canonical_claim_carrier_binding_tail_v1, constrain_complete_claim_against_sha_jobs_v1,
+        public_instance as hash_claim_public,
+    },
     state_relation::{self, public_instance},
     terminal_authorization::{
         TERMINAL_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1,
-        TERMINAL_AUTHORIZATION_PUBLIC_PREFIX_COUNT_V1, hash_terminal_send_output_binding_v1,
-        public_instance as incoming_public_instance,
+        TERMINAL_AUTHORIZATION_PUBLIC_PREFIX_COUNT_V1, constrain_receiver_credential_lane_v1,
+        hash_terminal_send_output_binding_v1, public_instance as incoming_public_instance,
     },
 };
 
@@ -80,14 +91,18 @@ use crate::zk::{
     kagemusha_v1_poseidon::KagemushaPoseidonFieldV1,
     kagemusha_v1_state::{KagemushaMintFoldOpeningWitnessV1, mint_envelope_digest_v1},
     pasta_dense_msm::{PastaDenseMsmConfigV1, PastaDenseMsmJobsV1},
-    pasta_sha256::{PastaSha256BitV1, PastaSha256ByteV1, PastaSha256ConfigV1, PastaSha256JobsV1},
+    pasta_sha256::{PastaSha256BitV1, PastaSha256ByteV1, PastaSha256JobsV1},
 };
 use iroha_data_model::kagemusha::{
+    KAGEMUSHA_MINT_CREDIT_OPENING_COMMITMENT_PREIMAGE_FIELD_RANGES_V1,
     KAGEMUSHA_PASTA_STATE_COMMITMENT_DOMAIN_V1, KAGEMUSHA_PEER_CREDIT_OPENING_COMMITMENT_DOMAIN_V1,
-    KAGEMUSHA_WIRE_VERSION_V1, KagemushaCanonicalMintFrameV1, KagemushaLifecycleBindingV1,
+    KAGEMUSHA_RECIPIENT_CREDENTIAL_COMMITMENT_PREIMAGE_FIELD_RANGES_V1, KAGEMUSHA_WIRE_VERSION_V1,
+    KagemushaCanonicalMintFrameV1, KagemushaCreditOpeningV1, KagemushaLifecycleBindingV1,
     KagemushaMintAuthorizationStatementV1, KagemushaMintAuthorizationV1, KagemushaMintCreditV1,
     KagemushaOperationKindV1, KagemushaPairedProofV1, KagemushaPastaStateCommitmentV1,
     kagemusha_canonical_mint_frame_prefix_v1,
+    kagemusha_mint_credit_opening_commitment_preimage_layout_v1,
+    kagemusha_recipient_credential_commitment_preimage_layout_v1,
 };
 
 const MINIMUM_UNUSABLE_ROWS: usize = 9;
@@ -96,6 +111,8 @@ const INCOMING_CREDIT_EQUATION_TAG: u32 = 2;
 const GUARD_BUNDLE_EQUATION_TAG: u32 = 3;
 const MINT_FINALITY_EQUATION_TAG: u32 = 4;
 const MINT_AUTHORIZATION_EQUATION_TAG: u32 = 5;
+const STATE_HASH_CLAIM_CURRENT_EQUATION_TAG: u32 = 6;
+const STATE_HASH_CLAIM_HISTORY_EQUATION_TAG: u32 = 7;
 const RECEIVE_CREDIT_BINDING_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:receive-fold\0";
 // These private data-model domains are repeated next to the circuit relation deliberately. Native
 // parity tests below pin them to the model-owned canonical digest APIs.
@@ -109,6 +126,10 @@ const MINT_AUTHORIZATION_DIGEST_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:mint-aut
 const MINT_STATEMENT_DIGEST_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:mint-statement";
 const MINT_CIPHERTEXT_DIGEST_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:ciphertext";
 const MINT_CREDIT_ENVELOPE_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:mint-credit\0";
+const MINT_RECIPIENT_COMMITMENT_DOMAIN_V1: &[u8] =
+    b"iroha:kagemusha:v1:recipient-credential-commitment";
+const MINT_OPENING_COMMITMENT_DOMAIN_V1: &[u8] =
+    b"iroha:kagemusha:v1:mint-credit-opening-commitment";
 const MINT_ACCOUNT_IDENTITY_DIGEST_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:account-identity";
 const MINT_ASSET_IDENTITY_DIGEST_DOMAIN_EXACT_V1: &[u8] = b"iroha:kagemusha:v1:asset-identity";
 const MINT_FOLD_ASSET_PAYLOAD_BYTES_V1: usize = 32;
@@ -267,11 +288,23 @@ fn validate_incoming_authorization_proof_shape_v1(
     Ok(())
 }
 
+/// Exact terminal ordered claim for the SHA jobs emitted by one aggregate parity.
+struct KagemushaRecursiveHashClaimParityWitnessV1<'a, C: CurveAffineExt> {
+    protocol_digests: [DigestV1; 4],
+    protocol: &'a PlonkProtocol<C>,
+    instances: &'a [Vec<C::ScalarExt>],
+    proof: &'a [u8],
+    history: &'a IpaAccumulator<C, NativeLoader>,
+    history_fold_proof: &'a [u8],
+    merge_fold_proof: &'a [u8],
+}
+
 /// One parity's predecessor and GuardBundle proof material consumed by the aggregate circuit.
 pub(super) struct KagemushaRecursiveParityWitnessV1<'a, C>
 where
     C: CurveAffineExt,
 {
+    hash_claim: Option<KagemushaRecursiveHashClaimParityWitnessV1<'a, C>>,
     pub(super) mint_fold_opening: Option<KagemushaMintFoldOpeningWitnessV1<'a>>,
     pub(super) mint_authorization: &'a KagemushaMintAuthorizationV1,
     pub(super) mint_credit: &'a KagemushaMintCreditV1,
@@ -305,6 +338,7 @@ where
 
 /// Complete paired witness used to construct one Eq/Ep recursive transition circuit pair.
 pub(super) struct KagemushaRecursiveStateWitnessV1<'a> {
+    pub(super) hash_claim: Option<super::generation::KagemushaMintHashClaimGenerationWitnessV1<'a>>,
     pub(super) state: KagemushaStateRelationWitnessV1,
     pub(super) mint_fold_opening: Option<KagemushaMintFoldOpeningWitnessV1<'a>>,
     pub(super) mint_authorization: &'a KagemushaMintAuthorizationV1,
@@ -368,7 +402,6 @@ pub(super) struct KagemushaRecursiveStateWitnessV1<'a> {
 #[derive(Clone, Debug)]
 pub(super) struct KagemushaRecursiveStateConfigV1<F: halo2_base::utils::ScalarField> {
     base: BaseConfig<F>,
-    sha: PastaSha256ConfigV1,
     dense: PastaDenseMsmConfigV1,
 }
 
@@ -376,7 +409,6 @@ pub(super) struct KagemushaRecursiveStateConfigV1<F: halo2_base::utils::ScalarFi
 #[derive(Clone)]
 pub(super) struct KagemushaRecursiveStateEqCircuitV1 {
     builder: BaseCircuitBuilder<Fp>,
-    sha_jobs: PastaSha256JobsV1<Fp>,
     dense_jobs: PastaDenseMsmJobsV1<EpAffine>,
 }
 
@@ -384,7 +416,6 @@ pub(super) struct KagemushaRecursiveStateEqCircuitV1 {
 #[derive(Clone)]
 pub(super) struct KagemushaRecursiveStateEpCircuitV1 {
     builder: BaseCircuitBuilder<Fq>,
-    sha_jobs: PastaSha256JobsV1<Fq>,
     dense_jobs: PastaDenseMsmJobsV1<EqAffine>,
 }
 
@@ -402,7 +433,6 @@ macro_rules! impl_recursive_circuit {
             fn without_witnesses(&self) -> Self {
                 Self {
                     builder: self.builder.deep_clone().unknown(true),
-                    sha_jobs: self.sha_jobs.unknown(),
                     dense_jobs: self.dense_jobs.unknown(),
                 }
             }
@@ -416,7 +446,6 @@ macro_rules! impl_recursive_circuit {
                 base.set_usable_rows(usable_rows);
                 KagemushaRecursiveStateConfigV1 {
                     base,
-                    sha: PastaSha256ConfigV1::configure(meta),
                     dense: PastaDenseMsmConfigV1::configure::<$opposite>(meta),
                 }
             }
@@ -445,12 +474,6 @@ macro_rules! impl_recursive_circuit {
                     &self.builder,
                     config.base,
                     layouter.namespace(|| concat!($label, " Base")),
-                )?;
-                self.sha_jobs.synthesize(
-                    &config.sha,
-                    &mut layouter,
-                    &self.builder.core().copy_manager,
-                    usable_rows,
                 )?;
                 self.dense_jobs.synthesize(
                     &config.dense,
@@ -491,6 +514,63 @@ pub(super) fn build_kagemusha_recursive_state_pair_v1(
     ),
     String,
 > {
+    if witness.hash_claim.is_none() {
+        return Err("recursive state requires its authenticated complete SHA claim".to_owned());
+    }
+    match build_recursive_state_pair_impl_v1(eq_params, ep_params, witness, false)? {
+        RecursiveStateBuildV1::Authenticated(eq, ep, eq_audit, ep_audit) => {
+            Ok((eq, ep, eq_audit, ep_audit))
+        }
+        RecursiveStateBuildV1::Messages(_, _) => {
+            Err("recursive state discovery cannot produce an authenticated circuit".to_owned())
+        }
+    }
+}
+
+enum RecursiveStateBuildV1 {
+    Authenticated(
+        KagemushaRecursiveStateEqCircuitV1,
+        KagemushaRecursiveStateEpCircuitV1,
+        DigestV1,
+        DigestV1,
+    ),
+    Messages(Vec<Vec<u8>>, Vec<Vec<u8>>),
+}
+
+/// Discover exact typed messages without exposing an unauthenticated circuit or changing bytes.
+///
+/// The queue depends on state/Guard semantics and already-existing incoming/mint proofs. Neither
+/// this state's successor recursive history nor its deferred audit is hashed, so the completed
+/// claim may subsequently be merged into that history without creating a self-reference.
+pub(super) fn recursive_state_sha_messages_v1(
+    eq_params: &ParamsIPA<EqAffine>,
+    ep_params: &ParamsIPA<EpAffine>,
+    mut witness: KagemushaRecursiveStateWitnessV1<'_>,
+) -> Result<(Vec<Vec<u8>>, Vec<Vec<u8>>), String> {
+    witness.hash_claim = None;
+    match build_recursive_state_pair_impl_v1(eq_params, ep_params, witness, true)? {
+        RecursiveStateBuildV1::Messages(eq, ep) => Ok((eq, ep)),
+        RecursiveStateBuildV1::Authenticated(_, _, _, _) => {
+            Err("recursive state discovery unexpectedly constructed a circuit".to_owned())
+        }
+    }
+}
+
+fn build_recursive_state_pair_impl_v1(
+    eq_params: &ParamsIPA<EqAffine>,
+    ep_params: &ParamsIPA<EpAffine>,
+    witness: KagemushaRecursiveStateWitnessV1<'_>,
+    discover_messages: bool,
+) -> Result<RecursiveStateBuildV1, String> {
+    if discover_messages != witness.hash_claim.is_none() {
+        return Err(
+            "recursive state SHA claim is absent or present in the wrong construction phase"
+                .to_owned(),
+        );
+    }
+    if let Some(claim) = &witness.hash_claim {
+        validate_recursive_hash_claim_v1(claim)?;
+    }
     witness.state.validate()?;
     validate_mint_fold_opening_against_state_v1(&witness.state, witness.mint_fold_opening)?;
     let authorization = witness.mint_authorization;
@@ -592,6 +672,26 @@ pub(super) fn build_kagemusha_recursive_state_pair_v1(
         .ep_mint_history
         .to_native()
         .map_err(|error| error.to_string())?;
+    let eq_hash_history = witness
+        .hash_claim
+        .as_ref()
+        .map(|claim| {
+            claim
+                .eq_history
+                .to_native()
+                .map_err(|error| error.to_string())
+        })
+        .transpose()?;
+    let ep_hash_history = witness
+        .hash_claim
+        .as_ref()
+        .map(|claim| {
+            claim
+                .ep_history
+                .to_native()
+                .map_err(|error| error.to_string())
+        })
+        .transpose()?;
     let eq_svk = eq_succinct_vk(eq_params);
     let ep_svk = ep_succinct_vk(ep_params);
     let eq_incoming_protocol_digest =
@@ -634,12 +734,32 @@ pub(super) fn build_kagemusha_recursive_state_pair_v1(
             },
         )
         .collect::<Vec<_>>();
-    let (mut eq_builder, eq_sha, eq_output) = build_scalar_half::<EqAffine>(
+    let (mut eq_builder, eq_sha, eq_output, eq_claim_binding) = build_scalar_half::<EqAffine>(
         witness.state.clone(),
         witness.guard_relation.clone(),
         &eq_svk,
         KagemushaPastaParityV1::Eq,
         KagemushaRecursiveParityWitnessV1 {
+            hash_claim: witness
+                .hash_claim
+                .as_ref()
+                .zip(eq_hash_history.as_ref())
+                .map(
+                    |(claim, history)| KagemushaRecursiveHashClaimParityWitnessV1 {
+                        protocol_digests: [
+                            claim.eq_claim_protocol_digest,
+                            claim.ep_claim_protocol_digest,
+                            claim.eq_shard_protocol_digest,
+                            claim.ep_shard_protocol_digest,
+                        ],
+                        protocol: claim.eq_protocol,
+                        instances: claim.eq_instances,
+                        proof: claim.eq_proof,
+                        history,
+                        history_fold_proof: claim.eq_history_fold_proof.as_bytes(),
+                        merge_fold_proof: claim.eq_merge_fold_proof.as_bytes(),
+                    },
+                ),
             mint_fold_opening: witness.mint_fold_opening,
             mint_authorization: witness.mint_authorization,
             mint_credit: witness.mint_credit,
@@ -675,12 +795,32 @@ pub(super) fn build_kagemusha_recursive_state_pair_v1(
             mint_merge_fold_proof: witness.eq_mint_merge_fold_proof.as_bytes(),
         },
     )?;
-    let (mut ep_builder, ep_sha, ep_output) = build_scalar_half::<EpAffine>(
+    let (mut ep_builder, ep_sha, ep_output, ep_claim_binding) = build_scalar_half::<EpAffine>(
         witness.state,
         witness.guard_relation,
         &ep_svk,
         KagemushaPastaParityV1::Ep,
         KagemushaRecursiveParityWitnessV1 {
+            hash_claim: witness
+                .hash_claim
+                .as_ref()
+                .zip(ep_hash_history.as_ref())
+                .map(
+                    |(claim, history)| KagemushaRecursiveHashClaimParityWitnessV1 {
+                        protocol_digests: [
+                            claim.eq_claim_protocol_digest,
+                            claim.ep_claim_protocol_digest,
+                            claim.eq_shard_protocol_digest,
+                            claim.ep_shard_protocol_digest,
+                        ],
+                        protocol: claim.ep_protocol,
+                        instances: claim.ep_instances,
+                        proof: claim.ep_proof,
+                        history,
+                        history_fold_proof: claim.ep_history_fold_proof.as_bytes(),
+                        merge_fold_proof: claim.ep_merge_fold_proof.as_bytes(),
+                    },
+                ),
             mint_fold_opening: witness.mint_fold_opening,
             mint_authorization: witness.mint_authorization,
             mint_credit: witness.mint_credit,
@@ -717,38 +857,54 @@ pub(super) fn build_kagemusha_recursive_state_pair_v1(
         },
     )?;
 
+    if discover_messages {
+        // These builders have not consumed a hash proof and must never escape as circuits.
+        return Ok(RecursiveStateBuildV1::Messages(
+            eq_sha.canonical_messages()?,
+            ep_sha.canonical_messages()?,
+        ));
+    }
+    if eq_sha.compression_blocks()? != 0 || ep_sha.compression_blocks()? != 0 {
+        return Err("recursive state retained an unauthenticated inline SHA queue".to_owned());
+    }
+    let expected_ep_audit: [AssignedValue<Fp>; 2] = eq_builder.assigned_instances[0]
+        [public_instance::EP_DEFERRED_AUDIT_LO..public_instance::EP_DEFERRED_AUDIT_LO + 2]
+        .try_into()
+        .map_err(|_| "recursive state Ep audit width changed".to_owned())?;
+    let expected_eq_audit: [AssignedValue<Fq>; 2] = ep_builder.assigned_instances[0]
+        [public_instance::EQ_DEFERRED_AUDIT_LO..public_instance::EQ_DEFERRED_AUDIT_LO + 2]
+        .try_into()
+        .map_err(|_| "recursive state Eq audit width changed".to_owned())?;
     let mut eq_dense = PastaDenseMsmJobsV1::default();
-    constrain_reciprocal_parent_pass_v1::<EpAffine>(
+    constrain_reciprocal_output_with_u128_binding_v1::<EpAffine>(
         &mut eq_builder,
-        KagemushaPastaParityV1::Ep,
         &ep_output,
+        &expected_ep_audit,
+        &eq_claim_binding,
         &mut eq_dense,
     )?;
     let mut ep_dense = PastaDenseMsmJobsV1::default();
-    constrain_reciprocal_parent_pass_v1::<EqAffine>(
+    constrain_reciprocal_output_with_u128_binding_v1::<EqAffine>(
         &mut ep_builder,
-        KagemushaPastaParityV1::Eq,
         &eq_output,
+        &expected_eq_audit,
+        &ep_claim_binding,
         &mut ep_dense,
     )?;
     eq_builder.calculate_params(Some(MINIMUM_UNUSABLE_ROWS));
     ep_builder.calculate_params(Some(MINIMUM_UNUSABLE_ROWS));
     let usable_rows = (1_usize << 16) - MINIMUM_UNUSABLE_ROWS;
-    eq_sha.validate_capacity(usable_rows)?;
-    ep_sha.validate_capacity(usable_rows)?;
     eq_dense.validate_capacity(usable_rows)?;
     ep_dense.validate_capacity(usable_rows)?;
     let eq_audit = assigned_digest_bytes(&eq_output.audit_digest_limbs)?;
     let ep_audit = assigned_digest_bytes(&ep_output.audit_digest_limbs)?;
-    Ok((
+    Ok(RecursiveStateBuildV1::Authenticated(
         KagemushaRecursiveStateEqCircuitV1 {
             builder: eq_builder,
-            sha_jobs: eq_sha,
             dense_jobs: eq_dense,
         },
         KagemushaRecursiveStateEpCircuitV1 {
             builder: ep_builder,
-            sha_jobs: ep_sha,
             dense_jobs: ep_dense,
         },
         eq_audit,
@@ -785,6 +941,7 @@ fn build_scalar_half<C>(
         BaseCircuitBuilder<C::ScalarExt>,
         PastaSha256JobsV1<C::ScalarExt>,
         KagemushaDeferredParentOutputV1<C>,
+        Vec<AssignedValue<C::ScalarExt>>,
     ),
     String,
 >
@@ -1216,6 +1373,32 @@ where
         .first()
         .ok_or_else(|| "Kagemusha mint-authorization public column is absent".to_owned())?;
     constrain_mint_authorization_binding_v1(&loader, authorization_column, &public, mint)?;
+    let recipient_credential_preimage = witness
+        .mint_fold_opening
+        .map(|opening| opening.recipient_credential().canonical_id_preimage_bytes())
+        .transpose()
+        .map_err(|error| format!("invalid MintFold recipient credential preimage: {error}"))?;
+    {
+        let chip = loader.ecc_chip();
+        let mut loader_ctx = loader.ctx_mut();
+        let authorization_cells = authorization_column
+            .iter()
+            .map(|value| *value.assigned())
+            .collect::<Vec<_>>();
+        constrain_mint_fold_recipient_opening_v1(
+            loader_ctx.main(),
+            chip.range(),
+            &mut sha_jobs,
+            &authorization_cells,
+            assigned_state.successor.lane_id,
+            assigned_state.replay_credit_id,
+            recipient_credential_preimage.as_deref(),
+            witness
+                .mint_fold_opening
+                .map(|opening| opening.credit_opening()),
+            mint,
+        )?;
+    }
     let authorization_current = verify_ordinary_proof_with_canonical_bytes_v1(
         &loader,
         succinct_vk,
@@ -1354,14 +1537,30 @@ where
         mint,
     )
     .map_err(|error| format!("failed to select finalized-mint history: {error:?}"))?;
-    bind_accumulator_limbs(&loader, &successor_history, &history_limbs)
-        .map_err(|error| format!("failed to bind successor history: {error:?}"))?;
     let mint_end = loader.ecc_chip().equation_count();
     if mint_end <= authorization_end {
         return Err("Kagemusha finalized-mint verifier emitted no equations".to_owned());
     }
 
-    let mut equation_tags = Vec::with_capacity(mint_end);
+    let (successor_history, claim_binding, claim_current_end) =
+        if let Some(claim) = witness.hash_claim {
+            let claimed_sha = core::mem::take(&mut sha_jobs);
+            constrain_recursive_hash_claim_v1(
+                &loader,
+                succinct_vk,
+                parity,
+                claim,
+                &claimed_sha,
+                assigned_state.successor.release_id,
+                successor_history,
+            )?
+        } else {
+            (successor_history, Vec::new(), mint_end)
+        };
+    bind_accumulator_limbs(&loader, &successor_history, &history_limbs)
+        .map_err(|error| format!("failed to bind successor history: {error:?}"))?;
+    let claim_end = loader.ecc_chip().equation_count();
+    let mut equation_tags = Vec::with_capacity(claim_end);
     equation_tags.extend(std::iter::repeat_n(PARENT_EQUATION_TAG, parent_end));
     equation_tags.extend(std::iter::repeat_n(
         INCOMING_CREDIT_EQUATION_TAG,
@@ -1401,18 +1600,253 @@ where
         mint_enabled,
         mint_end - authorization_end,
     ));
-    let output = finalize_deferred_audit_plan_v1(
+    equation_tags.extend(std::iter::repeat_n(
+        STATE_HASH_CLAIM_CURRENT_EQUATION_TAG,
+        claim_current_end - mint_end,
+    ));
+    equation_tags.extend(std::iter::repeat_n(
+        STATE_HASH_CLAIM_HISTORY_EQUATION_TAG,
+        claim_end - claim_current_end,
+    ));
+    assigned_selectors.extend(std::iter::repeat_n(guard_enabled, claim_end - mint_end));
+    equation_selectors.extend(std::iter::repeat_n(true, claim_end - mint_end));
+    let output = finalize_deferred_audit_plan_with_u128_binding_v1(
         &mut builder,
         loader,
         equation_tags,
         assigned_selectors,
         equation_selectors,
+        &claim_binding,
     )
     .map_err(|error| format!("failed to finalize deferred audit: {error:?}"))?;
     for (actual, expected) in output.audit_digest_limbs.iter().zip(expected_audit) {
         builder.main(0).constrain_equal(actual, &expected);
     }
-    Ok((builder, sha_jobs, output))
+    Ok((builder, sha_jobs, output, claim_binding))
+}
+
+fn validate_recursive_hash_claim_v1(
+    claim: &super::generation::KagemushaMintHashClaimGenerationWitnessV1<'_>,
+) -> Result<(), String> {
+    let digests = [
+        claim.eq_claim_protocol_digest,
+        claim.ep_claim_protocol_digest,
+        claim.eq_shard_protocol_digest,
+        claim.ep_shard_protocol_digest,
+    ];
+    if digests.iter().any(|digest| *digest == [0; 32])
+        || digests[0] == digests[1]
+        || digests[2] == digests[3]
+    {
+        return Err(
+            "recursive state hash suite has absent or parity-aliased identities".to_owned(),
+        );
+    }
+    if native_parent_protocol_digest_v1(claim.eq_protocol, KagemushaPastaParityV1::Eq)?
+        != digests[0]
+        || native_parent_protocol_digest_v1(claim.ep_protocol, KagemushaPastaParityV1::Ep)?
+            != digests[1]
+    {
+        return Err(
+            "recursive state hash claim differs from its authenticated protocol".to_owned(),
+        );
+    }
+    validate_recursive_hash_claim_history_v1(claim.eq_instances, claim.eq_history.as_bytes())?;
+    validate_recursive_hash_claim_history_v1(claim.ep_instances, claim.ep_history.as_bytes())?;
+    if canonical_claim_carrier_binding_tail_v1(claim.eq_instances)?
+        != canonical_claim_carrier_binding_tail_v1(claim.ep_instances)?
+    {
+        return Err(
+            "recursive state paired hash claims have different carrier bindings".to_owned(),
+        );
+    }
+    Ok(())
+}
+
+fn validate_recursive_hash_claim_history_v1<F: KagemushaPoseidonFieldV1>(
+    instances: &[Vec<F>],
+    history: &[u8; super::KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1],
+) -> Result<(), String> {
+    let shape = [
+        KAGEMUSHA_MINT_HASH_CLAIM_INNER_SEMANTIC_INSTANCE_COUNT_V1,
+        KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_INSTANCE_COUNT_V1,
+        KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_INSTANCE_COUNT_V1,
+    ];
+    if !instances.iter().map(Vec::len).eq(shape) {
+        return Err(
+            "recursive state hash claim requires the exact two-carrier hybrid shape".to_owned(),
+        );
+    }
+    let expected = history
+        .chunks_exact(16)
+        .map(|bytes| {
+            F::from_u128(u128::from_le_bytes(
+                bytes.try_into().expect("history limb width"),
+            ))
+        })
+        .collect::<Vec<_>>();
+    if instances[0]
+        .get(hash_claim_public::HISTORY_START..KAGEMUSHA_MINT_HASH_CLAIM_PUBLIC_INSTANCE_COUNT_V1)
+        != Some(expected.as_slice())
+    {
+        return Err(
+            "recursive state hash-claim history is detached from its public column".to_owned(),
+        );
+    }
+    Ok(())
+}
+
+/// Verify the exact ordered SHA queue and fold its complete authenticated history.
+///
+/// The returned carrier binding must be absorbed in both deferred audits and equality-bound in
+/// the reciprocal passes. The hybrid proof alone does not authenticate its opposite-field
+/// deferred equations, and a host comparison of the binding is only an early diagnostic.
+#[allow(clippy::too_many_arguments)]
+fn constrain_recursive_hash_claim_v1<'chip, C>(
+    loader: &DeferredLoader<'chip, C>,
+    succinct_vk: &IpaSuccinctVerifyingKey<C>,
+    parity: KagemushaPastaParityV1,
+    claim: KagemushaRecursiveHashClaimParityWitnessV1<'_, C>,
+    jobs: &PastaSha256JobsV1<C::ScalarExt>,
+    release: [AssignedValue<C::ScalarExt>; 2],
+    predecessor: super::deferred_parent::DeferredAccumulator<'chip, C>,
+) -> Result<
+    (
+        super::deferred_parent::DeferredAccumulator<'chip, C>,
+        Vec<AssignedValue<C::ScalarExt>>,
+        usize,
+    ),
+    String,
+>
+where
+    C: CurveAffineExt,
+    C::Base: BigPrimeField,
+    C::ScalarExt: KagemushaPoseidonFieldV1,
+{
+    // These four identities are fixed-column values owned by the release-authenticated State
+    // key. They are not prover-selected public claims or unconstrained digest witnesses.
+    let protocols: [[AssignedValue<C::ScalarExt>; 2]; 4] = claim.protocol_digests.map(|digest| {
+        crate::zk::kagemusha_v1_poseidon::digest_limbs::<C::ScalarExt>(digest)
+            .map(|value| loader.ctx_mut().main().load_constant(value))
+    });
+    let structure = kagemusha_protocol_structure_digest_v1(claim.protocol, parity)?;
+    let loaded = load_and_constrain_parent_protocol_v1(
+        loader,
+        claim.protocol,
+        parity,
+        structure,
+        &protocols[match parity {
+            KagemushaPastaParityV1::Eq => 0,
+            KagemushaPastaParityV1::Ep => 1,
+        }],
+    )
+    .map_err(|error| format!("recursive state hash-claim protocol binding failed: {error:?}"))?;
+    let shape = [
+        KAGEMUSHA_MINT_HASH_CLAIM_INNER_SEMANTIC_INSTANCE_COUNT_V1,
+        KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_INSTANCE_COUNT_V1,
+        KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_INSTANCE_COUNT_V1,
+    ];
+    if loaded.protocol.num_instance != shape || !claim.instances.iter().map(Vec::len).eq(shape) {
+        return Err("recursive state terminal hash-claim protocol shape changed".to_owned());
+    }
+    let semantic = claim.instances[0]
+        .iter()
+        .map(|value| loader.assign_scalar(*value))
+        .collect::<Vec<_>>();
+    let equation_start = loader.ecc_chip().equation_count();
+    let current = verify_two_carrier_hybrid_ordinary_proof_and_stream_v1(
+        loader,
+        succinct_vk,
+        &loaded.protocol,
+        &semantic,
+        match parity {
+            KagemushaPastaParityV1::Eq => [
+                [
+                    hash_claim_public::EQ_PROOF_EQ_CARRIER_COMMITMENT_LO,
+                    hash_claim_public::EQ_PROOF_EQ_CARRIER_COMMITMENT_LO + 1,
+                ],
+                [
+                    hash_claim_public::EQ_PROOF_EP_CARRIER_COMMITMENT_LO,
+                    hash_claim_public::EQ_PROOF_EP_CARRIER_COMMITMENT_LO + 1,
+                ],
+            ],
+            KagemushaPastaParityV1::Ep => [
+                [
+                    hash_claim_public::EP_PROOF_EQ_CARRIER_COMMITMENT_LO,
+                    hash_claim_public::EP_PROOF_EQ_CARRIER_COMMITMENT_LO + 1,
+                ],
+                [
+                    hash_claim_public::EP_PROOF_EP_CARRIER_COMMITMENT_LO,
+                    hash_claim_public::EP_PROOF_EP_CARRIER_COMMITMENT_LO + 1,
+                ],
+            ],
+        },
+        claim.proof,
+    )
+    .map_err(|error| format!("recursive state hash-claim verifier failed: {error:?}"))?;
+    let current_end = loader.ecc_chip().equation_count();
+    if current_end <= equation_start {
+        return Err("recursive state hash-claim current verifier emitted no equation".to_owned());
+    }
+    let column = &semantic[..KAGEMUSHA_MINT_HASH_CLAIM_PUBLIC_INSTANCE_COUNT_V1];
+    let history = load_native_accumulator(loader, claim.history)
+        .map_err(|error| format!("recursive state hash history load failed: {error:?}"))?;
+    let history_cells = column[hash_claim_public::HISTORY_START..]
+        .iter()
+        .map(|value| *value.assigned())
+        .collect::<Vec<_>>();
+    bind_accumulator_limbs(loader, &history, &history_cells)
+        .map_err(|error| format!("recursive state hash history binding failed: {error:?}"))?;
+    let binding = semantic[KAGEMUSHA_MINT_HASH_CLAIM_PUBLIC_INSTANCE_COUNT_V1
+        ..hash_claim_public::CARRIER_BINDING_END]
+        .iter()
+        .map(|value| *value.assigned())
+        .collect::<Vec<_>>();
+    if binding.len() != KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_BINDING_COUNT_V1 {
+        return Err("recursive state hash carrier-binding width changed".to_owned());
+    }
+    {
+        let chip = loader.ecc_chip();
+        let mut ctx = loader.ctx_mut();
+        let assigned = column
+            .iter()
+            .map(|value| *value.assigned())
+            .collect::<Vec<_>>();
+        constrain_complete_claim_against_sha_jobs_v1(
+            ctx.main(),
+            chip.range(),
+            jobs,
+            &assigned,
+            parity,
+            release,
+            protocols[0],
+            protocols[1],
+            protocols[2],
+            protocols[3],
+        )?;
+    }
+    let complete = verify_fold(
+        loader,
+        succinct_vk,
+        &[current.accumulator, history],
+        claim.history_fold_proof,
+    )
+    .map_err(|error| format!("recursive state hash-claim history fold failed: {error:?}"))?;
+    let complete_end = loader.ecc_chip().equation_count();
+    if complete_end <= current_end {
+        return Err("recursive state hash-claim history fold emitted no equation".to_owned());
+    }
+    let successor = verify_fold(
+        loader,
+        succinct_vk,
+        &[predecessor, complete],
+        claim.merge_fold_proof,
+    )
+    .map_err(|error| format!("recursive state hash-claim merge fold failed: {error:?}"))?;
+    if loader.ecc_chip().equation_count() <= complete_end {
+        return Err("recursive state hash-claim merge fold emitted no equation".to_owned());
+    }
+    Ok((successor, binding, current_end))
 }
 
 fn assign_history_limbs<F: KagemushaPoseidonFieldV1>(
@@ -2164,6 +2598,168 @@ where
     // The final proof independently authenticates an enabled sender hardware profile and policy.
     // They need not equal the receiving wallet's profile or policy epoch.
     let _ = jobs;
+    Ok(())
+}
+
+/// Join the original authorized recipient and both plaintext openings to this aggregate lane.
+///
+/// The authorization verifier establishes the credential ID and commitment values. Opening that
+/// exact credential to its stable lane prevents another otherwise valid hardware lane from
+/// consuming the same mint credit against its independent replay tree. Original credential epoch
+/// fields deliberately remain unchanged: a credit staged before ordinary rotation still belongs
+/// to the same lane. Both branches assign identical fixed-size private buffers and SHA jobs.
+#[allow(clippy::too_many_arguments)]
+fn constrain_mint_fold_recipient_opening_v1<F: KagemushaPoseidonFieldV1>(
+    ctx: &mut halo2_base::Context<F>,
+    range: &halo2_base::gates::RangeChip<F>,
+    jobs: &mut PastaSha256JobsV1<F>,
+    authorization: &[AssignedValue<F>],
+    successor_lane: [AssignedValue<F>; 2],
+    replay_credit_id: [AssignedValue<F>; 2],
+    credential_preimage: Option<&[u8]>,
+    opening: Option<&KagemushaCreditOpeningV1>,
+    enabled: AssignedValue<F>,
+) -> Result<(), String> {
+    if authorization.len() != MINT_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1
+        || credential_preimage.is_some() != opening.is_some()
+    {
+        return Err("MintFold recipient opening has incomplete fixed-shape inputs".to_owned());
+    }
+    let gate = range.gate();
+    let digest = |offset: usize| [authorization[offset], authorization[offset + 1]];
+    let credential_id = assigned_digest_bytes_v1(
+        ctx,
+        gate,
+        digest(mint_authorization_public_instance::CREDENTIAL_LO),
+    );
+    let recipient_lane = constrain_receiver_credential_lane_v1(
+        ctx,
+        range,
+        jobs,
+        credential_preimage,
+        &credential_id,
+        enabled,
+    )?;
+    constrain_digest_bytes_if_v1(ctx, gate, &recipient_lane, successor_lane, enabled);
+
+    // This is inactive circuit padding only. It cannot satisfy an active MintFold without the
+    // private preimages of the commitments already established by its recursive authorization.
+    let padding = KagemushaCreditOpeningV1 {
+        version: KAGEMUSHA_WIRE_VERSION_V1,
+        credit_id: [1; 32],
+        amount: 1,
+        credit_commitment_opening: [1; 32],
+        recipient_binding_opening: [1; 32],
+        recovery_nonce: [1; 32],
+    };
+    let opening = opening.unwrap_or(&padding);
+    let opening_version = ctx.load_witness(F::from(u64::from(opening.version)));
+    let opening_amount = ctx.load_witness(F::from_u128(opening.amount));
+    let version_bytes = assigned_uint_bytes_v1(ctx, gate, opening_version, 16);
+    let amount_bytes = assigned_uint_bytes_v1(ctx, gate, opening_amount, 128);
+    for (actual, expected) in [
+        (
+            opening_version,
+            authorization[mint_authorization_public_instance::VERSION],
+        ),
+        (
+            opening_amount,
+            authorization[mint_authorization_public_instance::AMOUNT],
+        ),
+    ] {
+        let difference = gate.sub(ctx, actual, expected);
+        let selected = gate.mul(ctx, difference, enabled);
+        gate.assert_is_const(ctx, &selected, &F::ZERO);
+    }
+    let opening_id: [PastaSha256ByteV1<F>; 32] = assign_bytes(ctx, range, &opening.credit_id)
+        .try_into()
+        .expect("fixed mint opening credit ID width");
+    constrain_digest_bytes_if_v1(
+        ctx,
+        gate,
+        &opening_id,
+        digest(mint_authorization_public_instance::CREDIT_ID_LO),
+        enabled,
+    );
+    constrain_digest_bytes_if_v1(ctx, gate, &opening_id, replay_credit_id, enabled);
+    let recipient_opening = assign_bytes(ctx, range, &opening.recipient_binding_opening);
+    let credit_opening = assign_bytes(ctx, range, &opening.credit_commitment_opening);
+    assert_bytes_nonzero(ctx, range, &recipient_opening);
+    assert_bytes_nonzero(ctx, range, &credit_opening);
+    let operation = assigned_digest_bytes_v1(
+        ctx,
+        gate,
+        digest(mint_authorization_public_instance::OPERATION_LO),
+    );
+    let recipient_preimage = assemble_canonical_preimage_v1(
+        ctx,
+        range,
+        &kagemusha_recipient_credential_commitment_preimage_layout_v1()
+            .map_err(|error| error.to_string())?,
+        &KAGEMUSHA_RECIPIENT_CREDENTIAL_COMMITMENT_PREIMAGE_FIELD_RANGES_V1,
+        &[&operation, &credential_id, &recipient_opening],
+    )?;
+    let recipient_commitment = hash_model_frame_v1(
+        ctx,
+        jobs,
+        MINT_RECIPIENT_COMMITMENT_DOMAIN_V1,
+        &recipient_preimage,
+    )?;
+    constrain_digest_bytes_if_v1(
+        ctx,
+        gate,
+        &recipient_commitment,
+        digest(mint_authorization_public_instance::RECIPIENT_COMMITMENT_LO),
+        enabled,
+    );
+
+    let [network, asset, incarnation, pool, recipient, key] = [
+        mint_authorization_public_instance::NETWORK_LO,
+        mint_authorization_public_instance::ASSET_LO,
+        mint_authorization_public_instance::INCARNATION_LO,
+        mint_authorization_public_instance::POOL_LO,
+        mint_authorization_public_instance::RECIPIENT_LO,
+        mint_authorization_public_instance::RECIPIENT_KEY_LO,
+    ]
+    .map(|offset| assigned_digest_bytes_v1(ctx, gate, digest(offset)));
+    let scale = assigned_uint_bytes_v1(
+        ctx,
+        gate,
+        authorization[mint_authorization_public_instance::SCALE],
+        32,
+    );
+    let credit_preimage = assemble_canonical_preimage_v1(
+        ctx,
+        range,
+        &kagemusha_mint_credit_opening_commitment_preimage_layout_v1()
+            .map_err(|error| error.to_string())?,
+        &KAGEMUSHA_MINT_CREDIT_OPENING_COMMITMENT_PREIMAGE_FIELD_RANGES_V1,
+        &[
+            &version_bytes,
+            &network,
+            &asset,
+            &incarnation,
+            &scale,
+            &pool,
+            &amount_bytes,
+            &recipient,
+            &key,
+            &credit_opening,
+        ],
+    )?;
+    let credit_commitment = hash_model_frame_v1(
+        ctx,
+        jobs,
+        MINT_OPENING_COMMITMENT_DOMAIN_V1,
+        &credit_preimage,
+    )?;
+    constrain_digest_bytes_if_v1(
+        ctx,
+        gate,
+        &credit_commitment,
+        digest(mint_authorization_public_instance::CREDIT_COMMITMENT_LO),
+        enabled,
+    );
     Ok(())
 }
 
@@ -3440,10 +4036,10 @@ pub(super) fn ep_succinct_vk(params: &ParamsIPA<EpAffine>) -> IpaSuccinctVerifyi
 #[cfg(test)]
 mod tests {
     use super::super::terminal_authorization::{
-        constrain_receiver_credential_lane_v1, hash_incoming_payment_claims_binding_v1,
-        hash_terminal_prepared_transfer_v1,
+        hash_incoming_payment_claims_binding_v1, hash_terminal_prepared_transfer_v1,
     };
     use super::*;
+    use crate::zk::pasta_sha256::PastaSha256ConfigV1;
     use halo2_base::gates::RangeChip;
     use halo2_proofs::dev::MockProver;
     use sha2::{Digest as _, Sha256};
@@ -3511,7 +4107,7 @@ mod tests {
                 &config.sha,
                 &mut layouter,
                 &self.builder.core().copy_manager,
-                (1_usize << RECEIVER_LANE_TEST_K) - MINIMUM_UNUSABLE_ROWS,
+                (1_usize << self.builder.config_params.k) - MINIMUM_UNUSABLE_ROWS,
             )
         }
     }
@@ -3914,6 +4510,406 @@ mod tests {
         let lifecycle = &credit.statement.lifecycle;
         assert_canonical_mint_lifecycle_digest::<Fp>(lifecycle);
         assert_canonical_mint_lifecycle_digest::<Fq>(lifecycle);
+    }
+
+    #[derive(Clone)]
+    struct MintRecipientOpeningFixture {
+        authorization: Vec<u128>,
+        credential_preimage: Vec<u8>,
+        opening: KagemushaCreditOpeningV1,
+        lane: DigestV1,
+        replay_credit_id: DigestV1,
+    }
+
+    fn mint_recipient_opening_fixture() -> MintRecipientOpeningFixture {
+        use iroha_data_model::kagemusha::{
+            kagemusha_asset_identity_digest_v1, kagemusha_mint_credit_opening_commitment_v1,
+            kagemusha_recipient_credential_commitment_v1,
+        };
+        // Existing structural fixtures supply real canonical values, never proof authority. This
+        // test invokes the production binder directly without checking its witnesses on the host.
+        let credit = super::super::tests::compact_mint_credit_fixture();
+        let lifecycle = &credit.statement.lifecycle;
+        let payment = super::super::tests::incoming_payment_fixture(0x41, 9, 7, 11, 128, 128);
+        let key = payment.request.recipient_encryption_key;
+        let mut credential = payment.request.hardware_credential;
+        credential.network_id = lifecycle.network_id;
+        credential.suite_id = lifecycle.suite_id;
+        credential.hardware_profile_id = lifecycle.hardware_profile_id;
+        credential.policy_epoch = lifecycle.policy_epoch;
+        credential = credential
+            .seal_credential_id()
+            .expect("retained credential ID");
+        let opening = KagemushaCreditOpeningV1 {
+            version: KAGEMUSHA_WIRE_VERSION_V1,
+            credit_id: lifecycle.credit_id,
+            amount: credit.statement.amount,
+            recipient_binding_opening: [0x91; 32],
+            credit_commitment_opening: [0x92; 32],
+            recovery_nonce: [0x93; 32],
+        };
+        let operation = [0x94; 32];
+        let recipient_commitment = kagemusha_recipient_credential_commitment_v1(
+            operation,
+            credential.credential_id,
+            opening.recipient_binding_opening,
+        )
+        .expect("canonical recipient commitment");
+        let credit_commitment = kagemusha_mint_credit_opening_commitment_v1(
+            &lifecycle.network_id,
+            &lifecycle.asset,
+            lifecycle.asset_incarnation,
+            lifecycle.scale,
+            lifecycle.liability_pool_id,
+            opening.amount,
+            &credit.statement.recipient,
+            key,
+            opening.credit_commitment_opening,
+        )
+        .expect("canonical credit commitment");
+        let recipient = canonical_test_digest(
+            MINT_ACCOUNT_IDENTITY_DIGEST_DOMAIN_V1,
+            &norito::encode_canonical(&credit.statement.recipient).expect("canonical recipient"),
+        );
+        let mut authorization = vec![0; MINT_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1];
+        for (offset, bytes) in [
+            (mint_authorization_public_instance::OPERATION_LO, operation),
+            (
+                mint_authorization_public_instance::CREDENTIAL_LO,
+                credential.credential_id,
+            ),
+            (
+                mint_authorization_public_instance::NETWORK_LO,
+                *lifecycle.network_id.as_bytes(),
+            ),
+            (
+                mint_authorization_public_instance::ASSET_LO,
+                kagemusha_asset_identity_digest_v1(&lifecycle.asset).expect("asset digest"),
+            ),
+            (
+                mint_authorization_public_instance::INCARNATION_LO,
+                *lifecycle.asset_incarnation.as_bytes(),
+            ),
+            (
+                mint_authorization_public_instance::POOL_LO,
+                lifecycle.liability_pool_id,
+            ),
+            (mint_authorization_public_instance::RECIPIENT_LO, recipient),
+            (mint_authorization_public_instance::RECIPIENT_KEY_LO, key),
+            (
+                mint_authorization_public_instance::CREDIT_ID_LO,
+                opening.credit_id,
+            ),
+            (
+                mint_authorization_public_instance::RECIPIENT_COMMITMENT_LO,
+                recipient_commitment,
+            ),
+            (
+                mint_authorization_public_instance::CREDIT_COMMITMENT_LO,
+                credit_commitment,
+            ),
+        ] {
+            for (cell, bytes) in authorization[offset..offset + 2]
+                .iter_mut()
+                .zip(bytes.chunks_exact(16))
+            {
+                *cell = u128::from_le_bytes(bytes.try_into().expect("digest limb"));
+            }
+        }
+        authorization[mint_authorization_public_instance::VERSION] = u128::from(opening.version);
+        authorization[mint_authorization_public_instance::AMOUNT] = opening.amount;
+        authorization[mint_authorization_public_instance::SCALE] = u128::from(lifecycle.scale);
+        MintRecipientOpeningFixture {
+            authorization,
+            credential_preimage: credential
+                .canonical_id_preimage_bytes()
+                .expect("credential preimage"),
+            opening,
+            lane: credential.lane_commitment,
+            replay_credit_id: opening.credit_id,
+        }
+    }
+
+    fn mint_recipient_opening_circuit<F: KagemushaPoseidonFieldV1>(
+        fixture: &MintRecipientOpeningFixture,
+        enabled: bool,
+    ) -> ReceiverLaneTestCircuit<F> {
+        let mut builder = BaseCircuitBuilder::<F>::new(false)
+            .use_k(16)
+            .use_lookup_bits(15)
+            .use_instance_columns(1);
+        let range = builder.range_chip();
+        let mut instances = fixture
+            .authorization
+            .iter()
+            .copied()
+            .map(F::from_u128)
+            .collect::<Vec<_>>();
+        instances.extend(crate::zk::kagemusha_v1_poseidon::digest_limbs::<F>(
+            fixture.lane,
+        ));
+        instances.extend(crate::zk::kagemusha_v1_poseidon::digest_limbs::<F>(
+            fixture.replay_credit_id,
+        ));
+        instances.push(F::from(u64::from(enabled)));
+        let cells = builder.main(0).assign_witnesses(instances.iter().copied());
+        let end = MINT_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1;
+        range.gate().assert_bit(builder.main(0), cells[end + 4]);
+        let mut jobs = PastaSha256JobsV1::default();
+        constrain_mint_fold_recipient_opening_v1(
+            builder.main(0),
+            &range,
+            &mut jobs,
+            &cells[..end],
+            [cells[end], cells[end + 1]],
+            [cells[end + 2], cells[end + 3]],
+            enabled.then_some(fixture.credential_preimage.as_slice()),
+            enabled.then_some(&fixture.opening),
+            cells[end + 4],
+        )
+        .expect("fixed MintFold opening inputs");
+        assert_eq!(
+            jobs.compression_blocks()
+                .expect("mint opening SHA inventory"),
+            17
+        );
+        builder.assigned_instances = vec![cells];
+        builder.calculate_params(Some(MINIMUM_UNUSABLE_ROWS));
+        ReceiverLaneTestCircuit {
+            builder,
+            jobs,
+            instances,
+        }
+    }
+
+    fn assert_mint_recipient_opening<F: KagemushaPoseidonFieldV1>(
+        fixture: &MintRecipientOpeningFixture,
+        enabled: bool,
+        valid: bool,
+    ) {
+        let circuit = mint_recipient_opening_circuit::<F>(fixture, enabled);
+        let result = MockProver::run(16, &circuit, vec![circuit.instances.clone()])
+            .expect("MintFold recipient opening synthesis")
+            .verify();
+        assert_eq!(
+            result.is_ok(),
+            valid,
+            "MintFold recipient opening constraints: {result:?}"
+        );
+    }
+
+    fn mint_fold_claim_binding_result<F: KagemushaPoseidonFieldV1>(tamper: u8) -> bool {
+        use super::super::{
+            mint_hash_claim_fold::KagemushaMintHashClaimPlanV1,
+            mint_hash_shard::KagemushaMintHashPlanV1,
+        };
+        use crate::zk::kagemusha_v1_poseidon::digest_limbs;
+        let fixture = mint_recipient_opening_fixture();
+        let mut circuit = mint_recipient_opening_circuit::<F>(&fixture, true);
+        let parity = if F::IS_EQ_PARITY {
+            KagemushaPastaParityV1::Eq
+        } else {
+            KagemushaPastaParityV1::Ep
+        };
+        let release = [0x31; 32];
+        let mut messages = circuit
+            .jobs
+            .canonical_messages()
+            .expect("exact composite opening queue");
+        // Derive a different, internally valid SHA plan. Host recomputation must not authorize
+        // even one changed byte once the consumer binds the original assigned queue.
+        if tamper == 1 {
+            messages[0][0] ^= 1;
+        }
+        let leaves = KagemushaMintHashPlanV1::from_messages(release, parity, [0x51; 32], messages)
+            .expect("native candidate SHA plan");
+        let plan = KagemushaMintHashClaimPlanV1::from_leaves::<F>(release, leaves.leaves())
+            .expect("candidate ordered claim plan");
+        assert_eq!(plan.total_stages, 17);
+        let mut claim = vec![F::ZERO; KAGEMUSHA_MINT_HASH_CLAIM_PUBLIC_INSTANCE_COUNT_V1];
+        claim[hash_claim_public::VERSION] = F::ONE;
+        claim[hash_claim_public::PARITY] = F::from(u64::from(!F::IS_EQ_PARITY));
+        claim[hash_claim_public::COMPLETE] = F::from(u64::from(tamper != 2));
+        claim[hash_claim_public::TOTAL_STAGES] = F::from(plan.total_stages);
+        claim[hash_claim_public::TOTAL_JOBS] = F::from(u64::from(plan.total_jobs));
+        claim[hash_claim_public::NEXT_STAGE] = F::from(plan.total_stages);
+        claim[hash_claim_public::NEXT_JOB] = F::from(u64::from(plan.total_jobs));
+        let offsets = if F::IS_EQ_PARITY {
+            [
+                hash_claim_public::EQ_PLAN_LO,
+                hash_claim_public::EQ_MESSAGE_ROOT_LO,
+                hash_claim_public::EQ_EXPECTED_MESSAGE_ROOT_LO,
+                hash_claim_public::EQ_TERMINAL_ROOT_LO,
+                hash_claim_public::EQ_EXPECTED_ROOT_LO,
+            ]
+        } else {
+            [
+                hash_claim_public::EP_PLAN_LO,
+                hash_claim_public::EP_MESSAGE_ROOT_LO,
+                hash_claim_public::EP_EXPECTED_MESSAGE_ROOT_LO,
+                hash_claim_public::EP_TERMINAL_ROOT_LO,
+                hash_claim_public::EP_EXPECTED_ROOT_LO,
+            ]
+        };
+        for (offset, digest) in offsets.into_iter().zip([
+            plan.plan_binding,
+            plan.expected_message_root,
+            plan.expected_message_root,
+            plan.expected_terminal_root,
+            plan.expected_terminal_root,
+        ]) {
+            claim[offset..offset + 2].copy_from_slice(&digest_limbs::<F>(digest));
+        }
+        let protocol_digests = [[0x61; 32], [0x62; 32], [0x63; 32], [0x64; 32]];
+        for (offset, digest) in [
+            hash_claim_public::RELEASE_LO,
+            hash_claim_public::EQ_CLAIM_PROTOCOL_LO,
+            hash_claim_public::EP_CLAIM_PROTOCOL_LO,
+            hash_claim_public::EQ_SHARD_PROTOCOL_LO,
+            hash_claim_public::EP_SHARD_PROTOCOL_LO,
+        ]
+        .into_iter()
+        .zip([release].into_iter().chain(protocol_digests))
+        {
+            claim[offset..offset + 2].copy_from_slice(&digest_limbs::<F>(digest));
+        }
+        for offset in [
+            hash_claim_public::EQ_CHAINING_STATE,
+            hash_claim_public::EP_CHAINING_STATE,
+        ] {
+            claim[offset..offset + 8].copy_from_slice(
+                &crate::zk::pasta_sha256_table8::IV.map(|word| F::from(u64::from(word))),
+            );
+        }
+        if tamper == 3 {
+            claim[hash_claim_public::EQ_SHARD_PROTOCOL_LO] += F::ONE;
+        }
+        let range = circuit.builder.range_chip();
+        let ctx = circuit.builder.main(0);
+        let cells = ctx.assign_witnesses(claim);
+        let release = digest_limbs::<F>(release).map(|value| ctx.load_constant(value));
+        let protocols = protocol_digests
+            .map(|digest| digest_limbs::<F>(digest).map(|value| ctx.load_constant(value)));
+        constrain_complete_claim_against_sha_jobs_v1(
+            ctx,
+            &range,
+            &circuit.jobs,
+            &cells,
+            parity,
+            release,
+            protocols[0],
+            protocols[1],
+            protocols[2],
+            protocols[3],
+        )
+        .expect("constrain exact composite queue");
+        circuit
+            .builder
+            .calculate_params(Some(MINIMUM_UNUSABLE_ROWS));
+        // This tests the byte/plan binding only. The production consumer additionally verifies
+        // the terminal proof and both complete-history folds before emitting a state circuit.
+        MockProver::run(16, &circuit.builder, vec![circuit.instances])
+            .expect("K16 exact queue binding synthesis")
+            .verify()
+            .is_ok()
+    }
+
+    #[test]
+    fn mint_fold_sha_claim_binding_rejects_changed_bytes_incomplete_plan_and_substituted_suite() {
+        for tamper in 0..4 {
+            assert_eq!(mint_fold_claim_binding_result::<Fp>(tamper), tamper == 0);
+            assert_eq!(mint_fold_claim_binding_result::<Fq>(tamper), tamper == 0);
+        }
+    }
+
+    #[test]
+    fn recursive_hash_claim_history_rejects_truncation_extra_columns_and_detached_history() {
+        fn check<F: KagemushaPoseidonFieldV1>() {
+            let history = [0x42; super::super::KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1];
+            let mut instances = vec![
+                vec![F::ZERO; KAGEMUSHA_MINT_HASH_CLAIM_INNER_SEMANTIC_INSTANCE_COUNT_V1],
+                vec![F::ZERO; KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_INSTANCE_COUNT_V1],
+                vec![F::ZERO; KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_INSTANCE_COUNT_V1],
+            ];
+            for (cell, bytes) in instances[0][hash_claim_public::HISTORY_START
+                ..KAGEMUSHA_MINT_HASH_CLAIM_PUBLIC_INSTANCE_COUNT_V1]
+                .iter_mut()
+                .zip(history.chunks_exact(16))
+            {
+                *cell = F::from_u128(u128::from_le_bytes(bytes.try_into().unwrap()));
+            }
+            validate_recursive_hash_claim_history_v1(&instances, &history)
+                .expect("exact bound history");
+            let mut changed = instances.clone();
+            changed[0][hash_claim_public::HISTORY_START] += F::ONE;
+            assert!(validate_recursive_hash_claim_history_v1(&changed, &history).is_err());
+            for index in 0..3 {
+                let mut changed = instances.clone();
+                changed[index].pop();
+                assert!(validate_recursive_hash_claim_history_v1(&changed, &history).is_err());
+            }
+            instances.push(Vec::new());
+            assert!(validate_recursive_hash_claim_history_v1(&instances, &history).is_err());
+        }
+        check::<Fp>();
+        check::<Fq>();
+    }
+
+    #[test]
+    fn mint_fold_recipient_opening_rejects_cross_lane_and_secret_substitutions_in_both_fields() {
+        let fixture = mint_recipient_opening_fixture();
+        assert_mint_recipient_opening::<Fp>(&fixture, true, true);
+        assert_mint_recipient_opening::<Fq>(&fixture, true, true);
+        for index in 0..3 {
+            let mut changed = fixture.clone();
+            match index {
+                0 => changed.lane[0] ^= 1,
+                1 => changed.opening.recipient_binding_opening[0] ^= 1,
+                _ => changed.opening.credit_commitment_opening[0] ^= 1,
+            }
+            assert_mint_recipient_opening::<Fp>(&changed, true, false);
+            assert_mint_recipient_opening::<Fq>(&changed, true, false);
+        }
+    }
+
+    #[test]
+    fn mint_fold_recipient_opening_rejects_version_amount_credit_and_replay_substitutions() {
+        let fixture = mint_recipient_opening_fixture();
+        for index in 0..4 {
+            let mut changed = fixture.clone();
+            match index {
+                0 => changed.opening.version += 1,
+                1 => changed.opening.amount += 1,
+                2 => changed.opening.credit_id[0] ^= 1,
+                _ => changed.replay_credit_id[0] ^= 1,
+            }
+            assert_mint_recipient_opening::<Fp>(&changed, true, false);
+        }
+    }
+
+    #[test]
+    fn mint_fold_recipient_opening_retains_fixed_padding_and_original_credential() {
+        let fixture = mint_recipient_opening_fixture();
+        let active = mint_recipient_opening_circuit::<Fp>(&fixture, true);
+        let inactive = mint_recipient_opening_circuit::<Fp>(&fixture, false);
+        assert_eq!(
+            active.builder.config_params.num_advice_per_phase,
+            inactive.builder.config_params.num_advice_per_phase,
+        );
+        assert_eq!(
+            active.builder.config_params.num_lookup_advice_per_phase,
+            inactive.builder.config_params.num_lookup_advice_per_phase,
+        );
+        assert_eq!(
+            active.builder.config_params.num_fixed,
+            inactive.builder.config_params.num_fixed
+        );
+        assert_mint_recipient_opening::<Fp>(&fixture, false, true);
+        // Epoch bytes remain in the credential-ID preimage and are never equated with a later
+        // aggregate epoch. Substituting a newly issued credential cannot open the original ID.
+        let mut changed = fixture;
+        changed.credential_preimage[218] ^= 1;
+        assert_mint_recipient_opening::<Fp>(&changed, true, false);
     }
 
     #[test]

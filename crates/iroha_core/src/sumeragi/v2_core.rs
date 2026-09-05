@@ -146,7 +146,8 @@ pub(crate) use refinement::{
     SUCCESSOR_AUTHORITY_RECOVERED_COMPLETE_TIP, SUCCESSOR_AUTHORITY_SNAPSHOT_BOOTSTRAP,
     SUCCESSOR_LIFECYCLE_BEGIN, SUCCESSOR_LIFECYCLE_FAIL, SUCCESSOR_LIFECYCLE_RETRY_COMPLETE_TIP,
     SUCCESSOR_LIFECYCLE_SNAPSHOT_BOOTSTRAP, SUCCESSOR_MARKER_ACTIVATED, SUCCESSOR_STAGE_COMPLETE,
-    SUCCESSOR_STAGE_NONE, SUCCESSOR_STAGE_QUEUED, SUCCESSOR_STAGE_RUNNING, TagProjection,
+    SUCCESSOR_STAGE_NONE, SUCCESSOR_STAGE_QUEUED, SUCCESSOR_STAGE_RUNNING,
+    StrictSameRoundTimeoutUpgradeProjection, TagProjection,
     check_production_application_transition, check_production_applied_successor_transition,
     check_production_body_capacity_retirement_effective_lock_transition,
     check_production_body_ownership_effective_lock_transition,
@@ -171,6 +172,7 @@ pub(crate) use refinement::{
     production_in_flight_first_release_terminal_owner,
     production_in_flight_first_release_witness_binding_kernel,
     production_successor_predecessor_binding_kernel, select_bounded_service_class,
+    strict_same_round_timeout_upgrade_is_allowed,
 };
 pub use refinement::{
     CheckedProductionTransition, ProductionTwoStageRelayRetryTraceProjection,

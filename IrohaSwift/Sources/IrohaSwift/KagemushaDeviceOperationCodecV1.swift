@@ -603,6 +603,17 @@ public enum KagemushaDeviceOperationCodecV1 {
     return value
   }
 
+  /// Canonical operation-5 reservation binding shared with the native outgoing-operation index.
+  public static func encodeSenderPublicInputs(
+    _ value: KagemushaDeviceSenderPublicInputsV1
+  ) throws -> Data {
+    try deviceFrame(
+      encodeSenderInputs(value),
+      DeviceOperationArchiveDescriptor(
+        schema: "iroha.kagemusha.device.v1.sender-public-inputs",
+        alignment: 16, maximum: senderCommandMaximumBytes))
+  }
+
   public static func encodeSenderCommand(
     _ value: KagemushaDeviceSenderCommandV1
   ) throws -> Data {

@@ -19,7 +19,7 @@ use std::{
     sync::Arc,
     time::Instant,
 };
-const PENDING_INGRESS_IDENTITY_DOMAIN: &[u8] = b"iroha:sumeragi:v2:lifecycle:pending-ingress:v2";
+const PENDING_INGRESS_IDENTITY_DOMAIN: &[u8] = b"iroha:sumeragi:v2:lifecycle:pending-ingress:v3";
 /// Exact non-zero fair-ingress positions frozen before a dequeue predicate runs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct FairIngressQueuePositions {
@@ -34,11 +34,13 @@ impl FairIngressQueuePositions {
 }
 /// Queue-minted identity for one exact physical ingress occurrence.
 ///
-/// The digest binds the authenticated wire carrier, its exact source owner and
-/// ownership history, the queue-bound lifecycle context, and the receiver-local
+/// The digest binds the authenticated wire carrier, its immutable source owner,
+/// the queue-bound lifecycle context, and the receiver-local
 /// physical admission ordinal. The selected target additionally proves that
 /// its carrier-derived context equals this bound context. The identity contains
-/// no superseded runtime lifecycle or scheduler ordinal.
+/// no superseded runtime lifecycle or scheduler ordinal. Mutable coalescence
+/// history, routes, and eligibility belong to the separately refreshed queue
+/// witness; they cannot replace an already-persisted command's physical identity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::sumeragi) struct PendingFairIngressIdentity {
     context: LifecycleContext,
@@ -70,16 +72,6 @@ impl PendingFairIngressIdentity {
     /// Return the unique physical fair-ingress admission ordinal.
     pub(super) const fn physical_admission_ordinal(&self) -> u64 {
         self.physical_admission_ordinal
-    }
-    /// Whether two snapshots name the same queue-bound physical coordinates.
-    ///
-    /// Exact retransmission coalescence deliberately changes the ownership-history
-    /// digest without replacing the physical row. Callers must still compare the
-    /// authenticated carrier and its semantic owner before treating such snapshots
-    /// as one persistence handoff.
-    pub(super) fn shares_physical_coordinates(&self, other: &Self) -> bool {
-        self.context == other.context
-            && self.physical_admission_ordinal == other.physical_admission_ordinal
     }
 }
 /// Failure to freeze or revalidate one exact pre-dequeue fair-ingress cut.
@@ -2128,12 +2120,6 @@ fn pending_identity(
             .expect("bounded ingress wire length fits u64")
             .to_le_bytes(),
     );
-    projection.extend_from_slice(
-        occurrence
-            .ownership_snapshot
-            .process_local_projection_hash()
-            .as_ref(),
-    );
     projection.push(match occurrence.source_class {
         FairV2IngressSourceClass::Validator => 0,
         FairV2IngressSourceClass::Authenticated => 1,
@@ -2150,12 +2136,6 @@ fn pending_identity(
             append_field(&mut projection, &token.encode());
         }
     }
-    projection.push(match occurrence.queue_gate {
-        FairV2IngressQueueGateVerdict::Blocked => 0,
-        FairV2IngressQueueGateVerdict::Strict => 1,
-        FairV2IngressQueueGateVerdict::Dependency => 2,
-    });
-    projection.push(u8::from(occurrence.obsolete));
     projection.extend_from_slice(&physical_admission_ordinal.to_le_bytes());
     let hash = Hash::new(projection);
     let mut digest = [0_u8; 32];
@@ -3305,10 +3285,10 @@ mod tests {
         let recaptured = ingress
             .capture_lifecycle_queue_cut(target_ordinal)
             .expect("recapture mutated ownership projection");
-        assert_ne!(
+        assert_eq!(
             recaptured.selected_identity().digest(),
             initial_digest,
-            "the selected join digest binds the complete ownership projection"
+            "refreshing a changed queue witness preserves the exact physical command identity"
         );
         let original_class = {
             let mut state = ingress.state.lock();

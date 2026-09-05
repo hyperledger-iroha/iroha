@@ -942,6 +942,7 @@ def _manifest_report_matrix(template: object) -> dict[str, str]:
                 "hardware_profile",
                 "suite_id",
                 "qualification_report",
+                "physical_evidence",
                 "relations",
                 "helpers",
                 "receive_fold_occupancies",
@@ -951,6 +952,16 @@ def _manifest_report_matrix(template: object) -> dict[str, str]:
                 "envelope",
                 "acceptance_cases",
             },
+        )
+        physical = _object(
+            profile["physical_evidence"], "profile physical evidence",
+            release_verifier.PHYSICAL_EVIDENCE_FIELDS,
+        )
+        for name, path in physical.items():
+            _relative_path(path, f"profile physical {name}", argv_safe=True)
+        add_report(
+            physical["oem_report"], release_verifier.OEM_ATTESTATION_REPORT_SCHEMA,
+            "profile OEM attestation report",
         )
         hardware = _object(
             profile["hardware_profile"],
@@ -1202,6 +1213,21 @@ def _parse_plan(
     if producer_ids != sorted(set(producer_ids)):
         _fail("producer steps must have uniquely sorted ids")
 
+    physical_requirements: dict[str, set[str]] = {}
+    for profile in row["manifest_template"]["profiles"]:
+        physical = profile["physical_evidence"]
+        kinds = {
+            "transcript": "physical_transcript", "attestation": "oem_attestation",
+            "trust_roots": "oem_trust_roots", "observer_policy": "observer_policy", "oem_report": "report",
+        }
+        for name, kind in kinds.items():
+            if declared.get(physical[name]) != kind:
+                _fail(f"physical evidence {name} must be declared with kind {kind!r}")
+        physical_requirements[physical["oem_report"]] = set(physical.values())
+        physical_requirements[profile["qualification_report"]] = {
+            profile["qualification_report"], *physical.values()
+        }
+
     verifications: list[VerificationStep] = []
     verification_ids: list[str] = []
     verification_reports: dict[str, str] = {}
@@ -1270,6 +1296,8 @@ def _parse_plan(
                 arguments.append(("file", path))
             else:
                 _fail(f"verification {step_id} argument must be literal or file")
+        if report in physical_requirements and file_arguments != physical_requirements[report]:
+            _fail(f"verification step {step_id!r} does not receive exactly its physical evidence inputs")
         if report not in file_arguments:
             _fail(f"verification step {step_id!r} does not receive its report")
 
@@ -1342,7 +1370,15 @@ def _toolchain_binding(path: Path, expected_sha256: str, label: str) -> dict[str
 
 
 def _toolchain_closure(args: argparse.Namespace) -> dict[str, object]:
+    policy = release_verifier._load_observer_policy(
+        Path(args.observer_policy), args.observer_policy_sha256
+    )
+    physical_info, _ = release_verifier.physical_verifier_source(policy)
     return {
+        "physical_verifier": {
+            "path": str(release_verifier.PHYSICAL_VERIFIER_PATH),
+            "sha256": physical_info.sha256, "byte_len": physical_info.size,
+        },
         "python_executable": _toolchain_binding(
             RESOLVED_PYTHON, args.python_executable_sha256, "Python executable"
         ),

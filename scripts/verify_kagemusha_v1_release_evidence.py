@@ -272,6 +272,7 @@ PHYSICAL_PROFILE_CHECKS = (
     "airplane_mode",
     "restart",
     "power_loss",
+    "clock_rollback",
     "backup_restore_rejection",
     "memory_and_latency",
     "thermal_folding",
@@ -281,6 +282,10 @@ PHYSICAL_PROFILE_CHECKS = (
 FILE_KINDS = frozenset(
     {
         "artifact",
+        "physical_transcript",
+        "oem_attestation",
+        "oem_trust_roots",
+        "observer_policy",
         "cargo_lock",
         "event_log",
         "internal_proof",
@@ -326,6 +331,7 @@ REPORT_SCHEMAS = frozenset(
         "iroha.kagemusha_v1.fuzz_report",
         "iroha.kagemusha_v1.resource_report",
         "iroha.kagemusha_v1.hardware_profile_qualification_report",
+        "iroha.kagemusha_v1.oem_attestation_verification_report",
         "iroha.kagemusha_v1.relation_qualification_report",
         "iroha.kagemusha_v1.helper_qualification_report",
         "iroha.kagemusha_v1.receive_fold_occupancy_report",
@@ -1002,6 +1008,10 @@ def _ed25519_verify(public_key: bytes, message: bytes, signature: bytes) -> bool
 def _max_for_kind(kind: str) -> int:
     return {
         "artifact": MAX_ARTIFACT_BYTES,
+        "physical_transcript": MAX_TRANSCRIPT_BYTES,
+        "oem_attestation": MAX_REPORT_BYTES,
+        "oem_trust_roots": MAX_REPORT_BYTES,
+        "observer_policy": MAX_OBSERVER_POLICY_BYTES,
         "cargo_lock": MAX_MANIFEST_BYTES,
         "event_log": MAX_EVENT_LOG_BYTES,
         "internal_proof": INTERNAL_PROOF_RESOURCE_MAX_BYTES,
@@ -1269,6 +1279,46 @@ def _load_observer_policy(
     )
 
 
+PHYSICAL_VERIFIER_ID = "physical-device-verifier"
+PHYSICAL_VERIFIER_PATH = Path(__file__).resolve().with_name(
+    "verify_kagemusha_v1_physical_device.py"
+)
+OEM_ATTESTATION_REPORT_SCHEMA = "iroha.kagemusha_v1.oem_attestation_verification_report"
+PHYSICAL_EVIDENCE_FIELDS = {
+    "transcript", "attestation", "trust_roots", "observer_policy", "oem_report"
+}
+
+
+def physical_verifier_source(policy: TrustedObserverPolicy) -> tuple[StableFile, bytes]:
+    """Authenticate the fixed physical verifier through the independent policy."""
+
+    trusted = policy.verifiers.get(PHYSICAL_VERIFIER_ID)
+    info, payload = stable_read_path(PHYSICAL_VERIFIER_PATH, max_size=MAX_REPORT_BYTES)
+    if (
+        trusted is None
+        or trusted.sha256 != info.sha256
+        or "iroha.kagemusha_v1.hardware_profile_qualification_report"
+        not in trusted.report_schemas
+    ):
+        _fail("observer policy does not admit the exact bundled physical-device verifier")
+    return info, payload
+
+
+def physical_oem_challenge(
+    hardware_profile_id: str, endpoint: Mapping[str, object], run: Mapping[str, object]
+) -> str:
+    """Derive the fresh OEM attestation challenge without a transcript hash cycle."""
+
+    subject = {
+        "hardware_profile_id": hardware_profile_id,
+        **{key: endpoint[key] for key in ("device_id", "firmware_digest", "os_build_digest")},
+        **{key: run[key] for key in ("candidate_context_digest", "artifact_set_digest", "run_id")},
+    }
+    return hashlib.sha256(
+        b"iroha:kagemusha:v1:physical-oem-challenge\0" + canonical_json_bytes(subject)
+    ).hexdigest()
+
+
 class EvidenceVerifier:
     """Stateful verifier for one immutable evidence closure."""
 
@@ -1305,6 +1355,7 @@ class EvidenceVerifier:
         self.total_observed_duration_ms = 0
         self.total_observed_cpu_ms = 0
         self.total_jsonl_rows = 0
+        self.physical_verifier_info: StableFile | None = None
 
     def verify(self) -> dict[str, object]:
         required = {
@@ -1353,6 +1404,8 @@ class EvidenceVerifier:
             profile_inputs=profile_inputs,
             observer_policy=_binding(self.observer_policy.info),
         )
+        self.candidate_context_digest = candidate_context_digest
+        self.artifact_set_digest = artifact_set_digest
         self._capture_commands(
             self.manifest["commands"],
             candidate_context_digest=candidate_context_digest,
@@ -1474,7 +1527,7 @@ class EvidenceVerifier:
         retained_declared_bytes = sum(
             byte_len
             for kind, _, byte_len in expected.values()
-            if kind in {"event_log", "report", "observation"}
+            if kind in {"event_log", "report", "observation", "physical_transcript", "observer_policy"}
         )
         if retained_declared_bytes > MAX_RETAINED_PAYLOAD_BYTES:
             _fail("retained evidence payloads exceed the 128-MiB aggregate byte cap")
@@ -1491,7 +1544,7 @@ class EvidenceVerifier:
         identities: set[tuple[int, int]] = set()
         for path in normalized_paths:
             kind, expected_sha, expected_len = expected[path]
-            retain = kind in {"event_log", "report", "observation"}
+            retain = kind in {"event_log", "report", "observation", "physical_transcript", "observer_policy"}
             info, payload = stable_read_relative(
                 self.root,
                 path,
@@ -1561,6 +1614,7 @@ class EvidenceVerifier:
             "hardware_profile",
             "suite_id",
             "qualification_report",
+            "physical_evidence",
             "relations",
             "helpers",
             "recursive_depths",
@@ -2052,6 +2106,123 @@ class EvidenceVerifier:
             _fail("profile qualifications must be uniquely sorted by hardware profile id")
         return result
 
+    def _verify_physical_evidence(
+        self,
+        raw: object,
+        hardware: Mapping[str, object],
+        qualification_path: str,
+        qualification: Mapping[str, object],
+    ) -> None:
+        """Close raw physical evidence and independently observed native OEM validation.
+
+        OEM formats remain the responsibility of the separately admitted native
+        verifier. Its exact executable and trust-root bytes must match the
+        governed hardware profile; a transcript's hardware booleans alone never
+        establish OEM authenticity.
+        """
+
+        rows = _object(raw, "physical evidence", PHYSICAL_EVIDENCE_FIELDS)
+        paths = {name: self._path(value, f"physical evidence {name}") for name, value in rows.items()}
+        if len(set(paths.values())) != len(paths):
+            _fail("physical evidence paths must be distinct")
+        for name, kind in (
+            ("transcript", "physical_transcript"), ("attestation", "oem_attestation"),
+            ("trust_roots", "oem_trust_roots"), ("observer_policy", "observer_policy"),
+        ):
+            self._expect_kind(paths[name], kind)
+        if self.payloads[paths["observer_policy"]] != self.observer_policy.payload:
+            _fail("physical evidence substitutes the independently pinned observer policy")
+        if self.files[paths["trust_roots"]].sha256 != hardware["attestation_trust_roots_digest"]:
+            _fail("physical OEM trust roots differ from the governed hardware profile")
+
+        info, source = physical_verifier_source(self.observer_policy)
+        if self.physical_verifier_info is not None and self.physical_verifier_info != info:
+            _fail("physical-device verifier changed between profiles")
+        self.physical_verifier_info = info
+        # The hardened projector executes authenticated bytes in a dedicated
+        # globals dictionary. Its __name__ may be __main__ while sys.modules
+        # still contains the bootstrap; inject this exact namespace instead.
+        trusted_release = type(sys)("_kagemusha_trusted_release")
+        trusted_release.__dict__.update(globals())
+        namespace: dict[str, object] = {
+            "__name__": "_kagemusha_pinned_physical_verifier",
+            "__file__": str(PHYSICAL_VERIFIER_PATH),
+            "_trusted_release": trusted_release,
+        }
+        exec(compile(source, str(PHYSICAL_VERIFIER_PATH), "exec"), namespace)
+        try:
+            derived = namespace["verify_bytes"](
+                self.payloads[paths["transcript"]], self.observer_policy
+            )
+        except ValueError as error:
+            _fail(f"physical transcript rejected: {error}")
+        if derived != qualification:
+            _fail("physical transcript does not derive the exact qualification report")
+        document = load_json_object(self.payloads[paths["transcript"]], "physical transcript")
+        profile, endpoint, run = document["profile"], document["endpoint"], document["run"]
+        expected_profile = {
+            "hardware_profile_id": hardware["hardware_profile_id"],
+            "provider_id": hardware["provider_id"],
+            "qualification_report_digest": hardware["qualification_report_digest"],
+            "policy_epoch": hardware["policy_epoch"],
+            "capability_mask": hardware["capability_mask"],
+        }
+        if any(profile[key] != value for key, value in expected_profile.items()):
+            _fail("physical transcript substitutes its governed hardware profile")
+        if endpoint["platform_class"] != hardware["platform_class"]:
+            _fail("physical transcript substitutes its governed platform class")
+        if (
+            run["candidate_context_digest"] != self.candidate_context_digest
+            or run["artifact_set_digest"] != self.artifact_set_digest
+        ):
+            _fail("physical transcript substitutes its release candidate or artifact set")
+        if not (hardware["valid_from_ms"] <= run["started_at_ms"] < run["ended_at_ms"] <= hardware["expires_at_ms"]):
+            _fail("physical transcript falls outside the governed profile validity interval")
+        if endpoint["attestation_digest"] != self.files[paths["attestation"]].sha256:
+            _fail("physical transcript does not bind the retained raw OEM attestation")
+
+        body = {
+            "candidate_context_digest", "artifact_set_digest", "hardware_profile_id",
+            "provider_id", "policy_epoch", "capability_mask", "hardware_policy_id",
+            "platform_class", "device_id", "product_id", "firmware_digest", "os_build_digest",
+            "product_class_digest", "firmware_policy_digest", "attestation_verifier_sha256",
+            "attestation", "trust_roots", "transcript", "observer_policy",
+            "run_id", "started_at_ms", "ended_at_ms", "challenge_sha256", "hardware_backed",
+            "software_fallback", "production_build", "passed",
+        }
+        report = self._report(paths["oem_report"], OEM_ATTESTATION_REPORT_SCHEMA, body)
+        expected = {
+            **{key: hardware[key] for key in (
+                "hardware_profile_id", "provider_id", "policy_epoch", "capability_mask",
+                "product_class_digest", "firmware_policy_digest",
+            )},
+            **{key: endpoint[key] for key in (
+                "hardware_policy_id", "platform_class", "device_id", "product_id",
+                "firmware_digest", "os_build_digest", "hardware_backed",
+                "software_fallback", "production_build",
+            )},
+            **{key: run[key] for key in (
+                "candidate_context_digest", "artifact_set_digest", "run_id",
+                "started_at_ms", "ended_at_ms",
+            )},
+            "challenge_sha256": physical_oem_challenge(hardware["hardware_profile_id"], endpoint, run),
+            "attestation_verifier_sha256": hardware["enrollment_attestation_verifier_digest"],
+            **{name: _binding(self.files[paths[name]]) for name in (
+                "attestation", "trust_roots", "transcript", "observer_policy"
+            )},
+            "passed": True,
+        }
+        # Canonical byte equality also rejects Python's bool/int equivalence.
+        if canonical_json_bytes({key: report[key] for key in expected}) != canonical_json_bytes(expected):
+            _fail("OEM attestation report substitutes its physical subject or governed verifier policy")
+        self._bind_report_command(paths["oem_report"], report, set(paths.values()))
+        oem_command = self.commands[report["verification_id"]]
+        if oem_command.verifier_sha256 != hardware["enrollment_attestation_verifier_digest"]:
+            _fail("OEM attestation command is not the governed enrollment verifier")
+        self._bind_report_command(
+            qualification_path, qualification, {qualification_path, *paths.values()}
+        )
+
     def _verify_profile(
         self,
         raw: object,
@@ -2064,6 +2235,7 @@ class EvidenceVerifier:
             "hardware_profile",
             "suite_id",
             "qualification_report",
+            "physical_evidence",
             "relations",
             "helpers",
             "recursive_depths",
@@ -2132,7 +2304,9 @@ class EvidenceVerifier:
         if qualification["physical_checks"] != list(PHYSICAL_PROFILE_CHECKS):
             _fail("physical qualification report omits a required physical check")
         _true(qualification["passed"], "physical qualification passed")
-        self._bind_report_command(qualification_path, qualification, {qualification_path})
+        self._verify_physical_evidence(
+            profile["physical_evidence"], hardware_profile, qualification_path, qualification
+        )
         profile_projection["qualification_report"] = _binding(
             self.files[qualification_path]
         )
@@ -3005,6 +3179,10 @@ class EvidenceVerifier:
         return {"role": role, **_binding(self.files[self.artifacts[role]])}
 
     def _revalidate_closure(self) -> None:
+        if self.physical_verifier_info is not None:
+            info, _ = physical_verifier_source(self.observer_policy)
+            if info != self.physical_verifier_info:
+                _fail("physical-device verifier changed during release verification")
         if _scan_evidence_tree(self.root) != sorted(self.files):
             _fail("evidence root changed while it was verified")
         for path in sorted(self.files):

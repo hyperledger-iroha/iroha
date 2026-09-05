@@ -6,6 +6,7 @@ package org.hyperledger.iroha.sdk.offline
 import java.math.BigInteger
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.security.SecureRandom
 import java.util.EnumSet
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
@@ -350,9 +351,23 @@ class KagemushaAuthenticatedDeviceClientV1(
         executeLocked(16, requestId, canonicalCommand, ReplyLane.MINT)
     }
 
+    /** Persist the caller-owned identity without allowing native Core to substitute another ID. */
+    internal fun reserveOperationId(operation: Int, operationId: ByteArray, publicBinding: ByteArray): ByteArray {
+        val expected = authenticatedDigest(operationId, "operationId")
+        val reserved = core.reserveOperationId(operation, expected.copyOf(), publicBinding.copyOf())
+        require(reserved.contentEquals(expected)) { "native Core substituted the reserved operation ID" }
+        return expected
+    }
+
+    /** Internal operations recover through the authoritative wallet snapshot or credit selector. */
+    internal fun reserveInternalOperationId(operation: Int, publicBinding: ByteArray): ByteArray {
+        val id = ByteArray(32).also { SecureRandom().nextBytes(it) }
+        return reserveOperationId(operation, id, publicBinding)
+    }
+
     private fun qualifyLocked(): Session {
         val operation = 1
-        val requestId = core.reserveOperationId(operation, byteArrayOf(operation.toByte()))
+        val requestId = reserveInternalOperationId(operation, byteArrayOf(operation.toByte()))
         val command = KagemushaDeviceOperationCodecV1.encodeControlCommand(
             KagemushaDeviceControlCommandV1.ReadActiveHardwareCredential,
         )
@@ -497,7 +512,7 @@ class KagemushaAuthenticatedHardwareProviderV1(
         val command = KagemushaDeviceControlCommandV1.CreateSignedPaymentRequest(
             id, KagemushaAccountIdV1.fromCanonicalPayload(recipientAccount), amount, validityWindowMillis
         )
-        client.core.reserveOperationId(22, id, KagemushaDeviceOperationCodecV1.encodeControlCommand(command))
+        client.reserveOperationId(22, id, KagemushaDeviceOperationCodecV1.encodeControlCommand(command))
     }
 
     override fun createPaymentRequest(
@@ -507,7 +522,7 @@ class KagemushaAuthenticatedHardwareProviderV1(
         validityWindowMillis: Long,
     ): ByteArray = lock.withLock {
         val recipient = KagemushaAccountIdV1.fromCanonicalPayload(recipientAccount)
-        val id = authenticatedDigest(operationId, "operationId")
+        val id = reservePaymentRequestOperationId(operationId, recipientAccount, amount, validityWindowMillis)
         val command = KagemushaDeviceControlCommandV1.CreateSignedPaymentRequest(
             id,
             recipient,
@@ -633,7 +648,7 @@ class KagemushaAuthenticatedHardwareProviderV1(
     ): KagemushaHardwareReceiveFoldV1 = lock.withLock {
         val credit = authenticatedDigest(selector.creditId(), "creditId")
         val binding = byteArrayOf(selector.kind.ordinal.toByte()) + credit
-        val id = client.core.reserveOperationId(17, binding)
+        val id = client.reserveInternalOperationId(17, binding)
         val call = client.control(
             KagemushaDeviceControlCommandV1.FoldReceiveCredit(id, selector),
             id,
@@ -649,7 +664,12 @@ class KagemushaAuthenticatedHardwareProviderV1(
 
     override fun reservePaymentOperationId(operationId: ByteArray, canonicalRequest: ByteArray): ByteArray = lock.withLock {
         KagemushaNoritoV1.decodePaymentRequestShapeExact(canonicalRequest)
-        client.core.reserveOperationId(5, authenticatedDigest(operationId, "operationId"), canonicalRequest)
+        client.reserveOperationId(
+            5, authenticatedDigest(operationId, "operationId"),
+            KagemushaDeviceOperationCodecV1.encodeSenderPublicInputs(
+                KagemushaDeviceSenderPublicInputsV1.SendSplit(canonicalRequest),
+            ),
+        )
     }
 
     override fun commitPayment(
@@ -738,7 +758,12 @@ class KagemushaAuthenticatedHardwareProviderV1(
         amount: BigInteger,
         beneficiaryAccount: ByteArray,
     ): ByteArray = lock.withLock {
-        client.core.reserveOperationId(5, authenticatedDigest(operationId, "operationId"), unsigned128(amount) + beneficiaryAccount)
+        client.reserveOperationId(
+            5, authenticatedDigest(operationId, "operationId"),
+            KagemushaDeviceOperationCodecV1.encodeSenderPublicInputs(
+                KagemushaDeviceSenderPublicInputsV1.RedeemSplit(amount, beneficiaryAccount),
+            ),
+        )
     }
 
     override fun commitRedemption(
@@ -796,7 +821,7 @@ class KagemushaAuthenticatedHardwareProviderV1(
         recipientAccount: ByteArray,
     ): ByteArray = lock.withLock {
         val binding = unsigned128(amount) + payerAccount + recipientAccount
-        client.core.reserveOperationId(14, authenticatedDigest(operationId, "operationId"), binding)
+        client.reserveOperationId(14, authenticatedDigest(operationId, "operationId"), binding)
     }
 
     /** Operation 14 prepares one proof-bearing authorization plus its exact encrypted credit. */
@@ -984,7 +1009,7 @@ class KagemushaAuthenticatedHardwareProviderV1(
     ): AuthenticatedCall = requireSuccess(client.control(command, requestId))
 
     private fun freshId(operation: Int): ByteArray =
-        client.core.reserveOperationId(operation, byteArrayOf(operation.toByte()))
+        client.reserveInternalOperationId(operation, byteArrayOf(operation.toByte()))
 }
 
 private fun requireSuccess(call: AuthenticatedCall): AuthenticatedCall {

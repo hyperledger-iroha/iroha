@@ -151,11 +151,11 @@ impl KagemushaCoordinatorOperationStoreV1 {
                 }
                 Record::BeginIntent(intent) => {
                     store.require_new_intent(&intent)?;
-                    store
+                    let operation = store
                         .operations
                         .get_mut(&intent.operation_id)
-                        .ok_or(Error::JournalCorrupt)?
-                        .intent = Some(*intent);
+                        .ok_or(Error::JournalCorrupt)?;
+                    operation.intent = Some(*intent);
                 }
             }
         }
@@ -287,8 +287,12 @@ fn validate_reservation(reservation: &Reservation) -> Result<()> {
             return Err(Error::InvalidBinding);
         }
         match inputs {
-            KagemushaOutgoingPublicInputsV1::SendSplit { request } if request.is_empty() => {
-                return Err(Error::InvalidBinding);
+            KagemushaOutgoingPublicInputsV1::SendSplit { .. } => {
+                // The reservation is durable and consumes physical capacity. Reject a malformed
+                // nested request now rather than retaining an intent that can never begin.
+                inputs
+                    .decode_send_parts()
+                    .map_err(|_| Error::InvalidBinding)?;
             }
             KagemushaOutgoingPublicInputsV1::RedeemSplit { amount: 0, .. } => {
                 return Err(Error::InvalidBinding);

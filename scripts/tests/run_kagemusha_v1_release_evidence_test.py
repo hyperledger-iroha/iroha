@@ -156,6 +156,11 @@ class RunnerFixture:
             ],
             "verifiers": [
                 {
+                    "id": VERIFIER.PHYSICAL_VERIFIER_ID,
+                    "sha256": _file_sha256(VERIFIER.PHYSICAL_VERIFIER_PATH),
+                    "report_schemas": ["iroha.kagemusha_v1.hardware_profile_qualification_report"],
+                },
+                {
                     "id": "trusted-stub-v1",
                     "sha256": self.worker_sha256,
                     "report_schemas": sorted(VERIFIER.REPORT_SCHEMAS),
@@ -268,6 +273,11 @@ class RunnerFixture:
             "hardware_profile": self._hardware_profile(),
             "suite_id": "22" * 32,
             "qualification_report": "reports/profile/qualification.json",
+            "physical_evidence": {
+                "transcript": "physical/transcript.json", "attestation": "physical/attestation.bin",
+                "trust_roots": "physical/roots.bin", "observer_policy": "physical/observer-policy.json",
+                "oem_report": "reports/profile/oem-attestation.json",
+            },
             "relations": [
                 {"relation": name, "report": f"reports/profile/relation-{name}.json"}
                 for name in VERIFIER.RELATIONS
@@ -326,14 +336,21 @@ class RunnerFixture:
             self.inputs / evidence_path.replace("/", "__"),
             payload,
         )
+        physical = self.template["profiles"][0]["physical_evidence"]
+        physical_kinds = {
+            physical[name]: kind for name, kind in (
+                ("transcript", "physical_transcript"), ("attestation", "oem_attestation"),
+                ("trust_roots", "oem_trust_roots"), ("observer_policy", "observer_policy")
+            )
+        }
         return {
             "source": str(source),
             "evidence_path": evidence_path,
-            "kind": "report" if evidence_path in self.report_schemas else (
+            "kind": physical_kinds.get(evidence_path) or ("report" if evidence_path in self.report_schemas else (
                 "source_archive" if evidence_path.endswith(".tar") else (
                     "cargo_lock" if evidence_path.endswith("Cargo.lock") else "artifact"
                 )
-            ),
+            )),
             "sha256": _sha256(payload),
             "byte_len": len(payload),
         }
@@ -343,6 +360,11 @@ class RunnerFixture:
             "source/candidate.tar": b"candidate-source\n",
             "source/Cargo.lock": b"lock-source\n",
         }
+        physical = self.template["profiles"][0]["physical_evidence"]
+        seed_payloads.update({physical[name]: b"synthetic evidence" for name in (
+            "transcript", "attestation", "trust_roots",
+        )})
+        seed_payloads[physical["observer_policy"]] = self.policy_path.read_bytes()
         for artifact in self.template["artifacts"]:
             seed_payloads[artifact["path"]] = f"{artifact['role']}\n".encode()
         for path, schema in self.report_schemas.items():
@@ -363,6 +385,10 @@ class RunnerFixture:
             arguments = [{"file": path}]
             if path == sorted(self.report_schemas)[0]:
                 arguments = [{"file": value} for value in declared]
+            if path == physical["oem_report"]:
+                arguments = [{"file": value} for value in sorted(physical.values())]
+            elif path == self.template["profiles"][0]["qualification_report"]:
+                arguments = [{"file": value} for value in sorted({path, *physical.values()})]
             step_id = self.report_ids[path]
             verification_steps.append(
                 {
@@ -509,6 +535,29 @@ class KagemushaReleaseEvidenceRunnerTests(unittest.TestCase):
         projection = json.loads(stdout)
         self.assertEqual(projection["status"], "dry_run")
         self.assertEqual(stdout.encode(), RUNNER.canonical_json_bytes(projection))
+
+    def test_physical_raw_evidence_is_required_before_any_execution(self) -> None:
+        with _small_matrix():
+            fixture = self.fixture("missing-physical")
+            path = fixture.template["profiles"][0]["physical_evidence"]["attestation"]
+            fixture.plan["seed_files"] = [row for row in fixture.plan["seed_files"] if row["evidence_path"] != path]
+            fixture.write_plan()
+            code, _, stderr = fixture.collect()
+            self.assertEqual(code, 1)
+            self.assertIn("physical evidence attestation must be declared", stderr)
+            self.assertFalse(fixture.marker.exists())
+
+    def test_physical_verification_inputs_must_be_exact_before_execution(self) -> None:
+        with _small_matrix():
+            fixture = self.fixture("wrong-physical-inputs")
+            path = fixture.template["profiles"][0]["physical_evidence"]["oem_report"]
+            step = next(row for row in fixture.plan["verification_steps"] if row["report"] == path)
+            step["arguments"] = [{"file": path}]
+            fixture.write_plan()
+            code, _, stderr = fixture.collect()
+            self.assertEqual(code, 1)
+            self.assertIn("exactly its physical evidence inputs", stderr)
+            self.assertFalse(fixture.marker.exists())
 
     def test_unknown_field_and_duplicate_job_fail_before_execution(self) -> None:
         with _small_matrix():
@@ -776,6 +825,8 @@ class KagemushaReleaseEvidenceRunnerTests(unittest.TestCase):
         evidence.mkdir(mode=0o700)
         manifest = _canonical(out_dir / "manifest.json", {})
         runtime_args = types.SimpleNamespace(
+            observer_policy=fixture.policy_path,
+            observer_policy_sha256=fixture.policy_sha256,
             python_executable_sha256=_file_sha256(RUNNER.RESOLVED_PYTHON),
             release_verifier_sha256=_file_sha256(
                 RUNNER.BUNDLED_RELEASE_VERIFIER

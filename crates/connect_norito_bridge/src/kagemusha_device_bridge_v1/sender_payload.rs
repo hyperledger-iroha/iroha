@@ -1798,7 +1798,7 @@ fn canonical_hardware_authorization_for_tests(
 }
 
 #[cfg(test)]
-pub(super) fn canonical_command_body_for_tests(operation: u8) -> Option<Vec<u8>> {
+pub(crate) fn canonical_command_body_for_tests(operation: u8) -> Option<Vec<u8>> {
     let fixture: norito::json::Value = norito::json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../../fixtures/offline/kagemusha_v1.json"

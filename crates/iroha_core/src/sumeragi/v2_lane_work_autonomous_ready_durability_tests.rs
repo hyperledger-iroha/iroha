@@ -308,8 +308,8 @@ fn higher_same_subject_lock_authorizes_unchanged_autonomous_carrier_ready() {
             &anchored_payload.origin_proposal,
             adapter.context.epoch,
         )
-            .expect("later-view protected payload is durable before READY")
-            .executable_payload,
+        .expect("later-view protected payload is durable before READY")
+        .executable_payload,
         anchored_payload
     );
 }
@@ -410,12 +410,7 @@ fn autonomous_ready_crosses_payload_and_certificate_durability_before_commit_vot
         V2LaneIngressOutcome::Inserted
     );
     assert!(
-        autonomous_artifact(
-            &adapter,
-            &unanchored_proposal,
-            adapter.context.epoch,
-        )
-        .is_none(),
+        autonomous_artifact(&adapter, &unanchored_proposal, adapter.context.epoch,).is_none(),
         "an unprotected global carrier must not make payload bytes durable"
     );
     let availability_body = lane_payload_availability_body(
@@ -964,8 +959,7 @@ fn autonomous_ready_crosses_payload_and_certificate_durability_before_commit_vot
 
 #[test]
 fn commit_certified_autonomous_payload_replay_is_idempotent_before_application_receipt() {
-    let (mut adapter, keys) =
-        fixture_at_height_inner(wire::ConsensusMode::Permissioned, 2, true);
+    let (mut adapter, keys) = fixture_at_height_inner(wire::ConsensusMode::Permissioned, 2, true);
     let (source_block, mut unanchored_proposal) =
         planned_autonomous_lane_candidate_block_at_view(&adapter, &keys, 0);
     unanchored_proposal.payload_block_hint = None;
@@ -1157,9 +1151,7 @@ fn committee_payload_replay_defers_until_decided_carrier_recovery_binds_session(
         .expect("persist exact canonical finality before receipt-bound recovery");
     let stale_lock = wire::BlockSubject {
         parent_block_hash: decided.parent_block_hash,
-        block_hash: HashOf::from_untyped_unchecked(Hash::new(
-            b"pre-bind-replay-stale-local-lock",
-        )),
+        block_hash: HashOf::from_untyped_unchecked(Hash::new(b"pre-bind-replay-stale-local-lock")),
         payload_hash: Hash::new(b"pre-bind-replay-stale-local-lock-payload"),
     };
     assert_eq!(
@@ -1339,9 +1331,7 @@ fn canonical_decision_rebinds_quarantined_higher_view_autonomous_payload() {
         .expect("persist higher-view canonical finality");
     let stale_lock = wire::BlockSubject {
         parent_block_hash: decided.parent_block_hash,
-        block_hash: HashOf::from_untyped_unchecked(Hash::new(
-            b"canonical-rebind-stale-local-lock",
-        )),
+        block_hash: HashOf::from_untyped_unchecked(Hash::new(b"canonical-rebind-stale-local-lock")),
         payload_hash: Hash::new(b"canonical-rebind-stale-local-lock-payload"),
     };
     assert_eq!(
@@ -1349,10 +1339,7 @@ fn canonical_decision_rebinds_quarantined_higher_view_autonomous_payload() {
         Ok(GlobalBodyLockOutcome::Inserted)
     );
     assert_eq!(
-        adapter
-            .pending_autonomous_anchor_payloads
-            .values()
-            .next(),
+        adapter.pending_autonomous_anchor_payloads.values().next(),
         Some(&hint_free),
         "the higher-view lock must quarantine the old advisory hint"
     );
@@ -3118,10 +3105,12 @@ fn exercise_canonical_autonomous_carrier_after_direct_decision(
     let prepare_outcome = if local_signer_quorum {
         adapter.insert_lane_qc(prepare_qc, locked_round.view)
     } else {
-        adapter.accept_lane_message_with_ingress_ownership(
-            admit_quorum_message(BlockMessage::LaneBlockQc(prepare_qc)),
-            locked_round.view,
-        )
+        adapter
+            .accept_lane_message_with_ingress_ownership(
+                admit_quorum_message(BlockMessage::LaneBlockQc(prepare_qc)),
+                locked_round.view,
+            )
+            .expect("owned lane ingress remains available")
     };
     assert_eq!(prepare_outcome, V2LaneIngressOutcome::Inserted);
     assert!(
@@ -3133,10 +3122,12 @@ fn exercise_canonical_autonomous_carrier_after_direct_decision(
     let commit_outcome = if local_signer_quorum {
         adapter.insert_lane_qc(commit_qc, locked_round.view)
     } else {
-        adapter.accept_lane_message_with_ingress_ownership(
-            admit_quorum_message(BlockMessage::LaneBlockQc(commit_qc)),
-            locked_round.view,
-        )
+        adapter
+            .accept_lane_message_with_ingress_ownership(
+                admit_quorum_message(BlockMessage::LaneBlockQc(commit_qc)),
+                locked_round.view,
+            )
+            .expect("owned lane ingress remains available")
     };
     assert_eq!(commit_outcome, V2LaneIngressOutcome::Inserted);
     assert_eq!(
@@ -3482,13 +3473,15 @@ fn finalized_carrier_nonmember_cache_saturated_capacity_replaces_uncommitted_con
 
     assert_eq!(adapter.lane_sessions, saturated_cache);
     assert_eq!(
-        adapter.accept_lane_message_with_ingress_ownership(
-            fair_v2_ingress_admit_for_test(InboundBlockMessage::from_authenticated_peer(
-                BlockMessage::LaneBlockQc(prepare_qc.clone()),
-                sender,
-            )),
-            locked_round.view,
-        ),
+        adapter
+            .accept_lane_message_with_ingress_ownership(
+                fair_v2_ingress_admit_for_test(InboundBlockMessage::from_authenticated_peer(
+                    BlockMessage::LaneBlockQc(prepare_qc.clone()),
+                    sender,
+                )),
+                locked_round.view,
+            )
+            .expect("owned lane ingress remains available"),
         V2LaneIngressOutcome::Inserted,
         "canonical finalized hydration must replace, rather than count in addition to, an uncommitted same-slot conflict"
     );
@@ -3549,13 +3542,15 @@ fn finalized_carrier_nonmember_cache_invalid_ready_vote_rolls_back_hydration() {
         .expect("READY signature fixture is non-empty") ^= 0x01;
 
     assert_eq!(
-        adapter.accept_lane_message_with_ingress_ownership(
-            fair_v2_ingress_admit_for_test(InboundBlockMessage::from_authenticated_peer(
-                BlockMessage::LaneBlockVote(invalid_vote),
-                sender.clone(),
-            )),
-            locked_round.view,
-        ),
+        adapter
+            .accept_lane_message_with_ingress_ownership(
+                fair_v2_ingress_admit_for_test(InboundBlockMessage::from_authenticated_peer(
+                    BlockMessage::LaneBlockVote(invalid_vote),
+                    sender.clone(),
+                )),
+                locked_round.view,
+            )
+            .expect("owned lane ingress remains available"),
         V2LaneIngressOutcome::Rejected
     );
     assert_eq!(
@@ -3569,13 +3564,15 @@ fn finalized_carrier_nonmember_cache_invalid_ready_vote_rolls_back_hydration() {
     );
 
     assert_eq!(
-        adapter.accept_lane_message_with_ingress_ownership(
-            fair_v2_ingress_admit_for_test(InboundBlockMessage::from_authenticated_peer(
-                BlockMessage::LaneBlockVote(valid_vote.clone()),
-                sender,
-            )),
-            locked_round.view,
-        ),
+        adapter
+            .accept_lane_message_with_ingress_ownership(
+                fair_v2_ingress_admit_for_test(InboundBlockMessage::from_authenticated_peer(
+                    BlockMessage::LaneBlockVote(valid_vote.clone()),
+                    sender,
+                )),
+                locked_round.view,
+            )
+            .expect("owned lane ingress remains available"),
         V2LaneIngressOutcome::Inserted,
         "the corresponding valid READY vote must remain admissible after rollback"
     );
@@ -3636,13 +3633,15 @@ fn finalized_carrier_nonmember_cache_invalid_commit_certificate_rolls_back_hydra
     );
 
     assert_eq!(
-        adapter.accept_lane_message_with_ingress_ownership(
-            fair_v2_ingress_admit_for_test(InboundBlockMessage::from_authenticated_peer(
-                BlockMessage::LaneBlockCertificate(Box::new(invalid_certificate)),
-                sender.clone(),
-            )),
-            locked_round.view,
-        ),
+        adapter
+            .accept_lane_message_with_ingress_ownership(
+                fair_v2_ingress_admit_for_test(InboundBlockMessage::from_authenticated_peer(
+                    BlockMessage::LaneBlockCertificate(Box::new(invalid_certificate)),
+                    sender.clone(),
+                )),
+                locked_round.view,
+            )
+            .expect("owned lane ingress remains available"),
         V2LaneIngressOutcome::Rejected
     );
     assert_eq!(
@@ -3656,13 +3655,15 @@ fn finalized_carrier_nonmember_cache_invalid_commit_certificate_rolls_back_hydra
     );
 
     assert_eq!(
-        adapter.accept_lane_message_with_ingress_ownership(
-            fair_v2_ingress_admit_for_test(InboundBlockMessage::from_authenticated_peer(
-                BlockMessage::LaneBlockCertificate(Box::new(valid_certificate)),
-                sender,
-            )),
-            locked_round.view,
-        ),
+        adapter
+            .accept_lane_message_with_ingress_ownership(
+                fair_v2_ingress_admit_for_test(InboundBlockMessage::from_authenticated_peer(
+                    BlockMessage::LaneBlockCertificate(Box::new(valid_certificate)),
+                    sender,
+                )),
+                locked_round.view,
+            )
+            .expect("owned lane ingress remains available"),
         V2LaneIngressOutcome::Inserted,
         "the valid complete certificate must remain admissible after transactional rollback"
     );
@@ -3792,10 +3793,12 @@ fn global_validator_outside_lane_committee_uses_canonical_replica_for_rollover()
         .first_mut()
         .expect("aggregate signature fixture is non-empty") ^= 0x01;
     assert_eq!(
-        adapter.accept_lane_message_with_ingress_ownership(
-            admit_quorum_message(BlockMessage::LaneBlockQc(bad_signature)),
-            locked_round.view,
-        ),
+        adapter
+            .accept_lane_message_with_ingress_ownership(
+                admit_quorum_message(BlockMessage::LaneBlockQc(bad_signature)),
+                locked_round.view,
+            )
+            .expect("owned lane ingress remains available"),
         V2LaneIngressOutcome::Rejected
     );
     assert_eq!(
@@ -3811,10 +3814,12 @@ fn global_validator_outside_lane_committee_uses_canonical_replica_for_rollover()
         .body
         .executable_payload_hash = Hash::new(b"bad embedded observer READY");
     assert_eq!(
-        adapter.accept_lane_message_with_ingress_ownership(
-            admit_quorum_message(BlockMessage::LaneBlockQc(bad_ready)),
-            locked_round.view,
-        ),
+        adapter
+            .accept_lane_message_with_ingress_ownership(
+                admit_quorum_message(BlockMessage::LaneBlockQc(bad_ready)),
+                locked_round.view,
+            )
+            .expect("owned lane ingress remains available"),
         V2LaneIngressOutcome::Rejected
     );
     assert_eq!(
@@ -3822,10 +3827,12 @@ fn global_validator_outside_lane_committee_uses_canonical_replica_for_rollover()
         "bad embedded READY validation must roll back public observer hydration"
     );
     assert_eq!(
-        adapter.accept_lane_message_with_ingress_ownership(
-            admit_quorum_message(BlockMessage::LaneBlockQc(commit_qc.clone())),
-            locked_round.view,
-        ),
+        adapter
+            .accept_lane_message_with_ingress_ownership(
+                admit_quorum_message(BlockMessage::LaneBlockQc(commit_qc.clone())),
+                locked_round.view,
+            )
+            .expect("owned lane ingress remains available"),
         V2LaneIngressOutcome::Rejected
     );
     assert_eq!(
@@ -3835,17 +3842,21 @@ fn global_validator_outside_lane_committee_uses_canonical_replica_for_rollover()
     assert!(adapter.lane_ready_authorizations.is_empty());
     assert!(!adapter.output_guard.restart_required());
     assert_eq!(
-        adapter.accept_lane_message_with_ingress_ownership(
-            admit_quorum_message(BlockMessage::LaneBlockQc(prepare_qc)),
-            locked_round.view,
-        ),
+        adapter
+            .accept_lane_message_with_ingress_ownership(
+                admit_quorum_message(BlockMessage::LaneBlockQc(prepare_qc)),
+                locked_round.view,
+            )
+            .expect("owned lane ingress remains available"),
         V2LaneIngressOutcome::Inserted
     );
     assert_eq!(
-        adapter.accept_lane_message_with_ingress_ownership(
-            admit_quorum_message(BlockMessage::LaneBlockQc(commit_qc)),
-            locked_round.view,
-        ),
+        adapter
+            .accept_lane_message_with_ingress_ownership(
+                admit_quorum_message(BlockMessage::LaneBlockQc(commit_qc)),
+                locked_round.view,
+            )
+            .expect("owned lane ingress remains available"),
         V2LaneIngressOutcome::Inserted
     );
     assert_eq!(
@@ -4009,17 +4020,21 @@ fn restarted_nonmember_accepts_public_qcs_and_persists_only_canonical_replica() 
         ))
     };
     assert_eq!(
-        recovered.accept_lane_message_with_ingress_ownership(
-            admit(BlockMessage::LaneBlockQc(prepare_qc)),
-            0,
-        ),
+        recovered
+            .accept_lane_message_with_ingress_ownership(
+                admit(BlockMessage::LaneBlockQc(prepare_qc)),
+                0,
+            )
+            .expect("owned lane ingress remains available"),
         V2LaneIngressOutcome::Inserted
     );
     assert_eq!(
-        recovered.accept_lane_message_with_ingress_ownership(
-            admit(BlockMessage::LaneBlockQc(commit_qc)),
-            0,
-        ),
+        recovered
+            .accept_lane_message_with_ingress_ownership(
+                admit(BlockMessage::LaneBlockQc(commit_qc)),
+                0,
+            )
+            .expect("owned lane ingress remains available"),
         V2LaneIngressOutcome::Inserted
     );
     assert!(recovered.has_pending_historical_recovery());

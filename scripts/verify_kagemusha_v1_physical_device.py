@@ -15,7 +15,12 @@ import sys
 from pathlib import Path
 from typing import Any, Mapping, NoReturn, Sequence
 
-import verify_kagemusha_v1_release_evidence as release
+# The release projector injects its already authenticated module when loading
+# these policy-pinned source bytes. Standalone use loads the local verifier.
+if "_trusted_release" in globals():
+    release = globals()["_trusted_release"]
+else:
+    import verify_kagemusha_v1_release_evidence as release
 
 
 TRANSCRIPT_SCHEMA = "iroha.kagemusha_v1.physical_device_transcript"
@@ -38,6 +43,7 @@ PHYSICAL_CHECKS = (
     "airplane_mode",
     "restart",
     "power_loss",
+    "clock_rollback",
     "backup_restore_rejection",
     "memory_and_latency",
     "thermal_folding",
@@ -137,13 +143,9 @@ def _sha256(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
 
 
-# TODO: The V1 release report/command schema currently retains only the small
-# derived report below and admits only that report as the verification-command
-# input.  It therefore cannot carry this transcript, its OEM attestation, or its
-# observer-policy binding into the final release closure.  This verifier checks
-# the observer-signed transcript's internal consistency; it must not be treated
-# as closing that external attestation/provenance gap until the release schema is
-# extended.
+# Keep this stable profile preimage independent of the full transcript. The
+# release manifest binds the raw transcript, OEM attestation and verifier report
+# beside this report; including their hashes here would create a profile cycle.
 def _report(provider_id: str, policy_epoch: int, run_id: str) -> dict[str, Any]:
     return {
         "schema": REPORT_SCHEMA,
@@ -262,10 +264,10 @@ def _validate_endpoint(value: Any, profile: Mapping[str, Any]) -> Mapping[str, A
 def _validate_run(value: Any) -> Mapping[str, Any]:
     run = _exact_fields(
         value,
-        ("run_id", "candidate_digest", "artifact_set_digest", "started_at_ms", "ended_at_ms"),
+        ("run_id", "candidate_digest", "candidate_context_digest", "artifact_set_digest", "started_at_ms", "ended_at_ms"),
         "run",
     )
-    for field in ("run_id", "candidate_digest", "artifact_set_digest"):
+    for field in ("run_id", "candidate_digest", "candidate_context_digest", "artifact_set_digest"):
         _digest(run[field], f"run.{field}")
     started = _integer(run["started_at_ms"], "run.started_at_ms", minimum=1, maximum=(1 << 64) - 1)
     ended = _integer(run["ended_at_ms"], "run.ended_at_ms", minimum=1, maximum=(1 << 64) - 1)
@@ -376,6 +378,21 @@ EVENT_DATA_FIELDS: dict[str, tuple[str, ...]] = {
         "rss_bytes",
     ),
     "backup_snapshot": ("control_id", "state", "counter", "epoch", "snapshot_sha256"),
+    "clock_rollback_begin": (
+        "control_id", "boot_id", "state", "counter", "epoch",
+        "host_time_ms", "trusted_time_ms", "request_expires_at_ms", "request_sha256",
+    ),
+    "clock_rollback_applied": (
+        "control_id", "boot_id", "host_time_ms", "trusted_time_ms",
+    ),
+    "expired_request_rejected": (
+        "control_id", "boot_id", "operation_id", "request_sha256",
+        "authoritative_state", "counter", "epoch", "host_time_ms", "trusted_time_ms",
+        "result",
+    ),
+    "clock_rollback_end": (
+        "control_id", "boot_id", "host_time_ms", "trusted_time_ms",
+    ),
     "backup_restore_attempt": (
         "control_id",
         "snapshot_sha256",
@@ -512,6 +529,26 @@ def _validate_event_data(
         if data["result"] != "durable":
             _fail(f"{label}.data.result must be durable")
         _validate_metric_data(data, f"{label}.data", metrics)
+    elif kind in {
+        "clock_rollback_begin", "clock_rollback_applied",
+        "expired_request_rejected", "clock_rollback_end",
+    }:
+        for field in ("control_id", "boot_id"):
+            _digest(data[field], f"{label}.data.{field}")
+        for field in ("host_time_ms", "trusted_time_ms"):
+            _integer(data[field], f"{label}.data.{field}", minimum=1, maximum=(1 << 64) - 1)
+        if kind in {"clock_rollback_begin", "expired_request_rejected"}:
+            _digest(data["request_sha256"], f"{label}.data.request_sha256")
+            _integer(data["counter"], f"{label}.data.counter")
+            _integer(data["epoch"], f"{label}.data.epoch", minimum=1, maximum=(1 << 64) - 1)
+        if kind == "clock_rollback_begin":
+            _digest(data["state"], f"{label}.data.state")
+            _integer(data["request_expires_at_ms"], f"{label}.data.request_expires_at_ms", minimum=1, maximum=(1 << 64) - 1)
+        elif kind == "expired_request_rejected":
+            _digest(data["operation_id"], f"{label}.data.operation_id")
+            _digest(data["authoritative_state"], f"{label}.data.authoritative_state")
+            if data["result"] != "expired_request_rejected":
+                _fail(f"{label}.data.result must be expired_request_rejected")
     elif kind == "backup_snapshot":
         for field in ("control_id", "state", "snapshot_sha256"):
             _digest(data[field], f"{label}.data.{field}")
@@ -606,6 +643,10 @@ def _expect_sequence(events: Sequence[Mapping[str, Any]]) -> tuple[int, int]:
         "power_loss_begin",
         "power_loss_end",
         "outbox_recover",
+        "clock_rollback_begin",
+        "clock_rollback_applied",
+        "expired_request_rejected",
+        "clock_rollback_end",
         "backup_snapshot",
         "advance_state",
         "backup_restore_attempt",
@@ -727,6 +768,40 @@ def _derive_checks(
         _fail("run.candidate_digest does not bind the persisted candidate artifact")
 
     commit = by_kind["commit"][0]["data"]
+    # Rolling back the host clock must not make an expired request spendable.
+    # The observer clock remains monotonic; host and hardware clocks are explicit
+    # observations so decreasing host time cannot be hidden in event timestamps.
+    clock_begin = by_kind["clock_rollback_begin"][0]["data"]
+    clock_applied = by_kind["clock_rollback_applied"][0]["data"]
+    clock_rejection = by_kind["expired_request_rejected"][0]["data"]
+    clock_end = by_kind["clock_rollback_end"][0]["data"]
+    clock_kinds = {
+        "clock_rollback_begin", "clock_rollback_applied",
+        "expired_request_rejected", "clock_rollback_end",
+    }
+    if (
+        any(data["control_id"] != clock_begin["control_id"] or data["boot_id"] != boot_id
+            for data in (clock_begin, clock_applied, clock_rejection, clock_end))
+        or any(event["kind"] not in clock_kinds
+               and event["data"].get("control_id") == clock_begin["control_id"]
+               for event in events)
+    ):
+        _fail("clock-rollback control is replayed or not bound to the active hardware boot")
+    expiry = clock_begin["request_expires_at_ms"]
+    if not (
+        clock_applied["host_time_ms"] <= clock_rejection["host_time_ms"] < expiry
+        < clock_begin["host_time_ms"] <= clock_end["host_time_ms"]
+        and expiry < clock_begin["trusted_time_ms"] <= clock_applied["trusted_time_ms"]
+        <= clock_rejection["trusted_time_ms"] <= clock_end["trusted_time_ms"]
+    ):
+        _fail("clock-rollback evidence must cross request expiry while trusted time remains monotonic")
+    if not (
+        clock_begin["state"] == clock_rejection["authoritative_state"] == commit["successor"]
+        and clock_begin["counter"] == clock_rejection["counter"] == commit["counter_after"]
+        and clock_begin["epoch"] == clock_rejection["epoch"] == commit["epoch_after"]
+        and clock_begin["request_sha256"] == clock_rejection["request_sha256"]
+    ):
+        _fail("clock-rollback rejection must bind the expired request and unchanged authoritative state")
     second = by_kind["second_successor_rejected"][0]["data"]
     stale = by_kind["stale_predecessor_rejected"][0]["data"]
     if not (
@@ -812,6 +887,7 @@ def _derive_checks(
         counter = data["counter_after"]
         epoch = data["epoch_after"]
     single_use_operation_ids = [
+        clock_rejection["operation_id"],
         second["operation_id"],
         stale["operation_id"],
         advance["operation_id"],
@@ -916,6 +992,7 @@ def verify_document(
         ("schema", "schema_version", "profile", "endpoint", "run", "events", "approvals"),
         "transcript",
     )
+    _integer(top["schema_version"], "transcript.schema_version", minimum=1, maximum=SCHEMA_VERSION)
     if top["schema"] != TRANSCRIPT_SCHEMA or top["schema_version"] != SCHEMA_VERSION:
         _fail("transcript schema or schema_version is unsupported")
     profile = _validate_profile(top["profile"])

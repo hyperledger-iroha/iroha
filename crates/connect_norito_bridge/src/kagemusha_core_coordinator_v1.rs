@@ -6,6 +6,17 @@
 //! inputs and fail closed until a qualified platform build supplies the
 //! authenticated durable coordinator.
 
+mod archives;
+pub use archives::{
+    KAGEMUSHA_CORE_COORDINATOR_ARCHIVE_MAX_BYTES_V1, KagemushaCoreCoordinatorArchiveErrorV1,
+    KagemushaCoreSenderCandidateArchiveV1, KagemushaCoreSenderPreparationArchiveV1,
+    KagemushaCoreSenderRecoveryArchiveV1,
+};
+pub use crate::kagemusha_device_bridge_v1::sender_payload::{
+    SenderPreparationSelectorV1 as KagemushaCoreSenderPreparationSelectorV1,
+    SenderWalletContextV1 as KagemushaCoreSenderWalletContextV1,
+};
+
 use iroha_data_model::kagemusha::{
     KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1, KagemushaArtifactRoleV1,
     KagemushaQualifiedHelperCircuitV1, KagemushaQualifiedRelationV1,
@@ -598,7 +609,12 @@ pub fn kagemusha_core_coordinator_validate_method_response_v1(
             require_nonempty_field(response.get(1))?;
             require_nonzero_digest_field(response.get(2))?;
             require_nonempty_field(response.get(3))?;
-            require_nonempty_field(response.get(4))
+            require_nonempty_field(response.get(4))?;
+            // Both sender kinds must release the exact installed envelope supplied by the
+            // caller. The operation identity in response[0] is distinct from the requested
+            // terminal identity, so only the envelope can be correlated at this frame layer.
+            let (_, terminal_start) = require_sender_input_fields(&request, 1)?;
+            require_equal_fields(response.get(3), request.get(terminal_start))
         }
     }
 }
@@ -643,6 +659,7 @@ mod tests {
     enum TestResponse {
         ReserveValid,
         ReleaseValid,
+        ReleaseSubstituted,
         InvalidSchema,
         Malformed,
         Oversized,
@@ -855,14 +872,62 @@ mod tests {
                     b"canonical-preparation".to_vec(),
                 ]
             }
-            KagemushaCoreCoordinatorMethodV1::ReleaseOutbox => vec![
-                digest(0x63),
-                b"canonical-preparation".to_vec(),
-                digest(0x64),
-                b"terminal-envelope".to_vec(),
-                b"hardware-release-authorization".to_vec(),
-            ],
+            KagemushaCoreCoordinatorMethodV1::ReleaseOutbox => {
+                let (_, terminal_start) =
+                    require_sender_input_fields(request, 1).expect("valid sender request");
+                vec![
+                    digest(0x63),
+                    b"canonical-preparation".to_vec(),
+                    digest(0x64),
+                    request[terminal_start].clone(),
+                    b"hardware-release-authorization".to_vec(),
+                ]
+            }
         }
+    }
+
+    #[test]
+    fn shared_sdk_frames_match_every_native_method_and_recovery_selector() {
+        let fixture = include_str!(
+            "../../../fixtures/offline/kagemusha_core_coordinator_frame_v1.tsv"
+        );
+        let mut fixtures = std::collections::BTreeMap::new();
+        for line in fixture.lines().filter(|line| !line.starts_with('#') && !line.is_empty()) {
+            let columns: Vec<_> = line.split('\t').collect();
+            assert_eq!(columns.len(), 4, "invalid fixture row");
+            let method = KagemushaCoreCoordinatorMethodV1::from_code(
+                columns[1].parse().expect("method code"),
+            )
+            .expect("closed method");
+            let request = hex::decode(columns[2]).expect("request hex");
+            let response = hex::decode(columns[3]).expect("response hex");
+            kagemusha_core_coordinator_validate_method_response_v1(method, &request, &response)
+                .expect("native request/response correlation");
+            assert!(fixtures.insert(columns[0], (method, request, response)).is_none());
+        }
+        assert_eq!(fixtures.len(), 14);
+        for (method, name, request_fields) in mobile_request_cases() {
+            let (actual_method, request, response) = fixtures.get(name).expect("shared method case");
+            assert_eq!(*actual_method, method);
+            assert_eq!(
+                *request,
+                kagemusha_core_coordinator_encode_request_v1(&request_fields).expect("native request"),
+                "{name}",
+            );
+            assert_eq!(
+                *response,
+                kagemusha_core_coordinator_encode_response_v1(&mobile_response_fields(method, &request_fields))
+                    .expect("native response"),
+                "{name}",
+            );
+        }
+        let (_, missing_request, missing_response) = fixtures.get("recover-missing").unwrap();
+        let missing_fields = kagemusha_core_coordinator_decode_request_v1(missing_request).unwrap();
+        assert_eq!(missing_fields[0], [KAGEMUSHA_CORE_COORDINATOR_RECOVER_BY_OPERATION_ID_V1]);
+        assert!(kagemusha_core_coordinator_decode_response_v1(missing_response).unwrap().is_empty());
+        let (_, terminal_request, _) = fixtures.get("recover-terminal").unwrap();
+        let terminal_fields = kagemusha_core_coordinator_decode_request_v1(terminal_request).unwrap();
+        assert_eq!(terminal_fields[0], [KAGEMUSHA_CORE_COORDINATOR_RECOVER_BY_TERMINAL_ID_V1]);
     }
 
     struct TestBackend {
@@ -894,7 +959,7 @@ mod tests {
                     kagemusha_core_coordinator_encode_response_v1(&[digest(0x51)])
                         .map_err(|_| KagemushaCoreCoordinatorBackendErrorV1::Rejected)
                 }
-                TestResponse::ReleaseValid => {
+                mode @ (TestResponse::ReleaseValid | TestResponse::ReleaseSubstituted) => {
                     assert_eq!(method, KagemushaCoreCoordinatorMethodV1::ReleaseOutbox);
                     assert_eq!(
                         kagemusha_core_coordinator_validate_method_request_v1(
@@ -903,12 +968,16 @@ mod tests {
                         ),
                         Ok(())
                     );
-                    kagemusha_core_coordinator_encode_response_v1(&mobile_response_fields(
+                    let mut fields = mobile_response_fields(
                         method,
                         &kagemusha_core_coordinator_decode_request_v1(request_frame)
                             .expect("request"),
-                    ))
-                    .map_err(|_| KagemushaCoreCoordinatorBackendErrorV1::Rejected)
+                    );
+                    if matches!(mode, TestResponse::ReleaseSubstituted) {
+                        fields[3] = b"another-installed-envelope".to_vec();
+                    }
+                    kagemusha_core_coordinator_encode_response_v1(&fields)
+                        .map_err(|_| KagemushaCoreCoordinatorBackendErrorV1::Rejected)
                 }
                 TestResponse::InvalidSchema => {
                     let invalid = match method {
@@ -1359,6 +1428,36 @@ mod tests {
     }
 
     #[test]
+    fn release_response_rejects_another_installed_envelope_for_both_sender_kinds() {
+        let method = KagemushaCoreCoordinatorMethodV1::ReleaseOutbox;
+        for request_fields in [
+            send_release_request_fields(),
+            redeem_release_request_fields(),
+        ] {
+            let request = kagemusha_core_coordinator_encode_request_v1(&request_fields)
+                .expect("release request");
+            let mut response_fields = mobile_response_fields(method, &request_fields);
+            let response = kagemusha_core_coordinator_encode_response_v1(&response_fields)
+                .expect("matching release response");
+            assert_eq!(
+                kagemusha_core_coordinator_validate_method_response_v1(method, &request, &response),
+                Ok(())
+            );
+            response_fields[3] = b"another-installed-envelope".to_vec();
+            let substituted = kagemusha_core_coordinator_encode_response_v1(&response_fields)
+                .expect("well-shaped substituted release response");
+            assert_eq!(
+                kagemusha_core_coordinator_validate_method_response_v1(
+                    method,
+                    &request,
+                    &substituted,
+                ),
+                Err(KagemushaCoreCoordinatorFrameErrorV1::Field)
+            );
+        }
+    }
+
+    #[test]
     fn storage_path_validation_is_bounded_utf8_and_nul_free() {
         assert_eq!(
             kagemusha_core_coordinator_validate_storage_path_v1(b"/durable/kagemusha.db"),
@@ -1613,22 +1712,27 @@ mod tests {
             ))
         );
 
-        *backend.response.lock().expect("response mode") = TestResponse::InvalidSchema;
-        assert_eq!(
-            unsafe {
-                crate::connect_norito_kagemusha_core_coordinator_invoke_v1(
-                    handle,
-                    KagemushaCoreCoordinatorMethodV1::ReleaseOutbox.code(),
-                    release.as_ptr(),
-                    release.len(),
-                    &mut output_ptr,
-                    &mut output_len,
-                )
-            },
-            crate::ERR_KAGEMUSHA_V1
-        );
-        assert!(output_ptr.is_null());
-        assert_eq!(output_len, 0);
+        for mode in [
+            TestResponse::InvalidSchema,
+            TestResponse::ReleaseSubstituted,
+        ] {
+            *backend.response.lock().expect("response mode") = mode;
+            assert_eq!(
+                unsafe {
+                    crate::connect_norito_kagemusha_core_coordinator_invoke_v1(
+                        handle,
+                        KagemushaCoreCoordinatorMethodV1::ReleaseOutbox.code(),
+                        release.as_ptr(),
+                        release.len(),
+                        &mut output_ptr,
+                        &mut output_len,
+                    )
+                },
+                crate::ERR_KAGEMUSHA_V1
+            );
+            assert!(output_ptr.is_null());
+            assert_eq!(output_len, 0);
+        }
     }
 
     #[test]

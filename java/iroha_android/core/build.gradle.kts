@@ -87,6 +87,18 @@ tasks.withType<Test>().configureEach {
         rootProject.layout.projectDirectory
             .dir("..")
             .dir("..")
+            .file("fixtures/offline/kagemusha_sender_reservation_v1.json"),
+    )
+    inputs.file(
+        rootProject.layout.projectDirectory
+            .dir("..")
+            .dir("..")
+            .file("fixtures/offline/kagemusha_core_coordinator_frame_v1.tsv"),
+    )
+    inputs.file(
+        rootProject.layout.projectDirectory
+            .dir("..")
+            .dir("..")
             .file("fixtures/kotodama/entrypoint_argument_record_v1.json"),
     )
     inputs.file(

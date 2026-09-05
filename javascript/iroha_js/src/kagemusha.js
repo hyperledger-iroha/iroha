@@ -202,8 +202,6 @@ function defineModel(name, fields, validate) {
       MODEL_VALUES.set(this, normalized);
       Object.freeze(this);
     }
-
-    _kagemushaValues() { return MODEL_VALUES.get(this); }
   };
   Object.defineProperty(Model, "name", { value: name });
   for (const [fieldName] of fields) {
@@ -1342,7 +1340,7 @@ function equalBytes(left, right) { return left.length === right.length && left.e
 function requireEqual(actual, expected, context) { if (!equalBytes(actual, expected)) throw new TypeError(`${context} does not match`); }
 function bounded(value, maximum, context) { if (value.length > maximum) throw new RangeError(`KAGEMUSHA V1 ${context} exceeds ${maximum} bytes`); return Uint8Array.from(value); }
 function instance(value, Model, context) { if (!(value instanceof Model)) throw new TypeError(`${context} must be a ${Model.name}`); return value; }
-function rawValues(value) { return value._kagemushaValues(); }
+function rawValues(value) { return MODEL_VALUES.get(value); }
 function cloneValue(value) { return value instanceof Uint8Array ? Uint8Array.from(value) : value; }
 function exactRecord(value, context, fields) { if (value === null || typeof value !== "object" || Array.isArray(value)) throw new TypeError(`${context} must be an object`); const actual = Object.keys(value); const expected = new Set(fields); if (actual.length !== fields.length || actual.some((key) => !expected.has(key))) throw new TypeError(`${context} contains missing or unknown fields`); }
 function kindLimits(kind) { if (typeof kind !== "string" || !Object.hasOwn(LIMITS, kind)) throw new TypeError("unknown KAGEMUSHA V1 payload kind"); return LIMITS[kind]; }

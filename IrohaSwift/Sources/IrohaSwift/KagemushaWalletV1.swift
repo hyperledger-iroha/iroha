@@ -161,9 +161,16 @@ public protocol KagemushaHardwareProviderV1: AnyObject {
   func journalRevision() throws -> KagemushaUInt128V1
 
   func createPaymentRequest(
+    operationID: Data,
     recipient: KagemushaAccountIDV1,
     amount: KagemushaUInt128V1,
     validityWindowMS: UInt64
+  ) throws -> Data
+
+  /// Persist the caller-owned request identity and exact parameters before device mutation.
+  func reservePaymentRequestOperationID(
+    operationID: Data, recipient: KagemushaAccountIDV1,
+    amount: KagemushaUInt128V1, validityWindowMS: UInt64
   ) throws -> Data
 
   func stagePayment(
@@ -171,7 +178,7 @@ public protocol KagemushaHardwareProviderV1: AnyObject {
     canonicalPayment: Data
   ) throws -> KagemushaHardwarePaymentStageV1
 
-  func reservePaymentOperationID(canonicalRequest: Data) throws -> Data
+  func reservePaymentOperationID(operationID: Data, canonicalRequest: Data) throws -> Data
 
   func prepareProveCommitPayment(
     operationID: Data,
@@ -187,6 +194,7 @@ public protocol KagemushaHardwareProviderV1: AnyObject {
   ) throws
 
   func reserveMintOperationID(
+    operationID: Data,
     amount: KagemushaUInt128V1, payer: KagemushaAccountIDV1,
     recipient: KagemushaAccountIDV1
   ) throws -> Data
@@ -220,6 +228,7 @@ public protocol KagemushaHardwareProviderV1: AnyObject {
   ) throws -> KagemushaHardwareTerminalResultV1
 
   func reserveRedemptionOperationID(
+    operationID: Data,
     amount: KagemushaUInt128V1,
     beneficiary: KagemushaAccountIDV1
   ) throws -> Data
@@ -297,6 +306,7 @@ public final class KagemushaWalletV1: @unchecked Sendable {
 
   /// Create a signed positive exact-amount request. It never binds the receiver balance head.
   public func createPaymentRequest(
+    operationID: Data,
     recipient: KagemushaAccountIDV1,
     amount: KagemushaUInt128V1,
     validityWindowMS: UInt64
@@ -307,8 +317,9 @@ public final class KagemushaWalletV1: @unchecked Sendable {
     return try lock.withLock {
       let request = try KagemushaNoritoV1.decodePaymentRequestShapeExact(
         provider.createPaymentRequest(
+          operationID: kagemushaDigest(operationID, "operationID"),
           recipient: recipient, amount: amount, validityWindowMS: validityWindowMS))
-      guard request.recipient == recipient, request.amount == amount,
+      guard request.requestID == operationID, request.recipient == recipient, request.amount == amount,
         request.expiresAtMS - request.issuedAtMS == validityWindowMS,
         request.releaseID == aggregateStateValue.releaseID,
         request.networkID == aggregateStateValue.networkID,
@@ -321,12 +332,31 @@ public final class KagemushaWalletV1: @unchecked Sendable {
     }
   }
 
-  /// Reserve and return the identity the caller must persist before beginning a payment.
+  /// Persist only after the caller has durably saved the ID and exact request parameters.
+  public func reservePaymentRequestOperationID(
+    operationID: Data, recipient: KagemushaAccountIDV1,
+    amount: KagemushaUInt128V1, validityWindowMS: UInt64
+  ) throws -> Data {
+    guard !amount.isZero, validityWindowMS > 0,
+      validityWindowMS <= KagemushaWireV1.requestMaximumTTLMS
+    else { throw invalid("invalid request amount or validity window") }
+    return try kagemushaReserveOperationIDV1(operationID) { expected in
+      try provider.reservePaymentRequestOperationID(
+        operationID: expected, recipient: recipient,
+        amount: amount, validityWindowMS: validityWindowMS)
+    }
+  }
+
+  /// Persist the identity the caller has already saved before beginning a payment.
   public func reservePaymentOperationID(
+    operationID: Data,
     request: KagemushaPaymentRequestV1
   ) throws -> Data {
-    try provider.reservePaymentOperationID(
-      canonicalRequest: KagemushaNoritoV1.encodePaymentRequestShape(request))
+    try kagemushaReserveOperationIDV1(operationID) { expected in
+      try provider.reservePaymentOperationID(
+        operationID: expected,
+        canonicalRequest: KagemushaNoritoV1.encodePaymentRequestShape(request))
+    }
   }
 
   /// Commit a receiver-bound payment using the caller-persisted operation identity.
@@ -421,13 +451,18 @@ public final class KagemushaWalletV1: @unchecked Sendable {
         acknowledgement, against: request, payment: payment))
   }
 
-  /// Reserve and return the ID the caller must persist before mint preparation.
+  /// Persist the identity the caller has already saved before mint preparation.
   public func reserveMintOperationID(
+    operationID: Data,
     amount: KagemushaUInt128V1,
     payer: KagemushaAccountIDV1,
     recipient: KagemushaAccountIDV1
   ) throws -> Data {
-    try provider.reserveMintOperationID(amount: amount, payer: payer, recipient: recipient)
+    guard !amount.isZero else { throw invalid("mint amount") }
+    return try kagemushaReserveOperationIDV1(operationID) { expected in
+      try provider.reserveMintOperationID(
+        operationID: expected, amount: amount, payer: payer, recipient: recipient)
+    }
   }
 
   public func prepareMintConstructionBundle(
@@ -512,11 +547,15 @@ public final class KagemushaWalletV1: @unchecked Sendable {
   }
 
   public func reserveRedemptionOperationID(
+    operationID: Data,
     amount: KagemushaUInt128V1,
     beneficiary: KagemushaAccountIDV1
   ) throws -> Data {
     guard !amount.isZero else { throw invalid("redemption amount") }
-    return try provider.reserveRedemptionOperationID(amount: amount, beneficiary: beneficiary)
+    return try kagemushaReserveOperationIDV1(operationID) { expected in
+      try provider.reserveRedemptionOperationID(
+        operationID: expected, amount: amount, beneficiary: beneficiary)
+    }
   }
 
   public func commitRedemption(
@@ -741,4 +780,15 @@ private final class KagemushaForegroundGateV1 {
     }
     return try body()
   }
+}
+
+/// Check the wallet-provider boundary before publishing a durable operation identity.
+func kagemushaReserveOperationIDV1(
+  _ operationID: Data, reserve: (Data) throws -> Data
+) throws -> Data {
+  let expected = try kagemushaDigest(operationID, "operationID")
+  guard try reserve(expected) == expected else {
+    throw KagemushaWalletErrorV1.invalidHardwareResult("provider substituted reserved operation ID")
+  }
+  return expected
 }

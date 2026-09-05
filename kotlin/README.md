@@ -218,6 +218,22 @@ Mint authorization, mint credit, and redemption vouchers are separately framed;
 size and verification work are independent of balance history; no hop, input,
 origin, ancestry, fan-in, or proof-depth limit is encoded.
 
+Before requesting, sending, minting, or redeeming offline value, the app must durably
+save a fresh nonzero 32-byte operation identity and its exact action parameters, then
+pass that identity to the corresponding reservation and execution calls. An identical
+retry retains the same identity; a lost native return must never cause the app to
+allocate a replacement. The authenticated provider rejects a substituted reservation
+identity before executing a device operation. Payment and redemption reservations
+carry the canonical tagged `iroha.kagemusha.device.v1.sender-public-inputs` Norito
+archive, shared with the native outgoing-operation index.
+
+`KagemushaCoreCoordinatorBridgeV1.open(storagePath)` in `client-android` provides
+the strict schema-2 JNI transport, backed by the pure `core-jvm` frame codec.
+It checks the complete ABI-23 inventory and rejects substituted response bindings;
+missing JNI or an absent qualified native coordinator fails closed. Its opaque
+archives do not implement the typed wallet coordinator: the remaining native-owned
+archive schemas and integration are recorded in [the source contract](../specs/kagemusha_device_bridge_v1.md).
+
 Online reserve top-ups use the same payer authority as the debit. Build one
 `TopUpKagemushaV1Instruction` from the proof-bearing request, put that sole
 instruction in a transaction, and sign it with `TransactionBuilder`.

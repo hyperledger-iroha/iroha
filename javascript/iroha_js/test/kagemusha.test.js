@@ -68,7 +68,10 @@ function requestFor() {
 }
 
 // These are codec/shape fixtures, not cryptographic proof qualification.
-const replace = (value, updates) => new value.constructor({ ...value._kagemushaValues(), ...updates });
+const publicFields = (value) => Object.fromEntries(
+  Object.keys(Object.getPrototypeOf(value)).map((key) => [key, value[key]]),
+);
+const replace = (value, updates) => new value.constructor({ ...publicFields(value), ...updates });
 const digest = (domain, transcript) => {
   const size = Buffer.alloc(8);
   size.writeBigUInt64LE(BigInt(transcript.length));
@@ -272,6 +275,32 @@ test("operation-16 command archive bytes are defensively copied", () => {
   assert.deepEqual(Kagemusha.encodeDeviceMintStageCommandShape(command), before);
 });
 
+test("retained payment models never expose mutable canonical backing fields", () => {
+  const { request, payment, acknowledgement } = completeExchange();
+  const cases = [
+    [request, () => Kagemusha.encodePaymentRequest(request)],
+    [payment, () => Kagemusha.encodePayment(payment, request)],
+    [acknowledgement, () => Kagemusha.encodeAcknowledgement(acknowledgement, request, payment)],
+  ];
+  for (const [model, encode] of cases) {
+    const canonical = encode();
+    assert.equal(Object.isFrozen(model), true);
+    assert.equal("_kagemushaValues" in model, false);
+    const projection = publicFields(model);
+    for (const [field, value] of Object.entries(projection)) {
+      if (value instanceof Uint8Array) value.fill(0);
+      assert.throws(() => { model[field] = null; }, TypeError);
+      projection[field] = null;
+    }
+    assert.deepEqual(encode(), canonical);
+  }
+  const canonical = Kagemusha.encodePayment(payment, request);
+  request.hardwareCredential.credentialId.fill(0);
+  payment.output.requestDigest.fill(0);
+  payment.proof.eqProof.fill(0);
+  assert.deepEqual(Kagemusha.encodePayment(payment, request), canonical);
+});
+
 test("three-message tags and caps are the sole peer transport", () => {
   assert.deepEqual(Object.fromEntries(Object.entries(Kagemusha.ipm1PayloadKinds).map(([kind, value]) => [kind, value.tag])),
     { request: 1, payment: 2, acknowledgement: 3 });
@@ -296,7 +325,7 @@ test("request binds one exact amount and receiver encryption key", () => {
   assert.equal(Kagemusha.paymentRequestTranscript(request).length, 390);
   assert.throws(() => replace(request, { amount: 0n }), /positive/u);
   assert.throws(() => replace(request, { recipientEncryptionKey: octets(0) }), /nonzero/u);
-  assert.throws(() => new Kagemusha.PaymentRequest({ ...request._kagemushaValues(), requestMode: {} }));
+  assert.throws(() => new Kagemusha.PaymentRequest({ ...publicFields(request), requestMode: {} }));
 });
 
 test("semantic digests use fixed transcripts rather than canonical Norito frames", () => {

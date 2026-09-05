@@ -6414,10 +6414,10 @@ fn runtime_step_reconciliation_rejects_durable_decision_loss() {
     let mut services = fixture.services();
     let subject = fixture.manifest.subject;
     services
-        .finish_runtime_step_reconciliation(Some(subject))
+        .finish_runtime_step_reconciliation(Some(subject), None)
         .expect("publish the durable Decision");
     let error = services
-        .finish_runtime_step_reconciliation(None)
+        .finish_runtime_step_reconciliation(None, None)
         .expect_err("a durable Decision cannot disappear on a later runtime step");
     assert!(error.contains("lost its durable Decision"));
     assert_eq!(services.durable_runtime_decision, Some(subject));

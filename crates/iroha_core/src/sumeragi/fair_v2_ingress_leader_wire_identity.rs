@@ -73,6 +73,8 @@ pub(crate) struct FairV2IngressLeaderWireIdentity {
     phase: FairV2IngressLeaderWirePhase,
     semantic_origin: PeerId,
     canonical_wire_hash: CryptoHash,
+    vote_statement_hash: Option<CryptoHash>,
+    timeout_prepare_view: Option<u64>,
 }
 impl FairV2IngressLeaderWireIdentity {
     /// Stable route-neutral projection persisted by the downstream owner.
@@ -104,6 +106,8 @@ impl FairV2IngressLeaderWireIdentity {
                 projection.extend_from_slice(hash.as_ref());
             }
         }
+        projection.extend_from_slice(&self.vote_statement_hash.encode());
+        projection.extend_from_slice(&self.timeout_prepare_view.encode());
         projection.extend_from_slice(self.canonical_wire_hash.as_ref());
         CryptoHash::new(projection)
     }

@@ -271,6 +271,42 @@ class _TranscriptBuilder:
         )
         self.add("outbox_recover", outbox)
 
+        clock_control = _digest("clock-control")
+        clock_request = _digest("expired-clock-request")
+        self.add(
+            "clock_rollback_begin",
+            {
+                "control_id": clock_control, "boot_id": boot_6,
+                "state": state_1, "counter": 11, "epoch": 1,
+                "host_time_ms": 20_000, "trusted_time_ms": 20_000,
+                "request_expires_at_ms": 15_000, "request_sha256": clock_request,
+            },
+        )
+        self.add(
+            "clock_rollback_applied",
+            {
+                "control_id": clock_control, "boot_id": boot_6,
+                "host_time_ms": 10_000, "trusted_time_ms": 20_001,
+            },
+        )
+        self.add(
+            "expired_request_rejected",
+            {
+                "control_id": clock_control, "boot_id": boot_6,
+                "operation_id": _digest("expired-clock-operation"),
+                "request_sha256": clock_request, "authoritative_state": state_1,
+                "counter": 11, "epoch": 1, "host_time_ms": 10_001,
+                "trusted_time_ms": 20_002, "result": "expired_request_rejected",
+            },
+        )
+        self.add(
+            "clock_rollback_end",
+            {
+                "control_id": clock_control, "boot_id": boot_6,
+                "host_time_ms": 20_003, "trusted_time_ms": 20_003,
+            },
+        )
+
         backup_control = _digest("backup-control")
         snapshot = _digest("backup-snapshot")
         self.add(
@@ -423,6 +459,7 @@ class _TranscriptBuilder:
             "run": {
                 "run_id": run_id,
                 "candidate_digest": candidate["artifact_sha256"],
+                "candidate_context_digest": _digest("release-candidate-context"),
                 "artifact_set_digest": _digest("artifacts"),
                 "started_at_ms": 1_700_000_000_000,
                 "ended_at_ms": 1_700_000_200_000,
@@ -513,6 +550,13 @@ class PhysicalDeviceEvidenceTest(unittest.TestCase):
         self.assertEqual(report["physical_checks"], list(physical.PHYSICAL_CHECKS))
         self.assertIs(report["passed"], True)
 
+    def test_rejects_boolean_transcript_schema_version(self) -> None:
+        document = self.fresh()
+        document["schema_version"] = True
+        self.builder.approve(document)
+        with self.assertRaisesRegex(physical.PhysicalDeviceEvidenceError, "schema_version must be an integer"):
+            self.verify(document)
+
     def test_requires_policy_to_admit_exact_physical_verifier(self) -> None:
         trusted = self.policy.verifiers[physical.PHYSICAL_VERIFIER_ID]
         variants = {
@@ -541,6 +585,68 @@ class PhysicalDeviceEvidenceTest(unittest.TestCase):
                     physical.verify_bytes(
                         release.canonical_json_bytes(self.fresh()), policy
                     )
+
+    def test_requires_physical_clock_rollback_check_in_release_report(self) -> None:
+        self.assertIn("clock_rollback", physical.PHYSICAL_CHECKS)
+        self.assertEqual(physical.PHYSICAL_CHECKS, release.PHYSICAL_PROFILE_CHECKS)
+
+    def test_rejects_each_missing_clock_control_boundary(self) -> None:
+        for kind in (
+            "clock_rollback_begin", "clock_rollback_applied",
+            "expired_request_rejected", "clock_rollback_end",
+        ):
+            with self.subTest(kind=kind):
+                document = self.fresh()
+                document["events"] = [event for event in document["events"] if event["kind"] != kind]
+                self.rechain_and_approve(document)
+                with self.assertRaisesRegex(physical.PhysicalDeviceEvidenceError, "boundary"):
+                    self.verify(document)
+
+    def test_rejects_signed_clock_rollback_substitutions(self) -> None:
+        cases = (
+            ("clock_rollback_applied", "control_id", _digest("other-control"), "control is replayed"),
+            ("clock_rollback_begin", "boot_id", _digest("other-boot"), "active hardware boot"),
+            ("clock_rollback_applied", "host_time_ms", 20_000, "cross request expiry"),
+            ("expired_request_rejected", "host_time_ms", 15_000, "cross request expiry"),
+            ("clock_rollback_end", "host_time_ms", 19_999, "cross request expiry"),
+            ("clock_rollback_begin", "trusted_time_ms", 15_000, "trusted time remains monotonic"),
+            ("clock_rollback_applied", "trusted_time_ms", 19_999, "trusted time remains monotonic"),
+            ("expired_request_rejected", "trusted_time_ms", 20_000, "trusted time remains monotonic"),
+            ("clock_rollback_end", "trusted_time_ms", 20_001, "trusted time remains monotonic"),
+            ("clock_rollback_begin", "request_expires_at_ms", True, "must be an integer"),
+            ("expired_request_rejected", "request_sha256", _digest("other-request"), "unchanged authoritative state"),
+            ("expired_request_rejected", "authoritative_state", _digest("other-state"), "unchanged authoritative state"),
+            ("expired_request_rejected", "counter", 12, "unchanged authoritative state"),
+            ("expired_request_rejected", "epoch", 2, "unchanged authoritative state"),
+            ("expired_request_rejected", "result", "success", "must be expired_request_rejected"),
+        )
+        for kind, field, value, error in cases:
+            with self.subTest(kind=kind, field=field, value=value):
+                document = self.fresh()
+                event = next(event for event in document["events"] if event["kind"] == kind)
+                event["data"][field] = value
+                self.rechain_and_approve(document)
+                with self.assertRaisesRegex(physical.PhysicalDeviceEvidenceError, error):
+                    self.verify(document)
+
+    def test_rejects_reused_clock_control_and_operation(self) -> None:
+        for reuse in ("control", "operation"):
+            with self.subTest(reuse=reuse):
+                document = self.fresh()
+                by_kind = {event["kind"]: event["data"] for event in document["events"]}
+                if reuse == "control":
+                    for kind in (
+                        "clock_rollback_begin", "clock_rollback_applied",
+                        "expired_request_rejected", "clock_rollback_end",
+                    ):
+                        by_kind[kind]["control_id"] = by_kind["airplane_mode_enabled"]["control_id"]
+                    error = "control is replayed"
+                else:
+                    by_kind["expired_request_rejected"]["operation_id"] = by_kind["prepare"]["operation_id"]
+                    error = "operation identifier is reused"
+                self.rechain_and_approve(document)
+                with self.assertRaisesRegex(physical.PhysicalDeviceEvidenceError, error):
+                    self.verify(document)
 
     def test_run_start_must_bind_prepared_state_counter_and_epoch(self) -> None:
         replacements = {

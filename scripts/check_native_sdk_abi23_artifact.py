@@ -137,6 +137,9 @@ REQUIRED_SYMBOLS: Mapping[str, tuple[str, ...]] = {
         "Java_pg_bpng_digitalkina_KagemushaNativeCoreJniV1_nativeContractV1",
         "Java_pg_bpng_digitalkina_KagemushaNativeCoreJniV1_nativeOpenV1",
         "Java_pg_bpng_digitalkina_KagemushaNativeCoreJniV1_nativeInvokeV1",
+        "Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoordinatorJniV1_nativeContractV1",
+        "Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoordinatorJniV1_nativeOpenV1",
+        "Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoordinatorJniV1_nativeInvokeV1",
         "connect_norito_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json",
     ),
     "csharp": (

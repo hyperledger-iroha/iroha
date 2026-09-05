@@ -2,14 +2,24 @@ impl V2EffectServices for ProductionV2Services {
     type Error = String;
     fn finish_runtime_step_reconciliation(
         &mut self,
-        decided_subject: Option<wire::BlockSubject>,
+        _decided_subject: Option<wire::BlockSubject>,
+        authority: Option<super::serviced_candidate_store::LeaderWireRecoveryAuthority>,
     ) -> Result<(), Self::Error> {
-        if decided_subject.is_some() {
-            let next = self.leader_wire_recovery_authority.with_durable_decision();
-            self.leader_wire_ingress
-                .advance_leader_wire_recovery_cut(next)?;
-            self.leader_wire_recovery_authority = next;
+        let next = authority.ok_or_else(|| {
+            "production ingress reconciliation has no adapter WAL authority".to_owned()
+        })?;
+        let output_guard = Arc::clone(&self.output_guard);
+        let _permit = output_guard
+            .acquire()
+            .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
+        if !next.monotonically_extends(self.leader_wire_recovery_authority) {
+            return Err(
+                "production ingress reconciliation regressed the adapter WAL authority".to_owned(),
+            );
         }
+        self.leader_wire_ingress
+            .advance_leader_wire_recovery_cut(next)?;
+        self.leader_wire_recovery_authority = next;
         Ok(())
     }
     fn complete_leader_wire_runtime_terminal(
@@ -643,12 +653,10 @@ impl V2EffectServices for ProductionV2Services {
                 "Sumeragi v2 service rejected non-monotonic certified view ownership".to_owned(),
             );
         }
-        let next_recovery_authority = self
-            .leader_wire_recovery_authority
-            .advance_view(tag.view(), protected_lock)?;
-        self.leader_wire_ingress
-            .advance_leader_wire_recovery_cut(next_recovery_authority)?;
-        self.leader_wire_recovery_authority = next_recovery_authority;
+        if tag != self.leader_wire_recovery_authority.consumer_tag() {
+            return Err("entered view lacks the actual published adapter WAL consumer".to_owned());
+        }
+        let _ = protected_lock;
         // The old view's active Sign command may still complete after its
         // executor owner is cancelled. Prune first and publish the new owner
         // second; completion handling classifies the old work ID before it is

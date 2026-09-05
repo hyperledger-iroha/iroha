@@ -418,6 +418,11 @@ impl<'a> KagemushaRecursiveIncomingEpGenerationWitnessV1<'a> {
 #[cfg(feature = "zk-halo2-ipa")]
 #[derive(Clone)]
 pub struct KagemushaRecursiveStateGenerationWitnessV1<'a> {
+    /// Complete ordered claim for this transition's exact SHA queue and its two history merges.
+    ///
+    /// State key generation and state proving require `Some`. `None` is accepted only by
+    /// `prove_kagemusha_recursive_state_hash_claim_v1`, whose planning phase returns no circuit.
+    pub hash_claim: Option<KagemushaMintHashClaimGenerationWitnessV1<'a>>,
     /// Six-operation aggregate-state transition witness.
     pub state: KagemushaStateRelationWitnessV1,
     /// Checked-preview mint opening, present exactly for `MintFold`.
@@ -533,6 +538,10 @@ pub struct KagemushaRecursiveStateGenerationWitnessV1<'a> {
 
 #[cfg(feature = "zk-halo2-ipa")]
 impl<'a> KagemushaRecursiveStateGenerationWitnessV1<'a> {
+    fn reborrow(&self) -> KagemushaRecursiveStateGenerationWitnessV1<'_> {
+        self.clone()
+    }
+
     fn into_recursive<'b>(
         self,
         eq_incoming_credits: &'b [CompositeIncomingEqWitnessV1<'b>; 1],
@@ -542,6 +551,7 @@ impl<'a> KagemushaRecursiveStateGenerationWitnessV1<'a> {
         'a: 'b,
     {
         KagemushaRecursiveStateWitnessV1 {
+            hash_claim: self.hash_claim,
             state: self.state,
             mint_fold_opening: self
                 .mint_fold_opening
@@ -3032,6 +3042,60 @@ pub fn prove_kagemusha_mint_authorization_hash_claim_v1(
     )
 }
 
+/// Prove the exact ordered SHA queue consumed by the recursive aggregate-state circuit.
+///
+/// Discovery runs the same typed relation and canonical proof parsers as state proving, then
+/// discards their builders before synthesizing any circuit. The caller must merge each returned
+/// complete claim history into the pre-claim state history and supply that claim to state proving.
+/// Current successor history and deferred-audit cells are not inputs to the discovered SHA jobs.
+///
+/// # Errors
+///
+/// Rejects mixed release artifacts, a state from another release, a malformed relation or proof
+/// parser input, unequal parity queue shapes, and any failed ordered shard/claim/history proof.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn prove_kagemusha_recursive_state_hash_claim_v1(
+    eq: &KagemushaLoadedEqMintHashArtifactsV1,
+    ep: &KagemushaLoadedEpMintHashArtifactsV1,
+    mut witness: KagemushaRecursiveStateGenerationWitnessV1<'_>,
+    recovery_seed: &KagemushaRecoverySeedV1,
+) -> Result<KagemushaGeneratedMintHashClaimV1, KagemushaArtifactGenerationErrorV1> {
+    validate_loaded_typed_sha_pair_v1(eq, ep)?;
+    if witness.state.successor.release_id != eq.release_id {
+        return Err(KagemushaArtifactGenerationErrorV1::CircuitBuild(
+            "recursive state hash claim does not belong to the authenticated release".to_owned(),
+        ));
+    }
+    // Public state-proving inputs name the outer transport key; local predecessors carry the
+    // private inner proof. Match the same identity normalization performed by the actual carrier
+    // prover before entering its strict predecessor-protocol binder. These cells are not SHA
+    // inputs, and this planning function returns no circuit or monetary authority.
+    witness.state.eq_protocol_digest =
+        native_parent_protocol_digest_v1(witness.eq_parent_protocol, KagemushaPastaParityV1::Eq)
+            .map_err(KagemushaArtifactGenerationErrorV1::CircuitBuild)?;
+    witness.state.ep_protocol_digest =
+        native_parent_protocol_digest_v1(witness.ep_parent_protocol, KagemushaPastaParityV1::Ep)
+            .map_err(KagemushaArtifactGenerationErrorV1::CircuitBuild)?;
+    let eq_incoming = witness
+        .eq_incoming_credits
+        .map(KagemushaRecursiveIncomingEqGenerationWitnessV1::into_composite);
+    let ep_incoming = witness
+        .ep_incoming_credits
+        .map(KagemushaRecursiveIncomingEpGenerationWitnessV1::into_composite);
+    let (eq_messages, ep_messages) = super::composite::recursive_state_sha_messages_v1(
+        &eq.carrier_parameters,
+        &ep.carrier_parameters,
+        witness.into_recursive(&eq_incoming, &ep_incoming),
+    )
+    .map_err(KagemushaArtifactGenerationErrorV1::CircuitBuild)?;
+    prove_kagemusha_typed_sha_claim_v1(
+        eq,
+        ep,
+        KagemushaPairedShaMessagesV1::try_new(eq_messages, ep_messages)?,
+        recovery_seed,
+    )
+}
+
 /// Prove one exact, typed SHA queue pair with the release-qualified shard and claim artifacts.
 ///
 /// This is deliberately private until every monetary consumer recursively binds the completed
@@ -4148,13 +4212,13 @@ pub fn prove_kagemusha_mint_authority_bootstrap_v1(
         ));
     }
 
-    let mut eq_protocol = compile(
+    let eq_protocol = compile(
         &eq.parameters,
         &eq.verifying_key,
         snark_verifier::system::halo2::Config::ipa()
             .with_num_instance(vec![KAGEMUSHA_MINT_AUTHORITY_PUBLIC_INSTANCE_COUNT_V1]),
     );
-    let mut ep_protocol = compile(
+    let ep_protocol = compile(
         &ep.parameters,
         &ep.verifying_key,
         snark_verifier::system::halo2::Config::ipa()
@@ -4749,31 +4813,150 @@ fn prove_private_recursive_carrier_v1(
 }
 
 #[cfg(feature = "zk-halo2-ipa")]
+fn require_recursive_state_bootstrap_keygen_v1(
+    operation: KagemushaOperationV1,
+) -> Result<(), KagemushaArtifactGenerationErrorV1> {
+    if operation != KagemushaOperationV1::Bootstrap {
+        return Err(KagemushaArtifactGenerationErrorV1::CircuitBuild(
+            "recursive-state key generation requires an actual zero-balance Bootstrap witness"
+                .to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn recursive_state_parent_structure_matches_v1<C>(
+    seeded: &PlonkProtocol<C>,
+    generated: &PlonkProtocol<C>,
+    parity: KagemushaPastaParityV1,
+) -> Result<bool, KagemushaArtifactGenerationErrorV1>
+where
+    C: snark_verifier::util::arithmetic::CurveAffine,
+{
+    if seeded.num_instance != [recursive_public_instance_count()]
+        || generated.num_instance != [recursive_public_instance_count()]
+    {
+        return Err(KagemushaArtifactGenerationErrorV1::CircuitBuild(
+            "recursive-state Bootstrap parent protocol has the wrong public shape".to_owned(),
+        ));
+    }
+    Ok(kagemusha_protocol_structure_digest_v1(seeded, parity)
+        .map_err(KagemushaArtifactGenerationErrorV1::CircuitBuild)?
+        == kagemusha_protocol_structure_digest_v1(generated, parity)
+            .map_err(KagemushaArtifactGenerationErrorV1::CircuitBuild)?)
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
 /// Generate the paired Pasta recursive-state proving and verification artifacts.
 ///
 /// The required secret seed makes the real measurement proofs reproducible without an implicit
 /// random fallback; it does not change the deterministic transparent parameter/key generation.
+/// Only a zero-balance Bootstrap witness may seed the internal parent-verifier shape convergence.
+/// Generated artifacts are returned only after an actual carrier proof and transport proof have
+/// been verified under the converged release identities.
 pub fn generate_kagemusha_recursive_state_artifacts_v1(
     witness: KagemushaRecursiveStateGenerationWitnessV1<'_>,
     recovery_seed: &KagemushaRecoverySeedV1,
 ) -> Result<KagemushaGeneratedRecursiveStateArtifactsV1, KagemushaArtifactGenerationErrorV1> {
+    require_recursive_state_bootstrap_keygen_v1(witness.state.operation)?;
     let eq_parameters = canonical_kagemusha_eq_parameters_v1();
     let ep_parameters = canonical_kagemusha_ep_parameters_v1();
-    let (inner_eq_circuit, inner_ep_circuit, _, _) =
-        build_recursive_generation_pair_v1(&eq_parameters, &ep_parameters, witness.clone())
-            .map_err(KagemushaArtifactGenerationErrorV1::CircuitBuild)?;
+    let template = witness;
+    let mut eq_seed_protocol = template.eq_parent_protocol.clone();
+    let mut ep_seed_protocol = template.ep_parent_protocol.clone();
+    let mut candidate_keys = None;
+    // This bound applies only to release construction. It never limits monetary ancestry,
+    // hash leaves, operations, fan-in, or the number of valid recursive transitions.
+    for _ in 0..8 {
+        let eq_padding = dummy_ordinary_proof_bytes(
+            &eq_seed_protocol,
+            EqAffine::generator().to_bytes().as_ref(),
+            KagemushaPastaParityV1::Eq,
+        )?;
+        let ep_padding = dummy_ordinary_proof_bytes(
+            &ep_seed_protocol,
+            EpAffine::generator().to_bytes().as_ref(),
+            KagemushaPastaParityV1::Ep,
+        )?;
+        let mut candidate = template.reborrow();
+        candidate.eq_parent_protocol = &eq_seed_protocol;
+        candidate.ep_parent_protocol = &ep_seed_protocol;
+        candidate.eq_parent_proof = &eq_padding;
+        candidate.ep_parent_proof = &ep_padding;
+        candidate.state.eq_protocol_digest =
+            native_parent_protocol_digest_v1(&eq_seed_protocol, KagemushaPastaParityV1::Eq)
+                .map_err(KagemushaArtifactGenerationErrorV1::CircuitBuild)?;
+        candidate.state.ep_protocol_digest =
+            native_parent_protocol_digest_v1(&ep_seed_protocol, KagemushaPastaParityV1::Ep)
+                .map_err(KagemushaArtifactGenerationErrorV1::CircuitBuild)?;
+        let (eq_circuit, ep_circuit, _, _) =
+            build_recursive_generation_pair_v1(&eq_parameters, &ep_parameters, candidate)
+                .map_err(KagemushaArtifactGenerationErrorV1::CircuitBuild)?;
+        validate_recursive_profile(KagemushaPastaParityV1::Eq, &eq_circuit.params())?;
+        validate_recursive_profile(KagemushaPastaParityV1::Ep, &ep_circuit.params())?;
+        let eq_vk = keygen_vk(&eq_parameters, &eq_circuit).map_err(|error| {
+            KagemushaArtifactGenerationErrorV1::KeyGeneration {
+                parity: KagemushaPastaParityV1::Eq,
+                kind: "private recursive-state carrier convergence verifying key",
+                reason: error.to_string(),
+            }
+        })?;
+        let ep_vk = keygen_vk(&ep_parameters, &ep_circuit).map_err(|error| {
+            KagemushaArtifactGenerationErrorV1::KeyGeneration {
+                parity: KagemushaPastaParityV1::Ep,
+                kind: "private recursive-state carrier convergence verifying key",
+                reason: error.to_string(),
+            }
+        })?;
+        let eq_protocol = compile(
+            &eq_parameters,
+            &eq_vk,
+            snark_verifier::system::halo2::Config::ipa()
+                .with_num_instance(vec![recursive_public_instance_count()]),
+        );
+        let ep_protocol = compile(
+            &ep_parameters,
+            &ep_vk,
+            snark_verifier::system::halo2::Config::ipa()
+                .with_num_instance(vec![recursive_public_instance_count()]),
+        );
+        if recursive_state_parent_structure_matches_v1(
+            &eq_seed_protocol,
+            &eq_protocol,
+            KagemushaPastaParityV1::Eq,
+        )? && recursive_state_parent_structure_matches_v1(
+            &ep_seed_protocol,
+            &ep_protocol,
+            KagemushaPastaParityV1::Ep,
+        )? {
+            candidate_keys = Some((
+                eq_circuit,
+                ep_circuit,
+                eq_vk,
+                ep_vk,
+                eq_protocol,
+                ep_protocol,
+            ));
+            break;
+        }
+        eq_seed_protocol = eq_protocol;
+        ep_seed_protocol = ep_protocol;
+    }
+    let (
+        inner_eq_circuit,
+        inner_ep_circuit,
+        inner_eq_vk,
+        inner_ep_vk,
+        inner_eq_protocol,
+        inner_ep_protocol,
+    ) = candidate_keys.ok_or_else(|| {
+        KagemushaArtifactGenerationErrorV1::CircuitBuild(
+            "recursive-state Bootstrap parent verifier structure did not converge".to_owned(),
+        )
+    })?;
     let inner_eq_circuit_params = inner_eq_circuit.params();
     let inner_ep_circuit_params = inner_ep_circuit.params();
-    validate_recursive_profile(KagemushaPastaParityV1::Eq, &inner_eq_circuit_params)?;
-    validate_recursive_profile(KagemushaPastaParityV1::Ep, &inner_ep_circuit_params)?;
-
-    let inner_eq_vk = keygen_vk(&eq_parameters, &inner_eq_circuit).map_err(|error| {
-        KagemushaArtifactGenerationErrorV1::KeyGeneration {
-            parity: KagemushaPastaParityV1::Eq,
-            kind: "private recursive-state carrier verifying key",
-            reason: error.to_string(),
-        }
-    })?;
     let inner_eq_pk =
         keygen_pk(&eq_parameters, inner_eq_vk.clone(), &inner_eq_circuit).map_err(|error| {
             KagemushaArtifactGenerationErrorV1::KeyGeneration {
@@ -4782,13 +4965,6 @@ pub fn generate_kagemusha_recursive_state_artifacts_v1(
                 reason: error.to_string(),
             }
         })?;
-    let inner_ep_vk = keygen_vk(&ep_parameters, &inner_ep_circuit).map_err(|error| {
-        KagemushaArtifactGenerationErrorV1::KeyGeneration {
-            parity: KagemushaPastaParityV1::Ep,
-            kind: "private recursive-state carrier verifying key",
-            reason: error.to_string(),
-        }
-    })?;
     let inner_ep_pk =
         keygen_pk(&ep_parameters, inner_ep_vk.clone(), &inner_ep_circuit).map_err(|error| {
             KagemushaArtifactGenerationErrorV1::KeyGeneration {
@@ -4797,19 +4973,25 @@ pub fn generate_kagemusha_recursive_state_artifacts_v1(
                 reason: error.to_string(),
             }
         })?;
-
-    let inner_eq_protocol = compile(
-        &eq_parameters,
-        &inner_eq_vk,
-        snark_verifier::system::halo2::Config::ipa()
-            .with_num_instance(vec![recursive_public_instance_count()]),
-    );
-    let inner_ep_protocol = compile(
-        &ep_parameters,
-        &inner_ep_vk,
-        snark_verifier::system::halo2::Config::ipa()
-            .with_num_instance(vec![recursive_public_instance_count()]),
-    );
+    drop(inner_eq_circuit);
+    drop(inner_ep_circuit);
+    // Only the nonexistent Bootstrap parent is replaced. Both production identity checks stay
+    // strict, and every monetary successor continues to consume the real prior inner proof.
+    let eq_padding = dummy_ordinary_proof_bytes(
+        &inner_eq_protocol,
+        EqAffine::generator().to_bytes().as_ref(),
+        KagemushaPastaParityV1::Eq,
+    )?;
+    let ep_padding = dummy_ordinary_proof_bytes(
+        &inner_ep_protocol,
+        EpAffine::generator().to_bytes().as_ref(),
+        KagemushaPastaParityV1::Ep,
+    )?;
+    let mut witness = template.reborrow();
+    witness.eq_parent_protocol = &inner_eq_protocol;
+    witness.ep_parent_protocol = &inner_ep_protocol;
+    witness.eq_parent_proof = &eq_padding;
+    witness.ep_parent_proof = &ep_padding;
     let inner_eq_protocol_digest =
         native_parent_protocol_digest_v1(&inner_eq_protocol, KagemushaPastaParityV1::Eq)
             .map_err(KagemushaArtifactGenerationErrorV1::CircuitBuild)?;
@@ -10222,6 +10404,72 @@ mod tests {
     use std::io::Write as _;
 
     use super::*;
+
+    #[cfg(feature = "zk-halo2-ipa")]
+    #[test]
+    fn recursive_state_key_convergence_never_replaces_a_monetary_parent() {
+        require_recursive_state_bootstrap_keygen_v1(KagemushaOperationV1::Bootstrap)
+            .expect("zero-balance Bootstrap can seed release keys");
+        for operation in [
+            KagemushaOperationV1::MintFold,
+            KagemushaOperationV1::SendSplit,
+            KagemushaOperationV1::ReceiveFold,
+            KagemushaOperationV1::RedeemSplit,
+            KagemushaOperationV1::Rotate,
+        ] {
+            assert!(require_recursive_state_bootstrap_keygen_v1(operation).is_err());
+        }
+    }
+
+    #[cfg(feature = "zk-halo2-ipa")]
+    #[test]
+    fn recursive_state_key_convergence_distinguishes_shape_from_authenticated_identity() {
+        macro_rules! check {
+            ($curve:ty, $field:ty, $parity:expr) => {{
+                let parameters = ParamsIPA::<$curve>::new(6);
+                let circuit =
+                    SmallRecoveryCircuit(halo2_proofs::circuit::Value::known(<$field>::from(7)));
+                let vk = keygen_vk(&parameters, &circuit).expect("small shape-test VK");
+                let protocol = compile(
+                    &parameters,
+                    &vk,
+                    snark_verifier::system::halo2::Config::ipa()
+                        .with_num_instance(vec![recursive_public_instance_count()]),
+                );
+                assert!(
+                    recursive_state_parent_structure_matches_v1(&protocol, &protocol, $parity)
+                        .unwrap()
+                );
+                let mut changed = protocol.clone();
+                assert!(!changed.preprocessed.is_empty());
+                changed.preprocessed[0] = <$curve>::generator();
+                if changed.preprocessed[0] == protocol.preprocessed[0] {
+                    changed.preprocessed[0] = <$curve>::identity();
+                }
+                assert!(
+                    recursive_state_parent_structure_matches_v1(&protocol, &changed, $parity)
+                        .unwrap()
+                );
+                assert_ne!(
+                    native_parent_protocol_digest_v1(&protocol, $parity).unwrap(),
+                    native_parent_protocol_digest_v1(&changed, $parity).unwrap(),
+                    "shape convergence never authorizes substituted preprocessed points"
+                );
+                changed.num_witness[0] += 1;
+                assert!(
+                    !recursive_state_parent_structure_matches_v1(&protocol, &changed, $parity)
+                        .unwrap()
+                );
+                changed.num_instance[0] += 1;
+                assert!(
+                    recursive_state_parent_structure_matches_v1(&protocol, &changed, $parity)
+                        .is_err()
+                );
+            }};
+        }
+        check!(EqAffine, Fp, KagemushaPastaParityV1::Eq);
+        check!(EpAffine, Fq, KagemushaPastaParityV1::Ep);
+    }
 
     #[cfg(feature = "zk-halo2-ipa")]
     #[test]

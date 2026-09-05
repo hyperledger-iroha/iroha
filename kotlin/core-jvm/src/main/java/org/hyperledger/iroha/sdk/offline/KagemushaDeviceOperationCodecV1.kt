@@ -766,6 +766,11 @@ object KagemushaDeviceOperationCodecV1 {
         return value
     }
 
+    /** Canonical operation-5 reservation binding shared with the native outgoing-operation index. */
+    @JvmStatic
+    fun encodeSenderPublicInputs(value: KagemushaDeviceSenderPublicInputsV1): ByteArray =
+        frame("iroha.kagemusha.device.v1.sender-public-inputs", 16, senderInputs(value), SENDER_COMMAND_MAX_BYTES)
+
     /** Encode the shared canonical sender command schema. */
     @JvmStatic
     fun encodeSenderCommand(value: KagemushaDeviceSenderCommandV1): ByteArray {

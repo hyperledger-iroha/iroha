@@ -756,6 +756,8 @@ fn leader_wire_runtime_terminal_fixture(
             phase,
             semantic_origin: origin.clone(),
             canonical_wire_hash: Hash::new(b"effect-dispatch leader-wire bytes"),
+            vote_statement_hash: Some(Hash::new(b"effect-dispatch vote statement")),
+            timeout_prepare_view: None,
         },
         slot: super::super::FairV2IngressLeaderWireSlot {
             semantic_origin: origin,

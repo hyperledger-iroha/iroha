@@ -426,22 +426,55 @@ probe remains available even when the stock monetary provider correctly reports
 device-unavailable.
 
 The coordinator contract call returns the written word count and pins exactly
-`[1, 23, 3, 6, 50, 8, 6, 22, 16, 0xffff]`: frame version, native ABI, peer
+`[2, 23, 3, 6, 50, 8, 6, 22, 16, 0xffff]`: frame version, native ABI, peer
 messages, complete wire payloads, artifact roles, relations, helper circuits,
 device operations, hardware capabilities, and the required capability mask.
 Its digest/inventory role is compatibility and tamper detection only.
 
 Coordinator request and response frames start with ASCII `IKGMCOR1`, followed
-by little-endian `version:u16 = 1`, `field_count:u16`, reserved zero `u32`, and
+by little-endian `version:u16 = 2`, `field_count:u16`, reserved zero `u32`, and
 then `field_count` repetitions of `length:u32 || bytes`. A frame has at most 16
 fields, each field at most 64 KiB, a request at most 256 KiB, and a response at
 most 128 KiB. Methods 1 through 10 are, in order: reserve operation ID, accept
 qualification, accept authenticated reply, begin sender transition, prove the
 prepared sender transition, build the terminal envelope, accept the installed
 terminal, recover sender, recover the byte-identical terminal envelope, and
-release the outbox after a closed terminal receipt. JNI exposes only the
-KAGEMUSHA-named `KagemushaNativeCoreJniV1.nativeContractV1`, `nativeOpenV1`,
-and `nativeInvokeV1` boundary.
+release the outbox after a closed terminal receipt. The generic Kotlin Android
+SDK uses `org.hyperledger.iroha.sdk.offline.KagemushaCoreCoordinatorJniV1`
+`nativeContractV1`, `nativeOpenV1`, and `nativeInvokeV1`; the signed-app
+`KagemushaNativeCoreJniV1` exports delegate through the same native implementation.
+The Java Android facade uses the Kotlin transport. Swift invokes the corresponding
+C exports through the validated native loader. The SDK checks the complete
+ten-word ABI inventory, retains unsigned handle bits, serializes calls, and
+correlates all returned identities/envelopes before exposing bounded fields.
+
+`KagemushaCoreCoordinatorFrameV1` and `KagemushaCoreCoordinatorBridgeV1` are
+transport layers, not implementations of `KagemushaNativeCoreCoordinatorV1`.
+The shared `fixtures/offline/kagemusha_core_coordinator_frame_v1.tsv` corpus
+covers every method, both sender kinds, both recovery selectors, and missing
+recovery; its opaque archive strings do not represent valid proofs or credentials.
+TODO: connect the typed SDK coordinator to the native-owned, canonical Norito
+preparation (operation ID, wallet context, inputs digest), candidate (preparation,
+selector, candidate digest, commit authorization), and recovery (operation ID,
+terminal ID, wallet context, inputs digest) archives once their exact native
+schemas and fixtures are available. No SDK decoder may infer those schemas
+from nonempty frame fields or treat structural validation as journal authority.
+
+Schema 2 is the sole coordinator frame schema. Reservation method 1 takes
+`operation:u32`, the caller-persisted nonzero 32-byte operation ID, and the exact
+public binding. It acknowledges that same operation ID after durable admission;
+it never creates a replacement ID. Device operation 5 uses the complete canonical
+Norito `iroha.kagemusha.device.v1.sender-public-inputs` enum as its public binding:
+`SendSplit { request: Vec<u8> }` or `RedeemSplit { amount: u128, beneficiary: AccountId }`.
+Untagged request bytes or concatenated amount/account bytes are invalid. The Core
+operation journal checks canonical nested payment-request shape before reserving
+capacity. A reservation is retry material, not authenticated monetary authority.
+
+Release method 10 returns the retained operation ID, preparation, envelope digest,
+exact installed envelope, and hardware release authorization. The frame boundary
+requires the returned envelope bytes to equal the supplied envelope for both send
+and redemption. Qualified Core still verifies the terminal identity, public-input
+binding, envelope digest, receipt and hardware authorization before release.
 
 The generic bridge installs no qualified durable coordinator. It validates
 storage paths, method codes, and complete frames, clears outputs, and returns

@@ -385,7 +385,11 @@ fn unknown_hash_has_no_body_status_or_durable_payload_len() {
     assert_eq!(kura.get_block_height_by_hash(unknown_hash), None);
     assert_eq!(kura.block_body_status_by_hash(unknown_hash), None);
     assert!(!kura.block_payload_available_by_hash(unknown_hash));
-    assert_eq!(kura.durable_block_payload_len_by_hash(unknown_hash), None);
+    assert_eq!(
+        kura.durable_block_payload_len_by_hash(unknown_hash)
+            .expect("unknown hash lookup"),
+        None
+    );
 }
 fn store_dummy_block_arcs(kura: &Kura, count: usize) -> Vec<Arc<SignedBlock>> {
     let mut generator = DummyBlocks::new();

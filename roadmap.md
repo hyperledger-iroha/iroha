@@ -49,9 +49,16 @@ profile and never permits software fallback.
   and Java Card journal tests are prerequisites, not device qualification.
 - Connect the now-validated Swift/Kotlin bootstrap and recovery ordering to the
   qualified native service, then rebuild mobile artifacts from the settled
-  source. Sender intent, payment and redemption still need caller-persisted
-  operation identities, authenticated lookup after a lost native return, and
+  source. Caller-persisted operation identities and canonical reservation bindings
+  now have focused SDK coverage. Finish authenticated lookup after a lost native
+  return, canonical Core archive schemas, real native coordinator integration and
   revision-consistent outbox discovery before complete customer flows can ship.
+- Qualify the requested iPhone, Samsung, Huawei, Google and Meizu device families
+  by exact model/OS/firmware/provider profile. Establish an authorized service
+  implementing the complete monetary contract for each; stock key signing is
+  insufficient. Huawei HarmonyOS requires explicit runtime/native integration
+  qualification independent of Android. Track evidence and remaining acceptance
+  gates in [the readiness record](specs/kagemusha_v1_production_readiness.md).
 
 ## Additive SNS dataspace bootstrap qualification
 

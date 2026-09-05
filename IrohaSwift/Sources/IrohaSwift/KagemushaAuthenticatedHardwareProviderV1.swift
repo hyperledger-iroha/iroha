@@ -458,9 +458,30 @@ public final class KagemushaAuthenticatedDeviceClientV1: @unchecked Sendable {
     }
   }
 
+  /// Require native Core to persist the exact caller-owned identity without substitution.
+  fileprivate func reserveOperationID(
+    operation: UInt8, operationID: Data, publicBinding: Data
+  ) throws -> Data {
+    let expected = try authenticatedProviderDigest(operationID, "operationID")
+    let reserved = try core.reserveOperationID(
+      operation: operation, operationID: expected, publicBinding: publicBinding)
+    guard reserved == expected else {
+      throw authenticatedProviderInvalid("native Core substituted the reserved operation ID")
+    }
+    return expected
+  }
+
+  /// Internal operations recover through the authoritative wallet snapshot or credit selector.
+  fileprivate func reserveInternalOperationID(operation: UInt8, publicBinding: Data) throws -> Data {
+    var generator = SystemRandomNumberGenerator()
+    let operationID = Data((0..<32).map { _ in UInt8.random(in: .min ... .max, using: &generator) })
+    return try reserveOperationID(
+      operation: operation, operationID: operationID, publicBinding: publicBinding)
+  }
+
   private func qualifyLocked() throws -> Session {
     let operation: UInt8 = 1
-    let requestID = try core.reserveOperationID(
+    let requestID = try reserveInternalOperationID(
       operation: operation,
       publicBinding: Data([operation])
     )
@@ -686,7 +707,23 @@ public final class KagemushaAuthenticatedHardwareProviderV1: KagemushaHardwarePr
     }
   }
 
+  public func reservePaymentRequestOperationID(
+    operationID: Data, recipient: KagemushaAccountIDV1,
+    amount: KagemushaUInt128V1, validityWindowMS: UInt64
+  ) throws -> Data {
+    try locked {
+      let operationID = try authenticatedProviderDigest(operationID, "operationID")
+      let command = KagemushaDeviceControlCommandV1.createSignedPaymentRequest(
+        requestID: operationID, recipient: recipient, amount: amount,
+        validityWindowMS: validityWindowMS)
+      return try client.reserveOperationID(
+        operation: 22, operationID: operationID,
+        publicBinding: KagemushaDeviceOperationCodecV1.encodeControlCommand(command))
+    }
+  }
+
   public func createPaymentRequest(
+    operationID: Data,
     recipient: KagemushaAccountIDV1,
     amount: KagemushaUInt128V1,
     validityWindowMS: UInt64
@@ -695,10 +732,9 @@ public final class KagemushaAuthenticatedHardwareProviderV1: KagemushaHardwarePr
       guard !amount.isZero,
         (1...KagemushaWireV1.requestMaximumTTLMS).contains(validityWindowMS)
       else { throw authenticatedProviderInvalid("invalid payment request amount or lifetime") }
-      var binding = Data(recipient.canonicalPayload)
-      binding.append(amount.littleEndianBytes)
-      binding.append(authenticatedProviderU64LE(validityWindowMS))
-      let requestID = try client.core.reserveOperationID(operation: 22, publicBinding: binding)
+      let requestID = try reservePaymentRequestOperationID(
+        operationID: operationID, recipient: recipient, amount: amount,
+        validityWindowMS: validityWindowMS)
       let command = KagemushaDeviceControlCommandV1.createSignedPaymentRequest(
         requestID: requestID,
         recipient: recipient,
@@ -868,7 +904,7 @@ public final class KagemushaAuthenticatedHardwareProviderV1: KagemushaHardwarePr
       let credit = try authenticatedProviderDigest(selector.creditID, "creditID")
       var publicBinding = Data([UInt8(selector.kind.rawValue)])
       publicBinding.append(credit)
-      let operationID = try client.core.reserveOperationID(
+      let operationID = try client.reserveInternalOperationID(
         operation: 17,
         publicBinding: publicBinding
       )
@@ -894,11 +930,14 @@ public final class KagemushaAuthenticatedHardwareProviderV1: KagemushaHardwarePr
     }
   }
 
-  /// Reserve the durable operation identity which the caller must persist before committing.
-  public func reservePaymentOperationID(canonicalRequest: Data) throws -> Data {
+  /// Persist the exact identity and intent the caller saved before committing.
+  public func reservePaymentOperationID(operationID: Data, canonicalRequest: Data) throws -> Data {
     try locked {
       _ = try KagemushaNoritoV1.decodePaymentRequestShapeExact(canonicalRequest)
-      return try client.core.reserveOperationID(operation: 5, publicBinding: canonicalRequest)
+      return try client.reserveOperationID(
+        operation: 5, operationID: operationID,
+        publicBinding: KagemushaDeviceOperationCodecV1.encodeSenderPublicInputs(
+          .sendSplit(canonicalRequest: canonicalRequest)))
     }
   }
 
@@ -1000,14 +1039,16 @@ public final class KagemushaAuthenticatedHardwareProviderV1: KagemushaHardwarePr
   }
 
   public func reserveRedemptionOperationID(
+    operationID: Data,
     amount: KagemushaUInt128V1,
     beneficiary: KagemushaAccountIDV1
   ) throws -> Data {
     try locked {
       guard !amount.isZero else { throw authenticatedProviderInvalid("redemption amount is zero") }
-      var binding = Data(amount.littleEndianBytes)
-      binding.append(beneficiary.canonicalPayload)
-      return try client.core.reserveOperationID(operation: 5, publicBinding: binding)
+      return try client.reserveOperationID(
+        operation: 5, operationID: operationID,
+        publicBinding: KagemushaDeviceOperationCodecV1.encodeSenderPublicInputs(
+          .redeemSplit(amount: amount, beneficiary: beneficiary)))
     }
   }
 
@@ -1077,8 +1118,9 @@ public final class KagemushaAuthenticatedHardwareProviderV1: KagemushaHardwarePr
     }
   }
 
-  /// Reserve the durable operation identity which must be persisted before operation 14.
+  /// Persist the exact identity and intent the caller saved before operation 14.
   public func reserveMintOperationID(
+    operationID: Data,
     amount: KagemushaUInt128V1,
     payer: KagemushaAccountIDV1,
     recipient: KagemushaAccountIDV1
@@ -1088,7 +1130,8 @@ public final class KagemushaAuthenticatedHardwareProviderV1: KagemushaHardwarePr
       var binding = Data(amount.littleEndianBytes)
       binding.append(payer.canonicalPayload)
       binding.append(recipient.canonicalPayload)
-      return try client.core.reserveOperationID(operation: 14, publicBinding: binding)
+      return try client.reserveOperationID(
+        operation: 14, operationID: operationID, publicBinding: binding)
     }
   }
 
@@ -1338,7 +1381,7 @@ public final class KagemushaAuthenticatedHardwareProviderV1: KagemushaHardwarePr
   }
 
   private func freshID(operation: UInt8) throws -> Data {
-    try client.core.reserveOperationID(operation: operation, publicBinding: Data([operation]))
+    try client.reserveInternalOperationID(operation: operation, publicBinding: Data([operation]))
   }
 
   private func locked<T>(_ body: () throws -> T) rethrows -> T {

@@ -158,6 +158,21 @@ Exposed credits cannot be cancelled. QR, NFC, and Nearby consume
 `../../fixtures/offline/kagemusha_v1.json`.
 Public wire size and verification work do not grow with balance history.
 
+Before requesting, sending, minting, or redeeming offline value, the app must durably
+save a fresh nonzero 32-byte operation identity and its exact action parameters, then
+pass that identity to the corresponding reservation and execution calls. An identical
+retry retains the same identity; a lost native return must never cause the app to
+allocate a replacement. The authenticated provider rejects a substituted reservation
+identity before executing a device operation. Payment and redemption reservations
+carry the canonical tagged `iroha.kagemusha.device.v1.sender-public-inputs` Norito
+archive, shared with the native outgoing-operation index.
+
+`KagemushaCoreCoordinatorFrameV1` mirrors Kotlin's strict schema-2 codec, and the
+Android `KagemushaCoreCoordinatorBridgeV1` facade delegates native open/invoke to
+Kotlin. Missing native authority remains unavailable; opaque preparation,
+candidate, and recovery archives are not a typed monetary coordinator. See the
+[native integration contract](../../specs/kagemusha_device_bridge_v1.md).
+
 `KagemushaWalletV1` mirrors the canonical Kotlin aggregate wallet. It requires an
 `KagemushaHardwareProviderV1` implementing the complete non-forking journal, exact-next counter,
 trusted-time, recovery, inbox, outbox, and rotation contract. Staging returns a durable ACK, sends

@@ -228,7 +228,7 @@ public sealed class KagemushaV1Tests
     private static byte[] Repeat(byte value, int count = 32) =>
         Enumerable.Repeat(value, count).ToArray();
 
-    private sealed class TestContext
+    internal sealed class TestContext
     {
         private const string AccountLiteral =
             "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";

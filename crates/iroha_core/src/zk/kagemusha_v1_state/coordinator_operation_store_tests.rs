@@ -281,6 +281,120 @@ fn operation_store_bounds_and_retired_sender_binding_reject_before_append() {
 }
 
 #[test]
+fn operation_store_validates_nested_send_request_before_reserving_capacity() {
+    let (machine, _, _) = machine();
+    let (_root, path) = location();
+    let mut store = machine
+        .create_coordinator_operation_store(&path, CAPACITY)
+        .unwrap();
+    let request =
+        crate::zk::kagemusha_v1_recursion::tests::incoming_payment_fixture(1, 2, 3, 5, 32, 32)
+            .request;
+    let canonical_request = norito::encode_canonical(&request).unwrap();
+    let mut zero_amount = request.clone();
+    zero_amount.amount = 0;
+    let mut trailing = canonical_request.clone();
+    trailing.push(0);
+    let size = fs::metadata(path.join(FILE)).unwrap().len();
+    for invalid_request in [
+        b"noncanonical nested request".to_vec(),
+        canonical_request[..canonical_request.len() - 1].to_vec(),
+        trailing,
+        norito::encode_canonical(&zero_amount).unwrap(),
+    ] {
+        let inputs = KagemushaOutgoingPublicInputsV1::SendSplit {
+            request: invalid_request,
+        };
+        let binding = norito::encode_canonical(&inputs).unwrap();
+        assert_eq!(
+            machine.reserve_coordinator_operation(&mut store, id(1), 5, &binding),
+            Err(StoreError::InvalidBinding)
+        );
+        assert_eq!(fs::metadata(path.join(FILE)).unwrap().len(), size);
+    }
+    let inputs = KagemushaOutgoingPublicInputsV1::SendSplit {
+        request: canonical_request,
+    };
+    let binding = norito::encode_canonical(&inputs).unwrap();
+    assert_eq!(
+        machine.reserve_coordinator_operation(&mut store, id(1), 5, &binding),
+        Ok(id(1))
+    );
+    drop(store);
+    let mut store = machine.open_coordinator_operation_store(&path, 0).unwrap();
+    assert_eq!(
+        machine.reserve_coordinator_operation(&mut store, id(1), 5, &binding),
+        Ok(id(1))
+    );
+}
+
+#[test]
+fn operation_store_cross_sdk_sender_reservations_match_canonical_core_types() {
+    use norito::codec::Encode as _;
+
+    let fixture: norito::json::Value = norito::json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../fixtures/offline/kagemusha_sender_reservation_v1.json"
+    )))
+    .unwrap();
+    let string = |name: &str| fixture.get(name).unwrap().as_str().unwrap();
+    let bytes = |name: &str| hex::decode(string(name)).unwrap();
+    let send_binding = bytes("send_binding_hex");
+    let redeem_binding = bytes("redeem_binding_hex");
+    let send: KagemushaOutgoingPublicInputsV1 = norito::decode_canonical(&send_binding).unwrap();
+    assert_eq!(
+        send,
+        KagemushaOutgoingPublicInputsV1::SendSplit {
+            request: bytes("send_request_hex"),
+        }
+    );
+    send.decode_send_parts().unwrap();
+    assert_eq!(norito::encode_canonical(&send).unwrap(), send_binding);
+    let redeem: KagemushaOutgoingPublicInputsV1 =
+        norito::decode_canonical(&redeem_binding).unwrap();
+    let KagemushaOutgoingPublicInputsV1::RedeemSplit {
+        amount,
+        beneficiary,
+    } = &redeem
+    else {
+        panic!("shared fixture must use the Core redemption variant")
+    };
+    assert_eq!(
+        *amount,
+        string("redeem_amount_decimal").parse::<u128>().unwrap()
+    );
+    {
+        let _canonical =
+            norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+        assert_eq!(
+            beneficiary.encode(),
+            bytes("redeem_beneficiary_payload_hex")
+        );
+    }
+    assert_eq!(norito::encode_canonical(&redeem).unwrap(), redeem_binding);
+
+    let (machine, _, _) = machine();
+    let (_root, path) = location();
+    let mut store = machine
+        .create_coordinator_operation_store(&path, CAPACITY)
+        .unwrap();
+    for (operation_id, binding) in [(id(1), &send_binding), (id(2), &redeem_binding)] {
+        assert_eq!(
+            machine.reserve_coordinator_operation(&mut store, operation_id, 5, binding),
+            Ok(operation_id)
+        );
+    }
+    drop(store);
+    let mut store = machine.open_coordinator_operation_store(&path, 0).unwrap();
+    for (operation_id, binding) in [(id(1), &send_binding), (id(2), &redeem_binding)] {
+        assert_eq!(
+            machine.reserve_coordinator_operation(&mut store, operation_id, 5, binding),
+            Ok(operation_id)
+        );
+    }
+}
+
+#[test]
 fn operation_store_intent_crash_recovery_never_becomes_prepared_or_absent() {
     let (machine, credential, account) = machine();
     let (_root, path) = location();

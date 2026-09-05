@@ -181,6 +181,23 @@ dotnet test tests/Hyperledger.Iroha.Sdk.IntegrationTests/Hyperledger.Iroha.Sdk.I
 The integration suite is environment-gated; its test project documents the required
 variables. The executable sample lives in `samples/Hyperledger.Iroha.Sdk.Sample`.
 
+## KAGEMUSHA wallet operation and recovery contract
+
+Applications must persist a fresh, nonzero 32-byte operation ID before requesting
+a payment request, payment, mint construction or redemption. Pass that same ID
+and the same public inputs on every retry. The wallet reserves the exact ID with
+native Core and rejects substituted reservation results; request creation also
+requires the returned request ID to match. An interrupted call must not allocate
+a replacement monetary operation.
+
+Opening a new qualified wallet corroborates bootstrap with a second native
+recovery snapshot and the live journal revision. Recovery of an existing wallet
+never bootstraps missing state. It rejects identity changes, journal rollback,
+same-revision equivocation and invalid epoch-generation transitions before
+publishing the recovered snapshot. These checks require an authenticated native
+provider; passing orchestration tests does not qualify a device or enable offline
+money. See the [production-readiness record](../specs/kagemusha_v1_production_readiness.md).
+
 ## Pack
 
 Package validation expects the native bridge stage to contain the supported runtime

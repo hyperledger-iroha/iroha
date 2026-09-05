@@ -122,7 +122,8 @@ pub use generation::{
     prove_kagemusha_mint_authority_rotation_from_checkpoint_v1, prove_kagemusha_mint_authority_v1,
     prove_kagemusha_mint_authorization_hash_claim_v1, prove_kagemusha_mint_authorization_v1,
     prove_kagemusha_mint_hash_claim_v1, prove_kagemusha_payment_v1,
-    prove_kagemusha_platform_credential_hash_claim_v1, prove_kagemusha_recursive_state_v1,
+    prove_kagemusha_platform_credential_hash_claim_v1,
+    prove_kagemusha_recursive_state_hash_claim_v1, prove_kagemusha_recursive_state_v1,
     prove_kagemusha_redemption_v1, prove_kagemusha_terminal_authorization_v1,
 };
 pub use guard_bundle::{

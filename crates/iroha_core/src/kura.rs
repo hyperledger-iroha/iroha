@@ -13447,30 +13447,38 @@ impl Kura {
     pub(crate) fn durable_block_payload_len_by_hash(
         &self,
         hash: HashOf<BlockHeader>,
-    ) -> Option<(u64, u64)> {
+    ) -> Result<Option<(u64, u64)>> {
         let _prune_guard = self.prune_lock.lock();
-        self.ensure_prune_recovery_not_required().ok()?;
+        self.ensure_prune_recovery_not_required()?;
         let _canonical_chain_guard = self.canonical_chain_lock.lock();
-        self.ensure_canonical_storage_not_poisoned().ok()?;
-        let height = self.block_height_index.lock().get(&hash).copied()?;
-        let height_u64 = u64::try_from(height.get()).ok()?;
+        self.ensure_canonical_storage_not_poisoned()?;
+        let Some(height) = self.block_height_index.lock().get(&hash).copied() else {
+            return Ok(None);
+        };
+        let height_u64 = u64::try_from(height.get())?;
         let mut store = self.block_store.lock();
-        let durable_count = store.read_exact_durable_index_count().ok()?;
-        if height_u64 == 0 || height_u64 > durable_count {
-            return None;
+        let durable_count = store.read_exact_durable_index_count()?;
+        if height_u64 > durable_count {
+            return Ok(None);
         }
-        let durable_hash = Self::read_durable_hash_at_height(&mut store, height_u64).ok()??;
+        let durable_hash = Self::read_durable_hash_at_height(&mut store, height_u64)?
+            .ok_or(Error::HashesFileHeightMismatch)?;
         if durable_hash != hash {
-            return None;
+            return Err(Error::CanonicalBlockWireMismatch { height: height_u64 });
         }
-        let index = store.read_block_index(height_u64.saturating_sub(1)).ok()?;
+        let index = store.read_block_index(height_u64 - 1)?;
         if index.length == 0 || index.length > STRICT_INIT_MAX_BLOCK_BYTES {
-            return None;
+            return Err(Error::CorruptedBlockLength {
+                length: index.length,
+                limit: STRICT_INIT_MAX_BLOCK_BYTES,
+            });
         }
         drop(store);
-        let (header, artifact, _) = self
-            .v2_finality_artifact_with_archive_under_prune_and_canonical_guards(height_u64)
-            .ok()??;
+        let Some((header, artifact, _)) =
+            self.v2_finality_artifact_with_archive_under_prune_and_canonical_guards(height_u64)?
+        else {
+            return Ok(None);
+        };
         if header.hash() != hash
             || artifact
                 .commit_qc
@@ -13478,9 +13486,9 @@ impl Kura {
                 .executed_block_wire_len
                 != index.length
         {
-            return None;
+            return Err(Error::CanonicalBlockWireMismatch { height: height_u64 });
         }
-        Some((height_u64, index.length))
+        Ok(Some((height_u64, index.length)))
     }
     /// Cache a canonical block body in the local sidecar store after remote rehydration.
     ///
@@ -25567,6 +25575,7 @@ impl Kura {
         self.read_certified_lane_block_artifact_read_only_under_prune_and_canonical_guards(
             lane_id,
             lane_block_height,
+            false,
         )
     }
 
@@ -25580,9 +25589,11 @@ impl Kura {
         &self,
         lane_id: LaneId,
         lane_block_height: u64,
+        attest_durability: bool,
     ) -> Result<Option<CertifiedLaneBlockArtifact>> {
         let _geometry_guard = self.lane_geometry_lock.lock();
         let entry = self.lane_storage_entry(lane_id)?;
+        self.active_lane_incarnation_marker(&entry)?;
         let (data_path, index_path) =
             Self::certified_lane_block_paths_for_entry(&entry, &self.store_root);
         let _sidecar_guard = self.sidecar_lock.lock();
@@ -25600,13 +25611,29 @@ impl Kura {
         let mut pair = self.open_bound_progress_pair(&data_path, &index_path)?;
         let artifact = match &mut pair {
             BoundProgressPair::Absent(_) => None,
-            BoundProgressPair::Present(bound) => self
-                .read_active_certified_lane_block_artifact_from_bound_locked(
-                    &entry,
-                    lane_block_height,
-                    bound,
-                ),
+            BoundProgressPair::Present(bound) => self.read_populated_consensus_lane_slot(
+                bound,
+                lane_block_height,
+                "certified lane block",
+                |bound| {
+                    self.read_active_certified_lane_block_artifact_from_bound_locked(
+                        &entry,
+                        lane_block_height,
+                        bound,
+                    )
+                },
+            )?,
         };
+        if attest_durability
+            && artifact.is_some()
+            && let BoundProgressPair::Present(bound) = &pair
+            && !self.sync_bound_progress_sidecar(bound, "certified lane block")
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                index_path,
+                "certified lane completion durability barrier failed",
+            ));
+        }
         if let BoundProgressPair::Present(bound) = &pair
             && !self.bound_progress_sidecar_unchanged(bound)
         {
@@ -40196,26 +40223,24 @@ impl Kura {
         }
         block.results().nth(index).cloned()
     }
-    /// Return the highest valid lane-local block artifact known for `lane_id`.
+    /// Return the highest authenticated active lane-local artifact for `lane_id`.
     ///
-    /// Empty index entries created by sparse writes are skipped. Artifacts whose
-    /// global proposal hash no longer matches Kura's canonical block hash are
-    /// ignored.
+    /// Canonical empty sparse slots are skipped. Occupied malformed slots,
+    /// conflicting canonical anchors, and an exhausted absence scan are errors.
     #[must_use]
-    pub fn latest_lane_block_artifact(&self, lane_id: LaneId) -> Option<LaneBlockArtifact> {
+    pub fn latest_lane_block_artifact(&self, lane_id: LaneId) -> Result<Option<LaneBlockArtifact>> {
         self.latest_lane_block_artifact_matching(lane_id, |_| true)
     }
-    /// Return the highest valid lane-local block artifact for `lane_id` and `dataspace_id`.
+    /// Return the highest active lane artifact for `lane_id` and `dataspace_id`.
     ///
-    /// This scans past valid artifacts from other dataspaces, which can be left
-    /// by older lane incarnations or corrupted local state, and returns the
-    /// newest artifact that matches the active lane dataspace.
+    /// Active geometry and every occupied slot traversed are authenticated
+    /// before accepting a matching dataspace. Corruption never proves absence.
     #[must_use]
     pub fn latest_lane_block_artifact_for_dataspace(
         &self,
         lane_id: LaneId,
         dataspace_id: DataSpaceId,
-    ) -> Option<LaneBlockArtifact> {
+    ) -> Result<Option<LaneBlockArtifact>> {
         self.latest_lane_block_artifact_matching(lane_id, |artifact| {
             artifact.ownership.dataspace_id == dataspace_id
         })
@@ -40412,69 +40437,6 @@ impl Kura {
                 == Some(artifact)
         })
     }
-    /// Return the highest valid active lane artifact accepted by `accept`.
-    ///
-    /// Every indexed height consumes one scan slot, including absent,
-    /// malformed, and retired-incarnation entries. Failing to find a valid
-    /// match inside the fixed budget fails closed instead of letting sparse or
-    /// hostile history turn this consensus lookup into an unbounded walk.
-    pub(crate) fn latest_lane_block_artifact_matching<F>(
-        &self,
-        lane_id: LaneId,
-        mut accept: F,
-    ) -> Option<LaneBlockArtifact>
-    where
-        F: FnMut(&LaneBlockArtifact) -> bool,
-    {
-        if self.emergency_fast_startup_enabled() {
-            return self
-                .latest_lane_block_artifact_matching_without_sidecar_repair(lane_id, accept);
-        }
-        if self.prune_recovery_is_required() {
-            return None;
-        }
-        let _geometry_guard = self.lane_geometry_lock.lock();
-        let entry = self.lane_storage_entry(lane_id).ok()?;
-        let (data_path, index_path) = Self::lane_artifact_paths_for_entry(&entry, &self.store_root);
-        let candidates = {
-            let _guard = self.sidecar_lock.lock();
-            if self.prune_recovery_is_required() {
-                return None;
-            }
-            if !Self::recover_indexed_sidecar_artifacts(
-                &data_path,
-                &index_path,
-                "lane block artifact",
-            ) {
-                return None;
-            }
-            let heights = Self::indexed_sidecar_height_range(&index_path, "lane block artifact")?;
-            heights
-                .rev()
-                .take(CONSENSUS_SIDECAR_MATCH_SCAN_BUDGET)
-                .filter_map(|lane_block_height| {
-                    self.read_active_lane_block_artifact_from_paths_locked(
-                        &entry,
-                        lane_block_height,
-                        &data_path,
-                        &index_path,
-                        false,
-                    )
-                })
-                .collect::<Vec<_>>()
-        };
-        drop(_geometry_guard);
-        let artifact = candidates
-            .into_iter()
-            .filter_map(|artifact| self.validate_lane_block_artifact_canonical(artifact))
-            .find(|artifact| accept(artifact))?;
-        let confirmed = self.read_active_lane_block_artifact_structural(
-            lane_id,
-            artifact.ownership.lane_block_height,
-            false,
-        )?;
-        (confirmed == artifact && !self.prune_recovery_is_required()).then_some(artifact)
-    }
     fn read_active_lane_block_artifact_from_paths_locked(
         &self,
         entry: &LaneConfigEntry,
@@ -40589,6 +40551,7 @@ impl Kura {
 }
 include!("kura/autonomous_application_evidence.rs");
 include!("kura/indexed_sidecar_io.rs");
+include!("kura/consensus_storage_reads.rs");
 include!("kura/indexed_sidecar_rewrite.rs");
 include!("kura/lane_history_compaction.rs");
 impl BlockStore {

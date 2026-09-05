@@ -39,6 +39,14 @@ snapshot; a journal by itself cannot reconstruct proof witnesses or approve mone
 New lanes use `create_new` and the existing fully verified `bootstrap` operation.
 Missing/corrupt existing history never falls back to a new empty lane.
 
+The separate coordinator operation journal reserves caller-persisted identities
+against exact public bindings. Sender bindings use the tagged canonical Norito
+public-input enum; nested send requests must pass canonical decoding and public
+shape validation before an append can reserve capacity. Exact accepted retries
+survive reopening under a lower capacity budget. This journal retains public
+intent only and reconciles every Core-owned operation against the authenticated
+outgoing index; it never upgrades a retained intent into a Prepared capability.
+
 The tests exercise real P-256 signatures, canonical disk replay, exact identity
 classification, current-key binding, process exit/reopen, writer exclusion,
 corrupted/truncated records, valid same-root rollback, a speculative prepare suffix,

@@ -53,7 +53,7 @@ use crate::zk::kagemusha_v1_recursion::{
     },
     prove_kagemusha_mint_authority_v1, prove_kagemusha_mint_authorization_hash_claim_v1,
     prove_kagemusha_mint_authorization_v1, prove_kagemusha_mint_hash_claim_v1,
-    prove_kagemusha_recursive_state_v1,
+    prove_kagemusha_recursive_state_hash_claim_v1, prove_kagemusha_recursive_state_v1,
     terminal_authorization::TERMINAL_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1,
 };
 use halo2_proofs::{
@@ -1605,7 +1605,13 @@ impl MintKeys {
         );
     }
 
-    fn into_protocols(self) -> MintProtocols {
+    fn into_protocols(
+        self,
+    ) -> (
+        MintProtocols,
+        KagemushaLoadedEqMintHashArtifactsV1,
+        KagemushaLoadedEpMintHashArtifactsV1,
+    ) {
         let Self {
             eq,
             ep,
@@ -1626,12 +1632,10 @@ impl MintKeys {
         };
         drop(eq);
         drop(ep);
-        drop(hash_eq);
-        drop(hash_ep);
         drop(bootstrap_hash_claim);
         drop(finalized_hash_claim);
         halo2_proofs::release_allocator_slack();
-        protocols
+        (protocols, hash_eq, hash_ep)
     }
 }
 
@@ -1837,6 +1841,8 @@ fn certificate_signature_equations(certificate: &KagemushaMintCertificateWitness
 struct RealFundedPrerequisite {
     eq: ParamsIPA<EqAffine>,
     ep: ParamsIPA<EpAffine>,
+    hash_eq: KagemushaLoadedEqMintHashArtifactsV1,
+    hash_ep: KagemushaLoadedEpMintHashArtifactsV1,
     authorization_protocols: MintAuthorizationProtocols,
     authorization: ProvenMintAuthorization,
     genesis_roster_id: DigestV1,
@@ -1899,7 +1905,7 @@ fn prove_funded_prerequisite(
     let funded = mint_keys.prove_funding(&funding);
     mint_keys.decide(&funded.proof, &funded.eq_history, &funded.ep_history);
     let mint_credit = funded.mint_credit(&material, &authorization.authorization);
-    let mint_protocols = mint_keys.into_protocols();
+    let (mint_protocols, hash_eq, hash_ep) = mint_keys.into_protocols();
     let genesis_roster_id = funding.genesis_roster_id;
     drop(material);
     drop(funding);
@@ -1907,6 +1913,8 @@ fn prove_funded_prerequisite(
     RealFundedPrerequisite {
         eq,
         ep,
+        hash_eq,
+        hash_ep,
         authorization_protocols,
         authorization,
         genesis_roster_id,
@@ -2191,6 +2199,31 @@ fn recursive_state_history_plan(
     }
 }
 
+fn merge_recursive_state_hash_history(
+    funded: &RealFundedPrerequisite,
+    plan: &mut RecursiveStateHistoryPlan,
+    claim: &KagemushaGeneratedMintHashClaimV1,
+) -> (KagemushaEqFoldProofV1, KagemushaEpFoldProofV1) {
+    let seed = test_only_recovery_seed();
+    let eq_merge = fold_kagemusha_eq_accumulators_v1(
+        &funded.eq,
+        &plan.eq_successor_history,
+        &claim.eq_complete_history,
+        &seed,
+    )
+    .expect("merge complete Eq state SHA history");
+    let ep_merge = fold_kagemusha_ep_accumulators_v1(
+        &funded.ep,
+        &plan.ep_successor_history,
+        &claim.ep_complete_history,
+        &seed,
+    )
+    .expect("merge complete Ep state SHA history");
+    plan.eq_successor_history = eq_merge.successor().clone();
+    plan.ep_successor_history = ep_merge.successor().clone();
+    (eq_merge.proof().clone(), ep_merge.proof().clone())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn recursive_state_generation_witness<'a>(
     state: KagemushaStateRelationWitnessV1,
@@ -2207,6 +2240,7 @@ fn recursive_state_generation_witness<'a>(
     plan: &'a RecursiveStateHistoryPlan,
 ) -> KagemushaRecursiveStateGenerationWitnessV1<'a> {
     KagemushaRecursiveStateGenerationWitnessV1 {
+        hash_claim: None,
         state,
         mint_fold_opening,
         mint_authorization: &funded.authorization.authorization,
@@ -2428,13 +2462,13 @@ fn generate_recursive_state_keys_for_corridor(
     guard_keys: &GuardKeys,
     incoming: &IncomingStateProofMaterial,
 ) -> StateKeys {
-    let mut eq_parent_protocol = compile(
+    let eq_parent_protocol = compile(
         &funded.eq,
         &guard_keys.eq_verifying_key,
         snark_verifier::system::halo2::Config::ipa()
             .with_num_instance(vec![RECURSIVE_PUBLIC_INSTANCE_COUNT]),
     );
-    let mut ep_parent_protocol = compile(
+    let ep_parent_protocol = compile(
         &funded.ep,
         &guard_keys.ep_verifying_key,
         snark_verifier::system::halo2::Config::ipa()
@@ -2445,75 +2479,84 @@ fn generate_recursive_state_keys_for_corridor(
     let ep_initial = initial_kagemusha_ep_accumulator_v1(&funded.ep)
         .expect("Ep recursive state initial history");
 
-    for iteration in 0_u64..8 {
-        let parent = dummy_parent(
+    let parent = dummy_parent(
+        &eq_parent_protocol,
+        &ep_parent_protocol,
+        eq_initial.clone(),
+        ep_initial.clone(),
+    );
+    let mut plan = recursive_state_history_plan(
+        KagemushaOperationV1::Bootstrap,
+        funded,
+        &parent,
+        incoming,
+        guard,
+    );
+    let eq_seed_digest =
+        native_parent_protocol_digest_v1(&eq_parent_protocol, KagemushaPastaParityV1::Eq)
+            .expect("Eq recursive state seed protocol identity");
+    let ep_seed_digest =
+        native_parent_protocol_digest_v1(&ep_parent_protocol, KagemushaPastaParityV1::Ep)
+            .expect("Ep recursive state seed protocol identity");
+    let protocols = RecursiveStateProtocolBindings::new(
+        eq_seed_digest,
+        ep_seed_digest,
+        guard_keys,
+        funded,
+        incoming,
+    );
+    let relation = bootstrap_relation_for_corridor(
+        state.clone(),
+        guard,
+        digest(b"state-keygen-transport", 0),
+        protocols,
+    );
+    let hash_claim = prove_kagemusha_recursive_state_hash_claim_v1(
+        &funded.hash_eq,
+        &funded.hash_ep,
+        recursive_state_generation_witness(
+            relation.clone(),
+            None,
+            funded,
+            guard,
+            guard_keys,
             &eq_parent_protocol,
             &ep_parent_protocol,
-            eq_initial.clone(),
-            ep_initial.clone(),
-        );
-        let plan = recursive_state_history_plan(
-            KagemushaOperationV1::Bootstrap,
-            funded,
             &parent,
             incoming,
-            guard,
-        );
-        let eq_seed_digest =
-            native_parent_protocol_digest_v1(&eq_parent_protocol, KagemushaPastaParityV1::Eq)
-                .expect("Eq recursive state seed protocol identity");
-        let ep_seed_digest =
-            native_parent_protocol_digest_v1(&ep_parent_protocol, KagemushaPastaParityV1::Ep)
-                .expect("Ep recursive state seed protocol identity");
-        let protocols = RecursiveStateProtocolBindings::new(
-            eq_seed_digest,
-            ep_seed_digest,
-            guard_keys,
-            funded,
-            incoming,
-        );
-        let relation = bootstrap_relation_for_corridor(
-            state.clone(),
-            guard,
-            digest(b"state-keygen-transport", iteration),
-            protocols,
-        );
-        let generated = generate_kagemusha_recursive_state_artifacts_v1(
-            recursive_state_generation_witness(
-                relation,
-                None,
-                funded,
-                guard,
-                guard_keys,
-                &eq_parent_protocol,
-                &ep_parent_protocol,
-                &parent,
-                incoming,
-                &plan,
-            ),
-            &test_only_recovery_seed(),
-        )
-        .expect("generate genuine recursive-state artifacts");
-        let keys = decode_state_keys(&funded.eq, &funded.ep, state, generated);
-        let eq_before =
-            kagemusha_protocol_structure_digest_v1(&eq_parent_protocol, KagemushaPastaParityV1::Eq)
-                .expect("Eq recursive parent structure");
-        let ep_before =
-            kagemusha_protocol_structure_digest_v1(&ep_parent_protocol, KagemushaPastaParityV1::Ep)
-                .expect("Ep recursive parent structure");
-        let eq_after =
-            kagemusha_protocol_structure_digest_v1(&keys.eq_protocol, KagemushaPastaParityV1::Eq)
-                .expect("Eq generated recursive structure");
-        let ep_after =
-            kagemusha_protocol_structure_digest_v1(&keys.ep_protocol, KagemushaPastaParityV1::Ep)
-                .expect("Ep generated recursive structure");
-        if eq_before == eq_after && ep_before == ep_after {
-            return keys;
-        }
-        eq_parent_protocol = keys.eq_protocol;
-        ep_parent_protocol = keys.ep_protocol;
-    }
-    panic!("recursive state protocol structure failed to converge")
+            &plan,
+        ),
+        &test_only_recovery_seed(),
+    )
+    .expect("prove keygen state's complete exact SHA queue");
+    let (eq_hash_merge, ep_hash_merge) =
+        merge_recursive_state_hash_history(funded, &mut plan, &hash_claim);
+    let mut witness = recursive_state_generation_witness(
+        relation,
+        None,
+        funded,
+        guard,
+        guard_keys,
+        &eq_parent_protocol,
+        &ep_parent_protocol,
+        &parent,
+        incoming,
+        &plan,
+    );
+    witness.hash_claim = Some(
+        hash_claim
+            .mint_authority_witness(
+                &funded.hash_eq,
+                &funded.hash_ep,
+                &eq_hash_merge,
+                &ep_hash_merge,
+            )
+            .expect("borrow exact state hash claim"),
+    );
+    let generated =
+        generate_kagemusha_recursive_state_artifacts_v1(witness, &test_only_recovery_seed())
+            .expect("generate genuine recursive-state artifacts");
+    decode_state_keys(&funded.eq, &funded.ep, state, generated)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2529,12 +2572,13 @@ fn prove_recursive_state_step(
         crate::zk::kagemusha_v1_state::KagemushaMintFoldOpeningCapabilityV1<'_>,
     >,
 ) -> KagemushaGeneratedRecursiveStateProofV1 {
-    let plan = recursive_state_history_plan(relation.operation, funded, parent, incoming, guard);
-    prove_kagemusha_recursive_state_v1(
-        &state_keys.eq,
-        &state_keys.ep,
+    let mut plan =
+        recursive_state_history_plan(relation.operation, funded, parent, incoming, guard);
+    let hash_claim = prove_kagemusha_recursive_state_hash_claim_v1(
+        &funded.hash_eq,
+        &funded.hash_ep,
         recursive_state_generation_witness(
-            relation,
+            relation.clone(),
             mint_fold_opening,
             funded,
             guard,
@@ -2545,6 +2589,37 @@ fn prove_recursive_state_step(
             incoming,
             &plan,
         ),
+        &test_only_recovery_seed(),
+    )
+    .expect("prove recursive state's complete exact SHA queue");
+    let (eq_hash_merge, ep_hash_merge) =
+        merge_recursive_state_hash_history(funded, &mut plan, &hash_claim);
+    let mut witness = recursive_state_generation_witness(
+        relation,
+        mint_fold_opening,
+        funded,
+        guard,
+        guard_keys,
+        &state_keys.eq_protocol,
+        &state_keys.ep_protocol,
+        parent,
+        incoming,
+        &plan,
+    );
+    witness.hash_claim = Some(
+        hash_claim
+            .mint_authority_witness(
+                &funded.hash_eq,
+                &funded.hash_ep,
+                &eq_hash_merge,
+                &ep_hash_merge,
+            )
+            .expect("borrow exact recursive-state hash claim"),
+    );
+    prove_kagemusha_recursive_state_v1(
+        &state_keys.eq,
+        &state_keys.ep,
+        witness,
         &test_only_recovery_seed(),
     )
     .expect("prove genuine recursive state transition")

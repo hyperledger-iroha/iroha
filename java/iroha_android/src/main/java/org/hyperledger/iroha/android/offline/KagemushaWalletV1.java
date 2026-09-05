@@ -55,11 +55,27 @@ public final class KagemushaWalletV1 {
     return delegate.recover();
   }
 
+  /** Create a signed request using the identity already saved by the caller. */
   public KagemushaPaymentRequestV1 createPaymentRequest(
+      final byte[] operationId,
       final KagemushaAccountIdV1 recipient,
       final BigInteger amount,
       final long validityWindowMillis) {
     return delegate.createPaymentRequest(
+        Objects.requireNonNull(operationId, "operationId").clone(),
+        Objects.requireNonNull(recipient, "recipient"),
+        Objects.requireNonNull(amount, "amount"),
+        validityWindowMillis);
+  }
+
+  /** Persist only after the caller has durably saved the ID and exact request parameters. */
+  public byte[] reservePaymentRequestOperationId(
+      final byte[] operationId,
+      final KagemushaAccountIdV1 recipient,
+      final BigInteger amount,
+      final long validityWindowMillis) {
+    return delegate.reservePaymentRequestOperationId(
+        Objects.requireNonNull(operationId, "operationId").clone(),
         Objects.requireNonNull(recipient, "recipient"),
         Objects.requireNonNull(amount, "amount"),
         validityWindowMillis);
