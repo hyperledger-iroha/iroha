@@ -587,6 +587,54 @@ state_test! { sync empty_and_zero_activation_merge_entries_fail_live_and_recover
         );
     }
 }
+state_test! { sync merge_lane_authority_catalog_uses_one_immutable_state_view
+    let (state, _, _, parent) = configured_single_lane_merge_state();
+    let carrier_height = parent.header().height().get() + 1;
+    let view = state.view();
+    let consensus = state.merge_consensus_snapshot();
+    assert!(consensus.is_current(&state));
+    let original_generation = state.state_view_generation();
+    let historical = State::merge_active_lane_authority_snapshot_from_view(&view, carrier_height)
+        .expect("captured exact committee catalog");
+    state.validate_merge_lane_authority_catalog_live(
+        historical.0, &historical.1, &historical.2, carrier_height,
+    ).expect("current snapshot is live-authoritative");
+
+    let (replacement_accounts, replacement_keys) = bls_accounts_in("replacement", 4);
+    seed_consensus_keys_with_pops(&state, &replacement_keys);
+    install_lane_manifest_registry(
+        &state,
+        &[(LaneId::SINGLE, DataSpaceId::UNIVERSAL, replacement_accounts)],
+    );
+    assert_eq!(state.state_view_generation(), original_generation + 2);
+    assert!(!consensus.is_current(&state), "manifest publication invalidates in-flight candidate snapshots");
+    let fresh_consensus = state.merge_consensus_snapshot();
+    {
+        let publication = state.begin_state_view_write();
+        assert!(!fresh_consensus.is_current(&state), "an active publication is never a stable candidate parent");
+        drop(publication);
+    }
+    assert!(!fresh_consensus.is_current(&state), "a completed intervening publication must remain stale");
+    assert_eq!(
+        State::merge_active_lane_authority_snapshot_from_view(&view, carrier_height)
+            .expect("old immutable World and manifest remain paired"),
+        historical,
+    );
+    let current = state.merge_active_lane_authority_snapshot(carrier_height)
+        .expect("new immutable committee snapshot");
+    assert_eq!(current.0, historical.0);
+    assert_eq!(current.1, historical.1);
+    assert_ne!(current.2, historical.2);
+    assert!(state.validate_merge_lane_authority_catalog_live(
+        historical.0, &historical.1, &historical.2, carrier_height,
+    ).is_err(), "past authority cannot authorize a new carrier after rotation");
+    state.validate_merge_lane_authority_catalog_live(
+        current.0, &current.1, &current.2, carrier_height,
+    ).expect("fresh committee is accepted for live admission");
+    let mut malformed = current.2;
+    malformed.lane_roster_indices[0] = u16::MAX;
+    assert!(State::validate_merge_lane_authority_catalog_structure(&current.1, &malformed).is_err());
+}
 state_test! { sync merge_consensus_snapshot_never_mixes_lifecycle_replacement_with_old_admission_tip
     let replaced_lane = LaneId::new(1);
     let (state, _validator_keypairs, _commit_keypairs, _parent) = configured_two_lane_merge_state();
@@ -2617,4 +2665,94 @@ state_test! { sync merge_ledger_cache_reconfigures_capacity
         state.merge_ledger().cache_capacity(),
         MergeLedgerStore::DEFAULT_CACHE_DEPTH
     );
+}
+
+state_test! { sync merge_authority_geometry_rejects_config_and_lifecycle_before_publication
+    let (mut state, _, _, parent) = configured_single_lane_merge_state();
+    let before = state.nexus_snapshot();
+    let generation = state.state_view_generation();
+    let mut prospective = before.clone();
+    let mut dataspace = prospective.dataspace_catalog.by_id(DataSpaceId::UNIVERSAL).unwrap().clone();
+    dataspace.fault_tolerance = 42;
+    prospective.dataspace_catalog = DataSpaceCatalog::new(vec![dataspace]).unwrap();
+    let additions = (1..191_u32).map(|index| iroha_data_model::nexus::LaneConfig {
+        id: LaneId::new(index), alias: format!("geometry-{index}"),
+        ..iroha_data_model::nexus::LaneConfig::default()
+    }).collect::<Vec<_>>();
+    let plan = iroha_data_model::nexus::LaneLifecyclePlan { additions, retire: Vec::new() };
+    let lifecycle = state.lane_consensus_lifecycle_snapshot();
+    let error = prepare_lane_lifecycle_update(
+        &prospective, &lifecycle.incarnations, &state.lane_incarnation_lineage.read(),
+        &lifecycle.activation_heights, state.network_id_ref(), parent.hash(), &plan,
+        parent.header().height().get(), false,
+    ).err().expect("prospective lifecycle must reserve the full merge envelope");
+    assert!(matches!(error, LaneLifecycleError::MergeAuthorityGeometry(_)));
+    let mut autoscale = prospective.clone();
+    // Keep the actual elastic range inside the compiled eight-lane cap;
+    // many independent manual lanes can still consume the aggregate budget.
+    let base_plan = iroha_data_model::nexus::LaneLifecyclePlan {
+        additions: (8..197_u32).map(|index| iroha_data_model::nexus::LaneConfig {
+            id: LaneId::new(index), alias: format!("manual-geometry-{index}"),
+            ..iroha_data_model::nexus::LaneConfig::default()
+        }).collect(),
+        retire: Vec::new(),
+    };
+    autoscale.lane_catalog = autoscale.lane_catalog.apply_lifecycle(&base_plan).unwrap();
+    autoscale.staking.max_validators = nonzero!(127_u32);
+    autoscale.autoscale.enabled = true;
+    autoscale.autoscale.min_lane_id = nonzero!(1_u32);
+    autoscale.autoscale.max_lane_id_exclusive = nonzero!(2_u32);
+    let mut addition = autoscale_elastic_lane_config(LaneId::new(1), DataSpaceId::UNIVERSAL, parent.header().height().get());
+    let mut keys = (1_u8..=127).map(|seed| KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal).unwrap()).collect::<Vec<_>>();
+    keys.sort_by_key(|key| PeerId::new(key.public_key().clone()));
+    let committee = autoscale_lane_committee_from_validator_set(
+        keys.iter().map(|key| PeerId::new(key.public_key().clone())).collect(),
+        keys.iter().map(|key| bls_normal_pop_prove(key.private_key()).unwrap()).collect(),
+    ).unwrap();
+    addition.metadata.insert(AUTOSCALE_META_COMMITTEE.to_owned(), encode_autoscale_lane_committee(&committee).unwrap());
+    let auto_plan = iroha_data_model::nexus::LaneLifecyclePlan { additions: vec![addition], retire: Vec::new() };
+    let error = prepare_lane_lifecycle_update(
+        &autoscale, &lifecycle.incarnations, &state.lane_incarnation_lineage.read(),
+        &lifecycle.activation_heights, state.network_id_ref(), parent.hash(), &auto_plan,
+        parent.header().height().get(), true,
+    ).err().expect("an otherwise valid autoscale pin must not bypass aggregate geometry admission");
+    assert!(matches!(error, LaneLifecycleError::MergeAuthorityGeometry(_)), "autoscale: {error:?}");
+    prospective.lane_catalog = prospective.lane_catalog.apply_lifecycle(&plan).unwrap();
+    let error = state.set_nexus_from_config(prospective)
+        .expect_err("startup configuration must reject unmergeable geometry before any publication");
+    assert!(matches!(error, LaneLifecycleError::MergeAuthorityGeometry(_)));
+    let mut invalid_policy = before.clone();
+    let mut invalid_dataspaces = invalid_policy.dataspace_catalog.entries().to_vec();
+    invalid_dataspaces[0].fault_tolerance = 43;
+    invalid_policy.dataspace_catalog = DataSpaceCatalog::new(invalid_dataspaces).unwrap();
+    let error = state.set_nexus(invalid_policy)
+        .expect_err("same-catalog runtime policy changes must pass aggregate geometry admission");
+    assert!(matches!(error, LaneLifecycleError::MergeAuthorityGeometry(_)));
+    assert_eq!(state.nexus_snapshot().lane_catalog, before.lane_catalog);
+    assert_eq!(state.state_view_generation(), generation);
+}
+
+state_test! { sync merge_qc_capacity_rejects_variable_field_overruns_and_non_bls_keys
+    setup_merge_qc_test!(kura, query, state, keypairs, candidate);
+    let qc = merge_qc_for_candidate(&state, &candidate, &keypairs, &[0]);
+    let entry = merge_entry_from_candidate(candidate, qc);
+    for mutation in 0..6 {
+        let mut invalid = entry.clone();
+        match mutation {
+            0 => invalid.merge_qc.validator_set[0] = PeerId::new(KeyPair::random().public_key().clone()),
+            1 => invalid.merge_qc.aggregate_signature.push(0),
+            2 => invalid.merge_qc.signer_proofs[0].proof_of_possession.push(0),
+            3 => invalid.merge_qc.signers_bitmap.push(0),
+            4 => invalid.merge_qc.validator_set = vec![invalid.merge_qc.validator_set[0].clone(); iroha_data_model::merge::MAX_MERGE_QUORUM_CERTIFICATE_VALIDATORS + 1],
+            5 => invalid.merge_qc.signer_proofs = vec![invalid.merge_qc.signer_proofs[0].clone(); iroha_data_model::merge::MAX_MERGE_QUORUM_CERTIFICATE_VALIDATORS + 1],
+            _ => unreachable!(),
+        }
+        let error = state.validate_merge_quorum_certificate(&invalid, false, false)
+            .expect_err("QC variable field bounds must reject before signature work");
+        if mutation == 3 {
+            assert!(matches!(error, MergeLedgerCommitError::MergeQCBitmapLengthMismatch { .. }));
+        } else {
+            assert!(matches!(error, MergeLedgerCommitError::ExecutionBatchInvalid(_)), "mutation {mutation}: {error:?}");
+        }
+    }
 }

@@ -304,7 +304,7 @@ iroha-bfv-diagnostics-v1
 302	S	proof profile field count	S	release audit packages must reject signed reports with stale proof-profile field counts
 303	S	public opening material version	S	release audit packages must reject signed reports that omit the proof-profile public-opening material version
 304	S	public opening material field count	S	release audit packages must reject signed reports with stale proof-profile public-opening material field counts
-305	S	STARK hash selector	S	release audit packages must reject signed reports with stale proof-profile STARK hash selectors
+305	S	STARK n_log2	S	release audit packages must reject signed reports with stale proof-profile trace geometry
 306	S	FRI query count	S	release audit packages must reject signed reports with stale proof-profile FRI query counts
 307	S	canonical base transcript-label	S	release audit packages must reject signed reports with downgraded canonical base transcript-label obligations
 308	S	suffixed transcript-label	S	release audit packages must reject signed reports with downgraded suffixed transcript-label obligations
@@ -752,7 +752,7 @@ iroha-bfv-diagnostics-v1
 750	S	digest does not match	S	release audit record artifact validation must reject stale concrete artifacts
 751	S	governed artifact bytes	S	release audit package artifact validation must reject stale concrete artifacts before digest-only acceptance
 752	S	queries	S	release audit evidence digesting must reject stale proof profile metadata
-753	S	SHA-256	S	release audit evidence validation must reject proof profile hash-function drift
+753	S	proof system	S	release audit evidence validation must reject a retired proof-system profile
 754	S	exceeds n_log2	S	release audit evidence validation must reject impossible STARK blowup/domain geometry
 755	S	public-input layout mismatch	S	release audit evidence validation must reject proof profile public-input layout downgrades
 756	S	AIR evaluation material layout mismatch	S	release audit evidence validation must reject proof profile AIR evaluation layout downgrades
@@ -776,25 +776,25 @@ iroha-bfv-diagnostics-v1
 774	S	payload kind	S	release audit evidence validation must reject native payload kind drift
 775	S	fingerprint	S	release audit evidence validation must reject native circuit fingerprint drift
 776	S	fingerprint mismatch	S	release audit evidence validation must reject matched stale native circuit fingerprints
-777	S	verifier-key native payload digest must be distinct from prover-key native payload digest	S	release audit evidence validation must reject duplicated native payload digests before canonical role replay
-778	S	verifier-key native payload digest must be distinct from prover-key native payload digest	S	release audit evidence digesting must reject duplicated native payload digests before canonical role replay
-779	S	prover-key native payload digest must be distinct from proof-key pair commitment	S	release audit evidence validation must reject native payload digest aliasing with signed evidence commitments before canonical role replay
-780	S	prover-key native payload digest must be distinct from proof-key pair commitment	S	release audit evidence digesting must reject native payload digest aliasing with signed evidence commitments before canonical role replay
-781	S	inert native payload digest	S	release audit evidence validation must reject empty native-payload digest sentinels
-782	S	inert native payload digest	S	release audit evidence validation must reject all-zero native-payload digest sentinels
-783	S	inert native payload digest	D	runtime context retained in Rust
-784	S	inert native payload digest	S	release audit evidence validation must reject placeholder native-payload digest sentinels
-785	S	inert native payload digest	S	release audit evidence validation must reject generic proof-key native-payload placeholder digests
-786	S	inert native payload digest	S	release audit evidence validation must reject non-production native-payload digest sentinels
-787	S	inert native payload digest	S	release audit evidence validation must reject whitespace-prefixed non-production native-payload digest sentinels
-788	S	inert native payload digest	S	release audit evidence validation must reject draft native-payload digest sentinels
-789	S	inert native payload digest	S	release audit evidence validation must reject not-for-production native-payload digest sentinels
-790	S	inert native payload digest	S	release audit evidence validation must reject spaced replace-before-production native-payload digest sentinels
-791	S	inert native payload digest	S	release audit evidence validation must reject underscore replace-before-production native-payload digest sentinels
-792	S	inert native payload digest	S	release audit evidence validation must reject not-production-ready native-payload digest sentinels
-793	S	inert native payload digest	S	release audit evidence validation must reject whitespace-prefixed placeholder native-payload digest sentinels
-794	S	inert native payload digest	S	release audit evidence validation must reject padded placeholder native-payload digest sentinels
-795	S	inert native payload digest	S	release audit evidence digesting must reject delayed placeholder native-payload digest sentinels
-796	S	inert native payload digest	S	release audit evidence validation must reject leading-whitespace delayed placeholder native-payload digest sentinels
-797	S	inert native payload digest	S	release audit evidence validation must reject binary-decorated placeholder native-payload digest sentinels
+777	S	native payload digest mismatch	S	release audit evidence validation must reject a verifier payload commitment copied from the prover role
+778	S	native payload digest mismatch	S	release audit evidence digesting must reject a verifier payload commitment copied from the prover role
+779	S	native payload digest mismatch	S	release audit evidence validation must bind the canonical role payload instead of unrelated signed commitment bytes
+780	S	native payload digest mismatch	S	release audit evidence digesting must bind the canonical role payload instead of unrelated signed commitment bytes
+781	S	native payload digest mismatch	S	release audit evidence validation must reject empty native-payload digest sentinels
+782	S	native payload digest mismatch	S	release audit evidence validation must reject all-zero native-payload digest sentinels
+783	S	native payload digest mismatch	D	runtime context retained in Rust
+784	S	native payload digest mismatch	S	release audit evidence validation must reject placeholder native-payload digest sentinels
+785	S	native payload digest mismatch	S	release audit evidence validation must reject generic proof-key native-payload placeholder digests
+786	S	native payload digest mismatch	S	release audit evidence validation must reject non-production native-payload digest sentinels
+787	S	native payload digest mismatch	S	release audit evidence validation must reject whitespace-prefixed non-production native-payload digest sentinels
+788	S	native payload digest mismatch	S	release audit evidence validation must reject draft native-payload digest sentinels
+789	S	native payload digest mismatch	S	release audit evidence validation must reject not-for-production native-payload digest sentinels
+790	S	native payload digest mismatch	S	release audit evidence validation must reject spaced replace-before-production native-payload digest sentinels
+791	S	native payload digest mismatch	S	release audit evidence validation must reject underscore replace-before-production native-payload digest sentinels
+792	S	native payload digest mismatch	S	release audit evidence validation must reject not-production-ready native-payload digest sentinels
+793	S	native payload digest mismatch	S	release audit evidence validation must reject whitespace-prefixed placeholder native-payload digest sentinels
+794	S	native payload digest mismatch	S	release audit evidence validation must reject padded placeholder native-payload digest sentinels
+795	S	native payload digest mismatch	S	release audit evidence digesting must reject delayed placeholder native-payload digest sentinels
+796	S	native payload digest mismatch	S	release audit evidence validation must reject leading-whitespace delayed placeholder native-payload digest sentinels
+797	S	native payload digest mismatch	S	release audit evidence validation must reject binary-decorated placeholder native-payload digest sentinels
 798	S	role	S	release audit evidence digesting must reject proof-key role drift

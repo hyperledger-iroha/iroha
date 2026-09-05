@@ -232,6 +232,65 @@ profile and never permits software fallback.
 
 ## Atomic private settlement release qualification
 
+- Finish post-transfer Core feature compilation after the two duplicate-field
+  corrections. Run retained native fixture preflights, Orchard canonical
+  genesis, PQ verifier independence, complete PQ wire/statement tests and the
+  profile tuple regression. Preserve the observed full-proof failure and
+  rebuild its alternate-network negative so valid statement, binding and outer
+  authorization checks precede the required inner-STARK rejection. Re-run the
+  complete proof from the corrected current profile; no shallow preflight
+  error can substitute for that cryptographic check.
+
+- Reconcile and validate the first-release merge V3 changes only in
+  `/Users/takemiyamakoto/dev/iroha` on `optimizations`, then sign the settled
+  source. Preserve the existing staged work and repeat the
+  focused historical authority, generation-fencing, whole-entry prefix,
+  capacity, recovery and replay checks. Finish the still-running native proof
+  regression and repeat clean-source qualification from that exact commit.
+  Then execute the expanded N=3 smoke with all-process financial state, pinned
+  global finality identity, and bounded rolling restarts. Ten fresh successes
+  are required before benchmarks. Historical finalized read authority remains
+  QC/carrier-bound and distinct from live financial write admission; no
+  current-manifest fallback or previous-layout decoding is supported.
+
+- Execute the serial ten-run signed-source smoke orchestrator from the signed
+  candidate. Its synthetic validator/driver suite passes 27 checks. Intrinsic skip
+  rejection, bound requests, all-peer retained evidence and the corrected
+  continuous observer pass 28 Rust module checks. The mandatory release-runner
+  prerequisite passes its 34-test Python suite; neither result is a real
+  network gate. Persistent failure/raw-evidence/denominator retention and
+  atomic final-fragment publication pass 14 focused checks. Carry these into
+  qualification before starting the wider matrix. The older complete evidence
+  suite passed 171 tests while four source files changed; it is not a frozen
+  current-source pass. The subsequent suite passes 192/192 with all 44 captured
+  sources unchanged. Revalidate the transferred tools on `optimizations` and
+  carry their complete evidence into signed-source qualification.
+
+- Finish the already-running proof gates, preserving their exact earlier
+  binary and profile identities. Requalify the now-passing larger BFV artifact
+  binding test on the current arithmetic and reconciled source. Carry the
+  corrected proof-managed profile checks
+  (15 passed) and separate trace/entropy negative (passed), plus the passing
+  aggregate/transparent STARK, hybrid-encryption and affected short BFV checks
+  into clean-source qualification. Preserve current role-bound Goldilocks384
+  payloads and canonical network/genesis, recipient commitment and auditor
+  opening validation; no retired SHA helpers or compatibility formats return.
+
+- Carry the bounded Goldilocks reduction, exact qROM numerator-overflow
+  rejection and canonical CRC implementation into the next complete-source
+  proof and release builds. FastPQ passes 34 tests and focused strict Clippy;
+  smoke/runner pass 64 tests together. ARM64/x86-64 code generation removes
+  division helpers, but existing long Core/crypto proof jobs retain the prior
+  implementation. Their terminal evidence must stay bound to their old images;
+  no end-to-end speedup or current-source proof result is established yet.
+
+- Build and test the reconciled source in the authorized `optimizations`
+  checkout with `privacy-release-evidence` enabled. Validate the canonical
+  native-genesis fixtures and corrected v1 PQ-MASP wire known answers, then
+  qualify the changed governed profile commitments with complete proofs.
+  Earlier proof jobs retain their original executable/source identities.
+  Run all new Iroha builds and tests only in this checkout.
+
 - Release-candidate-qualify the implemented prepared-leg, request-aware audit,
   coordination, restart-certificate recovery, carrier, status, and receipt
   APIs in Rust/CLI, Kotlin, mirrored Java, Swift, Python, and JavaScript. Rebuild

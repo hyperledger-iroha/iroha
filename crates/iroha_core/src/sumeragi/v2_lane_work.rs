@@ -12199,7 +12199,8 @@ impl V2LaneWorkAdapter {
         requester: &PeerId,
     ) -> bool {
         let carrier_height = entry.merge_qc.carrier_height;
-        !entry.active_lanes.is_empty()
+        entry.has_current_version()
+            && !entry.active_lanes.is_empty()
             && entry.active_lanes.len() <= iroha_data_model::nexus::MAX_ACTIVE_EXECUTION_LANES
             && entry
                 .active_lanes
@@ -12513,7 +12514,7 @@ impl V2LaneWorkAdapter {
             if !sender_is_predecessor && !sender_is_lane_validator {
                 return Ok(V2LaneIngressOutcome::Rejected);
             }
-            // Historical global requesters and current governed lane
+            // Historical global requesters and finalized governed lane
             // validators share a complete committee-sized recovery corridor.
             // They may never consume the slots reserved for the live frozen
             // roster. Lower-generation retries remain stateless generation

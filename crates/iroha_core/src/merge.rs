@@ -809,6 +809,24 @@ mod tests {
             merge_qc_message_digest(&network_id, &other_version, 1, validator_set_hash),
             "the entry layout version must be bound into the merge QC signature payload"
         );
+        let mut historical_validators = (0xD1_u8..=0xD4)
+            .map(|seed| {
+                let key = KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                    .expect("derive historical committee fixture");
+                PeerId::new(key.public_key().clone())
+            })
+            .collect::<Vec<_>>();
+        historical_validators.sort();
+        let mut other_authority = candidate.clone();
+        other_authority.lane_authority_catalog =
+            MergeLaneAuthorityCatalogV1::from_lane_committees(&[historical_validators])
+                .expect("canonical historical authority");
+        assert_ne!(candidate.canonical_hash(), other_authority.canonical_hash());
+        assert_ne!(
+            digest_a,
+            merge_qc_message_digest(&network_id, &other_authority, 1, validator_set_hash),
+            "the exact lane authority catalog must be sealed by the merge QC"
+        );
         let drain_keypair = KeyPair::try_from_seed(
             b"merge-digest-drain-validator".to_vec(),
             Algorithm::BlsNormal,

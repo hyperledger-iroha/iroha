@@ -1,6 +1,8 @@
 use base64::Engine as _;
 use futures_util::StreamExt as _;
-use iroha::data_model::block::consensus_v2::recommended_data_availability_layout;
+use iroha::data_model::block::consensus_v2::{
+    HeightContextId, recommended_data_availability_layout,
+};
 use iroha::data_model::events::{
     EventBox,
     pipeline::{PipelineEventBox, TransactionEventFilter, TransactionStatus},
@@ -84,6 +86,80 @@ struct RealProcessBenchmarkPayloadV1 {
     warmup: bool,
     stages: Vec<String>,
     resources: Vec<String>,
+}
+
+/// Bound input for one fresh correctness run, before any benchmark campaign.
+#[derive(Clone, Debug, norito::JsonDeserialize, norito::JsonSerialize)]
+#[norito(deny_unknown_fields)]
+struct RealProcessSmokeRequestV1 {
+    version: u8,
+    protocol: String,
+    kind: String,
+    request_id: String,
+    invocation_nonce: String,
+    commit: String,
+    seed: u64,
+    run: u64,
+}
+
+fn validate_real_process_smoke_request(request: &RealProcessSmokeRequestV1) -> Result<()> {
+    ensure!(
+        request.version == 1
+            && request.protocol == "AtomicPrivateSettlementV1"
+            && request.kind == "smoke"
+            && request.run < 10
+            && lowercase_digest(&request.request_id, &[64])
+            && lowercase_digest(&request.invocation_nonce, &[64])
+            && lowercase_digest(&request.commit, &[40, 64]),
+        "malformed bound N=3 smoke request"
+    );
+    Ok(())
+}
+
+#[test]
+fn smoke_request_rejects_unbound_or_noncanonical_inputs() {
+    let valid = RealProcessSmokeRequestV1 {
+        version: 1,
+        protocol: "AtomicPrivateSettlementV1".to_owned(),
+        kind: "smoke".to_owned(),
+        request_id: "a".repeat(64),
+        invocation_nonce: "b".repeat(64),
+        commit: "c".repeat(40),
+        seed: u64::MAX,
+        run: 9,
+    };
+    validate_real_process_smoke_request(&valid).expect("bound request validates");
+    for field in [
+        "version",
+        "protocol",
+        "kind",
+        "request_id",
+        "invocation_nonce",
+        "commit",
+        "run",
+    ] {
+        let mut altered = valid.clone();
+        match field {
+            "version" => altered.version = 2,
+            "protocol" => altered.protocol.clear(),
+            "kind" => altered.kind = "benchmark".to_owned(),
+            "request_id" => altered.request_id = "0".repeat(64),
+            "invocation_nonce" => altered.invocation_nonce = "B".repeat(64),
+            "commit" => altered.commit = "c".repeat(39),
+            "run" => altered.run = 10,
+            _ => unreachable!(),
+        }
+        assert!(
+            validate_real_process_smoke_request(&altered).is_err(),
+            "accepted {field}"
+        );
+    }
+    let mut value = norito::json::to_value(&valid).expect("request JSON");
+    value
+        .as_object_mut()
+        .unwrap()
+        .insert("skip_network".to_owned(), true.into());
+    assert!(norito::json::from_value::<RealProcessSmokeRequestV1>(value).is_err());
 }
 
 #[derive(Debug, norito::JsonDeserialize)]
@@ -217,6 +293,7 @@ struct RealProcessLeakageRequestV1 {
 }
 
 enum RealProcessBoundRequestV1 {
+    Smoke(RealProcessSmokeRequestV1),
     Benchmark(RealProcessBenchmarkRequestV1),
     Fault(RealProcessFaultRequestV1),
     Leakage(RealProcessLeakageRequestV1),
@@ -1389,6 +1466,12 @@ fn read_bound_real_process_request() -> Result<(RealProcessBoundRequestV1, Strin
         .and_then(HarnessJsonValue::as_str)
         .ok_or_else(|| eyre!("real-process request lacks kind"))?;
     let request = match kind {
+        "smoke" => {
+            let request: RealProcessSmokeRequestV1 =
+                norito::json::from_value(value).wrap_err("decode strict smoke request")?;
+            validate_real_process_smoke_request(&request)?;
+            RealProcessBoundRequestV1::Smoke(request)
+        }
         "benchmark" => {
             let request: RealProcessBenchmarkRequestV1 =
                 norito::json::from_value(value).wrap_err("decode strict benchmark request")?;
@@ -2326,6 +2409,173 @@ fn canonical_harness_json_bytes<T: norito::json::JsonSerialize>(value: &T) -> Re
     norito::json::to_string(&value)
         .map(String::into_bytes)
         .wrap_err("encode canonical harness evidence JSON")
+}
+
+/// Digest of a retained correctness-run artifact; private configuration bytes stay local.
+#[derive(Clone, Debug, norito::JsonSerialize)]
+struct SmokeEvidenceFileV1 {
+    name: String,
+    bytes: u64,
+    sha256: String,
+}
+
+#[derive(Debug, norito::JsonSerialize)]
+struct SmokeProcessInventoryRowV1 {
+    peer_index: usize,
+    peer_id: PeerId,
+    committee_index: usize,
+    validator_index: usize,
+    pid: u32,
+    executable_sha256: String,
+    configuration_sha256: String,
+}
+
+#[derive(Debug, norito::JsonSerialize)]
+struct SmokeContinuousEvidenceV1 {
+    summary: FaultContinuousObservationSummaryV1,
+    observations: Vec<FaultStateObservationV1>,
+}
+
+#[derive(Debug, norito::JsonSerialize)]
+struct SmokeRestartV1 {
+    peer_index: usize,
+    before_pid: u32,
+    after_pid: u32,
+}
+
+#[derive(Debug, norito::JsonSerialize)]
+struct RealProcessSmokeResultV1 {
+    version: u8,
+    protocol: String,
+    kind: String,
+    request: RealProcessSmokeRequestV1,
+    request_sha256: String,
+    network_id: HarnessJsonValue,
+    participants: usize,
+    processes: usize,
+    restarted: usize,
+    activation_height: u64,
+    authority_context_height: u64,
+    finalized_height: u64,
+    signed_rs16_observations: u64,
+    continuous_checks: u64,
+    passed: bool,
+    artifacts: Vec<SmokeEvidenceFileV1>,
+}
+
+fn write_smoke_evidence<T: norito::json::JsonSerialize>(
+    root: &Path,
+    name: &str,
+    value: &T,
+) -> Result<SmokeEvidenceFileV1> {
+    ensure!(
+        name.ends_with(".json")
+            && name.bytes().all(|byte| byte.is_ascii_lowercase()
+                || byte.is_ascii_digit()
+                || matches!(byte, b'-' | b'.'))
+            && !name.starts_with('.'),
+        "smoke evidence name is not a canonical basename"
+    );
+    let metadata = fs::symlink_metadata(root)?;
+    ensure!(
+        metadata.file_type().is_dir() && metadata.permissions().mode() & 0o777 == 0o700,
+        "smoke evidence requires an owner-only regular directory"
+    );
+    let raw = canonical_harness_json_bytes(value)?;
+    ensure!(
+        raw.len() <= HARNESS_MAX_JSON_BYTES,
+        "smoke evidence exceeds its byte bound"
+    );
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(root.join(name))?;
+    file.write_all(&raw)?;
+    file.sync_all()?;
+    File::open(root)?.sync_all()?;
+    Ok(SmokeEvidenceFileV1 {
+        name: name.to_owned(),
+        bytes: u64::try_from(raw.len())?,
+        sha256: sha256_hex(&raw),
+    })
+}
+
+#[test]
+fn smoke_evidence_binds_bytes_and_rejects_overwrite_or_path_escape() {
+    let temporary = tempfile::tempdir().expect("temporary evidence directory");
+    fs::set_permissions(temporary.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let value = norito::json!({"state": "pending"});
+    let artifact = write_smoke_evidence(temporary.path(), "state-before.json", &value).unwrap();
+    let path = temporary.path().join(&artifact.name);
+    let raw = fs::read(&path).unwrap();
+    assert_eq!(artifact.sha256, sha256_hex(&raw));
+    assert_eq!(artifact.bytes, raw.len() as u64);
+    assert_eq!(
+        fs::metadata(path).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    assert!(write_smoke_evidence(temporary.path(), "state-before.json", &value).is_err());
+    for name in [
+        "../escape.json",
+        "/absolute.json",
+        ".hidden.json",
+        "nested/file.json",
+        "state.JSON",
+    ] {
+        assert!(write_smoke_evidence(temporary.path(), name, &value).is_err());
+    }
+    fs::set_permissions(temporary.path(), fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(write_smoke_evidence(temporary.path(), "unsafe.json", &value).is_err());
+}
+
+fn smoke_process_inventory(
+    network: &Network,
+    runtime: &tokio::runtime::Runtime,
+    shape: TopologyShape,
+) -> Result<Vec<SmokeProcessInventoryRowV1>> {
+    let expected_sha = std::env::var(HARNESS_VALIDATOR_SHA_ENV)
+        .wrap_err("missing smoke validator executable digest")?;
+    ensure!(
+        lowercase_digest(&expected_sha, &[64]),
+        "malformed smoke executable digest"
+    );
+    let mut pids = BTreeSet::new();
+    let mut peers = BTreeSet::new();
+    let mut inventory = Vec::new();
+    for (index, peer) in network.all_peers().enumerate() {
+        let pid = runtime
+            .block_on(peer.process_id())
+            .ok_or_else(|| eyre!("smoke peer has no PID"))?;
+        ensure!(
+            pids.insert(pid)
+                && peers.insert(peer.id().clone())
+                && peer.client().get_status().is_ok()
+                && sha256_regular_file(&executable_for_pid(pid)?)? == expected_sha,
+            "smoke process inventory has duplicate, unhealthy or substituted validators"
+        );
+        // Retain only a commitment to the complete ordered input layers: they
+        // contain runtime private keys and must not enter a research artifact.
+        let layers = network
+            .config_layers_for_peer(peer)
+            .map(|layer| toml::to_string(layer.as_ref()))
+            .collect::<Result<Vec<_>, _>>()?;
+        let configuration_sha256 = sha256_hex(&canonical_harness_json_bytes(&layers)?);
+        inventory.push(SmokeProcessInventoryRowV1 {
+            peer_index: index,
+            peer_id: peer.id().clone(),
+            committee_index: index / VALIDATORS_PER_LANE,
+            validator_index: index % VALIDATORS_PER_LANE,
+            pid,
+            executable_sha256: expected_sha.clone(),
+            configuration_sha256,
+        });
+    }
+    ensure!(
+        inventory.len() == shape.process_count(),
+        "smoke process inventory is incomplete"
+    );
+    Ok(inventory)
 }
 
 fn canonical_harness_json_value_bytes(value: &HarnessJsonValue) -> Result<Vec<u8>> {
@@ -3435,6 +3685,32 @@ impl FaultContinuousObservationAccumulatorV1 {
         Ok(())
     }
 
+    fn record_current_poll(
+        &mut self,
+        baseline: &FaultStateObservationV1,
+        observation: &FaultStateObservationV1,
+        participants: usize,
+        phase_index: usize,
+        attempt_epoch: u64,
+        checkpoint_epoch: u64,
+        retained: Option<&mut Vec<FaultStateObservationV1>>,
+    ) -> Result<bool> {
+        if attempt_epoch != checkpoint_epoch {
+            return Ok(false);
+        }
+        if let Some(rows) = retained.as_ref() {
+            ensure!(
+                rows.len() < LEAKAGE_MAX_OBSERVATIONS_PER_PEER,
+                "continuous APS evidence exceeded its per-peer bound"
+            );
+        }
+        self.record(baseline, observation, participants, phase_index)?;
+        if let Some(rows) = retained {
+            rows.push(observation.clone());
+        }
+        Ok(true)
+    }
+
     fn record_poll_failure(&mut self, phase_index: usize) -> Result<bool> {
         ensure!(
             self.check_count
@@ -3676,34 +3952,24 @@ impl FaultContinuousObserverV1 {
                                 break;
                             }
                         };
-                        if let Some(retained) = &thread_retained_observations {
-                            let mut retained = retained
-                                .lock()
-                                .unwrap_or_else(std::sync::PoisonError::into_inner);
-                            if retained[peer_index].len() >= LEAKAGE_MAX_OBSERVATIONS_PER_PEER {
-                                *thread_failure
-                                    .lock()
-                                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(
-                                    "continuous APS evidence exceeded its per-peer bound"
-                                        .to_owned(),
-                                );
-                                thread_stop.store(true, Ordering::Relaxed);
-                                break;
-                            }
-                            retained[peer_index].push(observation.clone());
-                        }
                         let result = {
+                            // Match observe_snapshot's accumulator -> evidence lock order.
+                            // An in-flight poll discarded by a checkpoint must be absent
+                            // from both the summary and its retained response sequence.
                             let mut accumulators = thread_accumulators
                                 .lock()
                                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-                            if thread_checkpoint_epoch.load(Ordering::Acquire) != attempt_epoch {
-                                continue;
-                            }
-                            accumulators[peer_index].record(
+                            let mut retained = thread_retained_observations.as_ref().map(|rows| {
+                                rows.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+                            });
+                            accumulators[peer_index].record_current_poll(
                                 &thread_baselines[peer_index],
                                 &observation,
                                 participants,
                                 phase_index,
+                                attempt_epoch,
+                                thread_checkpoint_epoch.load(Ordering::Acquire),
+                                retained.as_mut().map(|rows| &mut rows[peer_index]),
                             )
                         };
                         if let Err(error) = result {
@@ -4295,12 +4561,59 @@ fn ensure_fault_ledger_unchanged_before_finality(
     Ok(())
 }
 
-fn verify_signed_rs16_finality(network: &Network, finalized_height: u64) -> Result<u64> {
+/// One immutable global decision, independent of equivalent QC signer subsets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SignedRs16FinalityAnchorV1 {
+    block_hash: HashOf<BlockHeader>,
+    context_id: HeightContextId,
+}
+
+/// Complete all-process observations of the same authorized global decision.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SignedRs16FinalityObservationsV1 {
+    observations: u64,
+    anchor: SignedRs16FinalityAnchorV1,
+}
+
+fn ensure_signed_rs16_finality_identity(
+    expected_roster: &BTreeSet<PeerId>,
+    observed_roster: &[PeerId],
+    previous_anchor: Option<SignedRs16FinalityAnchorV1>,
+    observed_anchor: SignedRs16FinalityAnchorV1,
+) -> Result<()> {
+    ensure!(
+        expected_roster.len() == VALIDATORS_PER_LANE
+            && observed_roster.len() == VALIDATORS_PER_LANE
+            && observed_roster.iter().cloned().collect::<BTreeSet<_>>() == *expected_roster,
+        "signed finality substituted the configured global committee"
+    );
+    ensure!(
+        previous_anchor.is_none_or(|previous| previous == observed_anchor),
+        "validators returned conflicting finalized blocks or height contexts"
+    );
+    Ok(())
+}
+
+fn verify_signed_rs16_finality(
+    network: &Network,
+    finalized_height: u64,
+) -> Result<SignedRs16FinalityObservationsV1> {
+    Ok(collect_signed_rs16_finality(network, finalized_height, None)?.0)
+}
+
+fn collect_signed_rs16_finality(
+    network: &Network,
+    finalized_height: u64,
+    evidence: Option<(&Path, &str)>,
+) -> Result<(SignedRs16FinalityObservationsV1, Vec<SmokeEvidenceFileV1>)> {
     let height = NonZeroU64::new(finalized_height)
         .ok_or_else(|| eyre!("finalized receipt height is zero"))?;
     let expected_layout = recommended_data_availability_layout();
+    let expected_roster = network.validators().iter().map(|peer| peer.id()).collect();
     let mut observations = 0_u64;
-    for peer in network.all_peers() {
+    let mut anchor = None;
+    let mut files = Vec::new();
+    for (peer_index, peer) in network.all_peers().enumerate() {
         let (proof, block_hash) = peer
             .client()
             .get_bridge_finality_anchor(height, network.network_id())
@@ -4308,6 +4621,7 @@ fn verify_signed_rs16_finality(network: &Network, finalized_height: u64) -> Resu
         let artifact = &proof.finality_artifact;
         ensure!(
             proof.block_header.hash() == block_hash
+                && proof.block_header.height() == height
                 && artifact.height_context.roster.len() == VALIDATORS_PER_LANE
                 && artifact.height_context.quorum.min_signers == 3
                 && artifact.commit_qc.signers.len() == 3
@@ -4315,9 +4629,90 @@ fn verify_signed_rs16_finality(network: &Network, finalized_height: u64) -> Resu
             "peer {} did not return a signed 3-of-4 RS16 finality artifact",
             peer.id()
         );
+        let observed_anchor = SignedRs16FinalityAnchorV1 {
+            block_hash,
+            context_id: artifact.height_context.id(),
+        };
+        let observed_roster = artifact
+            .height_context
+            .roster
+            .iter()
+            .map(|entry| entry.validator.clone())
+            .collect::<Vec<_>>();
+        ensure_signed_rs16_finality_identity(
+            &expected_roster,
+            &observed_roster,
+            anchor,
+            observed_anchor,
+        )?;
+        anchor = Some(observed_anchor);
         observations += 1;
+        if let Some((root, prefix)) = evidence {
+            files.push(write_smoke_evidence(
+                root,
+                &format!("{prefix}-{peer_index:02}.json"),
+                &proof,
+            )?);
+        }
     }
-    Ok(observations)
+    Ok((
+        SignedRs16FinalityObservationsV1 {
+            observations,
+            anchor: anchor.ok_or_else(|| eyre!("finality observations omitted every validator"))?,
+        },
+        files,
+    ))
+}
+
+#[test]
+fn signed_rs16_finality_rejects_substituted_global_authority_and_conflicting_decisions() {
+    let peers = (1_u8..=5)
+        .map(|seed| {
+            PeerId::new(
+                KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                    .expect("deterministic finality test key")
+                    .public_key()
+                    .clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let expected = peers[..4].iter().cloned().collect::<BTreeSet<_>>();
+    let anchor = SignedRs16FinalityAnchorV1 {
+        block_hash: HashOf::from_untyped_unchecked(Hash::new(b"finality-block")),
+        context_id: HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
+            b"finality-context",
+        ))),
+    };
+    assert!(ensure_signed_rs16_finality_identity(&expected, &peers[..4], None, anchor).is_ok());
+    assert!(
+        ensure_signed_rs16_finality_identity(&expected, &peers[..4], Some(anchor), anchor).is_ok()
+    );
+    assert!(
+        ensure_signed_rs16_finality_identity(&expected, &peers[1..], Some(anchor), anchor).is_err()
+    );
+    let mut duplicated = peers[..4].to_vec();
+    duplicated[3] = duplicated[0].clone();
+    assert!(
+        ensure_signed_rs16_finality_identity(&expected, &duplicated, Some(anchor), anchor).is_err()
+    );
+    let changed_block = SignedRs16FinalityAnchorV1 {
+        block_hash: HashOf::from_untyped_unchecked(Hash::new(b"conflicting-block")),
+        ..anchor
+    };
+    assert!(
+        ensure_signed_rs16_finality_identity(&expected, &peers[..4], Some(anchor), changed_block)
+            .is_err()
+    );
+    let changed_context = SignedRs16FinalityAnchorV1 {
+        context_id: HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
+            b"conflicting-context",
+        ))),
+        ..anchor
+    };
+    assert!(
+        ensure_signed_rs16_finality_identity(&expected, &peers[..4], Some(anchor), changed_context)
+            .is_err()
+    );
 }
 
 fn prepare_fault_bundle(
@@ -5863,7 +6258,7 @@ fn run_fresh_route_fault_trial(
     ensure_fault_state_finalized_once(&before, &after, request.participants)?;
     observer.complete_phase()?;
     let continuous_observations = observer.finish(&after)?;
-    let signed_rs16 = verify_signed_rs16_finality(network, receipt.finalized_height)?;
+    let signed_rs16 = verify_signed_rs16_finality(network, receipt.finalized_height)?.observations;
     let (collection, trial_index) = match fault {
         FreshRouteFaultV1::Loss { trial_index, .. } => ("loss_trials", trial_index),
         FreshRouteFaultV1::Hold { trial_index, .. } => ("phase_cut_partitions", trial_index),
@@ -6236,7 +6631,7 @@ fn run_fresh_crash_trial(
         ensure_fault_state_finalized_once(&before, &after, request.participants)?;
         (
             after,
-            verify_signed_rs16_finality(network, receipt.finalized_height)?,
+            verify_signed_rs16_finality(network, receipt.finalized_height)?.observations,
         )
     } else if finalization_cut {
         let receipt = wait_for_identical_receipt(network, bundle.manifest.bundle_id)?;
@@ -6252,7 +6647,7 @@ fn run_fresh_crash_trial(
         ensure_fault_state_finalized_once(&before, &after, request.participants)?;
         (
             after,
-            verify_signed_rs16_finality(network, receipt.finalized_height)?,
+            verify_signed_rs16_finality(network, receipt.finalized_height)?.observations,
         )
     } else {
         advance_fault_bundle_past_expiry(sponsor, &bundle)?;
@@ -7454,7 +7849,7 @@ fn run_real_process_transparent_control_benchmark(
     }
 
     let signed_rs16_da_observations =
-        verify_signed_rs16_finality(&network, carrier.height().get())?;
+        verify_signed_rs16_finality(&network, carrier.height().get())?.observations;
     ensure!(
         signed_rs16_da_observations >= request.minimum_signed_rs16_da_observations,
         "signed RS16 finality observations are incomplete"
@@ -7914,7 +8309,7 @@ fn run_real_process_leakage_campaign(
                     .ok_or_else(|| eyre!("leakage atomicity check count overflow"))
             })?;
     let signed_rs16_da_observations =
-        verify_signed_rs16_finality(&network, receipt.finalized_height)?;
+        verify_signed_rs16_finality(&network, receipt.finalized_height)?.observations;
     ensure!(
         signed_rs16_da_observations >= request.minimum_signed_rs16_da_observations,
         "signed RS16 leakage finality observations are incomplete"
@@ -8508,7 +8903,7 @@ fn run_real_process_private_benchmark(
         "private benchmark atomicity observer omitted a validator or committee observer"
     );
     let signed_rs16_da_observations =
-        verify_signed_rs16_finality(&network, receipt.finalized_height)?;
+        verify_signed_rs16_finality(&network, receipt.finalized_height)?.observations;
     ensure!(
         signed_rs16_da_observations >= request.minimum_signed_rs16_da_observations,
         "signed RS16 finality observations are incomplete"
@@ -8804,6 +9199,52 @@ fn fault_continuous_observer_accepts_only_baseline_or_complete_finalization() {
     assert_eq!(summary.phase_coverage[0].phase, "preflight");
     assert_eq!(summary.phase_coverage[0].successful_observations, 3);
     assert_eq!(summary.phase_coverage[0].poll_failures, 0);
+}
+
+#[test]
+fn fault_continuous_observer_discards_stale_polls_from_counts_and_evidence() {
+    let baseline = fault_observation_fixture(0, 'a', 0);
+    let mut accumulator = FaultContinuousObservationAccumulatorV1::new(0, [9; Hash::LENGTH], false);
+    accumulator.checkpoint_phase(0, &[]).unwrap();
+    let mut retained = Vec::new();
+    let initial_chain = accumulator.response_chain.clone().finalize();
+    assert!(
+        !accumulator
+            .record_current_poll(&baseline, &baseline, 2, 0, 0, 1, Some(&mut retained))
+            .unwrap()
+    );
+    assert_eq!(accumulator.check_count, 0);
+    assert!(retained.is_empty());
+    assert_eq!(accumulator.response_chain.clone().finalize(), initial_chain);
+    assert!(
+        accumulator
+            .record_current_poll(&baseline, &baseline, 2, 0, 1, 1, Some(&mut retained))
+            .unwrap()
+    );
+    assert_eq!(accumulator.check_count, retained.len() as u64);
+    assert_eq!(retained[0].response_sha256, baseline.response_sha256);
+    let accepted_chain = accumulator.response_chain.clone().finalize();
+    assert!(
+        !accumulator
+            .record_current_poll(&baseline, &baseline, 2, 0, 1, 2, Some(&mut retained))
+            .unwrap()
+    );
+    assert_eq!(accumulator.check_count, retained.len() as u64);
+    assert_eq!(
+        accumulator.response_chain.clone().finalize(),
+        accepted_chain
+    );
+    retained.resize(LEAKAGE_MAX_OBSERVATIONS_PER_PEER, baseline.clone());
+    assert!(
+        accumulator
+            .record_current_poll(&baseline, &baseline, 2, 0, 2, 2, Some(&mut retained))
+            .is_err()
+    );
+    assert_eq!(accumulator.check_count, 1);
+    assert_eq!(
+        accumulator.response_chain.clone().finalize(),
+        accepted_chain
+    );
 }
 
 #[test]

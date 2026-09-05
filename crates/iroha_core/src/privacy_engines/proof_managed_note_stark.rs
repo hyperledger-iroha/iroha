@@ -325,6 +325,13 @@ impl ProofManagedNoteStarkProtocolV1 {
     pub(crate) fn validate(self) -> Result<(), ProofManagedNoteStarkErrorV1> {
         self.parameters.validate().map_err(map_aggregate_error_v1)?;
         self.domains.validate().map_err(map_aggregate_error_v1)?;
+        // Reject caller-controlled degrees before deriving mask geometry, whose
+        // zero-degree error would otherwise be misclassified as internal.
+        if !(NOTE_COPY_CONSTRAINT_DEGREE_V1..=PROOF_MANAGED_NOTE_MAX_CONSTRAINT_DEGREE_V1)
+            .contains(&self.maximum_constraint_degree)
+        {
+            return Err(ProofManagedNoteStarkErrorV1::InvalidProfile);
+        }
         let fri_soundness = validate_note_fri_soundness_v1(self.parameters)?;
         let mask_geometry = transparent_stark_zk_mask_geometry_v1(
             usize::from(
@@ -352,8 +359,6 @@ impl ProofManagedNoteStarkProtocolV1 {
             || self.parameters.maximum_trace_groups != 1
             || self.parameters.maximum_segment_instances != 1
             || self.parameters.maximum_proof_bytes > consensus_proof_cap
-            || self.maximum_constraint_degree < NOTE_COPY_CONSTRAINT_DEGREE_V1
-            || self.maximum_constraint_degree > PROOF_MANAGED_NOTE_MAX_CONSTRAINT_DEGREE_V1
             || PROOF_MANAGED_NOTE_MASK_DEGREE_V1 < mask_geometry.minimum_mask_degree
             || fri_soundness.query_error_bits != PROOF_MANAGED_NOTE_FRI_QUERY_ERROR_BITS_V1
             || fri_soundness.commitment_error_bits
@@ -3873,7 +3878,7 @@ mod tests {
         assert!(verify_proof_managed_note_stark_v1(adapter, &wrong_nonce).is_err());
     }
     #[test]
-    fn malformed_trace_profile_and_entropy_never_emit_a_proof() {
+    fn malformed_trace_and_entropy_never_emit_a_proof() {
         let adapter = MockAdapterV1::default();
         let mut changed = mock_base_columns_v1();
         changed[0][5] = F::ONE;
@@ -3887,6 +3892,18 @@ mod tests {
             ),
             Err(ProofManagedNoteStarkErrorV1::Randomness)
         ));
+    }
+    #[test]
+    fn malformed_profiles_are_rejected_before_proving() {
+        let adapter = MockAdapterV1::default();
+        for degree in [0, 1, 5, u8::MAX] {
+            let mut invalid = adapter.protocol_v1();
+            invalid.maximum_constraint_degree = degree;
+            assert_eq!(
+                invalid.validate(),
+                Err(ProofManagedNoteStarkErrorV1::InvalidProfile)
+            );
+        }
         let mut wrong_parameters = adapter.clone();
         wrong_parameters.parameters.query_count -= 1;
         assert!(matches!(
@@ -3940,13 +3957,10 @@ mod tests {
             Err(ProofManagedNoteStarkErrorV1::InvalidProfile),
             "profile domains must fit the canonical u16-framed transcript"
         );
-        let mut insufficient_fri_capacity = adapter.clone();
-        insufficient_fri_capacity.maximum_constraint_degree =
-            PROOF_MANAGED_NOTE_MAX_CONSTRAINT_DEGREE_V1;
-        assert!(matches!(
-            prepare_note_profile_v1(&insufficient_fri_capacity),
-            Err(ProofManagedNoteStarkErrorV1::InvalidProfile)
-        ));
+        let mut degree_four = adapter.clone();
+        degree_four.maximum_constraint_degree = PROOF_MANAGED_NOTE_MAX_CONSTRAINT_DEGREE_V1;
+        prepare_note_profile_v1(&degree_four)
+            .expect("the canonical four composition chunks admit degree-four quotients");
         let mut empty_profile = adapter.protocol_v1();
         empty_profile.profile_descriptor = b"";
         assert_eq!(
@@ -3994,10 +4008,20 @@ mod tests {
         let maximum_fri_input_degree =
             maximum_fri_input_degree_v1(&prepared.layout, prepared.protocol.parameters)
                 .expect("FRI capacity");
-        assert_eq!(maximum_trace_degree, 4_539);
-        assert_eq!(maximum_quotient_degree, 4_982);
-        assert_eq!(maximum_fri_input_degree, 8_191);
-        assert!(maximum_trace_degree.max(maximum_quotient_degree) <= maximum_fri_input_degree);
+        // n = 8192, mask degree = 975, terminal degree = 143, six folds.
+        // Quotients span four coefficient chunks; their combined degree is
+        // compared with the composition capacity, not one FRI input chunk.
+        let maximum_composition_degree = prepared
+            .layout
+            .maximum_composition_degree(prepared.protocol.parameters)
+            .expect("composition capacity");
+        assert_eq!(maximum_trace_degree, 9_167);
+        assert_eq!(maximum_quotient_degree, 10_142);
+        assert_eq!(maximum_fri_input_degree, 9_215);
+        assert_eq!(maximum_composition_degree, 36_863);
+        assert!(maximum_trace_degree <= maximum_fri_input_degree);
+        assert!(maximum_quotient_degree > maximum_fri_input_degree);
+        assert!(maximum_quotient_degree <= maximum_composition_degree);
         assert!(matches!(
             maximum_masked_trace_degree_v1(usize::MAX),
             Err(ProofManagedNoteStarkErrorV1::InvalidProfile)
@@ -4033,10 +4057,10 @@ mod tests {
         let production_composition_capacity = production_layout
             .maximum_composition_degree(production_parameters)
             .expect("production composition capacity");
-        assert_eq!(degree_four_quotient, 50_924);
-        assert_eq!(degree_nine_quotient, 135_059);
-        assert_eq!(production_fri_input_capacity, 32_767);
-        assert_eq!(production_composition_capacity, 131_071);
+        assert_eq!(degree_four_quotient, 53_052);
+        assert_eq!(degree_nine_quotient, 139_847);
+        assert_eq!(production_fri_input_capacity, 18_431);
+        assert_eq!(production_composition_capacity, 73_727);
         assert!(
             maximum_masked_trace_degree_v1(production_trace_size).expect("production trace degree")
                 <= production_fri_input_capacity

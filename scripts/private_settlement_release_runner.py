@@ -6,8 +6,8 @@ The runner has two deliberately separate phases:
 * ``plan`` freezes the exact N=2,3,4,8,16 matrix, harness executable,
   hardware description, configurations, canaries, and request identities.
   A plan is scaffolding and is never qualification evidence.
-* ``execute`` checks out the same clean source revision, invokes the frozen
-  external process harness once per request, validates every acknowledgement
+* ``execute`` requires ten retained fresh N=3 smoke successes at the same signed
+  clean source revision, invokes the frozen external process harness once per request, validates every acknowledgement
   and measurement, and writes a publication fragment only after the complete
   matrix passes.
 
@@ -16,12 +16,16 @@ exercise authenticated message control and persistence cuts, and capture the
 network/storage surfaces.  This script never substitutes synthetic values for
 missing harness output.  The harness protocol is a JSON request/response file
 contract described by :func:`invoke_harness` and validated below.
+Execution uses permanent owner-only attempt directories. Every request, raw
+stream, response, evidence file and terminal outcome is retained on failure;
+the frozen plan remains the denominator and no retry replaces a failed job.
 """
 
 from __future__ import annotations
 
 import argparse
 import base64
+import binascii
 import csv
 import hashlib
 import json
@@ -306,15 +310,9 @@ def canonical_iroha_hash_body(value: Any, label: str) -> str:
     if matched is None:
         raise RunnerError(f"{label} is not a canonical Iroha hash literal")
     body = matched.group(1)
-    crc = 0xFFFF
-    for byte in f"hash:{body}".encode("ascii"):
-        crc ^= byte << 8
-        for _ in range(8):
-            crc = (
-                ((crc << 1) ^ 0x1021) & 0xFFFF
-                if crc & 0x8000
-                else (crc << 1) & 0xFFFF
-            )
+    # Match norito::literal::crc16: polynomial 0x1021, initial value 0xFFFF,
+    # no reflection or final XOR, over the ASCII tag, colon and uppercase body.
+    crc = binascii.crc_hqx(f"hash:{body}".encode("ascii"), 0xFFFF)
     if value[-4:] != f"{crc:04X}":
         raise RunnerError(f"{label} has an invalid Iroha hash checksum")
     return body.lower()
@@ -5331,130 +5329,195 @@ def _terminate_owned_process_group(
     process.wait(timeout=1)
 
 
+def private_record(path: Path, value: Any) -> None:
+    """Durably create one immutable owner-only attempt/outcome JSON record."""
+
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(descriptor, "wb", closefd=False) as stream:
+            stream.write(canonical_bytes(value) + b"\n")
+            stream.flush()
+            os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+    directory = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+
+
+def publish_campaign_fragment(path: Path, value: Any) -> None:
+    """Publish fully synced bytes atomically, retaining the pending record on error.
+
+    The success name is never used for an incomplete write. A hard link gives
+    an atomic no-overwrite publication, while the pending name preserves the
+    exact bytes if syncing the new directory entry fails. Such a failure
+    removes the success name before it propagates to the campaign failure log.
+    """
+
+    pending = path.with_name(f"{path.stem}.pending{path.suffix}")
+    private_record(pending, value)
+    linked = False
+    try:
+        os.link(pending, path, follow_symlinks=False)
+        linked = True
+        directory = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    except BaseException:
+        if linked:
+            path.unlink()
+            directory = os.open(path.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+        raise
+
+
+def fresh_private_directory(path: Path) -> None:
+    """Create a new canonical owner-only directory without adopting prior evidence."""
+
+    if not path.is_absolute() or path.resolve(strict=False) != path:
+        raise RunnerError("attempt/output directory must be absolute and canonical")
+    path.mkdir(mode=0o700)
+    path.chmod(0o700)
+
+
+def retained_file_inventory(root: Path) -> list[dict[str, Any]]:
+    """Record regular raw files without following unexpected harness-created symlinks."""
+
+    inventory = []
+    for directory, subdirectories, files in os.walk(root, followlinks=False):
+        directory_path = Path(directory)
+        for name in sorted(subdirectories + files):
+            path = directory_path / name
+            relative = path.relative_to(root).as_posix()
+            try:
+                info = path.lstat()
+                if stat.S_ISLNK(info.st_mode):
+                    inventory.append({"path": relative, "kind": "symlink", "target": os.readlink(path)})
+                elif stat.S_ISREG(info.st_mode):
+                    inventory.append({"path": relative, "kind": "file", **file_binding(path)})
+                elif not stat.S_ISDIR(info.st_mode):
+                    inventory.append({"path": relative, "kind": "nonregular", "mode": stat.S_IMODE(info.st_mode)})
+            except (OSError, RunnerError) as error:
+                # An unreadable/unstable failed artifact must not erase the other
+                # files or replace the original failure with an inventory error.
+                inventory.append({"path": relative, "kind": "unreadable", "error": str(error)})
+    return sorted(inventory, key=lambda item: item["path"])
+
+
 def invoke_harness(
     harness: Path,
     request: Mapping[str, Any],
     *,
+    attempt_dir: Path,
     timeout_seconds: int,
     expected_harness_binding: Mapping[str, Any] | None = None,
-) -> tuple[
-    dict[str, Any],
-    Path,
-    Path,
-    dict[str, Any],
-    tempfile.TemporaryDirectory[str],
-]:
-    """Invoke the frozen harness through the strict file protocol.
+) -> tuple[dict[str, Any], Path, Path, dict[str, Any]]:
+    """Run one harness in a permanent fresh attempt directory, retaining failures.
 
-    The executable receives ``--aps-request``, ``--aps-response``, and
-    ``--aps-evidence-dir``.  It must exit zero, create exactly one response
-    JSON file, and (for fault or leakage jobs) write only their declared files
-    beneath the evidence directory. Stdout/stderr never substitute for the response.
-    The returned temporary directory remains owned by the caller until its
-    ``cleanup`` method is called.
+    Request, stdout, stderr, raw response and evidence remain on disk even when
+    process execution or response validation fails. The caller owns semantic
+    validation and its separate immutable validation outcome. No temporary
+    owner or automatic cleanup is returned; retries require a new campaign.
     """
 
     if timeout_seconds <= 0:
         raise RunnerError("harness timeout must be positive")
-    if (
-        expected_harness_binding is not None
-        and verify_harness(harness) != dict(expected_harness_binding)
-    ):
-        raise RunnerError("harness executable changed before invocation")
-    temporary = tempfile.TemporaryDirectory(prefix="aps-harness-")
-    root = Path(temporary.name)
+    fresh_private_directory(attempt_dir)
+    root = attempt_dir
     request_path = root / "request.json"
     response_path = root / "response.json"
     evidence_dir = root / "evidence"
     stdout_path = root / "stdout.log"
     stderr_path = root / "stderr.log"
-    evidence_dir.mkdir(mode=0o700)
-    write_json(request_path, request)
-    command = [
-        str(harness),
-        "--aps-request",
-        str(request_path),
-        "--aps-response",
-        str(response_path),
-        "--aps-evidence-dir",
-        str(evidence_dir),
-    ]
+    fresh_private_directory(evidence_dir)
+    private_record(request_path, request)
+    request_binding = file_binding(request_path)
+    command = [str(harness), "--aps-request", str(request_path), "--aps-response", str(response_path),
+               "--aps-evidence-dir", str(evidence_dir)]
+    private_record(root / "started.json", {
+        "version": VERSION, "protocol": PROTOCOL, "request_id": request.get("request_id"),
+        "invocation_nonce": request.get("invocation_nonce"), "command": command,
+        "request": request_binding, "harness": expected_harness_binding,
+        "timeout_seconds": timeout_seconds, "started_ns": time.time_ns(),
+    })
     process: subprocess.Popen[bytes] | None = None
+    returncode: int | None = None
+    process_error: str | None = None
+    timed_out = False
     try:
-        with stdout_path.open("wb") as stdout, stderr_path.open("wb") as stderr:
-            process = subprocess.Popen(
-                command,
-                stdin=subprocess.DEVNULL,
-                stdout=stdout,
-                stderr=stderr,
-                start_new_session=True,
-            )
+        # Explicit modes also protect partial files if the caller's umask is permissive.
+        with os.fdopen(os.open(stdout_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as stdout, \
+             os.fdopen(os.open(stderr_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as stderr:
+            if expected_harness_binding is not None and verify_harness(harness) != dict(expected_harness_binding):
+                raise RunnerError("harness executable changed before invocation")
+            process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr,
+                                       start_new_session=True, umask=0o077)
             process_group = process.pid
             try:
                 returncode = process.wait(timeout=timeout_seconds)
             except subprocess.TimeoutExpired as error:
+                timed_out = True
                 _terminate_owned_process_group(process, process_group)
-                raise RunnerError(
-                    f"real-process harness exceeded its {timeout_seconds}-second deadline"
-                ) from error
+                raise RunnerError(f"real-process harness exceeded its {timeout_seconds}-second deadline") from error
             if _process_group_exists(process_group):
                 _terminate_owned_process_group(process, process_group)
-                raise RunnerError(
-                    "real-process harness exited while owned child processes remained"
-                )
+                raise RunnerError("real-process harness exited while owned child processes remained")
+            stdout.flush()
+            stderr.flush()
+            os.fsync(stdout.fileno())
+            os.fsync(stderr.fileno())
     except OSError as error:
-        if process is not None and process.poll() is None:
-            _terminate_owned_process_group(process, process.pid)
-        temporary.cleanup()
-        raise RunnerError(f"real-process harness invocation failed: {error}") from error
-    except RunnerError:
-        temporary.cleanup()
+        process_error = str(error)
+        raise RunnerError(f"real-process harness invocation failed; retained {root}: {error}") from error
+    except BaseException as error:
+        process_error = str(error) or type(error).__name__
         raise
-    if (
-        expected_harness_binding is not None
-        and verify_harness(harness) != dict(expected_harness_binding)
-    ):
-        temporary.cleanup()
-        raise RunnerError("harness executable changed during invocation")
-    if returncode != 0:
-        try:
-            with stderr_path.open("rb") as stream:
-                stream.seek(max(0, stderr_path.stat().st_size - 2_000))
-                stderr_tail = stream.read().decode("utf-8", errors="replace")
-        except OSError:
-            stderr_tail = "<stderr unavailable>"
-        temporary.cleanup()
-        raise RunnerError(
-            f"real-process harness exited {returncode}: {stderr_tail}"
-        )
-    if response_path.is_symlink() or not response_path.is_file():
-        temporary.cleanup()
-        raise RunnerError("harness exited successfully without a regular response file")
-    response_binding = file_binding(response_path)
-    if response_binding["bytes"] > MAX_HARNESS_RESPONSE_BYTES:
-        temporary.cleanup()
-        raise RunnerError("harness response exceeds the bounded response size")
+    finally:
+        if process is not None:
+            returncode = process.poll()
+        private_record(root / "process-outcome.json", {
+            "version": VERSION, "protocol": PROTOCOL, "request_id": request.get("request_id"),
+            "finished_ns": time.time_ns(), "pid": None if process is None else process.pid,
+            "exit_code": returncode, "timed_out": timed_out, "error": process_error,
+            "passed": process_error is None and returncode == 0,
+            "retained_files": retained_file_inventory(root),
+        })
     try:
-        response = read_bound_json_file(
-            response_path, response_binding, "harness response"
-        )
-    except RunnerError as error:
-        temporary.cleanup()
-        raise RunnerError(str(error)) from error
-    if request.get("kind") == "benchmark" and any(evidence_dir.iterdir()):
-        temporary.cleanup()
-        raise RunnerError("benchmark harness wrote undeclared evidence files")
-    expected_root_names = {
-        "request.json",
-        "response.json",
-        "evidence",
-        "stdout.log",
-        "stderr.log",
-    }
-    if {entry.name for entry in root.iterdir()} != expected_root_names:
-        temporary.cleanup()
-        raise RunnerError("harness wrote an undeclared protocol file")
-    return response, evidence_dir, response_path, response_binding, temporary
+        if file_binding(request_path) != request_binding:
+            raise RunnerError("harness changed its bound request; original digest retained in started.json")
+        if expected_harness_binding is not None and verify_harness(harness) != dict(expected_harness_binding):
+            raise RunnerError("harness executable changed during invocation")
+        if returncode != 0:
+            raise RunnerError(f"real-process harness exited {returncode}; raw streams retained at {root}")
+        if response_path.is_symlink() or not response_path.is_file():
+            raise RunnerError("harness exited successfully without a regular response file")
+        response_binding = file_binding(response_path)
+        if response_binding["bytes"] > MAX_HARNESS_RESPONSE_BYTES:
+            raise RunnerError("harness response exceeds the bounded response size")
+        response = read_bound_json_file(response_path, response_binding, "harness response")
+        if request.get("kind") == "benchmark" and any(evidence_dir.iterdir()):
+            raise RunnerError("benchmark harness wrote undeclared evidence files")
+        expected_root_names = {"request.json", "response.json", "evidence", "stdout.log", "stderr.log",
+                               "started.json", "process-outcome.json"}
+        if {entry.name for entry in root.iterdir()} != expected_root_names:
+            raise RunnerError("harness wrote an undeclared protocol file")
+    except BaseException as error:
+        private_record(root / "response-outcome.json", {
+            "version": VERSION, "protocol": PROTOCOL, "passed": False,
+            "error": str(error) or type(error).__name__, "retained_files": retained_file_inventory(root),
+        })
+        raise
+    private_record(root / "response-outcome.json", {
+        "version": VERSION, "protocol": PROTOCOL, "passed": True, "response": response_binding,
+    })
+    return response, evidence_dir, response_path, response_binding
 
 
 def copy_bound_file(
@@ -5764,15 +5827,58 @@ def validate_publication_fragment(
     )
 
 
+def validate_smoke_prerequisite(
+    campaign_root: Path, *, source_root: Path, commit: str
+) -> dict[str, Any]:
+    """Require the complete signed ten-run gate before release experiments.
+
+    Raw smoke evidence remains in its owner-only directory. The publication
+    records its content binding and source/executable identities, without
+    copying private process configuration or local filesystem paths.
+    """
+
+    # Import lazily: the smoke reader reuses this module's strict state decoder.
+    import private_settlement_smoke_campaign as smoke_campaign
+
+    try:
+        campaign = smoke_campaign.validate_campaign(
+            campaign_root, expected_commit=commit
+        )
+        if smoke_campaign.source_seal(source_root.resolve(strict=True), commit) != campaign["source"]:
+            raise RunnerError("execution source differs from the signed smoke source")
+        binding = file_binding(campaign_root / "campaign.json")
+        if read_bound_json_file(
+            campaign_root / "campaign.json", binding, "smoke campaign"
+        ) != campaign:
+            raise RunnerError("smoke campaign changed after validation")
+    except (smoke_campaign.release_runner.RunnerError, OSError, ValueError, KeyError, TypeError) as error:
+        raise RunnerError(f"ten-run N=3 smoke prerequisite failed: {error}") from error
+    return {
+        "version": VERSION,
+        "protocol": PROTOCOL,
+        "kind": "smoke_campaign_prerequisite",
+        "commit": commit,
+        "campaign_sha256": binding["sha256"],
+        "campaign_bytes": binding["bytes"],
+        "source_tree": campaign["source"]["tree"],
+        "source_sha256": campaign["source"]["source_sha256"],
+        "validator_sha256": campaign["artifacts"]["validator"]["sha256"],
+        "integration_sha256": campaign["artifacts"]["integration"]["sha256"],
+        "runs": smoke_campaign.RUN_COUNT,
+        "passed": True,
+    }
+
+
 def execute_plan(
     plan_path: Path,
     output_dir: Path,
     *,
     source_root: Path,
     harness: Path,
+    smoke_campaign: Path,
     timeout_seconds: int,
 ) -> Path:
-    """Execute the complete frozen campaign and publish only a clean result."""
+    """Retain every attempt and denominator; publish a fragment only after complete validation."""
 
     if output_dir.exists():
         raise RunnerError(f"execution output already exists: {output_dir}")
@@ -5784,14 +5890,36 @@ def execute_plan(
     harness_binding = verify_harness(harness)
     if harness_binding != plan["harness"]:
         raise RunnerError("harness executable differs from the frozen plan")
+    smoke_prerequisite = validate_smoke_prerequisite(
+        smoke_campaign, source_root=source_root, commit=plan["commit"]
+    )
 
     parent = output_dir.parent.resolve()
     parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="aps-execute-", dir=parent) as temporary:
-        staging = Path(temporary)
+    fresh_private_directory(output_dir)
+    staging = output_dir
+    previous_umask = os.umask(0o077)
+    completed_jobs: list[dict[str, Any]] = []
+    active_job: dict[str, Any] | None = None
+    active_attempt: Path | None = None
+    stage = "foundation"
+    try:
+        private_record(staging / "started.json", {
+            "version": VERSION, "protocol": PROTOCOL, "commit": plan["commit"],
+            "started_ns": time.time_ns(), "planned_jobs": len(plan["jobs"]),
+            "plan": plan_file_binding, "harness": harness_binding,
+        })
+        private_record(staging / "frozen-plan.json", plan)
+        attempts = staging / "attempts"
+        fresh_private_directory(attempts)
         publication = staging / "publication"
-        publication.mkdir()
+        fresh_private_directory(publication)
         artifacts: list[dict[str, Any]] = []
+        smoke_receipt = publication / "smoke-prerequisite-v1.json"
+        write_json(smoke_receipt, smoke_prerequisite)
+        artifacts.append(
+            {"kind": "operator_log", **file_binding(smoke_receipt, relative_to=publication)}
+        )
         publication_plan = publication / "run-plan-v1.json"
         copy_bound_file(plan_path, publication_plan, expected=plan_file_binding)
         artifacts.append(
@@ -5857,19 +5985,25 @@ def execute_plan(
                 **job,
                 "invocation_nonce": os.urandom(32).hex(),
             }
+            active_job = {"ordinal": ordinal, "request_id": job["request_id"],
+                          "kind": job["kind"], "invocation_nonce": execution_job["invocation_nonce"]}
+            stage = "request"
+            active_attempt = attempts / f"{ordinal:05}-{job['request_id']}"
             request = build_request(plan, plan_root, execution_job)
+            stage = "invocation"
             (
                 response,
                 evidence_dir,
                 response_path,
                 response_binding,
-                temporary_job,
             ) = invoke_harness(
                 harness,
                 request,
+                attempt_dir=active_attempt,
                 timeout_seconds=timeout_seconds,
                 expected_harness_binding=plan["harness"],
             )
+            stage = "validation"
             try:
                 if job["kind"] == "fault":
                     raw, fault_artifacts = materialize_fault_response(
@@ -5935,14 +6069,27 @@ def execute_plan(
                         job["request_id"],
                     )
                 )
-            finally:
-                temporary_job.cleanup()
+            except BaseException as error:
+                private_record(active_attempt / "validation-outcome.json", {
+                    "version": VERSION, "protocol": PROTOCOL, **active_job,
+                    "passed": False, "stage": stage, "error": str(error) or type(error).__name__,
+                    "finished_ns": time.time_ns(),
+                })
+                raise
+            private_record(active_attempt / "validation-outcome.json", {
+                "version": VERSION, "protocol": PROTOCOL, **active_job,
+                "passed": True, "response": response_binding, "finished_ns": time.time_ns(),
+            })
+            completed_jobs.append(active_job)
+            active_job = None
+            active_attempt = None
             if ordinal % 25 == 0:
                 print(
                     f"validated {ordinal}/{len(plan['jobs'])} real-process jobs",
                     file=sys.stderr,
                 )
 
+        stage = "reports"
         if len(fault_rows) != len(PARTICIPANTS) * len(
             plan["requirements"]["seeds"]
         ):
@@ -6026,12 +6173,12 @@ def execute_plan(
                 ) from error
         benchmark_report_value["regressions"] = regressions
         benchmark_report_value["passed"] = not regressions
+        benchmark_report_path = publication / "reports" / "benchmark-report-v1.json"
+        write_json(benchmark_report_path, benchmark_report_value)
         if regressions:
             raise RunnerError(
                 "benchmark campaign exceeds the signed regression baseline"
             )
-        benchmark_report_path = publication / "reports" / "benchmark-report-v1.json"
-        write_json(benchmark_report_path, benchmark_report_value)
         artifacts.append(
             {
                 "kind": "benchmark_report",
@@ -6089,13 +6236,13 @@ def execute_plan(
             traffic_counts_left=count_paths["left"],
             traffic_counts_right=count_paths["right"],
         )
+        leakage_report_path = publication / "reports" / "leakage-report-v1.json"
+        write_json(leakage_report_path, leakage_report_value)
         if leakage_report_value["passed"] is not True:
             raise RunnerError(
                 "leakage audit found a canary, public-shape, size, or "
                 "traffic-count mismatch"
             )
-        leakage_report_path = publication / "reports" / "leakage-report-v1.json"
-        write_json(leakage_report_path, leakage_report_value)
         artifacts.append(
             {
                 "kind": "leakage_report",
@@ -6118,6 +6265,7 @@ def execute_plan(
             "publication_root": "publication",
             "real_process_campaign_complete": True,
             "publication_evidence": False,
+            "smoke_campaign_prerequisite": smoke_prerequisite,
             "benchmark_baseline": (
                 None
                 if plan["benchmark_baseline"] is None
@@ -6139,7 +6287,7 @@ def execute_plan(
             ],
             "artifacts": artifacts,
         }
-        write_json(staging / "release-artifact-fragment-v1.json", fragment)
+        stage = "final_revalidation"
         if verify_harness(harness) != plan["harness"]:
             raise RunnerError("harness executable changed during the campaign")
         if file_binding(plan_path) != plan_file_binding:
@@ -6148,7 +6296,36 @@ def execute_plan(
         if reloaded_plan != plan or reloaded_root != plan_root:
             raise RunnerError("frozen plan inputs changed during the campaign")
         verify_source_checkout(source_root, plan["commit"])
-        staging.rename(output_dir)
+        if validate_smoke_prerequisite(
+            smoke_campaign, source_root=source_root, commit=plan["commit"]
+        ) != smoke_prerequisite:
+            raise RunnerError("ten-run smoke evidence changed during release experiments")
+        private_record(staging / "campaign-validation.json", {
+            "version": VERSION, "protocol": PROTOCOL, "passed": True,
+            "planned_jobs": len(plan["jobs"]), "completed_jobs": completed_jobs,
+            "finished_ns": time.time_ns(),
+        })
+        stage = "publication"
+        publish_campaign_fragment(staging / "release-artifact-fragment-v1.json", fragment)
+    except BaseException as error:
+        reason = str(error) or type(error).__name__
+        if active_attempt is not None and active_attempt.is_dir() and not (active_attempt / "validation-outcome.json").exists():
+            private_record(active_attempt / "validation-outcome.json", {
+                "version": VERSION, "protocol": PROTOCOL, **(active_job or {}),
+                "passed": False, "stage": stage, "error": reason, "finished_ns": time.time_ns(),
+            })
+        completed_ids = {job["request_id"] for job in completed_jobs}
+        failed_id = None if active_job is None else active_job["request_id"]
+        private_record(staging / "failure.json", {
+            "version": VERSION, "protocol": PROTOCOL, "passed": False, "stage": stage,
+            "error": reason, "finished_ns": time.time_ns(), "planned_jobs": len(plan["jobs"]),
+            "completed_jobs": completed_jobs, "failed_job": active_job,
+            "not_started_request_ids": [job["request_id"] for job in plan["jobs"]
+                if job["request_id"] not in completed_ids and job["request_id"] != failed_id],
+        })
+        raise
+    finally:
+        os.umask(previous_umask)
     return output_dir / "release-artifact-fragment-v1.json"
 
 
@@ -6219,6 +6396,10 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     execute.add_argument("--source-root", required=True, type=Path)
     execute.add_argument("--harness", required=True, type=Path)
     execute.add_argument(
+        "--smoke-campaign", required=True, type=Path,
+        help="retained ten-run N=3 smoke campaign at the exact signed plan commit",
+    )
+    execute.add_argument(
         "--timeout-seconds", type=int, default=DEFAULT_HARNESS_TIMEOUT_SECONDS
     )
     return parser.parse_args(argv)
@@ -6248,6 +6429,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.output_dir,
                 source_root=args.source_root,
                 harness=args.harness,
+                smoke_campaign=args.smoke_campaign,
                 timeout_seconds=args.timeout_seconds,
             )
     except (

@@ -10355,7 +10355,20 @@ fn stage_autoscale_scale_out_for_commit_revalidation<'state>(
     store_root: &Path,
     cold_root: &Path,
 ) -> AutoscaleCommitRevalidationStage<'state> {
-    seed_autoscale_committee_for_test(state, 4);
+    let committee = seed_autoscale_committee_for_test(state, 4);
+    // Scale-out must derive its lane authority from the manifest, even when
+    // the same peers also happen to be members of the global topology.
+    install_lane_manifest_registry(
+        state,
+        &[(
+            LaneId::SINGLE,
+            DataSpaceId::UNIVERSAL,
+            committee
+                .iter()
+                .map(|keypair| AccountId::new(keypair.public_key().clone()))
+                .collect(),
+        )],
+    );
     let elastic_lane = autoscale_elastic_lane_config(LaneId::new(1), DataSpaceId::UNIVERSAL, 2);
     let_row! { updated_catalog = LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), elastic_lane]) .expect("autoscale updated catalog") };
     let updated_config = RuntimeLaneConfig::from_catalog(&updated_catalog);
@@ -10370,7 +10383,7 @@ fn stage_autoscale_scale_out_for_commit_revalidation<'state>(
         .commit()
         .expect("commit first block before autoscale revalidation test");
     store_committed_autoscale_history_block_for_test(&state, &kura, &first);
-    let signed_second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
+    let signed_second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 20);
     let mut state_block = state.block(signed_second.header());
     state_block.add_committed_fragments(20);
     let_row! { committed_second = ValidBlock::new_unverified_for_tests(signed_second) .commit_unchecked() .unpack(|_| {}) };
@@ -10456,7 +10469,11 @@ state_test! { sync replay_geometry_live_failure_preserves_state_kura_and_nexus_e
     drop(staged);
     let process_status_before = crate::sumeragi::status::lane_scoped_status_fingerprint_for_tests();
     let_row! { isolated = isolated_state_for_replay_prevalidation(&state, &kura) .expect("construct inert lifecycle replay probe") };
-    isolated.apply_committed_autoscale_lane_lifecycle(&height_one, false);
+    {
+        let _state_write_lock = isolated.state_write_lock.lock();
+        let publication = isolated.begin_state_view_write();
+        isolated.apply_committed_autoscale_lane_lifecycle(&height_one, false, &publication);
+    }
     assert_eq!(
         crate::sumeragi::status::lane_scoped_status_fingerprint_for_tests(),
         process_status_before,
@@ -23734,6 +23751,12 @@ fn finalize_lane_relay_for_state_test(
     let_row! { subject = wire::BlockSubject { parent_block_hash: block.header().prev_block_hash(), block_hash: block.hash(), payload_hash: block .canonical_proposal_wire_hash() .expect("encode relay finality proposal"), } };
     let_row! { executed_block_wire_len = u64::try_from( block .canonical_wire() .expect("encode relay finality carrier") .as_framed() .len(), ) .expect("relay finality carrier length fits u64") };
     let_row! { mut execution_commitment = wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier( Hash::new([0xBC; 4]), Hash::new([0xAB; 4]), Hash::new(b"state-test-relay-ordinary-writes"), executed_block_wire_len, block .executed_block_wire_hash() .expect("encode relay finality carrier"), ) };
+    // Adding a relay statement to an existing fixture carrier must preserve
+    // that block's authenticated merge entry in the replacement finality QC.
+    execution_commitment.merge_carrier = block
+        .execution_context()
+        .and_then(|bundle| bundle.merge_entry.as_ref())
+        .map(|reference| wire::MergeCarrierCommitmentV1::new(reference.entry_hash));
     execution_commitment.lane_finality_manifest = Some(statement_commitment);
     execution_commitment
         .validate()

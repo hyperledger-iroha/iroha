@@ -393,9 +393,27 @@ mod tests {
         statement: &PqMaspStarkStatementV1,
     ) -> (PrivacyNativeConsensusBindingV1, PrivacyConsensusLimitsV1) {
         let limits = PrivacyConsensusLimitsV1::taira_default();
-        let binding = PrivacyNativeConsensusBindingV1::new(&statement.context, [0xC2; 32], &limits)
-            .expect("valid PQ-MASP consensus binding");
+        let genesis_hash = iroha_crypto::Hash::prehashed([0xC2; 32]).into();
+        let binding =
+            PrivacyNativeConsensusBindingV1::new(&statement.context, genesis_hash, &limits)
+                .expect("valid PQ-MASP consensus binding");
         (binding, limits)
+    }
+    #[test]
+    fn consensus_fixture_binds_the_canonical_genesis_bytes() {
+        let (statement, _) = crate::privacy_engines::pq_masp::relation::tests::valid_fixture();
+        let (binding, limits) = consensus_material(&statement);
+        assert_eq!(binding.network_id, statement.context.network_id);
+        assert_eq!(
+            binding.validate_against_context(&statement.context, &limits),
+            Ok(())
+        );
+        let mut unmarked = binding;
+        unmarked.genesis_hash = [0xC2; 32];
+        assert_eq!(
+            unmarked.validate_against_context(&statement.context, &limits),
+            Err(PrivacyNativeConsensusBindingValidationErrorV1::NetworkGenesisMismatch)
+        );
     }
     fn note() -> PqMaspNotePlaintextV1 {
         let secret = [0x31; 32];

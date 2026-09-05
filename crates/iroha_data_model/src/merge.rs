@@ -19,7 +19,10 @@ use crate::{
     },
     consensus::{MAX_LANE_CONSENSUS_VALIDATORS, VALIDATOR_SET_HASH_VERSION_V1},
     fastpq::TransferTranscriptBundle,
-    nexus::{DataSpaceId, LaneId, LaneRelayEnvelope, MAX_ACTIVE_EXECUTION_LANES},
+    nexus::{
+        DataSpaceCatalog, DataSpaceId, LaneCatalog, LaneId, LaneRelayEnvelope,
+        MAX_ACTIVE_EXECUTION_LANES,
+    },
     peer::PeerId,
     transaction::signed::{TransactionEntrypoint, TransactionResult},
 };
@@ -52,6 +55,102 @@ pub const MAX_MERGE_LEDGER_ENTRY_BYTES: usize = 16 * 1024 * 1024;
 /// snapshots, merge QC, and Norito framing. Admission still checks the exact
 /// final full-entry size after the QC is attached.
 pub const MAX_MERGE_EXECUTION_BATCH_BYTES: usize = 12 * 1024 * 1024;
+/// Generic merge-QC roster/proof count ceiling, including recovered artifacts.
+pub const MAX_MERGE_QUORUM_CERTIFICATE_VALIDATORS: usize = 4_096;
+/// Maximum encoded merge QC, including canonical framing.
+///
+/// Even the generic hard ceiling of 4,096 BLS-normal validators and 4,096
+/// 96-byte signer proofs encodes in fewer than 900,000 bytes. The maximal
+/// fixed-width scalar/bitmap/roster fixture pins this bound in codec tests.
+pub const MAX_MERGE_QUORUM_CERTIFICATE_BYTES: usize = 1024 * 1024;
+// One canonical BLS-normal PeerId payload is 107 bytes. A 128-byte seat
+// reservation also covers its bounded collection framing. Per-lane 256 bytes
+// cover the binding (91 bytes), roster hash/version and vector headers, roster
+// index, and collection framing, without assuming any shared committees.
+const MERGE_AUTHORITY_BYTES_PER_SEAT: usize = 128;
+const MERGE_AUTHORITY_BYTES_PER_LANE: usize = 256;
+// Fixed entry/candidate scalars and roots, empty snapshot/drain vectors, and
+// the execution Option/field length prefixes fit below one KiB. Compact
+// field/element prefixes need at most four bytes below the 16-MiB ceiling;
+// the fixed eight-byte sequence counts are charged in the per-lane allowance.
+const MERGE_AUTHORITY_FIXED_ENVELOPE_BYTES: usize = 1024;
+
+/// Failure of the aggregate geometry reservation for a self-contained merge entry.
+#[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
+pub enum MergeLaneAuthorityGeometryError {
+    /// An active lane has no dataspace or no supported nonzero-fault committee.
+    #[error("lane {lane_id} has invalid committee geometry in dataspace {dataspace_id}")]
+    InvalidCommittee {
+        /// Active lane whose committee cannot be represented.
+        lane_id: LaneId,
+        /// Referenced dataspace whose fault-tolerance policy is unavailable or invalid.
+        dataspace_id: DataSpaceId,
+    },
+    /// Active-lane cardinality or checked size arithmetic exceeded its bound.
+    #[error("merge authority geometry exceeds its cardinality or arithmetic bound")]
+    InvalidCardinality,
+    /// The geometry can strand an otherwise admissible execution batch.
+    #[error(
+        "merge authority geometry reserves {reserved_bytes} bytes, exceeding the {maximum_bytes}-byte full-entry limit"
+    )]
+    EnvelopeTooLarge {
+        /// Worst-case full entry reservation without roster deduplication.
+        reserved_bytes: usize,
+        /// Protocol-wide full-entry ceiling.
+        maximum_bytes: usize,
+    },
+}
+
+/// Reserve a full execution batch and QC for every admitted lane geometry.
+///
+/// Committees are charged independently, so key rotation, committee selection,
+/// and loss of overlap never increase this bound. The 12-MiB execution budget
+/// includes repeated source material, state-dependent results, and settlement;
+/// the source-bundle bound alone does not bound that derived transcript.
+///
+/// # Errors
+/// Returns an error for unsupported committee geometry or a reservation above
+/// the full-entry ceiling. Configuration and lifecycle admission must run this
+/// before publishing prospective geometry.
+pub fn validate_merge_lane_authority_geometry(
+    lanes: &LaneCatalog,
+    dataspaces: &DataSpaceCatalog,
+) -> Result<usize, MergeLaneAuthorityGeometryError> {
+    if lanes.lanes().is_empty() || lanes.lanes().len() > MAX_ACTIVE_EXECUTION_LANES {
+        return Err(MergeLaneAuthorityGeometryError::InvalidCardinality);
+    }
+    let mut reserved_bytes = MAX_MERGE_EXECUTION_BATCH_BYTES
+        + MAX_MERGE_QUORUM_CERTIFICATE_BYTES
+        + MERGE_AUTHORITY_FIXED_ENVELOPE_BYTES;
+    for lane in lanes.lanes() {
+        let invalid = MergeLaneAuthorityGeometryError::InvalidCommittee {
+            lane_id: lane.id,
+            dataspace_id: lane.dataspace_id,
+        };
+        let count = dataspaces
+            .by_id(lane.dataspace_id)
+            .and_then(|dataspace| dataspace.fault_tolerance.checked_mul(3)?.checked_add(1))
+            .and_then(|count| usize::try_from(count).ok())
+            .filter(|count| {
+                *count >= crate::block::consensus_v2::MIN_VALIDATORS_PER_HEIGHT
+                    && *count <= MAX_LANE_CONSENSUS_VALIDATORS
+            })
+            .ok_or(invalid)?;
+        reserved_bytes = count
+            .checked_mul(MERGE_AUTHORITY_BYTES_PER_SEAT)
+            .and_then(|bytes| bytes.checked_add(MERGE_AUTHORITY_BYTES_PER_LANE))
+            .and_then(|bytes| reserved_bytes.checked_add(bytes))
+            .ok_or(MergeLaneAuthorityGeometryError::InvalidCardinality)?;
+    }
+    if reserved_bytes > MAX_MERGE_LEDGER_ENTRY_BYTES {
+        return Err(MergeLaneAuthorityGeometryError::EnvelopeTooLarge {
+            reserved_bytes,
+            maximum_bytes: MAX_MERGE_LEDGER_ENTRY_BYTES,
+        });
+    }
+    Ok(reserved_bytes)
+}
+
 /// Maximum number of ordered entrypoints in one certified merge execution batch.
 ///
 /// Lane-local proposal admission uses the same ceiling so every certified lane
@@ -428,13 +527,20 @@ impl MergeLaneCommitteeRosterV1 {
                 ),
             );
         }
-        if self.validators.is_empty()
+        if self.validators.len() < crate::block::consensus_v2::MIN_VALIDATORS_PER_HEIGHT
             || self.validators.len() > MAX_LANE_CONSENSUS_VALIDATORS
             || (self.validators.len() - 1) % 3 != 0
         {
             return Err(MergeLaneAuthorityCatalogError::InvalidValidatorCount {
                 actual: self.validators.len(),
             });
+        }
+        if self
+            .validators
+            .iter()
+            .any(|peer| peer.public_key().algorithm() != iroha_crypto::Algorithm::BlsNormal)
+        {
+            return Err(MergeLaneAuthorityCatalogError::UnsupportedValidatorAlgorithm);
         }
         if self.validators.windows(2).any(|pair| pair[0] >= pair[1]) {
             return Err(MergeLaneAuthorityCatalogError::NonCanonicalValidatorOrder);
@@ -458,6 +564,9 @@ pub enum MergeLaneAuthorityCatalogError {
         /// Observed number of active lane slots.
         actual: usize,
     },
+    /// Historical lane voting identities must use the production BLS-normal key type.
+    #[error("merge lane authority roster contains a non-BLS-normal validator")]
+    UnsupportedValidatorAlgorithm,
     /// The catalog carries no usable roster or more rosters than lane slots.
     #[error("merge lane authority catalog has invalid roster count {actual}")]
     InvalidRosterCount {
@@ -1164,6 +1273,292 @@ mod tests {
         execution_batch: Option<MergeExecutionBatch>,
         lane_drain_certificates: Vec<LaneDrainCertificateV1>,
     }
+    fn sample_lane_committee(offset: u8) -> Vec<PeerId> {
+        let mut validators = (offset..offset + 4)
+            .map(|seed| {
+                PeerId::new(
+                    KeyPair::try_from_seed(vec![seed + 1; 32], Algorithm::BlsNormal)
+                        .expect("deterministic lane committee key")
+                        .public_key()
+                        .clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        validators.sort();
+        validators
+    }
+    #[test]
+    fn merge_lane_authority_catalog_roundtrip_deduplicates_in_lane_order() {
+        let first = sample_lane_committee(0);
+        let second = sample_lane_committee(4);
+        let catalog = MergeLaneAuthorityCatalogV1::from_lane_committees(&[
+            first.clone(),
+            second.clone(),
+            first.clone(),
+        ])
+        .expect("canonical authority catalog");
+        assert_eq!(catalog.lane_roster_indices, [0, 1, 0]);
+        assert_eq!(catalog.rosters.len(), 2);
+        assert_eq!(catalog.roster_for_lane(0).unwrap().validators, first);
+        assert_eq!(catalog.roster_for_lane(1).unwrap().validators, second);
+        assert_eq!(catalog.roster_for_lane(2), catalog.roster_for_lane(0));
+        assert!(catalog.roster_for_lane(3).is_err());
+        assert!(catalog.contains_validator(3, &first[0]));
+        assert!(catalog.contains_validator(3, &second[0]));
+        assert!(!catalog.contains_validator(2, &first[0]));
+        assert!(!catalog.contains_validator(3, &sample_lane_committee(8)[0]));
+
+        let bytes = norito::encode_canonical(&catalog).expect("catalog bytes");
+        let decoded: MergeLaneAuthorityCatalogV1 =
+            norito::decode_from_bytes(&bytes).expect("catalog roundtrip");
+        assert_eq!(decoded, catalog);
+        #[cfg(feature = "json")]
+        {
+            let json = norito::json::to_json(&catalog).expect("catalog JSON");
+            let decoded: MergeLaneAuthorityCatalogV1 =
+                norito::json::from_json(&json).expect("catalog JSON roundtrip");
+            assert_eq!(decoded, catalog);
+        }
+    }
+
+    #[test]
+    fn merge_lane_authority_catalog_rejects_noncanonical_and_unused_rosters() {
+        let catalog = MergeLaneAuthorityCatalogV1::from_lane_committees(&[
+            sample_lane_committee(0),
+            sample_lane_committee(4),
+            sample_lane_committee(0),
+        ])
+        .expect("canonical authority catalog");
+        let mut invalid = catalog.clone();
+        invalid.version += 1;
+        assert!(matches!(
+            invalid.validate_for_active_lanes(3),
+            Err(MergeLaneAuthorityCatalogError::UnsupportedVersion(_))
+        ));
+        invalid = catalog.clone();
+        invalid.lane_roster_indices = vec![1, 0, 1];
+        assert_eq!(
+            invalid.validate_for_active_lanes(3),
+            Err(MergeLaneAuthorityCatalogError::NonCanonicalFirstUse)
+        );
+        invalid.lane_roster_indices = vec![0, 0, 0];
+        assert_eq!(
+            invalid.validate_for_active_lanes(3),
+            Err(MergeLaneAuthorityCatalogError::UnusedRoster)
+        );
+        invalid.lane_roster_indices = vec![0, 1, 2];
+        assert_eq!(
+            invalid.validate_for_active_lanes(3),
+            Err(MergeLaneAuthorityCatalogError::RosterIndexOutOfBounds)
+        );
+        invalid = catalog.clone();
+        invalid.rosters[1] = invalid.rosters[0].clone();
+        assert_eq!(
+            invalid.validate_for_active_lanes(3),
+            Err(MergeLaneAuthorityCatalogError::DuplicateRosterHash)
+        );
+        assert!(!invalid.contains_validator(3, &catalog.rosters[0].validators[0]));
+        assert!(MergeLaneAuthorityCatalogV1::from_lane_committees(&[]).is_err());
+        assert!(
+            catalog
+                .validate_for_active_lanes(MAX_ACTIVE_EXECUTION_LANES + 1)
+                .is_err()
+        );
+        assert!(
+            MergeLaneAuthorityCatalogV1::default()
+                .validate_for_active_lanes(0)
+                .is_ok()
+        );
+        assert!(
+            !MergeLaneAuthorityCatalogV1::default()
+                .contains_validator(0, &catalog.rosters[0].validators[0])
+        );
+    }
+
+    #[test]
+    fn merge_lane_authority_roster_requires_exact_geometry_order_and_hash() {
+        let validators = sample_lane_committee(0);
+        let roster = MergeLaneCommitteeRosterV1::new(validators.clone());
+        assert!(roster.validate().is_ok());
+        let mut non_bls = roster.clone();
+        non_bls.validators[0] = PeerId::new(KeyPair::random().public_key().clone());
+        assert_eq!(
+            non_bls.validate(),
+            Err(MergeLaneAuthorityCatalogError::UnsupportedValidatorAlgorithm)
+        );
+        let mut invalid = roster.clone();
+        invalid.validator_set_hash_version += 1;
+        assert!(matches!(
+            invalid.validate(),
+            Err(MergeLaneAuthorityCatalogError::UnsupportedValidatorSetHashVersion(_))
+        ));
+        for count in [0, 1, 2, 3, MAX_LANE_CONSENSUS_VALIDATORS + 1] {
+            assert!(matches!(
+                MergeLaneCommitteeRosterV1::new(vec![validators[0].clone(); count]).validate(),
+                Err(MergeLaneAuthorityCatalogError::InvalidValidatorCount { .. })
+            ));
+        }
+        invalid = roster.clone();
+        invalid.validators.swap(0, 1);
+        assert_eq!(
+            invalid.validate(),
+            Err(MergeLaneAuthorityCatalogError::NonCanonicalValidatorOrder)
+        );
+        invalid = roster.clone();
+        invalid.validators[1] = invalid.validators[0].clone();
+        assert_eq!(
+            invalid.validate(),
+            Err(MergeLaneAuthorityCatalogError::NonCanonicalValidatorOrder)
+        );
+        invalid = roster;
+        invalid.validator_set_hash = HashOf::new(&sample_lane_committee(4));
+        assert_eq!(
+            invalid.validate(),
+            Err(MergeLaneAuthorityCatalogError::ValidatorSetHashMismatch)
+        );
+    }
+    fn authority_geometry_fixture(lane_count: u32, faults: u32) -> (LaneCatalog, DataSpaceCatalog) {
+        let lanes = (0..lane_count)
+            .map(|index| crate::nexus::LaneConfig {
+                id: LaneId::new(index),
+                alias: format!("authority-{index}"),
+                ..crate::nexus::LaneConfig::default()
+            })
+            .collect();
+        let lanes = LaneCatalog::new(std::num::NonZeroU32::new(lane_count).unwrap(), lanes)
+            .expect("unique geometry fixture lanes");
+        let mut dataspace = crate::nexus::DataSpaceMetadata::default();
+        dataspace.fault_tolerance = faults;
+        let dataspaces = DataSpaceCatalog::new(vec![dataspace]).expect("fixture dataspace");
+        (lanes, dataspaces)
+    }
+
+    #[test]
+    fn merge_authority_geometry_reserves_execution_without_assuming_roster_overlap() {
+        let fixed = MAX_MERGE_EXECUTION_BATCH_BYTES
+            + MAX_MERGE_QUORUM_CERTIFICATE_BYTES
+            + MERGE_AUTHORITY_FIXED_ENVELOPE_BYTES;
+        let per_lane = MERGE_AUTHORITY_BYTES_PER_LANE + 127 * MERGE_AUTHORITY_BYTES_PER_SEAT;
+        let maximum_lanes = (MAX_MERGE_LEDGER_ENTRY_BYTES - fixed) / per_lane;
+        assert_eq!(maximum_lanes, 190);
+        let (lanes, dataspaces) = authority_geometry_fixture(maximum_lanes as u32, 42);
+        assert_eq!(
+            validate_merge_lane_authority_geometry(&lanes, &dataspaces),
+            Ok(fixed + maximum_lanes * per_lane)
+        );
+        let (too_many, _) = authority_geometry_fixture(maximum_lanes as u32 + 1, 42);
+        assert!(matches!(
+            validate_merge_lane_authority_geometry(&too_many, &dataspaces),
+            Err(MergeLaneAuthorityGeometryError::EnvelopeTooLarge { .. })
+        ));
+        let (all_small, small_dataspaces) =
+            authority_geometry_fixture(MAX_ACTIVE_EXECUTION_LANES as u32, 1);
+        assert!(validate_merge_lane_authority_geometry(&all_small, &small_dataspaces).is_ok());
+        for invalid_faults in [43, u32::MAX] {
+            let (lanes, dataspaces) = authority_geometry_fixture(1, invalid_faults);
+            assert!(matches!(
+                validate_merge_lane_authority_geometry(&lanes, &dataspaces),
+                Err(MergeLaneAuthorityGeometryError::InvalidCommittee { .. })
+            ));
+        }
+        assert!(matches!(
+            validate_merge_lane_authority_geometry(
+                &lanes,
+                &DataSpaceCatalog::new(vec![crate::nexus::DataSpaceMetadata {
+                    id: DataSpaceId::new(9),
+                    alias: "other".to_owned(),
+                    ..crate::nexus::DataSpaceMetadata::default()
+                }])
+                .unwrap()
+            ),
+            Err(MergeLaneAuthorityGeometryError::InvalidCommittee { .. })
+        ));
+    }
+
+    #[test]
+    fn merge_authority_geometry_byte_reservations_cover_maximal_canonical_fields() {
+        let peer = sample_lane_committee(0).remove(0);
+        assert_eq!(
+            peer.encode().len(),
+            107,
+            "BLS-normal PeerId has fixed canonical payload size"
+        );
+        let hash = Hash::prehashed([u8::MAX; Hash::LENGTH]);
+        let mut entry = MergeLedgerEntry {
+            version: MergeLedgerEntry::VERSION,
+            epoch_id: u64::MAX,
+            lane_catalog_hash: hash,
+            active_lanes: Vec::new(),
+            lane_authority_catalog: MergeLaneAuthorityCatalogV1::default(),
+            incarnation_root: hash,
+            activation_root: hash,
+            lane_snapshots: Vec::new(),
+            global_state_root: hash,
+            merge_qc: MergeQuorumCertificate::new(
+                u64::MAX,
+                u64::MAX,
+                u64::MAX,
+                HashOf::from_untyped_unchecked(hash),
+                NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(hash)),
+                u16::MAX,
+                HashOf::from_untyped_unchecked(hash),
+                vec![peer.clone(); MAX_MERGE_QUORUM_CERTIFICATE_VALIDATORS],
+                vec![u8::MAX; MAX_MERGE_QUORUM_CERTIFICATE_VALIDATORS.div_ceil(8)],
+                vec![
+                    MergeSignerProof {
+                        signer: u32::MAX,
+                        proof_of_possession: vec![u8::MAX; 96]
+                    };
+                    MAX_MERGE_QUORUM_CERTIFICATE_VALIDATORS
+                ],
+                vec![u8::MAX; 96],
+                hash,
+            ),
+            execution_batch: None,
+            lane_drain_certificates: Vec::new(),
+        };
+        assert_eq!(
+            norito::encode_canonical(&entry.merge_qc).unwrap().len(),
+            897_875
+        );
+        assert!(
+            norito::encode_canonical(&entry.merge_qc).unwrap().len()
+                <= MAX_MERGE_QUORUM_CERTIFICATE_BYTES
+        );
+        // Repeated identities deliberately model size only. Charging each lane
+        // separately remains an upper bound even for entirely disjoint rosters.
+        for count in (4..MAX_LANE_CONSENSUS_VALIDATORS).step_by(3) {
+            let roster = MergeLaneCommitteeRosterV1::new(vec![peer.clone(); count]);
+            assert!(roster.encode().len() <= count * MERGE_AUTHORITY_BYTES_PER_SEAT + 128);
+        }
+        let lane_count = 190;
+        for index in 0..lane_count {
+            entry.active_lanes.push(MergeLaneBinding {
+                lane_id: LaneId::new(index),
+                dataspace_id: DataSpaceId::new(u64::MAX),
+                lane_config_hash: hash,
+                incarnation: hash,
+                activation_height: u64::MAX,
+            });
+            entry
+                .lane_authority_catalog
+                .rosters
+                .push(MergeLaneCommitteeRosterV1::new(vec![peer.clone(); 127]));
+            entry
+                .lane_authority_catalog
+                .lane_roster_indices
+                .push(index as u16);
+        }
+        let (lanes, dataspaces) = authority_geometry_fixture(lane_count, 42);
+        let reservation = validate_merge_lane_authority_geometry(&lanes, &dataspaces).unwrap();
+        let batch = sample_execution_batch();
+        let batch_bytes = norito::encode_canonical(&batch).unwrap().len();
+        entry.execution_batch = Some(batch);
+        let overhead = entry.canonical_bytes().len() - batch_bytes;
+        assert!(overhead <= reservation - MAX_MERGE_EXECUTION_BATCH_BYTES);
+        assert!(overhead + MAX_MERGE_EXECUTION_BATCH_BYTES <= MAX_MERGE_LEDGER_ENTRY_BYTES);
+    }
+
     fn sample_tip(label: &[u8]) -> HashOf<BlockHeader> {
         HashOf::from_untyped_unchecked(Hash::new(label))
     }
@@ -1435,7 +1830,7 @@ mod tests {
         );
     }
     #[test]
-    fn reserved_entry_headroom_fits_maximum_execution_committee_and_lane_bindings() {
+    fn reserved_entry_headroom_fits_shared_committee_and_maximum_lane_bindings() {
         const MAX_ACTIVE_LANES: usize = 1_024;
         const MAX_MERGE_VALIDATORS: usize = 4_096;
         const BLS_PROOF_BYTES: usize = 96;
@@ -1535,7 +1930,11 @@ mod tests {
                     activation_height: 1,
                 },
             ],
-            lane_authority_catalog: sample_lane_authority_catalog(2),
+            lane_authority_catalog: MergeLaneAuthorityCatalogV1::from_lane_committees(&[
+                sample_lane_committee(0),
+                sample_lane_committee(4),
+            ])
+            .expect("sample lane catalog"),
             incarnation_root: sample_hash(b"incarnation-root"),
             activation_root: sample_hash(b"activation-root"),
             lane_snapshots: vec![
@@ -1706,7 +2105,13 @@ mod tests {
         let previous_v1_encoded = previous_v1.encode();
         assert!(
             MergeLedgerEntry::decode(&mut previous_v1_encoded.as_slice()).is_err(),
-            "the retired version-one layout must fail closed during decoding"
+            "the retired version-one layout without historical authority must fail closed"
+        );
+        let mut previous_version = entry.clone();
+        previous_version.version = MergeLedgerEntry::VERSION - 1;
+        assert!(
+            MergeLedgerEntry::decode(&mut previous_version.encode().as_slice()).is_err(),
+            "a previous version tag must fail even when all current fields are present"
         );
         let mut unsupported = entry;
         unsupported.version = MergeLedgerEntry::VERSION.saturating_add(1);

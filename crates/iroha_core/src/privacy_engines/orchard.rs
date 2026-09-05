@@ -1310,9 +1310,10 @@ pub(crate) mod tests {
         NetworkId,
         block::BlockHeader,
         privacy::{
-            PrivacyEngineManifestDigestV1, PrivacyParameterDigestV1, PrivacyParameterIdV1,
-            PrivacyStatementContextV1, PrivacyStatementSchemaDigestV1,
-            PrivacyTransactionIntentDigestV1, PrivacyVerifierDigestV1,
+            PrivacyEngineManifestDigestV1, PrivacyNativeConsensusBindingValidationErrorV1,
+            PrivacyParameterDigestV1, PrivacyParameterIdV1, PrivacyStatementContextV1,
+            PrivacyStatementSchemaDigestV1, PrivacyTransactionIntentDigestV1,
+            PrivacyVerifierDigestV1,
         },
     };
     use orchard::{
@@ -1326,10 +1327,10 @@ pub(crate) mod tests {
         PrivacyConsensusLimitsV1::taira_default()
     }
     fn consensus_binding(seed: u8) -> PrivacyNativeConsensusBindingV1 {
-        let genesis_hash = [seed.wrapping_add(6); 32];
+        let genesis_hash = Hash::prehashed([seed.wrapping_add(6); 32]);
         let context = PrivacyStatementContextV1 {
             network_id: NetworkId::from_genesis_hash(
-                HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(genesis_hash)),
+                HashOf::<BlockHeader>::from_untyped_unchecked(genesis_hash),
             ),
             action_index: 0,
             transaction_intent_digest: PrivacyTransactionIntentDigestV1::new([seed; 32]),
@@ -1341,8 +1342,30 @@ pub(crate) mod tests {
             ),
             engine_manifest_digest: PrivacyEngineManifestDigestV1::new([seed.wrapping_add(5); 32]),
         };
-        PrivacyNativeConsensusBindingV1::new(&context, genesis_hash, &consensus_limits())
+        PrivacyNativeConsensusBindingV1::new(&context, genesis_hash.into(), &consensus_limits())
             .expect("canonical Orchard test binding")
+    }
+    #[test]
+    fn consensus_fixture_binds_the_canonical_genesis_bytes() {
+        let limits = consensus_limits();
+        for seed in [0x44_u8, 0x55, 0x66, 0x6A, 0x72, 0x73, 0xFA] {
+            let binding = consensus_binding(seed);
+            let mut expected = [seed.wrapping_add(6); 32];
+            expected[31] |= 1;
+            assert_eq!(binding.genesis_hash, expected);
+            assert_eq!(binding.network_id.as_bytes(), &expected);
+            assert_eq!(binding.validate(&limits), Ok(()));
+            if seed.wrapping_add(6) & 1 == 0 {
+                let mut unmarked = binding;
+                unmarked.genesis_hash[31] &= !1;
+                let expected_error = if unmarked.genesis_hash == [0; 32] {
+                    PrivacyNativeConsensusBindingValidationErrorV1::ZeroGenesisHash
+                } else {
+                    PrivacyNativeConsensusBindingValidationErrorV1::NetworkGenesisMismatch
+                };
+                assert_eq!(unmarked.validate(&limits), Err(expected_error));
+            }
+        }
     }
     pub(crate) fn build_fixture(
         action_count: u8,

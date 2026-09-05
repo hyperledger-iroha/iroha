@@ -5102,9 +5102,10 @@ mod tests {
         statement.authorization_key_digest = key_digest;
         let unsigned = fixture.envelope(statement.clone(), Vec::new());
         let invalid_inner = vec![0xA5; 64];
+        let genesis_hash = *statement.context.network_id.as_bytes();
         let consensus_binding = PrivacyNativeConsensusBindingV1::new(
             &statement.context,
-            [0xA7; 32],
+            genesis_hash,
             &TEST_CONSENSUS_LIMITS,
         )
         .expect("canonical runtime PQ-MASP consensus binding");
@@ -5127,7 +5128,7 @@ mod tests {
             activation: &activation,
             consensus_limits: &TEST_CONSENSUS_LIMITS,
             network_id: &network_id,
-            genesis_hash: [0xA7; 32],
+            genesis_hash,
             current_height: 10,
             expected_action_index: 0,
             block_timestamp_ms: 1_800_000_000_000,

@@ -966,7 +966,8 @@ fn merge_candidate_for_persistence_retry(
     adapter: &V2LaneWorkAdapter,
     view: wire::View,
 ) -> crate::merge::MergeLedgerCandidate {
-    let nexus = adapter.state.nexus_snapshot();
+    let state_view = adapter.state.view();
+    let nexus = crate::state::StateReadOnly::nexus(&state_view);
     let active_lanes = nexus
         .lane_catalog
         .lanes()
@@ -975,10 +976,12 @@ fn merge_candidate_for_persistence_retry(
             lane_id: lane.id,
             dataspace_id: lane.dataspace_id,
             lane_config_hash: crate::merge::merge_lane_config_hash(lane),
-            incarnation: adapter
-                .state
-                .lane_incarnation_at_height(lane.id, adapter.context.height)
-                .expect("fixture lane incarnation is active"),
+            incarnation: crate::state::StateReadOnly::lane_incarnation_at_height(
+                &state_view,
+                lane.id,
+                adapter.context.height,
+            )
+            .expect("fixture lane incarnation is active"),
             activation_height: 1,
         })
         .collect::<Vec<_>>();
@@ -994,12 +997,11 @@ fn merge_candidate_for_persistence_retry(
     let lane_committees = active_lanes
         .iter()
         .map(|binding| {
-            adapter
-                .state
-                .resolve_lane_committee_at_height(
-                    crate::state::LaneAuthorityRoute::new(binding.lane_id, binding.dataspace_id),
-                    adapter.context.height,
-                )
+            crate::state::StateReadOnly::resolve_lane_committee_at_height(
+                &state_view,
+                crate::state::LaneAuthorityRoute::new(binding.lane_id, binding.dataspace_id),
+                adapter.context.height,
+            )
                 .expect("fixture exact lane committee")
                 .into_validators()
         })

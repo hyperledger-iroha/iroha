@@ -783,8 +783,10 @@ mod tests {
         statement: &PqMaspStarkStatementV1,
     ) -> (PrivacyNativeConsensusBindingV1, PrivacyConsensusLimitsV1) {
         let limits = PrivacyConsensusLimitsV1::taira_default();
-        let binding = PrivacyNativeConsensusBindingV1::new(&statement.context, [0xC2; 32], &limits)
-            .expect("valid PQ-MASP consensus binding");
+        let genesis_hash = iroha_crypto::Hash::prehashed([0xC2; 32]).into();
+        let binding =
+            PrivacyNativeConsensusBindingV1::new(&statement.context, genesis_hash, &limits)
+                .expect("valid PQ-MASP consensus binding");
         (binding, limits)
     }
     fn prepared_columns(

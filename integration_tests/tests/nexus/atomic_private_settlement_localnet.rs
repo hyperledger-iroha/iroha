@@ -897,7 +897,10 @@ fn n3_smoke_builder(shape: TopologyShape) -> NetworkBuilder {
     // mandatory DA payload before the view deadline. This release-only smoke
     // deliberately pays the full 300-height privacy-governance notice instead
     // of weakening the consensus rule or using a test-only activation path.
-    localnet_builder(shape)
+    // The authenticated test controller exposes the same financial-state
+    // observation route used by the release fault campaign. No fault rule is
+    // installed by the positive smoke test.
+    localnet_builder(shape).with_consensus_message_control()
 }
 
 fn routes_from_network(
@@ -1939,6 +1942,16 @@ fn wait_for_identical_receipt(
 }
 
 fn run_n3_real_process_smoke() -> Result<()> {
+    let (bound, request_sha) = read_bound_real_process_request()?;
+    let RealProcessBoundRequestV1::Smoke(smoke_request) = bound else {
+        return Err(eyre!("positive smoke received a non-smoke request"));
+    };
+    let evidence_root = fault_evidence_root().wrap_err("initialize smoke evidence directory")?;
+    let mut evidence_files = vec![write_smoke_evidence(
+        &evidence_root,
+        "request.json",
+        &smoke_request,
+    )?];
     let shape = TopologyShape::new(PARTICIPANT_COUNT);
     shape.validate()?;
     ensure!(
@@ -1957,11 +1970,22 @@ fn run_n3_real_process_smoke() -> Result<()> {
         "primary N=3 must mix one public and two restricted participant dataspaces"
     );
     let context = "atomic_private_settlement_n3_real_process_smoke";
-    let started = sandbox::start_network_blocking_or_skip(n3_smoke_builder(shape), context)?;
-    let Some((network, _runtime)) = sandbox::enforce_network_start_requirement(started, context)?
+    let builder = n3_smoke_builder(shape).with_base_seed(format!(
+        "aps-smoke:{}:{}:{}",
+        smoke_request.seed, smoke_request.run, smoke_request.invocation_nonce
+    ));
+    let started = sandbox::start_network_blocking_or_skip(builder, context)?;
+    let Some((network, runtime)) = sandbox::enforce_network_start_requirement(started, context)?
     else {
-        return Ok(());
+        return Err(eyre!("required sixteen-process smoke network was skipped"));
     };
+    verify_controller_readiness(&network, &runtime)?;
+    let initial_inventory = smoke_process_inventory(&network, &runtime, shape)?;
+    evidence_files.push(write_smoke_evidence(
+        &evidence_root,
+        "processes-before.json",
+        &initial_inventory,
+    )?);
     let sponsor = network.client();
     let activated_height = activate_ivm_private_note(&sponsor)?;
     let authority_context_height = activated_height + 1;
@@ -2005,7 +2029,32 @@ fn run_n3_real_process_smoke() -> Result<()> {
         sponsor.get_privacy_capabilities()?.committed_height == authority_context_height,
         "pool activation did not land at the manifest authority context"
     );
+    let before = wait_for_converged_fault_state_snapshot(&network, "smoke-before")?;
+    ensure!(
+        before.validators.len() == shape.process_count(),
+        "positive smoke omitted a global or participant validator"
+    );
 
+    evidence_files.push(write_smoke_evidence(
+        &evidence_root,
+        "state-before.json",
+        &before,
+    )?);
+    evidence_files.push(write_smoke_evidence(
+        &evidence_root,
+        "authorities.json",
+        &committees
+            .iter()
+            .map(|committee| &committee.authority)
+            .collect::<Vec<_>>(),
+    )?);
+    let mut observer = FaultContinuousObserverV1::start_retaining_evidence(
+        &network,
+        &before,
+        shape.participants,
+        &manifest.bundle_id,
+        false,
+    )?;
     let materials = provisional_materials(manifest, &prepared, &committees)?;
     let certificates = materials
         .iter()
@@ -2040,6 +2089,13 @@ fn run_n3_real_process_smoke() -> Result<()> {
         }
     }
     assert_no_partial_visibility(&network, final_manifest.bundle_id, "collecting")?;
+    let state = capture_fault_state_snapshot(&network, "smoke-collecting")?;
+    ensure_fault_ledger_unchanged_before_finality(&before, &state)?;
+    evidence_files.push(write_smoke_evidence(
+        &evidence_root,
+        "state-collecting.json",
+        &state,
+    )?);
 
     for (ordinal, (leg, committee)) in prepared.iter().zip(&committees).enumerate() {
         let auditor_transport_signer =
@@ -2095,6 +2151,13 @@ fn run_n3_real_process_smoke() -> Result<()> {
         );
     }
     assert_no_partial_visibility(&network, final_manifest.bundle_id, "audited")?;
+    let state = capture_fault_state_snapshot(&network, "smoke-audited")?;
+    ensure_fault_ledger_unchanged_before_finality(&before, &state)?;
+    evidence_files.push(write_smoke_evidence(
+        &evidence_root,
+        "state-audited.json",
+        &state,
+    )?);
 
     let endpoint_matrix = committees
         .iter()
@@ -2115,6 +2178,13 @@ fn run_n3_real_process_smoke() -> Result<()> {
         &deltas,
     )?;
     assert_no_partial_visibility(&network, final_manifest.bundle_id, "prepared")?;
+    let state = capture_fault_state_snapshot(&network, "smoke-prepared")?;
+    ensure_fault_ledger_unchanged_before_finality(&before, &state)?;
+    evidence_files.push(write_smoke_evidence(
+        &evidence_root,
+        "state-prepared.json",
+        &state,
+    )?);
     let fee_before_registration = sponsor_nexus_fee_balance(&sponsor)?;
     sponsor.register_private_settlement_prepare_and_wait_v1(
         &barrier,
@@ -2131,9 +2201,33 @@ fn run_n3_real_process_smoke() -> Result<()> {
         &fee_after_registration,
         "Prepare registration",
     )?;
+    let registered = capture_fault_state_snapshot(&network, "smoke-registered")?;
+    ensure_fault_ledger_unchanged_before_finality(&before, &registered)?;
+    evidence_files.push(write_smoke_evidence(
+        &evidence_root,
+        "state-registered.json",
+        &registered,
+    )?);
+    evidence_files.push(write_smoke_evidence(
+        &evidence_root,
+        "prepare-barrier.json",
+        &barrier,
+    )?);
     let commits =
         sponsor.recover_or_commit_private_settlement_bundle_v1(&endpoint_matrix, &barrier)?;
+    evidence_files.push(write_smoke_evidence(
+        &evidence_root,
+        "commit-certificates.json",
+        &commits,
+    )?);
     assert_no_partial_visibility(&network, final_manifest.bundle_id, "commit-certified")?;
+    let state = capture_fault_state_snapshot(&network, "smoke-commit-certified")?;
+    ensure_fault_ledger_unchanged_before_finality(&before, &state)?;
+    evidence_files.push(write_smoke_evidence(
+        &evidence_root,
+        "state-commit-certified.json",
+        &state,
+    )?);
 
     let request = sponsor.build_private_settlement_finalization_request_v1(
         &barrier,
@@ -2142,6 +2236,8 @@ fn run_n3_real_process_smoke() -> Result<()> {
             .expect("V1 carrier ceiling fits u64"),
     )?;
     let fee_before_finalization = sponsor_nexus_fee_balance(&sponsor)?;
+    observer.begin_phase("finalization", &[], true)?;
+    observer.checkpoint_active_phase(&[])?;
     sponsor.submit_private_settlement_bundle_v1(&request)?;
     let receipt = wait_for_identical_receipt(&network, final_manifest.bundle_id)?;
     let fee_after_finalization = sponsor_nexus_fee_balance(&sponsor)?;
@@ -2169,6 +2265,29 @@ fn run_n3_real_process_smoke() -> Result<()> {
             "a private leg became visible more than once"
         );
     }
+    let after = wait_for_converged_fault_state_snapshot(&network, "smoke-finalized")?;
+    ensure_fault_state_finalized_once(&before, &after, shape.participants)?;
+    observer.complete_phase()?;
+    evidence_files.push(write_smoke_evidence(
+        &evidence_root,
+        "state-finalized.json",
+        &after,
+    )?);
+    evidence_files.push(write_smoke_evidence(
+        &evidence_root,
+        "receipt.json",
+        &receipt,
+    )?);
+    let (finality, files) = collect_signed_rs16_finality(
+        &network,
+        receipt.finalized_height,
+        Some((&evidence_root, "finality-before")),
+    )?;
+    evidence_files.extend(files);
+    ensure!(
+        finality.observations == u64::try_from(shape.process_count())?,
+        "positive smoke lacks a signed RS16 finality observation from every process"
+    );
     ensure!(
         sponsor
             .submit_private_settlement_bundle_v1(&request)
@@ -2182,6 +2301,138 @@ fn run_n3_real_process_smoke() -> Result<()> {
     ensure!(
         wait_for_identical_receipt(&network, final_manifest.bundle_id)? == receipt,
         "replay changed the terminal receipt"
+    );
+    let replayed = wait_for_converged_fault_state_snapshot(&network, "smoke-replay")?;
+    ensure_fault_state_reverted(&after, &replayed)?;
+    evidence_files.push(write_smoke_evidence(
+        &evidence_root,
+        "state-replay.json",
+        &replayed,
+    )?);
+    let (summaries, observations) = observer.finish_with_evidence(&replayed)?;
+    ensure!(
+        summaries.len() == shape.process_count()
+            && observations.len() == shape.process_count()
+            && summaries.iter().all(|row| row.check_count >= 3
+                && row.finalized_observations > 0
+                && row.poll_failure_count == 0),
+        "smoke continuous observer omitted validators, finality or successful polling"
+    );
+    for (index, (summary, observations)) in summaries.iter().zip(&observations).enumerate() {
+        evidence_files.push(write_smoke_evidence(
+            &evidence_root,
+            &format!("continuous-{index:02}.json"),
+            &SmokeContinuousEvidenceV1 {
+                summary: summary.clone(),
+                observations: observations.clone(),
+            },
+        )?);
+    }
+    let mut restarts = Vec::new();
+
+    // Recover each durable store while preserving a live 3-of-4 quorum in
+    // every committee. A receipt alone would miss duplicated nullifiers,
+    // outputs, or residual reservations, so recheck the complete APS state.
+    for (peer_index, peer) in network.all_peers().enumerate() {
+        let before_pid = runtime
+            .block_on(peer.process_id())
+            .ok_or_else(|| eyre!("smoke restart target #{peer_index} has no live PID"))?;
+        let config_layers = network.config_layers_for_peer(peer).collect::<Vec<_>>();
+        ensure!(
+            runtime.block_on(peer.shutdown_if_started())
+                && runtime.block_on(peer.process_id()).is_none(),
+            "smoke restart target #{peer_index} did not stop"
+        );
+        runtime
+            .block_on(async {
+                tokio::time::timeout(
+                    FINALITY_TIMEOUT,
+                    peer.start_checked(config_layers.iter(), None),
+                )
+                .await
+            })
+            .wrap_err_with(|| format!("smoke restart target #{peer_index} timed out"))??;
+        let after_pid = runtime
+            .block_on(peer.process_id())
+            .ok_or_else(|| eyre!("smoke restart target #{peer_index} did not recover"))?;
+        ensure!(
+            before_pid != after_pid && peer.client().get_status().is_ok(),
+            "smoke restart target #{peer_index} lacks a healthy replacement process"
+        );
+        ensure!(
+            wait_for_identical_receipt(&network, final_manifest.bundle_id)? == receipt,
+            "smoke restart target #{peer_index} changed the finalized receipt"
+        );
+        let recovered = wait_for_converged_fault_state_snapshot(&network, "smoke-restarted")?;
+        ensure_fault_state_reverted(&after, &recovered)?;
+        evidence_files.push(write_smoke_evidence(
+            &evidence_root,
+            &format!("state-restarted-{peer_index:02}.json"),
+            &recovered,
+        )?);
+        restarts.push(SmokeRestartV1 {
+            peer_index,
+            before_pid,
+            after_pid,
+        });
+        println!(
+            "APS smoke restart verified: peer_index={peer_index} before_pid={before_pid} after_pid={after_pid}"
+        );
+    }
+    let (recovered_finality, files) = collect_signed_rs16_finality(
+        &network,
+        receipt.finalized_height,
+        Some((&evidence_root, "finality-after")),
+    )?;
+    ensure!(
+        recovered_finality == finality,
+        "restarted smoke network changed its finalized block, authority context, or coverage"
+    );
+    evidence_files.extend(files);
+    let recovered_inventory = smoke_process_inventory(&network, &runtime, shape)?;
+    ensure!(
+        initial_inventory
+            .iter()
+            .zip(&recovered_inventory)
+            .all(|(before, after)| before.peer_id == after.peer_id
+                && before.configuration_sha256 == after.configuration_sha256
+                && before.pid != after.pid),
+        "smoke restart changed identity/configuration or retained its process"
+    );
+    evidence_files.push(write_smoke_evidence(
+        &evidence_root,
+        "processes-after.json",
+        &recovered_inventory,
+    )?);
+    evidence_files.push(write_smoke_evidence(
+        &evidence_root,
+        "restarts.json",
+        &restarts,
+    )?);
+    write_real_process_result(&RealProcessSmokeResultV1 {
+        version: 1,
+        protocol: "AtomicPrivateSettlementV1".to_owned(),
+        kind: "smoke".to_owned(),
+        request: smoke_request,
+        request_sha256: request_sha,
+        network_id: norito::json::to_value(&network.network_id())?,
+        participants: shape.participants,
+        processes: shape.process_count(),
+        restarted: restarts.len(),
+        activation_height: activated_height,
+        authority_context_height,
+        finalized_height: receipt.finalized_height,
+        signed_rs16_observations: finality.observations,
+        continuous_checks: summaries.iter().map(|row| row.check_count).sum::<u64>(),
+        passed: true,
+        artifacts: evidence_files,
+    })?;
+    println!(
+        "APS smoke completed: participants={} processes={} restarted={} finalized_height={}",
+        shape.participants,
+        shape.process_count(),
+        shape.process_count(),
+        receipt.finalized_height,
     );
     Ok(())
 }

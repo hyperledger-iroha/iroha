@@ -3905,3 +3905,73 @@ fn pending_queue_plan_persistence_bounds_one_ahead_wait_and_rejects_larger_skew(
     );
 }
 include!("autonomous_merge_and_queue_plan_native_diagnostic_tests.rs");
+#[test]
+fn merge_execution_prefix_budget_includes_historical_authority_catalog() {
+    let (_state, entry, _carrier, _) = autonomous_merge_commit_authorization_fixture(false, false);
+    let mut template = crate::merge::MergeLedgerCandidate::from(&entry);
+    let batch = template
+        .execution_batch
+        .take()
+        .expect("certified execution fixture");
+    // Repeat the fixture lane only to vary encoded prefix sizes at this byte
+    // selection boundary. Full lane/source validity is checked by admission.
+    let build_batch = |prefix: usize| {
+        let mut prefix_batch = batch.clone();
+        prefix_batch.lanes = vec![batch.lanes[0].clone(); prefix];
+        prefix_batch.entrypoint_count *= u64::try_from(prefix).unwrap();
+        Some(prefix_batch)
+    };
+    let mut two_source_candidate = template.clone();
+    two_source_candidate.execution_batch = build_batch(2);
+    let unsigned_limit = two_source_candidate.canonical_bytes().len();
+    let selected =
+        State::select_merge_execution_candidate_prefix(&template, 3, unsigned_limit, build_batch)
+            .expect("exactly fitting two-source prefix");
+    assert_eq!(selected.execution_batch.unwrap().lanes.len(), 2);
+
+    let mut expanded_catalog = template.clone();
+    let mut validators = expanded_catalog.lane_authority_catalog.rosters[0]
+        .validators
+        .clone();
+    validators.extend((0xB1_u8..=0xB3).map(|seed| {
+        PeerId::new(
+            KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                .expect("distinct budget fixture validator")
+                .public_key()
+                .clone(),
+        )
+    }));
+    validators.sort();
+    expanded_catalog.lane_authority_catalog.rosters[0] =
+        iroha_data_model::merge::MergeLaneCommitteeRosterV1::new(validators);
+    expanded_catalog
+        .lane_authority_catalog
+        .validate_for_active_lanes(expanded_catalog.active_lanes.len())
+        .expect("expanded catalog remains canonical");
+    let selected = State::select_merge_execution_candidate_prefix(
+        &expanded_catalog,
+        3,
+        unsigned_limit,
+        build_batch,
+    )
+    .expect("smaller prefix still fits with a larger authority catalog");
+    assert_eq!(
+        selected.lane_authority_catalog,
+        expanded_catalog.lane_authority_catalog
+    );
+    assert_eq!(selected.execution_batch.unwrap().lanes.len(), 1);
+    assert!(
+        State::select_merge_execution_candidate_prefix(&expanded_catalog, 3, 0, build_batch,)
+            .is_none(),
+        "an uncarryable first source must never produce a candidate"
+    );
+    assert!(
+        State::select_merge_execution_candidate_prefix(&template, 0, unsigned_limit, build_batch,)
+            .is_none()
+    );
+    assert!(
+        State::select_merge_execution_candidate_prefix(&template, 3, unsigned_limit, |_| None,)
+            .is_none(),
+        "failed source construction remains fail-closed"
+    );
+}

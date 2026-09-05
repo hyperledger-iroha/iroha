@@ -653,7 +653,36 @@ before global registration and therefore retain the empty replicated plane.
 Every terminal snapshot must restore both lock planes to their exact empty
 commitments.
 
-Each real-process run emits one strict JSONL record for
+Release execution first requires a completed
+`scripts/private_settlement_smoke_campaign.py` campaign: ten consecutive fresh
+N=3 runs, each with sixteen distinct validators, the governed 300-height
+activation notice, continuous financial-state observations, signed RS16
+finality, replay rejection, and restart of every validator. The driver builds
+the exact signed clean source and retains requests, process inventories,
+state/certificate/finality artifacts, command logs, and source/executable
+digests outside the checkout. Skipped tests, failed runs, reused identities,
+changed bytes, or incomplete evidence invalidate the campaign. Synthetic
+validator tests do not satisfy this prerequisite.
+
+`scripts/private_settlement_release_runner.py execute` requires
+`--smoke-campaign <retained-campaign-directory>` at the exact plan commit. It
+revalidates the campaign and execution source before starting any job and
+again before completing the output fragment. A bound prerequisite receipt
+records the ten-run gate in the fragment; raw smoke evidence stays in its
+owner-only directory. This gate does not establish an independent audit or
+complete the other release requirements.
+
+Execution uses a fresh owner-only output directory and permanent
+`attempts/<ordinal-request-id>/` directories. Each retains the request, raw
+stdout/stderr, response bytes, evidence and immutable process/response/semantic
+outcomes, including malformed responses and unsuccessful commands. A failed
+campaign retains its frozen plan, completed jobs, failed job, unstarted request
+IDs and failing reports. A new campaign is required for another attempt.
+The completion fragment is atomically linked from fully synced pending bytes
+after final source and smoke revalidation; a failed publication preserves those
+pending bytes and its failure record without a success filename.
+
+Each real-process fault run emits one strict JSONL record for
 `scripts/private_settlement_fault_report.py`. The reporter requires the exact
 N=2,3,4,8,16 matrix across at least ten seeds per N, one validator restart in
 every committee, coordinator/global restarts, acknowledged 5/10/20-percent

@@ -4,6 +4,17 @@
 //! statement binding and deterministic evidence infrastructure.
 // This is a private continuation of the parent release-evidence module.
 use super::*;
+/// Bind the exact genesis already selected when the release fixture was built.
+///
+/// The fixture context has already entered note and accumulator commitments;
+/// deriving the binding must not replace that context with an unrelated network.
+fn native_release_fixture_consensus_binding_v1(
+    context: &PrivacyStatementContextV1,
+    consensus_limits: &PrivacyConsensusLimitsV1,
+) -> Result<PrivacyNativeConsensusBindingV1, PrivacyReleaseEvidenceErrorClassV1> {
+    PrivacyNativeConsensusBindingV1::new(context, *context.network_id.as_bytes(), consensus_limits)
+        .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)
+}
 fn redigest_ivm_release_statement_v1(
     statement: &mut iroha_data_model::privacy::IrohaIvmPrivateNoteStarkStatementV1,
 ) -> Result<(), PrivacyReleaseEvidenceErrorClassV1> {
@@ -35,7 +46,6 @@ fn native_bound_statement_material_v1(
 pub(super) fn run_ivm_private_note_stage_v1(
     case_kind: PrivacyReleaseCaseKindV1,
 ) -> Result<StageMaterialV1, PrivacyReleaseEvidenceErrorClassV1> {
-    const IVM_PRIVATE_NOTE_RELEASE_GENESIS_HASH_V1: [u8; 32] = [0x49; 32];
     let maximum = case_kind == PrivacyReleaseCaseKindV1::MaximumShapeResource;
     let protocol_id = PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1;
     let fixture_seed =
@@ -57,12 +67,8 @@ pub(super) fn run_ivm_private_note_stage_v1(
     let proof_seed = stage_purpose_seed_v1(protocol_id, case_kind, b"canonical-proof")?;
     let mut proof_rng = EvidenceRng09::new(proof_seed);
     let consensus_limits = PrivacyConsensusLimitsV1::taira_default();
-    let consensus_binding = PrivacyNativeConsensusBindingV1::new(
-        &statement.context,
-        IVM_PRIVATE_NOTE_RELEASE_GENESIS_HASH_V1,
-        &consensus_limits,
-    )
-    .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
+    let consensus_binding =
+        native_release_fixture_consensus_binding_v1(&statement.context, &consensus_limits)?;
     let proof = prove_ivm_private_note_v1_with_rng(
         &statement,
         &consensus_binding,
@@ -152,12 +158,10 @@ pub(super) fn run_ivm_private_note_stage_v1(
             let invalid_proof_seed =
                 stage_purpose_seed_v1(protocol_id, case_kind, b"invalid-path-proof")?;
             let mut invalid_proof_rng = EvidenceRng09::new(invalid_proof_seed);
-            let invalid_consensus_binding = PrivacyNativeConsensusBindingV1::new(
+            let invalid_consensus_binding = native_release_fixture_consensus_binding_v1(
                 &invalid.statement.context,
-                IVM_PRIVATE_NOTE_RELEASE_GENESIS_HASH_V1,
                 &consensus_limits,
-            )
-            .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
+            )?;
             if prove_ivm_private_note_v1_with_rng(
                 &invalid.statement,
                 &invalid_consensus_binding,
@@ -247,7 +251,6 @@ pub(super) fn run_ivm_private_note_stage_v1(
 pub(super) fn run_pq_masp_stage_v1(
     case_kind: PrivacyReleaseCaseKindV1,
 ) -> Result<StageMaterialV1, PrivacyReleaseEvidenceErrorClassV1> {
-    const PQ_MASP_RELEASE_GENESIS_HASH_V1: [u8; 32] = [0x50; 32];
     let maximum = case_kind == PrivacyReleaseCaseKindV1::MaximumShapeResource;
     let protocol_id = PrivacyProtocolIdV1::PqMaspStarkV1;
     let keygen_seed = stage_purpose_seed_v1(protocol_id, case_kind, b"canonical-fixture-keygen")?;
@@ -271,12 +274,8 @@ pub(super) fn run_pq_masp_stage_v1(
     let proof_seed = stage_purpose_seed_v1(protocol_id, case_kind, b"canonical-proof")?;
     let mut proof_rng = EvidenceRng09::new(proof_seed);
     let consensus_limits = PrivacyConsensusLimitsV1::taira_default();
-    let consensus_binding = PrivacyNativeConsensusBindingV1::new(
-        &statement.context,
-        PQ_MASP_RELEASE_GENESIS_HASH_V1,
-        &consensus_limits,
-    )
-    .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
+    let consensus_binding =
+        native_release_fixture_consensus_binding_v1(&statement.context, &consensus_limits)?;
     let proof = prove_pq_masp_v1_with_rng(
         &statement,
         &consensus_binding,
@@ -373,12 +372,10 @@ pub(super) fn run_pq_masp_stage_v1(
             let invalid_proof_seed =
                 stage_purpose_seed_v1(protocol_id, case_kind, b"invalid-path-proof")?;
             let mut invalid_proof_rng = EvidenceRng09::new(invalid_proof_seed);
-            let invalid_consensus_binding = PrivacyNativeConsensusBindingV1::new(
+            let invalid_consensus_binding = native_release_fixture_consensus_binding_v1(
                 &invalid.statement.context,
-                PQ_MASP_RELEASE_GENESIS_HASH_V1,
                 &consensus_limits,
-            )
-            .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
+            )?;
             if prove_pq_masp_v1_with_rng(
                 &invalid.statement,
                 &invalid_consensus_binding,
@@ -480,4 +477,125 @@ pub(super) fn run_pq_masp_stage_v1(
         },
         failure_class,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::privacy_engines::{
+        ivm_private_note::{
+            IvmPrivateNoteRelationErrorV1, PrivateNoteRelationProfileV1,
+            preflight_private_note_relation_with_profile_v1,
+        },
+        pq_masp::relation::{PqMaspRelationErrorV1, validate_pq_masp_relation_v1},
+    };
+    use iroha_data_model::privacy::PrivacyNativeConsensusBindingValidationErrorV1;
+
+    fn assert_release_fixture_consensus_binding(context: &PrivacyStatementContextV1) {
+        let limits = PrivacyConsensusLimitsV1::taira_default();
+        let binding = native_release_fixture_consensus_binding_v1(context, &limits)
+            .expect("the producer must bind the fixture's original network");
+        assert_eq!(binding.genesis_hash, *context.network_id.as_bytes());
+        assert_eq!(binding.network_id, context.network_id);
+        assert_eq!(binding.validate_against_context(context, &limits), Ok(()));
+        let mut changed_genesis = binding;
+        changed_genesis.genesis_hash[0] ^= 0x80;
+        assert_eq!(
+            changed_genesis.validate_against_context(context, &limits),
+            Err(PrivacyNativeConsensusBindingValidationErrorV1::NetworkGenesisMismatch)
+        );
+        let mut invalid_context = *context;
+        invalid_context.action_index = limits.max_actions_per_transaction;
+        assert_eq!(
+            native_release_fixture_consensus_binding_v1(&invalid_context, &limits),
+            Err(PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)
+        );
+    }
+
+    #[test]
+    fn ivm_release_fixtures_reach_consensus_and_relation_preflight_without_proving() {
+        let protocol_id = PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1;
+        for case_kind in [
+            PrivacyReleaseCaseKindV1::PositiveCanonicalEndToEnd,
+            PrivacyReleaseCaseKindV1::MaximumShapeResource,
+        ] {
+            let fixture_seed =
+                stage_purpose_seed_v1(protocol_id, case_kind, b"canonical-fixture-encryption")
+                    .expect("canonical fixture seed");
+            let mut fixture_rng = EvidenceRng06::new(fixture_seed);
+            let fixture = ivm_private_note_release_fixture_v1(
+                case_kind == PrivacyReleaseCaseKindV1::MaximumShapeResource,
+                &mut fixture_rng,
+            )
+            .expect("canonical release fixture");
+            assert_release_fixture_consensus_binding(&fixture.statement.context);
+            assert_eq!(
+                preflight_private_note_relation_with_profile_v1(
+                    &fixture.statement,
+                    &fixture.witness,
+                    PrivateNoteRelationProfileV1::IVM_PRIVATE_NOTE,
+                ),
+                Ok(())
+            );
+        }
+        let fixture_seed = stage_purpose_seed_v1(
+            protocol_id,
+            PrivacyReleaseCaseKindV1::ProofCorruptionAndTruncation,
+            b"invalid-path-fixture-encryption",
+        )
+        .expect("invalid-path fixture seed");
+        let mut fixture_rng = EvidenceRng06::new(fixture_seed);
+        let invalid = ivm_private_note_release_invalid_path_fixture_v1(&mut fixture_rng)
+            .expect("invalid-path release fixture");
+        assert_release_fixture_consensus_binding(&invalid.statement.context);
+        assert_eq!(
+            preflight_private_note_relation_with_profile_v1(
+                &invalid.statement,
+                &invalid.witness,
+                PrivateNoteRelationProfileV1::IVM_PRIVATE_NOTE,
+            ),
+            Err(IvmPrivateNoteRelationErrorV1::Membership)
+        );
+    }
+
+    #[test]
+    fn pq_masp_release_fixtures_reach_consensus_and_relation_preflight_without_proving() {
+        let protocol_id = PrivacyProtocolIdV1::PqMaspStarkV1;
+        for case_kind in [
+            PrivacyReleaseCaseKindV1::PositiveCanonicalEndToEnd,
+            PrivacyReleaseCaseKindV1::MaximumShapeResource,
+        ] {
+            let keygen_seed =
+                stage_purpose_seed_v1(protocol_id, case_kind, b"canonical-fixture-keygen")
+                    .expect("canonical keygen seed");
+            let fixture_seed =
+                stage_purpose_seed_v1(protocol_id, case_kind, b"canonical-fixture-encryption")
+                    .expect("canonical fixture seed");
+            let mut fixture_rng = EvidenceRng09::new(fixture_seed);
+            let fixture = pq_masp_release_fixture_v1(
+                case_kind == PrivacyReleaseCaseKindV1::MaximumShapeResource,
+                keygen_seed,
+                &mut fixture_rng,
+            )
+            .expect("canonical release fixture");
+            assert_release_fixture_consensus_binding(&fixture.statement.context);
+            validate_pq_masp_relation_v1(&fixture.statement, &fixture.witness)
+                .expect("canonical release relation");
+        }
+        let case_kind = PrivacyReleaseCaseKindV1::ProofCorruptionAndTruncation;
+        let keygen_seed =
+            stage_purpose_seed_v1(protocol_id, case_kind, b"invalid-path-fixture-keygen")
+                .expect("invalid-path keygen seed");
+        let fixture_seed =
+            stage_purpose_seed_v1(protocol_id, case_kind, b"invalid-path-fixture-encryption")
+                .expect("invalid-path fixture seed");
+        let mut fixture_rng = EvidenceRng09::new(fixture_seed);
+        let invalid = pq_masp_release_invalid_path_fixture_v1(keygen_seed, &mut fixture_rng)
+            .expect("invalid-path release fixture");
+        assert_release_fixture_consensus_binding(&invalid.statement.context);
+        assert!(matches!(
+            validate_pq_masp_relation_v1(&invalid.statement, &invalid.witness),
+            Err(PqMaspRelationErrorV1::Membership)
+        ));
+    }
 }

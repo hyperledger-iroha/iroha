@@ -7,14 +7,14 @@
 //! authenticated durable coordinator.
 
 mod archives;
+pub use crate::kagemusha_device_bridge_v1::sender_payload::{
+    SenderPreparationSelectorV1 as KagemushaCoreSenderPreparationSelectorV1,
+    SenderWalletContextV1 as KagemushaCoreSenderWalletContextV1,
+};
 pub use archives::{
     KAGEMUSHA_CORE_COORDINATOR_ARCHIVE_MAX_BYTES_V1, KagemushaCoreCoordinatorArchiveErrorV1,
     KagemushaCoreSenderCandidateArchiveV1, KagemushaCoreSenderPreparationArchiveV1,
     KagemushaCoreSenderRecoveryArchiveV1,
-};
-pub use crate::kagemusha_device_bridge_v1::sender_payload::{
-    SenderPreparationSelectorV1 as KagemushaCoreSenderPreparationSelectorV1,
-    SenderWalletContextV1 as KagemushaCoreSenderWalletContextV1,
 };
 
 use iroha_data_model::kagemusha::{
@@ -888,11 +888,13 @@ mod tests {
 
     #[test]
     fn shared_sdk_frames_match_every_native_method_and_recovery_selector() {
-        let fixture = include_str!(
-            "../../../fixtures/offline/kagemusha_core_coordinator_frame_v1.tsv"
-        );
+        let fixture =
+            include_str!("../../../fixtures/offline/kagemusha_core_coordinator_frame_v1.tsv");
         let mut fixtures = std::collections::BTreeMap::new();
-        for line in fixture.lines().filter(|line| !line.starts_with('#') && !line.is_empty()) {
+        for line in fixture
+            .lines()
+            .filter(|line| !line.starts_with('#') && !line.is_empty())
+        {
             let columns: Vec<_> = line.split('\t').collect();
             assert_eq!(columns.len(), 4, "invalid fixture row");
             let method = KagemushaCoreCoordinatorMethodV1::from_code(
@@ -903,31 +905,51 @@ mod tests {
             let response = hex::decode(columns[3]).expect("response hex");
             kagemusha_core_coordinator_validate_method_response_v1(method, &request, &response)
                 .expect("native request/response correlation");
-            assert!(fixtures.insert(columns[0], (method, request, response)).is_none());
+            assert!(
+                fixtures
+                    .insert(columns[0], (method, request, response))
+                    .is_none()
+            );
         }
         assert_eq!(fixtures.len(), 14);
         for (method, name, request_fields) in mobile_request_cases() {
-            let (actual_method, request, response) = fixtures.get(name).expect("shared method case");
+            let (actual_method, request, response) =
+                fixtures.get(name).expect("shared method case");
             assert_eq!(*actual_method, method);
             assert_eq!(
                 *request,
-                kagemusha_core_coordinator_encode_request_v1(&request_fields).expect("native request"),
+                kagemusha_core_coordinator_encode_request_v1(&request_fields)
+                    .expect("native request"),
                 "{name}",
             );
             assert_eq!(
                 *response,
-                kagemusha_core_coordinator_encode_response_v1(&mobile_response_fields(method, &request_fields))
-                    .expect("native response"),
+                kagemusha_core_coordinator_encode_response_v1(&mobile_response_fields(
+                    method,
+                    &request_fields
+                ))
+                .expect("native response"),
                 "{name}",
             );
         }
         let (_, missing_request, missing_response) = fixtures.get("recover-missing").unwrap();
         let missing_fields = kagemusha_core_coordinator_decode_request_v1(missing_request).unwrap();
-        assert_eq!(missing_fields[0], [KAGEMUSHA_CORE_COORDINATOR_RECOVER_BY_OPERATION_ID_V1]);
-        assert!(kagemusha_core_coordinator_decode_response_v1(missing_response).unwrap().is_empty());
+        assert_eq!(
+            missing_fields[0],
+            [KAGEMUSHA_CORE_COORDINATOR_RECOVER_BY_OPERATION_ID_V1]
+        );
+        assert!(
+            kagemusha_core_coordinator_decode_response_v1(missing_response)
+                .unwrap()
+                .is_empty()
+        );
         let (_, terminal_request, _) = fixtures.get("recover-terminal").unwrap();
-        let terminal_fields = kagemusha_core_coordinator_decode_request_v1(terminal_request).unwrap();
-        assert_eq!(terminal_fields[0], [KAGEMUSHA_CORE_COORDINATOR_RECOVER_BY_TERMINAL_ID_V1]);
+        let terminal_fields =
+            kagemusha_core_coordinator_decode_request_v1(terminal_request).unwrap();
+        assert_eq!(
+            terminal_fields[0],
+            [KAGEMUSHA_CORE_COORDINATOR_RECOVER_BY_TERMINAL_ID_V1]
+        );
     }
 
     struct TestBackend {

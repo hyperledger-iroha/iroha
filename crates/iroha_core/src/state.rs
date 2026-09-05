@@ -298,7 +298,7 @@ include!("state/vpn_lease_validation.rs");
 const MERGE_INNER_NORITO_COMPRESSION_OFFSET: usize = 4 + 1 + 1 + 16;
 const MERGE_INNER_NORITO_LENGTH_OFFSET: usize = MERGE_INNER_NORITO_COMPRESSION_OFFSET + 1;
 const MAX_MERGE_EXECUTION_RESERVATION_METADATA_BYTES: usize = 8 * 1024 * 1024;
-const MAX_MERGE_QC_BYTES: usize = 4 * 1024 * 1024;
+const MAX_MERGE_QC_BYTES: usize = iroha_data_model::merge::MAX_MERGE_QUORUM_CERTIFICATE_BYTES;
 const MERGE_QC_BLS_PROOF_BYTES: usize = 96;
 fn append_merge_write_set_component(out: &mut Vec<u8>, bytes: &[u8]) {
     let len = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
@@ -3476,6 +3476,9 @@ impl MergeAdmissionState {
 /// Errors surfaced when applying lane lifecycle updates.
 #[derive(Debug, ThisError)]
 pub enum LaneLifecycleError {
+    /// Prospective geometry must leave room for a complete merge execution transcript.
+    #[error(transparent)]
+    MergeAuthorityGeometry(#[from] iroha_data_model::merge::MergeLaneAuthorityGeometryError),
     /// Lifecycle plans must add or retire at least one lane.
     #[error("lane lifecycle plan must add or retire at least one lane")]
     EmptyPlan,
@@ -25910,10 +25913,17 @@ impl CertifiedLaneBlockPersistenceAuthority {
     }
 }
 struct MergeConsensusSnapshot {
+    generation: u64,
     lifecycle: LaneConsensusLifecycleSnapshot,
     admission: MergeAdmissionSnapshot,
     committed_height: u64,
     latest_block_hash: Option<HashOf<BlockHeader>>,
+}
+impl MergeConsensusSnapshot {
+    /// Whether all live reads still belong to this snapshot's publication.
+    fn is_current(&self, state: &State) -> bool {
+        is_stable_state_view_generation(self.generation, state.state_view_generation())
+    }
 }
 impl LaneConsensusLifecycleSnapshot {
     fn certified_lane_block_persistence_authority(
@@ -26361,6 +26371,7 @@ impl State {
                     validation?;
                 }
                 return Ok(MergeConsensusSnapshot {
+                    generation: generation_after,
                     lifecycle: LaneConsensusLifecycleSnapshot {
                         nexus,
                         incarnations,
@@ -31822,6 +31833,16 @@ impl State {
     }
     /// Install the lane manifest registry snapshot used for lane-relay validation.
     pub fn install_lane_manifests(&self, manifests: &LaneManifestRegistryHandle) {
+        let _state_write_lock = self.state_write_lock.lock();
+        let publication = self.begin_state_view_write();
+        self.install_lane_manifests_in_publication(manifests, &publication);
+    }
+    /// Publish manifest and privacy projections inside one existing State generation.
+    fn install_lane_manifests_in_publication(
+        &self,
+        manifests: &LaneManifestRegistryHandle,
+        _publication: &StateViewGenerationWriteGuard<'_>,
+    ) {
         {
             let mut guard = self.lane_manifests.write();
             *guard = Arc::clone(manifests);
@@ -33514,32 +33535,29 @@ impl State {
             return None;
         }
         let consensus = self.merge_consensus_snapshot();
-        self.build_merge_execution_batch_for_consensus(
+        self.build_merge_execution_candidate_for_consensus(
             epoch_id,
             application_block_header,
             &consensus,
             frozen_mode,
         )
+        .and_then(|candidate| candidate.execution_batch)
     }
     /// Snapshot active merge bindings and their exact lane committees from one
     /// immutable State view.
     fn merge_active_lane_authority_snapshot(
         &self,
         authority_height: u64,
-    ) -> Result<
-        (Hash, Vec<MergeLaneBinding>, MergeLaneAuthorityCatalogV1),
-        MergeLedgerCommitError,
-    > {
+    ) -> Result<(Hash, Vec<MergeLaneBinding>, MergeLaneAuthorityCatalogV1), MergeLedgerCommitError>
+    {
         let state_view = self.view();
         Self::merge_active_lane_authority_snapshot_from_view(&state_view, authority_height)
     }
     fn merge_active_lane_authority_snapshot_from_view(
         state_view: &StateView<'_>,
         authority_height: u64,
-    ) -> Result<
-        (Hash, Vec<MergeLaneBinding>, MergeLaneAuthorityCatalogV1),
-        MergeLedgerCommitError,
-    > {
+    ) -> Result<(Hash, Vec<MergeLaneBinding>, MergeLaneAuthorityCatalogV1), MergeLedgerCommitError>
+    {
         let nexus = state_view.nexus();
         if nexus.lane_catalog.lanes().is_empty()
             || nexus.lane_catalog.lanes().len() > MAX_ACTIVE_EXECUTION_LANES
@@ -33579,14 +33597,14 @@ impl State {
             });
             lane_committees.push(committee.into_validators());
         }
-        let lane_authority_catalog =
-            MergeLaneAuthorityCatalogV1::from_lane_committees(&lane_committees).map_err(
-                |error| {
-                    MergeLedgerCommitError::ExecutionBatchInvalid(format!(
-                        "merge lane authority catalog is invalid: {error}"
-                    ))
-                },
-            )?;
+        let lane_authority_catalog = MergeLaneAuthorityCatalogV1::from_lane_committees(
+            &lane_committees,
+        )
+        .map_err(|error| {
+            MergeLedgerCommitError::ExecutionBatchInvalid(format!(
+                "merge lane authority catalog is invalid: {error}"
+            ))
+        })?;
         Ok((
             merge_lane_catalog_hash(&nexus.lane_catalog),
             active_lanes,
@@ -33618,10 +33636,7 @@ impl State {
         )?;
         let state_view = self.view();
         let (expected_catalog_hash, expected_lanes, expected_authority_catalog) =
-            Self::merge_active_lane_authority_snapshot_from_view(
-                &state_view,
-                authority_height,
-            )?;
+            Self::merge_active_lane_authority_snapshot_from_view(&state_view, authority_height)?;
         if lane_catalog_hash != expected_catalog_hash || active_lanes != expected_lanes {
             return Err(MergeLedgerCommitError::CatalogMismatch);
         }
@@ -33653,40 +33668,12 @@ impl State {
         let epoch_id = consensus.admission.expected_epoch();
         let global_view = application_block_header.view_change_index();
         let parent_header = self.latest_block_header_fast()?;
-        let batch = self.build_merge_execution_batch_for_consensus(
+        let candidate = self.build_merge_execution_candidate_for_consensus(
             epoch_id,
             application_block_header,
             &consensus,
             frozen_mode,
         )?;
-        let (lane_catalog_hash, active_lanes, lane_authority_catalog) = self
-            .merge_active_lane_authority_snapshot(batch.application_block_header.height().get())
-            .ok()?;
-        let incarnation_entries = active_lanes
-            .iter()
-            .map(
-                |binding| iroha_data_model::nexus::LaneLifecycleIncarnationEntry {
-                    lane_id: binding.lane_id,
-                    incarnation: binding.incarnation,
-                },
-            )
-            .collect::<Vec<_>>();
-        let candidate = crate::merge::MergeLedgerCandidate {
-            version: crate::merge::MergeLedgerCandidate::VERSION,
-            epoch_id,
-            view: global_view,
-            carrier_height: batch.application_block_header.height().get(),
-            carrier_parent_hash: batch.application_block_header.prev_block_hash()?,
-            lane_catalog_hash,
-            active_lanes: active_lanes.clone(),
-            lane_authority_catalog,
-            incarnation_root: LaneLifecycleParameterV1::incarnation_root(&incarnation_entries),
-            activation_root: crate::merge::merge_activation_root(&active_lanes),
-            lane_snapshots: Vec::new(),
-            execution_batch: Some(batch),
-            lane_drain_certificates: Vec::new(),
-            global_state_root: crate::merge::reduce_merge_hint_roots(&[]),
-        };
         self.validate_merge_candidate_for_global_round(
             &candidate,
             &parent_header,
@@ -33694,19 +33681,23 @@ impl State {
             frozen_mode,
         )
         .ok()?;
-        Some(candidate)
+        consensus.is_current(self).then_some(candidate)
     }
-    fn build_merge_execution_batch_for_consensus(
+    fn build_merge_execution_candidate_for_consensus(
         &self,
         epoch_id: u64,
         application_block_header: BlockHeader,
         consensus: &MergeConsensusSnapshot,
         frozen_mode: ConsensusMode,
-    ) -> Option<MergeExecutionBatch> {
+    ) -> Option<crate::merge::MergeLedgerCandidate> {
         let lifecycle = &consensus.lifecycle;
         let admission = &consensus.admission;
         let nexus = &lifecycle.nexus;
-        if epoch_id != admission.expected_epoch()
+        if !consensus.is_current(self)
+            || epoch_id != admission.expected_epoch()
+            || application_block_header.height().get()
+                != consensus.committed_height.checked_add(1)?
+            || application_block_header.prev_block_hash() != consensus.latest_block_hash
             || nexus.lane_catalog.lanes().len() > MAX_ACTIVE_EXECUTION_LANES
         {
             return None;
@@ -33846,21 +33837,81 @@ impl State {
             warn!("first canonical merge source exceeds the entrypoint hard limit");
             return None;
         }
-        // Canonical batch size is monotonic over this ordered source prefix.
-        // Binary search avoids repeatedly executing an attacker-sized backlog
-        // while still leaving every non-selected suffix item for a later epoch.
+        let (lane_catalog_hash, active_lanes, lane_authority_catalog) = self
+            .merge_active_lane_authority_snapshot(application_block_header.height().get())
+            .ok()?;
+        let incarnation_entries = active_lanes
+            .iter()
+            .map(
+                |binding| iroha_data_model::nexus::LaneLifecycleIncarnationEntry {
+                    lane_id: binding.lane_id,
+                    incarnation: binding.incarnation,
+                },
+            )
+            .collect::<Vec<_>>();
+        let candidate_template = crate::merge::MergeLedgerCandidate {
+            version: crate::merge::MergeLedgerCandidate::VERSION,
+            epoch_id,
+            view: application_block_header.view_change_index(),
+            carrier_height: application_block_header.height().get(),
+            carrier_parent_hash: application_block_header.prev_block_hash()?,
+            lane_catalog_hash,
+            active_lanes: active_lanes.clone(),
+            lane_authority_catalog,
+            incarnation_root: LaneLifecycleParameterV1::incarnation_root(&incarnation_entries),
+            activation_root: crate::merge::merge_activation_root(&active_lanes),
+            lane_snapshots: Vec::new(),
+            execution_batch: None,
+            lane_drain_certificates: Vec::new(),
+            global_state_root: crate::merge::reduce_merge_hint_roots(&[]),
+        };
+        let selected = Self::select_merge_execution_candidate_prefix(
+            &candidate_template,
+            sources.len(),
+            MAX_MERGE_LEDGER_ENTRY_BYTES.saturating_sub(MAX_MERGE_QC_BYTES),
+            |prefix_len| {
+                if !consensus.is_current(self) {
+                    return None;
+                }
+                self.build_merge_execution_batch_from_source_prefix(
+                    epoch_id,
+                    application_block_header.clone(),
+                    sources[..prefix_len].to_vec(),
+                )
+            },
+        );
+        // Every live read and scratch execution must belong to the generation
+        // which supplied the parent/lifecycle/admission snapshot. A concurrent
+        // publication invalidates even a previously fitting prefix.
+        consensus.is_current(self).then_some(selected).flatten()
+    }
+    /// Select the largest canonical source prefix whose complete unsigned
+    /// carrier fits, including the immutable historical authority catalog.
+    ///
+    /// The source builder enforces the execution-batch limit independently.
+    /// Reserving the QC before selection prevents a repeatable oversized best
+    /// batch from starving a smaller prefix that the carrier can finalize.
+    fn select_merge_execution_candidate_prefix(
+        candidate_template: &crate::merge::MergeLedgerCandidate,
+        source_count: usize,
+        unsigned_limit: usize,
+        mut build_batch: impl FnMut(usize) -> Option<MergeExecutionBatch>,
+    ) -> Option<crate::merge::MergeLedgerCandidate> {
+        // Canonical size is monotonic over the ordered source prefix.
+        // Binary search bounds repeated deterministic pre-execution work.
         let mut lower = 1usize;
-        let mut upper = sources.len();
+        let mut upper = source_count;
         let mut best = None;
         while lower <= upper {
             let midpoint = lower + (upper - lower) / 2;
-            match self.build_merge_execution_batch_from_source_prefix(
-                epoch_id,
-                application_block_header.clone(),
-                sources[..midpoint].to_vec(),
-            ) {
-                Some(batch) => {
-                    best = Some(batch);
+            let candidate = build_batch(midpoint).and_then(|batch| {
+                let mut candidate = candidate_template.clone();
+                candidate.execution_batch = Some(batch);
+                (candidate.canonical_bytes().len() <= unsigned_limit).then_some(candidate)
+            });
+            match candidate {
+                Some(candidate) => {
+                    best = Some(candidate);
                     lower = midpoint.saturating_add(1);
                 }
                 None => upper = midpoint.saturating_sub(1),
@@ -42419,17 +42470,23 @@ impl State {
                 qc.validator_set_hash_version,
             ));
         }
-        if qc.validator_set.len() > MAX_MERGE_EXECUTION_VALIDATORS
-            || qc.signer_proofs.len() > MAX_MERGE_EXECUTION_SIGNER_PROOFS
+        if qc.validator_set.len() > iroha_data_model::merge::MAX_MERGE_QUORUM_CERTIFICATE_VALIDATORS
+            || qc.signer_proofs.len()
+                > iroha_data_model::merge::MAX_MERGE_QUORUM_CERTIFICATE_VALIDATORS
+            || qc
+                .validator_set
+                .iter()
+                .any(|peer| peer.public_key().algorithm() != Algorithm::BlsNormal)
             || qc.aggregate_signature.len() != MERGE_QC_BLS_PROOF_BYTES
             || qc
                 .signer_proofs
                 .iter()
                 .any(|proof| proof.proof_of_possession.len() != MERGE_QC_BLS_PROOF_BYTES)
-            || qc.encode().len() > MAX_MERGE_QC_BYTES
+            || norito::encode_canonical(qc)
+                .map_or(true, |encoded| encoded.len() > MAX_MERGE_QC_BYTES)
         {
             return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
-                "merge QC exceeds a hard count or byte limit".to_owned(),
+                "merge QC violates a hard count, byte, or validator-algorithm limit".to_owned(),
             ));
         }
         if qc.validator_set_hash != HashOf::new(&qc.validator_set) {
@@ -42930,6 +42987,10 @@ impl State {
         &mut self,
         mut nexus: iroha_config::parameters::actual::Nexus,
     ) -> Result<(), LaneLifecycleError> {
+        iroha_data_model::merge::validate_merge_lane_authority_geometry(
+            &nexus.lane_catalog,
+            &nexus.dataspace_catalog,
+        )?;
         if self.kura.emergency_fast_startup_enabled() && self.nexus_runtime_restored_from_snapshot {
             Self::ensure_emergency_fast_restored_catalogs_match(self.nexus.get_mut(), &nexus)?;
             nexus.lane_config =
@@ -43084,6 +43145,10 @@ impl State {
         configured_lane_catalog: LaneCatalog,
         configured_baseline: Option<Hash>,
     ) -> Result<(), LaneLifecycleError> {
+        iroha_data_model::merge::validate_merge_lane_authority_geometry(
+            &nexus.lane_catalog,
+            &nexus.dataspace_catalog,
+        )?;
         nexus.configured_lane_catalog = configured_lane_catalog;
         let previous_nexus = self.nexus.read().clone();
         let dataspace_ids: BTreeSet<_> = nexus
@@ -43868,7 +43933,10 @@ impl State {
                     nexus.lane_catalog = lifecycle_update.updated_catalog;
                     nexus.lane_config = lifecycle_update.updated_lane_config;
                 }
-                self.install_lane_manifests(&updated_lane_manifests);
+                self.install_lane_manifests_in_publication(
+                    &updated_lane_manifests,
+                    &_view_generation,
+                );
                 *self.lane_incarnations.write() = lifecycle_update.updated_lane_incarnations;
                 *self.lane_incarnation_lineage.write() =
                     lifecycle_update.updated_lane_incarnation_lineage;
@@ -44177,6 +44245,7 @@ impl State {
         &self,
         pending: &PendingAutoscaleLaneLifecycle,
         persist_cursor_journal: bool,
+        publication: &StateViewGenerationWriteGuard<'_>,
     ) {
         let update = &pending.catalog_update;
         {
@@ -44191,7 +44260,7 @@ impl State {
         *self.lane_incarnation_lineage.write() = update.updated_lane_incarnation_lineage.clone();
         *self.lane_incarnation_activation_heights.write() =
             update.updated_lane_incarnation_activation_heights.clone();
-        self.install_lane_manifests(&pending.updated_lane_manifests);
+        self.install_lane_manifests_in_publication(&pending.updated_lane_manifests, publication);
         self.reset_lane_scoped_runtime_state(&update.lanes_to_reset, persist_cursor_journal);
         let active_reset_lanes =
             Self::active_reset_lanes(&update.lanes_to_reset, &update.updated_lane_config);
@@ -45591,6 +45660,10 @@ fn prepare_lane_lifecycle_update(
         return Err(LaneLifecycleError::PhysicalPrimaryReplacement);
     }
     let updated_catalog = nexus.lane_catalog.apply_lifecycle(plan)?;
+    iroha_data_model::merge::validate_merge_lane_authority_geometry(
+        &updated_catalog,
+        &nexus.dataspace_catalog,
+    )?;
     let added_lane_ids: BTreeSet<_> = plan.additions.iter().map(|lane| lane.id).collect();
     ensure_catalog_autoscale_lanes_consistent(
         nexus,
@@ -52655,8 +52728,11 @@ impl<'state> StateBlock<'state> {
             let autoscale_hold = if publish_block_runtime_effects {
                 if let Some(pending) = &pending_autoscale_lifecycle {
                     let autoscale_start = Instant::now();
-                    state_ref
-                        .apply_committed_autoscale_lane_lifecycle(pending, !replay_prevalidation);
+                    state_ref.apply_committed_autoscale_lane_lifecycle(
+                        pending,
+                        !replay_prevalidation,
+                        &_view_generation,
+                    );
                     autoscale_storage_hold + autoscale_start.elapsed()
                 } else {
                     autoscale_storage_hold

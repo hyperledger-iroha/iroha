@@ -99,6 +99,9 @@ fn decode_note_material_v1(
     bytes: &[u8],
     expected_commitment: PrivacyCommitmentV1,
 ) -> Result<PrivateNotePlaintextV1, IvmPrivateNoteWalletErrorV1> {
+    // Decode the shared fixed-width material only. The recipient checks the
+    // canonical note commitment; the audit-opening caller compares every field
+    // with a note already validated under its governed relation profile.
     if bytes.len() != PRIVACY_IVM_PRIVATE_NOTE_PLAINTEXT_BYTES_V1
         || bytes.get(..4) != Some(NOTE_MAGIC_V1.as_slice())
         || bytes.get(4..36) != Some(expected_commitment.as_bytes().as_slice())
@@ -915,11 +918,15 @@ mod tests {
         0xff, 0x7f,
     ];
     #[test]
-    fn inner_note_codec_rejects_magic_commitment_and_opening_corruption() {
+    fn inner_note_codec_rejects_noncanonical_framing_and_embedded_commitment() {
         let (_, _, note, _) = fixture();
         let commitment = derive_note_commitment_v1(&note).unwrap();
         let encoded = encode_note_material_v1(&note, commitment);
-        for index in [0, 4, 36, 52, 84, 116, 148, encoded.len() - 1] {
+        assert_eq!(
+            decode_note_material_v1(encoded.as_slice(), commitment),
+            Ok(note)
+        );
+        for index in 0..36 {
             let mut tampered = Zeroizing::new(*encoded);
             tampered[index] ^= 1;
             assert!(
@@ -927,9 +934,91 @@ mod tests {
                 "tampered plaintext byte {index} was accepted"
             );
         }
+        for length in 0..encoded.len() {
+            assert_eq!(
+                decode_note_material_v1(&encoded[..length], commitment),
+                Err(IvmPrivateNoteWalletErrorV1::Note)
+            );
+        }
+        let mut trailing = Zeroizing::new(encoded.to_vec());
+        trailing.push(0);
         assert_eq!(
-            decode_note_material_v1(&encoded[..encoded.len() - 1], commitment),
+            decode_note_material_v1(trailing.as_slice(), commitment),
             Err(IvmPrivateNoteWalletErrorV1::Note)
         );
+    }
+
+    #[test]
+    fn authenticated_opening_corruption_fails_recipient_and_auditor_validation() {
+        let (pool, program, note, recipient_secret) = fixture();
+        let recipient_public = ivm_private_recipient_public_key_v1(&recipient_secret).unwrap();
+        let commitment = derive_note_commitment_v1(&note).unwrap();
+        let encoded = encode_note_material_v1(&note, commitment);
+        let ephemeral_secret = core::array::from_fn(|index| (index as u8) * 7 + 3);
+        let nonce = core::array::from_fn(|index| (index as u8) * 5 + 11);
+        let encrypted = encrypt_note_material_v1(
+            pool,
+            program,
+            &note,
+            commitment,
+            recipient_public,
+            &ephemeral_secret,
+            &nonce,
+        )
+        .unwrap();
+        assert_eq!(
+            validate_ivm_private_wallet_encryption_opening_v1(
+                pool,
+                program,
+                &note,
+                commitment,
+                &encrypted,
+                recipient_public,
+                &ephemeral_secret,
+            ),
+            Ok(())
+        );
+        for index in 36..encoded.len() {
+            let mut tampered = Zeroizing::new(*encoded);
+            tampered[index] ^= 1;
+            let changed_note = decode_note_material_v1(tampered.as_slice(), commitment).unwrap();
+            // A malicious sender can authenticate arbitrary plaintext. Exercise
+            // the commitment and exact-opening checks after successful AEAD,
+            // rather than accepting an authentication failure as sufficient.
+            let encrypted = encrypt_note_material_v1(
+                pool,
+                program,
+                &changed_note,
+                commitment,
+                recipient_public,
+                &ephemeral_secret,
+                &nonce,
+            )
+            .unwrap();
+            assert_eq!(
+                decrypt_ivm_private_wallet_note_v1(
+                    pool,
+                    program,
+                    commitment,
+                    &encrypted,
+                    &recipient_secret,
+                ),
+                Err(IvmPrivateNoteWalletErrorV1::Note),
+                "recipient accepted authenticated opening byte {index}"
+            );
+            assert_eq!(
+                validate_ivm_private_wallet_encryption_opening_v1(
+                    pool,
+                    program,
+                    &note,
+                    commitment,
+                    &encrypted,
+                    recipient_public,
+                    &ephemeral_secret,
+                ),
+                Err(IvmPrivateNoteWalletErrorV1::Note),
+                "auditor accepted authenticated opening byte {index}"
+            );
+        }
     }
 }

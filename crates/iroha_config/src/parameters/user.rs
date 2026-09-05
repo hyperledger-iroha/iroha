@@ -11813,6 +11813,13 @@ impl Nexus {
             Self::build_dataspace_catalog(dataspace_catalog, emitter)?;
         let lane_catalog =
             Self::build_lane_catalog(lane_count, lane_catalog, &dataspace_catalog, emitter)?;
+        if let Err(error) = iroha_data_model::merge::validate_merge_lane_authority_geometry(
+            &lane_catalog,
+            &dataspace_catalog,
+        ) {
+            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(error.to_string()));
+            return None;
+        }
         let routing_policy =
             Self::build_routing_policy(routing_policy, &lane_catalog, &dataspace_catalog, emitter)?;
         let registry = registry.parse(emitter)?;
@@ -39379,3 +39386,40 @@ mod kagemusha_v1_settlement_tests;
 #[cfg(test)]
 #[path = "user/settlement_router_tests.rs"]
 mod settlement_router_tests;
+
+#[cfg(test)]
+mod merge_authority_geometry_tests {
+    use super::*;
+
+    #[test]
+    fn nexus_rejects_unmergeable_aggregate_committee_geometry() {
+        for (lane_count, allowed) in [(190_u32, true), (191_u32, false)] {
+            let mut config = Nexus::default();
+            config.lane_count = NonZeroU32::new(lane_count).unwrap();
+            config.lane_catalog = (0..lane_count)
+                .map(|index| LaneDescriptor {
+                    index: Some(index),
+                    alias: Some(format!("geometry-{index}")),
+                    ..LaneDescriptor::default()
+                })
+                .collect();
+            config.dataspace_catalog = vec![DataSpaceDescriptor {
+                id: Some(0),
+                alias: Some(defaults::nexus::DEFAULT_DATASPACE_ALIAS.to_owned()),
+                fault_tolerance: Some(42),
+                ..DataSpaceDescriptor::default()
+            }];
+            config.staking.max_validators = NonZeroU32::new(127).unwrap();
+            let mut emitter = Emitter::new();
+            let parsed = config.parse(&mut emitter);
+            let diagnostics = emitter.into_result();
+            if allowed {
+                assert!(parsed.is_some(), "admissible geometry: {diagnostics:?}");
+                assert!(diagnostics.is_ok());
+            } else {
+                assert!(parsed.is_none());
+                assert!(format!("{diagnostics:?}").contains("merge authority geometry reserves"));
+            }
+        }
+    }
+}

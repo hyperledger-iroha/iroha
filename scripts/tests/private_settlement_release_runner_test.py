@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import copy
+from contextlib import ExitStack, contextmanager
 import hashlib
 import importlib.util
+import io
 import json
 import os
+import stat
 import struct
 import sys
 import tempfile
@@ -1429,8 +1432,168 @@ def response(job: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+class CanonicalHashLiteralTests(unittest.TestCase):
+    """Check canonical hash checksums against independent bitwise fixtures."""
+
+    def test_fixed_checksum_vectors_preserve_literal_bytes(self) -> None:
+        vectors = (
+            ("0" * 64, "D52F"),
+            ("F" * 64, "C6C0"),
+            ("0123456789ABCDEF" * 4, "EFDA"),
+            ("4" * 64, "B84D"),
+        )
+        for body, checksum in vectors:
+            with self.subTest(body=body):
+                literal = f"hash:{body}#{checksum}"
+                self.assertEqual(_iroha_hash_literal(body), literal)
+                self.assertEqual(
+                    MODULE.canonical_iroha_hash_body(literal, "hash_test"),
+                    body.lower(),
+                )
+
+    def test_standard_library_crc_matches_independent_bit_loop(self) -> None:
+        # Keep _iroha_hash_literal's independent polynomial bit loop: using
+        # the production helper to construct these literals would hide drift.
+        for offset in range(32):
+            for value in range(256):
+                body_bytes = bytearray(32)
+                body_bytes[offset] = value
+                body = body_bytes.hex()
+                with self.subTest(offset=offset, value=value):
+                    self.assertEqual(
+                        MODULE.canonical_iroha_hash_body(
+                            _iroha_hash_literal(body), "hash_test"
+                        ),
+                        body,
+                    )
+        for index in range(256):
+            body = hashlib.sha256(index.to_bytes(2, "big")).hexdigest()
+            with self.subTest(dense_body=index):
+                self.assertEqual(
+                    MODULE.canonical_iroha_hash_body(
+                        _iroha_hash_literal(body), "hash_test"
+                    ),
+                    body,
+                )
+
+    def test_malformed_syntax_and_checksum_corruption_fail_closed(self) -> None:
+        body = "0123456789ABCDEF" * 4
+        literal = f"hash:{body}#EFDA"
+        malformed = (
+            None,
+            True,
+            1,
+            [],
+            {},
+            literal.encode("ascii"),
+            literal.lower(),
+            literal[:-4] + "efda",
+            literal.replace("hash:", "Hash:"),
+            literal.replace("hash:", "hash"),
+            literal.replace("#", ":"),
+            "hash:#EFDA",
+            f"hash:{body[:-1]}#EFDA",
+            f"hash:{body}0#EFDA",
+            f"hash:{body[:-1]}G#EFDA",
+            f"hash:{body[:-1]}Ｆ#EFDA",
+            literal[:-1],
+            literal + "0",
+            literal[:-1] + "G",
+            " " + literal,
+            literal + " ",
+            literal + "\n",
+            literal + "\0",
+        )
+        for value in malformed:
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(
+                    MODULE.RunnerError,
+                    "hash_test is not a canonical Iroha hash literal",
+                ):
+                    MODULE.canonical_iroha_hash_body(value, "hash_test")
+        for bit in range(16):
+            corrupted = literal[:-4] + f"{0xEFDA ^ (1 << bit):04X}"
+            with self.subTest(checksum_bit=bit), self.assertRaisesRegex(
+                MODULE.RunnerError, "hash_test has an invalid Iroha hash checksum"
+            ):
+                MODULE.canonical_iroha_hash_body(corrupted, "hash_test")
+        for offset in range(64):
+            replacement = "1" if body[offset] == "0" else "0"
+            corrupted = f"hash:{body[:offset]}{replacement}{body[offset + 1:]}#EFDA"
+            with self.subTest(body_offset=offset), self.assertRaisesRegex(
+                MODULE.RunnerError, "hash_test has an invalid Iroha hash checksum"
+            ):
+                MODULE.canonical_iroha_hash_body(corrupted, "hash_test")
+
+
 class PrivateSettlementReleaseRunnerTests(unittest.TestCase):
     """Exercise deterministic planning and fail-closed response materialization."""
+
+    def test_smoke_prerequisite_binds_gate_and_execution_source(self) -> None:
+        import private_settlement_smoke_campaign as smoke
+
+        campaign = {
+            "source": {"commit": COMMIT, "tree": "1" * 40, "source_sha256": "2" * 64},
+            "artifacts": {"validator": {"sha256": "3" * 64}, "integration": {"sha256": "4" * 64}},
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            MODULE.write_json(root / "campaign.json", campaign)
+            with mock.patch.object(smoke, "validate_campaign", return_value=campaign) as validate, mock.patch.object(
+                smoke, "source_seal", return_value=campaign["source"]
+            ) as seal:
+                receipt = MODULE.validate_smoke_prerequisite(root, source_root=root, commit=COMMIT)
+            validate.assert_called_once_with(root, expected_commit=COMMIT)
+            seal.assert_called_once_with(root, COMMIT)
+            self.assertEqual(receipt["campaign_sha256"], MODULE.file_binding(root / "campaign.json")["sha256"])
+            self.assertEqual(receipt["runs"], 10)
+            self.assertNotIn(str(root), MODULE.canonical_bytes(receipt).decode())
+
+            with mock.patch.object(smoke, "validate_campaign", return_value=campaign), mock.patch.object(
+                smoke, "source_seal", return_value={**campaign["source"], "source_sha256": "5" * 64}
+            ), self.assertRaisesRegex(MODULE.RunnerError, "execution source differs"):
+                MODULE.validate_smoke_prerequisite(root, source_root=root, commit=COMMIT)
+
+            def substitute_after_validation(*_args: Any) -> dict[str, Any]:
+                MODULE.write_json(root / "campaign.json", {**campaign, "substituted": True})
+                return campaign["source"]
+
+            with mock.patch.object(smoke, "validate_campaign", return_value=campaign), mock.patch.object(
+                smoke, "source_seal", side_effect=substitute_after_validation
+            ), self.assertRaisesRegex(MODULE.RunnerError, "changed after validation"):
+                MODULE.validate_smoke_prerequisite(root, source_root=root, commit=COMMIT)
+
+    def test_release_execution_rejects_missing_smoke_before_starting_work(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            source, output = root / "source", root / "new-parent" / "output"
+            source.mkdir()
+            frozen_plan = {"commit": COMMIT, "jobs": [], "harness": {"sha256": EXECUTABLE}}
+            with mock.patch.object(MODULE, "load_plan", return_value=(frozen_plan, root)), mock.patch.object(
+                MODULE, "validate_campaign_timeout"
+            ), mock.patch.object(MODULE, "file_binding", return_value={}), mock.patch.object(
+                MODULE, "verify_source_checkout"
+            ), mock.patch.object(MODULE, "verify_harness", return_value=frozen_plan["harness"]), mock.patch.object(
+                MODULE, "invoke_harness"
+            ) as invoke, self.assertRaisesRegex(MODULE.RunnerError, "smoke prerequisite failed"):
+                MODULE.execute_plan(
+                    root / "plan.json", output, source_root=source,
+                    harness=root / "harness", smoke_campaign=root / "missing-smoke",
+                    timeout_seconds=7_200,
+                )
+            invoke.assert_not_called()
+            self.assertFalse(output.parent.exists())
+
+    def test_release_execution_cli_requires_explicit_smoke_evidence(self) -> None:
+        arguments = ["execute", "--plan", "/plan", "--output-dir", "/output",
+                     "--source-root", "/source", "--harness", "/harness"]
+        with mock.patch("sys.stderr", new_callable=io.StringIO) as error, self.assertRaises(SystemExit) as result:
+            MODULE.parse_args(arguments)
+        self.assertEqual(result.exception.code, 2)
+        self.assertIn("--smoke-campaign", error.getvalue())
+        self.assertEqual(
+            MODULE.parse_args(arguments + ["--smoke-campaign", "/smoke"]).smoke_campaign, Path("/smoke")
+        )
 
     def test_job_matrix_is_complete_canonical_and_deterministic(self) -> None:
         canaries = MODULE.build_canary_manifest(COMMIT)
@@ -2997,14 +3160,22 @@ class PrivateSettlementReleaseRunnerTests(unittest.TestCase):
             harness = Path(temporary) / "empty-harness.sh"
             harness.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
             os.chmod(harness, 0o700)
-            with self.assertRaisesRegex(
-                MODULE.RunnerError, "without a regular response"
-            ):
+            process = mock.Mock(pid=987654, wait=mock.Mock(return_value=0),
+                                poll=mock.Mock(return_value=0))
+            with mock.patch.object(MODULE.subprocess, "Popen", return_value=process), mock.patch.object(
+                MODULE, "_process_group_exists", return_value=False
+            ), self.assertRaisesRegex(MODULE.RunnerError, "without a regular response"):
                 MODULE.invoke_harness(
-                    harness,
+                    harness.resolve(),
                     {"kind": "fault"},
+                    attempt_dir=Path(temporary).resolve() / "retained-attempt",
                     timeout_seconds=5,
                 )
+            attempt = Path(temporary).resolve() / "retained-attempt"
+            self.assertTrue((attempt / "request.json").is_file())
+            self.assertTrue((attempt / "stdout.log").is_file())
+            self.assertTrue((attempt / "stderr.log").is_file())
+            self.assertFalse(MODULE.read_json_file(attempt / "response-outcome.json", "test outcome")["passed"])
 
     def test_publication_fragment_replays_applicable_final_validators(self) -> None:
         from scripts.tests.private_settlement_release_evidence_test import (
@@ -3109,6 +3280,294 @@ class PrivateSettlementReleaseRunnerTests(unittest.TestCase):
             source = Path(temporary)
             with self.assertRaisesRegex(MODULE.RunnerError, "outside"):
                 MODULE.require_external_output(source / "evidence", source)
+
+
+class PrivateSettlementFailureRetentionTests(unittest.TestCase):
+    """Exercise disk retention with synthetic responses and no real processes."""
+
+    @staticmethod
+    def fake_process(*, response_bytes: bytes | None = b"{}", exit_code: int = 0):
+        """Return a Popen stand-in that writes real raw files but starts no process."""
+
+        def start(command, **options):
+            request_path = Path(command[command.index("--aps-request") + 1])
+            response_path = Path(command[command.index("--aps-response") + 1])
+            evidence = Path(command[command.index("--aps-evidence-dir") + 1])
+            options["stdout"].write(b"retained synthetic stdout\n")
+            options["stderr"].write(b"retained synthetic stderr\n")
+            if response_bytes is not None:
+                response_path.write_bytes(response_bytes)
+                response_path.chmod(0o600)
+            request = json.loads(request_path.read_text())
+            if request.get("kind") != "benchmark":
+                (evidence / "raw.bin").write_bytes(b"retained raw capture\x00")
+            return mock.Mock(pid=987654, wait=mock.Mock(return_value=exit_code),
+                             poll=mock.Mock(return_value=exit_code))
+
+        return start
+
+    @contextmanager
+    def execution_fixture(self, root: Path):
+        """Stub network semantics while exercising all persistent execution stages.
+
+        This reduced synthetic matrix tests bookkeeping only. Production plan,
+        process, report and smoke validators remain mandatory and unchanged.
+        """
+
+        source = root / "source"
+        source.mkdir()
+        harness = root / "synthetic-harness"
+        harness.write_text("synthetic executable bytes\n")
+        harness.chmod(0o700)
+        frozen = {
+            "commit": COMMIT,
+            "harness": MODULE.file_binding(harness),
+            "jobs": [
+                {"request_id": f"{index:064x}", "kind": kind, **extra}
+                for index, (kind, extra) in enumerate((
+                    ("fault", {}), ("benchmark", {}),
+                    ("leakage", {"variant": "left"}),
+                    ("leakage", {"variant": "right"}),
+                ), 1)
+            ],
+            "requirements": {"seeds": [0], "warmups": 0, "measured": 1,
+                             "bootstrap_iterations": 100},
+            "benchmark_baseline": None,
+        }
+        for key, value in (("hardware", {}), ("canary_manifest", {}),
+                           ("configuration_manifest", {"configurations": []})):
+            path = root / f"{key}.json"
+            MODULE.write_json(path, value)
+            frozen[key] = {"path": path.name, **MODULE.file_binding(path)}
+        plan_path = root / "plan.json"
+        MODULE.write_json(plan_path, frozen)
+        output = root / "retained-campaign"
+        with ExitStack() as stack:
+            def patch(target, name, **kwargs):
+                return stack.enter_context(mock.patch.object(target, name, **kwargs))
+
+            patch(MODULE, "PARTICIPANTS", new=(3,))
+            patch(MODULE, "PROFILES", new=("private",))
+            patch(MODULE, "load_plan", return_value=(frozen, root))
+            patch(MODULE, "verify_source_checkout")
+            smoke = patch(MODULE, "validate_smoke_prerequisite", return_value={"passed": True, "runs": 10})
+            patch(MODULE, "build_request", side_effect=lambda _plan, _root, job: dict(job))
+            process = patch(MODULE.subprocess, "Popen", side_effect=self.fake_process())
+            patch(MODULE, "_process_group_exists", return_value=False)
+            patch(MODULE, "materialize_fault_response", return_value=({"synthetic": "fault"}, []))
+            benchmark = patch(MODULE, "materialize_benchmark_response", return_value={"synthetic": "benchmark"})
+            patch(MODULE, "validate_leakage_response", return_value=({"messages": 1}, []))
+            patch(MODULE.fault_report, "load_runs", return_value=[])
+            patch(MODULE.fault_report, "input_bindings", return_value=[])
+            patch(MODULE.fault_report, "build_report", return_value={"passed": True})
+            patch(MODULE.benchmark_report, "load_jsonl", return_value=[])
+            patch(MODULE.benchmark_report, "build_report", return_value={"passed": True})
+            for name in ("write_fault_csv", "write_benchmark_csv"):
+                patch(MODULE, name, side_effect=lambda path, _rows: path.write_text("synthetic\n"))
+            patch(MODULE, "differential_pair_manifest", return_value={})
+            leakage = patch(MODULE.leakage_audit, "run_audit", return_value={"passed": True})
+            patch(MODULE, "validate_publication_fragment")
+            yield {
+                "plan": frozen, "output": output, "smoke": smoke,
+                "process": process, "benchmark": benchmark, "leakage": leakage,
+                "execute": lambda: MODULE.execute_plan(
+                    plan_path, output, source_root=source, harness=harness,
+                    smoke_campaign=root / "synthetic-smoke", timeout_seconds=7_200,
+                ),
+            }
+
+    def assert_no_success(self, output: Path) -> dict[str, Any]:
+        self.assertFalse((output / "release-artifact-fragment-v1.json").exists())
+        failure = json.loads((output / "failure.json").read_text())
+        self.assertIs(failure["passed"], False)
+        self.assertEqual(failure["planned_jobs"], 4)
+        return failure
+
+    def test_private_records_and_attempt_directories_are_fresh_and_owner_only(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            attempt = root / "attempt"
+            previous = os.umask(0)
+            try:
+                MODULE.fresh_private_directory(attempt)
+                MODULE.private_record(attempt / "outcome.json", {"passed": False})
+            finally:
+                os.umask(previous)
+            self.assertEqual(stat.S_IMODE(attempt.stat().st_mode), 0o700)
+            self.assertEqual(stat.S_IMODE((attempt / "outcome.json").stat().st_mode), 0o600)
+            with self.assertRaises(FileExistsError):
+                MODULE.fresh_private_directory(attempt)
+            with self.assertRaises(FileExistsError):
+                MODULE.private_record(attempt / "outcome.json", {"passed": True})
+            self.assertFalse(json.loads((attempt / "outcome.json").read_text())["passed"])
+            with self.assertRaisesRegex(MODULE.RunnerError, "absolute and canonical"):
+                MODULE.fresh_private_directory(Path("relative-attempt"))
+
+    def test_retained_inventory_does_not_follow_harness_symlinks(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            evidence = root / "evidence"
+            evidence.mkdir()
+            external = root / "outside.txt"
+            external.write_text("not an evidence file")
+            (evidence / "link").symlink_to(external)
+            (evidence / "raw.bin").write_bytes(b"capture")
+            inventory = MODULE.retained_file_inventory(evidence)
+            self.assertEqual(inventory[0], {"path": "link", "kind": "symlink", "target": str(external)})
+            self.assertEqual(inventory[1]["sha256"], hashlib.sha256(b"capture").hexdigest())
+
+    def test_failed_harness_responses_preserve_all_raw_evidence(self) -> None:
+        cases = ((7, b'{"partial":true}', "exited 7"),
+                 (0, None, "without a regular response"),
+                 (0, b'{"truncated":', "not valid JSON"))
+        for exit_code, raw_response, reason in cases:
+            with self.subTest(exit_code=exit_code, response=raw_response), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary).resolve()
+                attempt = root / "attempt"
+                with mock.patch.object(MODULE.subprocess, "Popen", side_effect=self.fake_process(
+                    response_bytes=raw_response, exit_code=exit_code
+                )), mock.patch.object(MODULE, "_process_group_exists", return_value=False), mock.patch.object(
+                    MODULE, "_terminate_owned_process_group"
+                ) as terminate, self.assertRaisesRegex(MODULE.RunnerError, reason):
+                    MODULE.invoke_harness(root / "synthetic-harness", {"kind": "fault", "request_id": "1" * 64},
+                                          attempt_dir=attempt, timeout_seconds=1)
+                terminate.assert_not_called()
+                self.assertEqual((attempt / "stdout.log").read_bytes(), b"retained synthetic stdout\n")
+                self.assertEqual((attempt / "stderr.log").read_bytes(), b"retained synthetic stderr\n")
+                self.assertEqual((attempt / "evidence" / "raw.bin").read_bytes(), b"retained raw capture\x00")
+                if raw_response is None:
+                    self.assertFalse((attempt / "response.json").exists())
+                else:
+                    self.assertEqual((attempt / "response.json").read_bytes(), raw_response)
+                self.assertEqual(json.loads((attempt / "process-outcome.json").read_text())["exit_code"], exit_code)
+                outcome = json.loads((attempt / "response-outcome.json").read_text())
+                self.assertFalse(outcome["passed"])
+                self.assertIn("request.json", {entry["path"] for entry in outcome["retained_files"]})
+
+    def test_semantic_failure_retains_earlier_success_and_complete_denominator(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary, self.execution_fixture(Path(temporary).resolve()) as fixture:
+            fixture["benchmark"].side_effect = MODULE.RunnerError("synthetic semantic failure")
+            with self.assertRaisesRegex(MODULE.RunnerError, "synthetic semantic failure"):
+                fixture["execute"]()
+            failure = self.assert_no_success(fixture["output"])
+            jobs = fixture["plan"]["jobs"]
+            self.assertEqual([job["request_id"] for job in failure["completed_jobs"]], [jobs[0]["request_id"]])
+            self.assertEqual(failure["failed_job"]["request_id"], jobs[1]["request_id"])
+            self.assertEqual(failure["not_started_request_ids"], [job["request_id"] for job in jobs[2:]])
+            self.assertEqual(json.loads((fixture["output"] / "frozen-plan.json").read_text()), fixture["plan"])
+            attempts = sorted((fixture["output"] / "attempts").iterdir())
+            self.assertEqual(len(attempts), 2)
+            for index, attempt in enumerate(attempts):
+                self.assertEqual((attempt / "response.json").read_bytes(), b"{}")
+                self.assertTrue((attempt / "stdout.log").is_file())
+                self.assertEqual(json.loads((attempt / "validation-outcome.json").read_text())["passed"], index == 0)
+            fixture["smoke"].assert_called_once()
+            self.assertEqual(fixture["process"].call_count, 2)
+            with self.assertRaisesRegex(MODULE.RunnerError, "already exists"):
+                fixture["execute"]()
+
+    def test_report_failure_retains_failing_report_and_all_completed_jobs(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary, self.execution_fixture(Path(temporary).resolve()) as fixture:
+            report = {"passed": False, "reason": "synthetic canary mismatch"}
+            fixture["leakage"].return_value = report
+            with self.assertRaisesRegex(MODULE.RunnerError, "leakage audit found"):
+                fixture["execute"]()
+            failure = self.assert_no_success(fixture["output"])
+            self.assertEqual(failure["stage"], "reports")
+            self.assertEqual(len(failure["completed_jobs"]), 4)
+            self.assertIsNone(failure["failed_job"])
+            self.assertEqual(failure["not_started_request_ids"], [])
+            report_path = fixture["output"] / "publication" / "reports" / "leakage-report-v1.json"
+            self.assertEqual(json.loads(report_path.read_text()), report)
+            self.assertEqual(len(list((fixture["output"] / "attempts").glob("*/response.json"))), 4)
+
+    def test_final_smoke_revalidation_failure_never_publishes_success(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary, self.execution_fixture(Path(temporary).resolve()) as fixture:
+            fixture["smoke"].side_effect = [{"passed": True, "runs": 10},
+                                           MODULE.RunnerError("smoke evidence changed")]
+            with self.assertRaisesRegex(MODULE.RunnerError, "smoke evidence changed"):
+                fixture["execute"]()
+            failure = self.assert_no_success(fixture["output"])
+            self.assertEqual(failure["stage"], "final_revalidation")
+            self.assertEqual(len(failure["completed_jobs"]), 4)
+            self.assertEqual(fixture["smoke"].call_count, 2)
+            self.assertFalse((fixture["output"] / "campaign-validation.json").exists())
+            self.assertFalse(list(fixture["output"].glob("*.pending.json")))
+
+    def test_fragment_is_published_only_after_pending_file_and_directory_sync(self) -> None:
+        for fail_at in (1, 2, 3):
+            with self.subTest(fsync_call=fail_at), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary).resolve()
+                final = root / "fragment.json"
+                real_fsync = os.fsync
+                calls = 0
+
+                def sync(descriptor):
+                    nonlocal calls
+                    calls += 1
+                    if calls == fail_at:
+                        raise OSError("synthetic fsync failure")
+                    real_fsync(descriptor)
+
+                with mock.patch.object(MODULE.os, "fsync", side_effect=sync), self.assertRaisesRegex(OSError, "fsync failure"):
+                    MODULE.publish_campaign_fragment(final, {"passed": True})
+                self.assertFalse(final.exists())
+                self.assertEqual(json.loads((root / "fragment.pending.json").read_text()), {"passed": True})
+
+    def test_fragment_write_failure_retains_partial_pending_and_campaign_error(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary, self.execution_fixture(Path(temporary).resolve()) as fixture:
+            record = MODULE.private_record
+
+            def fail_pending(path, value):
+                if path.name == "release-artifact-fragment-v1.pending.json":
+                    path.write_bytes(b'{"partial":')
+                    raise OSError("synthetic fragment write failure")
+                record(path, value)
+
+            with mock.patch.object(MODULE, "private_record", side_effect=fail_pending), self.assertRaisesRegex(
+                OSError, "fragment write failure"
+            ):
+                fixture["execute"]()
+            failure = self.assert_no_success(fixture["output"])
+            self.assertEqual(failure["stage"], "publication")
+            self.assertEqual(len(failure["completed_jobs"]), 4)
+            pending = fixture["output"] / "release-artifact-fragment-v1.pending.json"
+            self.assertEqual(pending.read_bytes(), b'{"partial":')
+            self.assertTrue((fixture["output"] / "campaign-validation.json").is_file())
+
+    def test_fragment_directory_sync_failure_retains_pending_and_campaign_error(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary, self.execution_fixture(Path(temporary).resolve()) as fixture:
+            final = fixture["output"] / "release-artifact-fragment-v1.json"
+            real_fsync = os.fsync
+            failed = False
+
+            def fail_publication_sync(descriptor):
+                nonlocal failed
+                if final.exists() and not failed:
+                    failed = True
+                    raise OSError("synthetic publication directory sync failure")
+                real_fsync(descriptor)
+
+            with mock.patch.object(MODULE.os, "fsync", side_effect=fail_publication_sync), self.assertRaisesRegex(
+                OSError, "publication directory sync failure"
+            ):
+                fixture["execute"]()
+            failure = self.assert_no_success(fixture["output"])
+            self.assertEqual(failure["stage"], "publication")
+            pending = fixture["output"] / "release-artifact-fragment-v1.pending.json"
+            self.assertTrue(json.loads(pending.read_text())["real_process_campaign_complete"])
+            self.assertEqual(len(failure["completed_jobs"]), 4)
+
+    def test_successful_campaign_retains_attempts_and_publishes_atomically(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary, self.execution_fixture(Path(temporary).resolve()) as fixture:
+            final = fixture["execute"]()
+            self.assertEqual(final.name, "release-artifact-fragment-v1.json")
+            self.assertTrue(json.loads(final.read_text())["real_process_campaign_complete"])
+            self.assertFalse((fixture["output"] / "failure.json").exists())
+            self.assertEqual(len(list((fixture["output"] / "attempts").glob("*/validation-outcome.json"))), 4)
+            self.assertEqual(final.read_bytes(), (fixture["output"] / "release-artifact-fragment-v1.pending.json").read_bytes())
+            self.assertEqual(stat.S_IMODE(final.stat().st_mode), 0o600)
+            self.assertEqual(fixture["smoke"].call_count, 2)
 
 
 if __name__ == "__main__":

@@ -146,21 +146,20 @@ pub use kagemusha_contract_vector_v1::{
 };
 mod kagemusha_core_coordinator_v1;
 pub use kagemusha_core_coordinator_v1::{
-    KAGEMUSHA_CORE_COORDINATOR_ARCHIVE_MAX_BYTES_V1, KagemushaCoreCoordinatorArchiveErrorV1,
-    KagemushaCoreSenderCandidateArchiveV1, KagemushaCoreSenderPreparationArchiveV1,
-    KagemushaCoreSenderRecoveryArchiveV1, KagemushaCoreSenderPreparationSelectorV1,
-    KagemushaCoreSenderWalletContextV1,
-    KAGEMUSHA_CORE_COORDINATOR_CONTRACT_WORDS_V1, KAGEMUSHA_CORE_COORDINATOR_FRAME_HEADER_BYTES_V1,
-    KAGEMUSHA_CORE_COORDINATOR_FRAME_MAGIC_V1, KAGEMUSHA_CORE_COORDINATOR_FRAME_VERSION_V1,
-    KAGEMUSHA_CORE_COORDINATOR_MAX_FIELD_BYTES_V1, KAGEMUSHA_CORE_COORDINATOR_MAX_FIELDS_V1,
-    KAGEMUSHA_CORE_COORDINATOR_MAX_REQUEST_BYTES_V1,
+    KAGEMUSHA_CORE_COORDINATOR_ARCHIVE_MAX_BYTES_V1, KAGEMUSHA_CORE_COORDINATOR_CONTRACT_WORDS_V1,
+    KAGEMUSHA_CORE_COORDINATOR_FRAME_HEADER_BYTES_V1, KAGEMUSHA_CORE_COORDINATOR_FRAME_MAGIC_V1,
+    KAGEMUSHA_CORE_COORDINATOR_FRAME_VERSION_V1, KAGEMUSHA_CORE_COORDINATOR_MAX_FIELD_BYTES_V1,
+    KAGEMUSHA_CORE_COORDINATOR_MAX_FIELDS_V1, KAGEMUSHA_CORE_COORDINATOR_MAX_REQUEST_BYTES_V1,
     KAGEMUSHA_CORE_COORDINATOR_MAX_RESPONSE_BYTES_V1,
     KAGEMUSHA_CORE_COORDINATOR_MAX_STORAGE_PATH_BYTES_V1,
     KAGEMUSHA_CORE_COORDINATOR_RECOVER_BY_OPERATION_ID_V1,
     KAGEMUSHA_CORE_COORDINATOR_RECOVER_BY_TERMINAL_ID_V1,
-    KAGEMUSHA_CORE_COORDINATOR_WIRE_PAYLOAD_COUNT_V1, KagemushaCoreCoordinatorBackendErrorV1,
-    KagemushaCoreCoordinatorBackendV1, KagemushaCoreCoordinatorFrameErrorV1,
-    KagemushaCoreCoordinatorInstallErrorV1, KagemushaCoreCoordinatorMethodV1,
+    KAGEMUSHA_CORE_COORDINATOR_WIRE_PAYLOAD_COUNT_V1, KagemushaCoreCoordinatorArchiveErrorV1,
+    KagemushaCoreCoordinatorBackendErrorV1, KagemushaCoreCoordinatorBackendV1,
+    KagemushaCoreCoordinatorFrameErrorV1, KagemushaCoreCoordinatorInstallErrorV1,
+    KagemushaCoreCoordinatorMethodV1, KagemushaCoreSenderCandidateArchiveV1,
+    KagemushaCoreSenderPreparationArchiveV1, KagemushaCoreSenderPreparationSelectorV1,
+    KagemushaCoreSenderRecoveryArchiveV1, KagemushaCoreSenderWalletContextV1,
     install_kagemusha_core_coordinator_backend_v1, kagemusha_core_coordinator_decode_request_v1,
     kagemusha_core_coordinator_decode_response_v1, kagemusha_core_coordinator_encode_request_v1,
     kagemusha_core_coordinator_encode_response_v1,
@@ -10243,7 +10242,9 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoord
     method: jni::sys::jint,
     fields: jni::objects::JObjectArray<'_>,
 ) -> jni::sys::jobjectArray {
-    Java_pg_bpng_digitalkina_KagemushaNativeCoreJniV1_nativeInvokeV1(env, class, handle, method, fields)
+    Java_pg_bpng_digitalkina_KagemushaNativeCoreJniV1_nativeInvokeV1(
+        env, class, handle, method, fields,
+    )
 }
 
 #[cfg(any(

@@ -978,7 +978,7 @@ mod tests {
                         >::from_untyped_unchecked(
                             iroha_crypto::Hash::prehashed([0xD0; 32]),
                         ));
-                    binding.genesis_hash = [0xD0; 32];
+                    binding.genesis_hash = *binding.network_id.as_bytes();
                 }
                 Self::GenesisHash => binding.genesis_hash = [0xD0; 32],
                 Self::ActionIndex => binding.action_index ^= 1,
@@ -1085,31 +1085,31 @@ mod tests {
         IrohaIvmPrivateNoteStarkStatementV1,
         PrivacyNativeConsensusBindingV1,
     )> {
+        if axis == ConsensusBindingAxisV1::GenesisHash {
+            // NetworkId is the canonical genesis hash, so there is no valid
+            // genesis-only substitution. The NetworkId axis changes both
+            // values together and binds the resulting statement context.
+            return None;
+        }
         if axis == ConsensusBindingAxisV1::ActionIndex {
             // The closed Taira profile admits exactly one action, so there is
             // no second valid action index under the same consensus limits.
             return None;
         }
         let mut substituted_statement = statement.clone();
-        let substituted_binding = if axis == ConsensusBindingAxisV1::GenesisHash {
-            let mut substituted_binding = binding.clone();
-            axis.mutate_binding(&mut substituted_binding);
-            substituted_binding
+        axis.mutate_context(&mut substituted_statement.context);
+        redigest_statement_v1(&mut substituted_statement);
+        let genesis_hash = if axis == ConsensusBindingAxisV1::NetworkId {
+            *substituted_statement.context.network_id.as_bytes()
         } else {
-            axis.mutate_context(&mut substituted_statement.context);
-            redigest_statement_v1(&mut substituted_statement);
-            let genesis_hash = if axis == ConsensusBindingAxisV1::NetworkId {
-                *substituted_statement.context.network_id.as_bytes()
-            } else {
-                binding.genesis_hash
-            };
-            PrivacyNativeConsensusBindingV1::new(
-                &substituted_statement.context,
-                genesis_hash,
-                limits,
-            )
-            .expect("coordinated substituted consensus binding")
+            binding.genesis_hash
         };
+        let substituted_binding = PrivacyNativeConsensusBindingV1::new(
+            &substituted_statement.context,
+            genesis_hash,
+            limits,
+        )
+        .expect("coordinated substituted consensus binding");
         Some((substituted_statement, substituted_binding))
     }
     fn assert_proof_equation_rejection_v1(
@@ -1171,7 +1171,7 @@ mod tests {
                     invalid_binding
                         .validate_against_context(&invalid_statement.context, &limits)
                         .is_err(),
-                    "the one-action profile admitted a second action index"
+                    "{axis:?} admitted an intrinsically invalid consensus binding"
                 );
                 continue;
             };
@@ -1370,9 +1370,11 @@ mod tests {
         );
         let mut other_genesis = binding.clone();
         other_genesis.genesis_hash[0] ^= 1;
-        other_genesis
-            .validate_against_context(&value.statement.context, &limits)
-            .expect("changed nonzero genesis remains a valid consensus binding");
+        assert_eq!(
+            other_genesis.validate_against_context(&value.statement.context, &limits),
+            Err(PrivacyNativeConsensusBindingValidationErrorV1::NetworkGenesisMismatch),
+            "a nonzero genesis substitution must retain the canonical network identity"
+        );
         assert_ne!(
             binding
                 .digest()
@@ -1382,10 +1384,10 @@ mod tests {
                 .expect("changed-genesis consensus-binding digest"),
             "changed nonzero genesis did not change the typed consensus-binding digest"
         );
-        assert_proof_equation_rejection_v1(
-            "nonzero genesis hash",
+        assert!(matches!(
             verify_private_note_stark_v1(&value.statement, &other_genesis, &limits, &proof),
-        );
+            Err(ProofManagedNoteStarkErrorV1::InvalidProfile)
+        ));
         for axis in CONSENSUS_BINDING_AXES_V1 {
             if matches!(
                 axis,

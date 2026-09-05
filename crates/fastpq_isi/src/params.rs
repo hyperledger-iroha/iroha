@@ -183,7 +183,10 @@ impl WideUint512V1 {
         let mut output = Self::default();
         let word_shift = usize::try_from(shift / 64).ok()?;
         let bit_shift = shift % 64;
-        let limbs = [value as u64, (value >> 64) as u64];
+        let limbs = [
+            u64::try_from(value & u128::from(u64::MAX)).ok()?,
+            u64::try_from(value >> 64).ok()?,
+        ];
         for (source_index, limb) in limbs.into_iter().enumerate() {
             if limb == 0 {
                 continue;
@@ -227,14 +230,17 @@ impl WideUint512V1 {
 }
 
 fn checked_shift(value: u128, shift: u32) -> Option<u128> {
-    value.checked_shl(shift)
+    let shifted = value.checked_shl(shift)?;
+    // checked_shl checks the shift count, but can still discard high bits.
+    // Exact security accounting must reject every unrepresentable numerator.
+    (shifted >> shift == value).then_some(shifted)
 }
 
 fn qrom_bound_terms(
     inputs: FastpqQromBoundInputsV1,
     queries: u32,
 ) -> Option<(ExactDyadicBoundV1, ExactDyadicBoundV1)> {
-    if !inputs.blowup_factor.is_power_of_two() || queries % 2 != 0 {
+    if !inputs.blowup_factor.is_power_of_two() || !queries.is_multiple_of(2) {
         return None;
     }
     let blowup_log2 = inputs.blowup_factor.ilog2();
@@ -293,12 +299,17 @@ fn exact_sum_below_target(
 }
 
 /// Evaluate the exact dyadic aggregate bound for one candidate query count.
+///
+/// Returns `None` for invalid inputs or numerators that cannot be represented
+/// exactly; overflowing terms are never truncated into smaller bounds.
 #[must_use]
 pub fn calculate_fastpq_qrom_bound_v1(
     inputs: FastpqQromBoundInputsV1,
     queries: u32,
 ) -> Option<FastpqQromBoundReportV1> {
-    if queries < FASTPQ_MIN_QUERY_COUNT_V1 || queries % FASTPQ_QUERY_COUNT_GRANULARITY_V1 != 0 {
+    if queries < FASTPQ_MIN_QUERY_COUNT_V1
+        || !queries.is_multiple_of(FASTPQ_QUERY_COUNT_GRANULARITY_V1)
+    {
         return None;
     }
     let (sampling_term, collision_term) = qrom_bound_terms(inputs, queries)?;
@@ -365,6 +376,85 @@ pub fn find_by_name(name: &str) -> Option<&'static StarkParameterSet> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn exact_shift_matches_checked_multiplication() {
+        for value in [
+            0,
+            1,
+            2,
+            u128::from(u64::MAX),
+            1_u128 << 64,
+            1_u128 << 127,
+            u128::MAX,
+        ] {
+            for shift in 0..=128 {
+                let expected = 1_u128
+                    .checked_shl(shift)
+                    .and_then(|factor| value.checked_mul(factor));
+                assert_eq!(
+                    checked_shift(value, shift),
+                    expected,
+                    "value {value}, shift {shift}"
+                );
+            }
+        }
+        assert_eq!(checked_shift(1, u32::MAX), None);
+    }
+
+    #[test]
+    fn wide_uint_shift_matches_individual_bits_at_every_boundary() {
+        for value in [
+            0,
+            1,
+            u128::from(u64::MAX),
+            1_u128 << 64,
+            1_u128 << 127,
+            u128::MAX,
+        ] {
+            for shift in 0..=513 {
+                let mut expected = [0_u64; 8];
+                let mut overflowed = false;
+                for bit in 0..128 {
+                    if value & (1_u128 << bit) != 0 {
+                        let target = bit + shift;
+                        if target >= 512 {
+                            overflowed = true;
+                        } else {
+                            expected[usize::try_from(target / 64).unwrap()] |=
+                                1_u64 << (target % 64);
+                        }
+                    }
+                }
+                assert_eq!(
+                    WideUint512V1::from_u128_shifted(value, shift),
+                    (!overflowed).then_some(WideUint512V1(expected)),
+                    "value {value}, shift {shift}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn exact_calculator_rejects_numerator_overflow() {
+        for (aggregate_targets, quantum_oracle_query_log2_bound) in [
+            // Both numerators overflow: sampling = 2^147, collision = 2^252.
+            (1_u64 << 63, 42),
+            // Only collision overflows: sampling = 2^76, collision = 2^130.
+            (1_u64 << 32, 22),
+        ] {
+            let inputs = FastpqQromBoundInputsV1 {
+                aggregate_targets,
+                quantum_oracle_query_log2_bound,
+                required_security_bits: 256,
+                ..FASTPQ_QROM_BOUND_INPUTS_V1
+            };
+            // Truncating either overflowing term to zero would incorrectly
+            // report the requested security target as met at this query count.
+            assert!(calculate_fastpq_qrom_bound_v1(inputs, 256).is_none());
+            assert!(select_fastpq_query_count_v1(inputs).is_none());
+        }
+    }
 
     fn mul_mod(left: u64, right: u64) -> u64 {
         let modulus = u128::from(crate::poseidon::FIELD_MODULUS);
@@ -434,6 +524,7 @@ mod tests {
 
     #[test]
     fn malformed_query_counts_and_non_dyadic_blowups_are_rejected() {
+        assert!(qrom_bound_terms(FASTPQ_QROM_BOUND_INPUTS_V1, 65).is_none());
         assert!(calculate_fastpq_qrom_bound_v1(FASTPQ_QROM_BOUND_INPUTS_V1, 63).is_none());
         assert!(calculate_fastpq_qrom_bound_v1(FASTPQ_QROM_BOUND_INPUTS_V1, 65).is_none());
         let mut invalid = FASTPQ_QROM_BOUND_INPUTS_V1;

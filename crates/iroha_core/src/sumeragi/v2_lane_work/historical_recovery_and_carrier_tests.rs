@@ -2268,12 +2268,36 @@ fn historical_sidecar_server_fixture_with_lane_committee(
         || missing_sidecar_reference(&adapter, &keys, 1),
         |indices| missing_sidecar_reference_with_signers(&adapter, &keys, 1, indices),
     );
-    let canonical_entry = if lane_keys.is_some() {
+    let mut canonical_entry = if lane_keys.is_some() {
         merge_candidate_for_persistence_retry(&adapter, 1)
             .into_entry(canonical_reference.merge_qc.clone())
     } else {
         merge_entry_from_reference(&canonical_reference, b"historical canonical sidecar")
     };
+    let candidate = crate::merge::MergeLedgerCandidate::from(&canonical_entry);
+    let qc = &mut canonical_entry.merge_qc;
+    qc.message_digest = crate::merge::merge_qc_message_digest(
+        &qc.network_id,
+        &candidate,
+        qc.validator_set_hash_version,
+        qc.validator_set_hash,
+    );
+    let signatures = keys
+        .iter()
+        .enumerate()
+        .filter_map(|(index, key)| {
+            (qc.signers_bitmap[index / 8] & (1 << (index % 8)) != 0).then(|| {
+                Signature::try_new(key.private_key(), qc.message_digest.as_ref())
+                    .expect("sign complete historical catalog and carrier candidate")
+                    .payload()
+                    .to_vec()
+            })
+        })
+        .collect::<Vec<_>>();
+    qc.aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(
+        &signatures.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+    )
+    .expect("aggregate exact historical candidate signatures");
     let canonical_entry_hash = adapter
         .kura
         .persist_pending_certified_merge_entry(&canonical_entry)
@@ -2378,6 +2402,24 @@ fn historical_sidecar_server_fixture_with_lane_committee(
         finality,
         carrier_height,
     }
+}
+fn current_fixture_lane_committee_contains(
+    adapter: &V2LaneWorkAdapter,
+    requester: &PeerId,
+) -> bool {
+    let view = adapter.state.view();
+    crate::state::StateReadOnly::nexus(&view)
+        .lane_catalog
+        .lanes()
+        .iter()
+        .any(|lane| {
+            crate::state::StateReadOnly::resolve_lane_committee_at_height(
+                &view,
+                crate::state::LaneAuthorityRoute::new(lane.id, lane.dataspace_id),
+                adapter.context.height,
+            )
+            .is_ok_and(|committee| committee.validators().contains(requester))
+        })
 }
 fn dispatch_historical_sidecar_request(
     fixture: &mut HistoricalSidecarServerFixture,
@@ -2547,7 +2589,7 @@ fn current_lane_validator_absent_from_historical_entry_is_rejected() {
     );
 }
 #[test]
-fn finalized_lane_committee_requires_exact_carrier_binding() {
+fn finalized_lane_committee_requires_exact_finalized_reference() {
     let mut lane_keys = (0xD8_u8..=0xDB)
         .map(|seed| {
             KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
@@ -2615,7 +2657,7 @@ fn finalized_lane_committee_requires_exact_carrier_binding() {
             .expect("read finalized carrier for changed incarnation")
     );
 
-    let mut wrong_config = entry;
+    let mut wrong_config = entry.clone();
     for binding in &mut wrong_config.active_lanes {
         binding.lane_config_hash = Hash::new(b"wrong lane configuration");
     }
@@ -2627,9 +2669,147 @@ fn finalized_lane_committee_requires_exact_carrier_binding() {
                 &CertifiedMergeLedgerReference::new(&wrong_config),
                 Some(&requester),
             )
-            .expect("read finalized carrier for changed configuration")
+            .expect("read finalized carrier for changed config")
+    );
+    let mut wrong_catalog = entry;
+    wrong_catalog.lane_authority_catalog.rosters[0].validator_set_hash =
+        HashOf::new(&Vec::<PeerId>::new());
+    assert!(
+        !fixture
+            .adapter
+            .finalized_merge_active_lane_committee_contains(&wrong_catalog, &requester,)
+    );
+    assert!(
+        !fixture
+            .adapter
+            .authenticates_certified_merge_sidecar_service_for_requester(
+                &wrong_catalog,
+                &CertifiedMergeLedgerReference::new(&wrong_catalog),
+                Some(&requester),
+            )
+            .expect("read finalized carrier for changed catalog")
     );
 }
+
+#[test]
+fn finalized_lane_authority_survives_manifest_roster_and_incarnation_churn() {
+    let keys_for = |offset: u8| {
+        let mut keys = (offset..offset + 4)
+            .map(|seed| {
+                KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                    .expect("deterministic churn validator")
+            })
+            .collect::<Vec<_>>();
+        keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+        keys
+    };
+    let historical_keys = keys_for(0xC0);
+    let replacement_keys = keys_for(0xC4);
+    let mut fixture = historical_sidecar_server_fixture_with_lane_committee(
+        HistoricalSidecarFinality::Exact,
+        None,
+        false,
+        Some(&historical_keys),
+    );
+    let route = crate::state::LaneAuthorityRoute::new(LaneId::new(1), DataSpaceId::new(7));
+    let state = Arc::clone(&fixture.adapter.state);
+    let historical_view = state.view();
+    let historical_committee = crate::state::StateReadOnly::resolve_lane_committee_at_height(
+        &historical_view,
+        route,
+        fixture.carrier_height,
+    )
+    .expect("immutable historical committee")
+    .into_validators();
+    let requester = historical_committee[0].clone();
+    let entry = fixture
+        .adapter
+        .kura
+        .merge_entry_by_hash(fixture.request.entry_hash)
+        .expect("historical entry lookup")
+        .expect("retained historical entry");
+
+    let replacement = enable_multilane_nexus(
+        &mut fixture.adapter,
+        &replacement_keys,
+        route.lane_id(),
+        route.dataspace_id(),
+    );
+    {
+        let mut nexus = fixture.adapter.state.nexus.write();
+        let mut lanes = nexus.lane_catalog.lanes().to_vec();
+        lanes
+            .iter_mut()
+            .find(|lane| lane.id == route.lane_id())
+            .expect("configured route")
+            .visibility = LaneVisibility::Restricted;
+        let catalog = LaneCatalog::new(NonZeroU32::new(2).unwrap(), lanes)
+            .expect("replacement lane configuration");
+        nexus.lane_config = iroha_config::parameters::actual::LaneConfig::from_catalog(&catalog);
+        nexus.lane_catalog = catalog;
+    }
+    fixture
+        .adapter
+        .state
+        .reseed_static_lane_incarnations_for_tests();
+    let retained_binding = entry
+        .active_lanes
+        .iter()
+        .find(|binding| binding.lane_id == route.lane_id())
+        .expect("historical active lane");
+    assert_ne!(
+        fixture
+            .adapter
+            .state
+            .lane_incarnation_at_height(route.lane_id(), fixture.adapter.context.height),
+        Some(retained_binding.incarnation),
+        "the current lane incarnation must differ from finalized history",
+    );
+    assert_eq!(
+        crate::state::StateReadOnly::resolve_lane_committee_at_height(
+            &historical_view,
+            route,
+            fixture.carrier_height,
+        )
+        .expect("old view retains its own manifest and World")
+        .into_validators(),
+        historical_committee,
+    );
+    assert!(!current_fixture_lane_committee_contains(
+        &fixture.adapter,
+        &requester
+    ));
+    assert!(current_fixture_lane_committee_contains(
+        &fixture.adapter,
+        &replacement[0]
+    ));
+    assert!(
+        fixture
+            .adapter
+            .finalized_merge_active_lane_committee_contains(&entry, &requester)
+    );
+    assert!(
+        !fixture
+            .adapter
+            .finalized_merge_active_lane_committee_contains(&entry, &replacement[0])
+    );
+
+    fixture.requester = requester.clone();
+    fixture.request.requester = requester;
+    fixture.request.service_generation = fixture
+        .adapter
+        .merge_sidecars
+        .server_service_generation_for_test();
+    fixture.request.request_id = fixture.request.canonical_request_id();
+    assert_eq!(
+        dispatch_historical_sidecar_request(&mut fixture),
+        V2LaneIngressOutcome::Inserted
+    );
+    assert!(fixture.adapter.sidecar_effects.iter().any(|effect| {
+        posted_sidecar_chunk(effect).is_some_and(|chunk| chunk.requester == fixture.requester)
+    }));
+}
+
 #[test]
 fn historical_lane_sidecar_corrupt_finality_fails_before_responder_allocation() {
     let mut lane_keys = (0xD4_u8..=0xD7)

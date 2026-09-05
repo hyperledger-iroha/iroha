@@ -337,6 +337,24 @@ once for the transaction rather than once per item. Trigger actions may store
 the same `Batch` form. One trigger invocation executes the items atomically and
 shares its deterministic trigger gas budget across the complete sequence.
 
+## Merge-ledger historical authority catalog
+
+The current first-release merge-ledger entry layout is version 3. It contains
+an explicit `MergeLaneAuthorityCatalogV1` next to the complete `active_lanes`
+vector. The catalog encodes deduplicated ordered rosters (hash version, roster
+hash, validators) and one `u16` roster index for each active lane. Canonical
+first-use order, complete reference coverage, exact `3f+1` geometry with at
+least four BLS-normal validators in increasing canonical `PeerId` order,
+roster hashes, unique validators/rosters, and index bounds are validated before
+admission. The entry hash uses `iroha:merge:ledger-entry:v3\0`; the QC payload
+includes the entry version and complete catalog under `iroha:merge:qc:v3\0`.
+Previous development entry layouts are rejected without compatibility decoding.
+Prospective lane geometry reserves a full 12-MiB execution batch, a 1-MiB QC,
+and conservative canonical catalog/framing bytes within the 16-MiB full entry.
+Admission does not assume shared rosters; exact encoded-size checks still apply.
+See [`specs/merge_ledger.md`](specs/merge_ledger.md) for finalized carrier binding
+and the distinction between historical read authority and live write authority.
+
 ## Sumeragi v2 Consensus Evidence Layout
 
 Sumeragi v2 votes and quorum certificates carry both `round` and
