@@ -38,9 +38,9 @@ fn plain_ballot_conviction_applies() {
     stx.world.governance_referenda_mut().insert(
         "ref-conviction".to_string(),
         iroha_core::state::GovernanceReferendumRecord {
-            h_start: 0,
+            h_start: 1,
             h_end: 200,
-            status: iroha_core::state::GovernanceReferendumStatus::Proposed,
+            status: iroha_core::state::GovernanceReferendumStatus::Open,
             mode: iroha_core::state::GovernanceReferendumMode::Plain,
         },
     );
@@ -56,10 +56,10 @@ fn plain_ballot_conviction_applies() {
     let duration_blocks: u64 = 250; // factor = 1 + floor(250/100) = 3
     let instr = CastPlainBallot {
         referendum_id: "ref-conviction".to_string(),
+        direction: 0,
         owner: ALICE_ID.clone(),
         amount: amount.into(),
         duration_blocks,
-        direction: 0,
     };
     instr
         .clone()
@@ -83,6 +83,6 @@ fn plain_ballot_conviction_applies() {
     }
     assert!(
         saw_ok,
-        "expected a BallotAccepted(Plain) event with conviction weight"
+        "expected a BallotAccepted event with conviction weight"
     );
 }

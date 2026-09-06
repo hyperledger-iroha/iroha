@@ -29,6 +29,8 @@ pub const JDG_SDN_COMMITMENT_DOMAIN_TAG_V1: &[u8] = b"iroha:jurisdiction:sdn:com
 #[repr(transparent)]
 #[norito(decode_from_slice)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::jurisdiction::JurisdictionId")]
 pub struct JurisdictionId(Vec<u8>);
 impl JurisdictionId {
     /// Construct a jurisdiction identifier from canonical bytes.
@@ -84,6 +86,8 @@ pub enum JurisdictionIdError {
 /// Inclusive block-height range covered by an attestation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::jurisdiction::JdgBlockRange")]
 pub struct JdgBlockRange {
     /// First block height (inclusive).
     pub start_height: u64,
@@ -132,6 +136,8 @@ impl JdgBlockRange {
 /// Statement scope bound into an attestation (dataspace + block window + jurisdiction id).
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::jurisdiction::JdgAttestationScope")]
 pub struct JdgAttestationScope {
     /// Jurisdiction identifier for the attested execution.
     pub jurisdiction_id: JurisdictionId,
@@ -143,6 +149,8 @@ pub struct JdgAttestationScope {
 /// Canonical read/write access set used by the attested execution.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::jurisdiction::JdgStateAccessSet")]
 pub struct JdgStateAccessSet {
     /// Canonical read keys (byte-sorted and deduplicated).
     pub reads: Vec<Vec<u8>>,
@@ -166,6 +174,8 @@ impl JdgStateAccessSet {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize),
     norito(tag = "verdict", content = "value")
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::jurisdiction::JdgVerdict")]
 pub enum JdgVerdict {
     /// Business rules accepted the transaction.
     Accept,
@@ -182,6 +192,8 @@ pub const JDG_SIGNATURE_SCHEME_BLS_NORMAL_AGGREGATE: u16 = 2;
 )]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "scheme", content = "value"))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::jurisdiction::JdgSignatureScheme")]
 pub enum JdgSignatureScheme {
     /// Per-signer signatures with optional signer bitmap.
     #[default]
@@ -246,6 +258,8 @@ impl TryFrom<u16> for JdgSignatureScheme {
 /// Threshold signature envelope; concrete scheme defined by JDG policy.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::jurisdiction::JdgThresholdSignature")]
 pub struct JdgThresholdSignature {
     /// Identifier for the signing scheme (e.g., simple threshold or BLS aggregate).
     pub scheme_id: u16,
@@ -258,6 +272,8 @@ pub struct JdgThresholdSignature {
 /// Commitment to secret data stored under a Secret Data Node (SDN).
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::jurisdiction::JdgSdnCommitment")]
 pub struct JdgSdnCommitment {
     /// Commitment format version.
     pub version: u16,
@@ -314,6 +330,8 @@ impl JdgSdnCommitment {
 /// Commitment body covered by the SDN seal.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::jurisdiction::JdgSdnCommitmentSignable")]
 pub struct JdgSdnCommitmentSignable {
     version: u16,
     scope: JdgAttestationScope,
@@ -333,6 +351,8 @@ impl From<&JdgSdnCommitment> for JdgSdnCommitmentSignable {
 /// Rotation/overlap policy applied when sealing SDN payloads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::jurisdiction::JdgSdnRotationPolicy")]
 pub struct JdgSdnRotationPolicy {
     /// Number of blocks the previous SDN key remains valid after a successor activates.
     pub dual_publish_blocks: u64,
@@ -340,6 +360,8 @@ pub struct JdgSdnRotationPolicy {
 /// Policy describing how SDN commitments are enforced.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::jurisdiction::JdgSdnPolicy")]
 pub struct JdgSdnPolicy {
     /// Whether SDN commitments are mandatory for the attested payload.
     pub require_commitments: bool,
@@ -349,6 +371,8 @@ pub struct JdgSdnPolicy {
 /// SDN sealing key with activation and retirement windows.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::jurisdiction::JdgSdnKeyRecord")]
 pub struct JdgSdnKeyRecord {
     /// SDN public key.
     pub public_key: PublicKey,
@@ -518,6 +542,8 @@ impl JdgSdnRegistry {
 #[repr(transparent)]
 #[norito(decode_from_slice)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::jurisdiction::JdgCommitteeId")]
 pub struct JdgCommitteeId(pub [u8; 32]);
 impl JdgCommitteeId {
     /// Construct a committee identifier from a 32-byte value.
@@ -529,6 +555,8 @@ impl JdgCommitteeId {
 /// JDG attestation payload including scope, signer set, optional proof, and signature envelope.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::jurisdiction::JdgAttestation")]
 pub struct JdgAttestation {
     /// Explicit attestation format version.
     pub version: u16,
@@ -894,6 +922,8 @@ pub enum JdgSdnValidationError {
 /// View of [`JdgAttestation`] used for hashing/signing (omits the signature).
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::jurisdiction::JdgAttestationSignable")]
 pub struct JdgAttestationSignable {
     version: u16,
     scope: JdgAttestationScope,
@@ -1443,3 +1473,6 @@ mod tests {
         ));
     }
 }
+
+#[cfg(test)]
+mod captured_jurisdiction_schema_tests;

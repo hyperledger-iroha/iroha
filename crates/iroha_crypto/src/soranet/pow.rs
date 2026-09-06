@@ -117,7 +117,8 @@ pub(super) fn ticket_binding_commitment(
     *hasher.finalize().as_bytes()
 }
 /// Fixed-width Argon2 admission ticket attached to `SoraNet` circuit establishment.
-#[derive(PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::soranet::pow::Ticket")]
 pub struct Ticket {
     /// Ticket format version (currently `1`).
     pub version: u8,
@@ -256,6 +257,8 @@ fn read_ticket_field<const N: usize>(bytes: &[u8], cursor: &mut usize) -> Result
 /// replace verification of the enclosed proof.
 #[derive(PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[norito(decode_from_slice)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::soranet::pow::SignedTicket")]
 pub struct SignedTicket {
     /// The underlying Argon2 ticket wire structure.
     pub ticket: Ticket,
@@ -544,13 +547,16 @@ struct RevokedTicketRecord {
 }
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 #[norito(decode_from_slice)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::soranet::pow::TicketRevocationSnapshot")]
 struct TicketRevocationSnapshot {
     version: u8,
     high_watermark_secs: u64,
     high_watermark_nanos: u32,
     entries: Vec<TicketRevocationSnapshotEntry>,
 }
-#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::soranet::pow::TicketRevocationSnapshotEntry")]
 struct TicketRevocationSnapshotEntry {
     fingerprint: [u8; 32],
     expires_at_secs: u64,
@@ -2533,3 +2539,6 @@ mod tests {
         TicketRevocationStore::load(&path, limits, now).expect("lock released with owner");
     }
 }
+
+#[cfg(test)]
+mod captured_schema_tests;

@@ -16,7 +16,9 @@ use super::{
         DurableValidateCompletionPublication, DurableValidateCompletionPublicationError,
         DurableValidateDispatch, DurableValidateExecutionError,
         DurableValidateRegistryPublicationErrorV1, ExecutedDurableValidateDispatch,
-        LifecycleDecisionApplyDispatchProjectionErrorV1, LifecycleOutputRegistryJoinV1,
+        LifecycleDecisionApplyDispatchProjectionErrorV1,
+        LifecycleDecisionApplyPendingOutputCensusErrorV1,
+        LifecycleDecisionApplyPendingOutputCensusV1, LifecycleOutputRegistryJoinV1,
         LiveLifecycleDecisionApplyReconciliationAuthorityV1,
         LiveReleasedValidateApplyRegistryReservation, LiveWalRegistryPublicationErrorV1,
         OpenedRecoveredWalValidateLedger, PendingDurableValidateAdmissionV1,
@@ -1610,6 +1612,68 @@ impl ProductionLifecycleOwnerV1 {
             )
     }
 
+    /// Authenticate whether one pending CommitQC output is immediately before
+    /// or after the exact Ready live Apply.
+    #[allow(single_use_lifetimes)]
+    pub(in crate::sumeragi) fn classify_lifecycle_decision_apply_pending_output_census<'a>(
+        &self,
+        authority: LiveLifecycleDecisionApplyReconciliationAuthorityV1,
+        pending_outputs: impl ExactSizeIterator<Item = &'a PendingLifecycleOutputAdmissionV1>,
+    ) -> Option<LifecycleDecisionApplyPendingOutputCensusV1> {
+        self.registry
+            .registry()
+            .classify_lifecycle_decision_apply_pending_output_census(
+                &self.coordinator,
+                authority,
+                pending_outputs,
+            )
+    }
+
+    /// Authenticate one pending CommitQC output and retain a structural failure category.
+    #[allow(single_use_lifetimes)]
+    pub(in crate::sumeragi) fn try_classify_lifecycle_decision_apply_pending_output_census<'a>(
+        &self,
+        authority: LiveLifecycleDecisionApplyReconciliationAuthorityV1,
+        pending_outputs: impl ExactSizeIterator<Item = &'a PendingLifecycleOutputAdmissionV1>,
+    ) -> Result<
+        LifecycleDecisionApplyPendingOutputCensusV1,
+        LifecycleDecisionApplyPendingOutputCensusErrorV1,
+    > {
+        self.registry
+            .registry()
+            .try_classify_lifecycle_decision_apply_pending_output_census(
+                &self.coordinator,
+                authority,
+                pending_outputs,
+            )
+    }
+
+    /// Authenticate the exact Ready live Apply and its sole deferred output.
+    ///
+    /// This read-only projection is used only to let the globally earlier
+    /// runtime predecessor drain. It neither claims the Apply row nor grants
+    /// authority to service the post-Apply CommitQC Broadcast.
+    #[allow(single_use_lifetimes)]
+    pub(in crate::sumeragi) fn attest_ready_live_decision_apply_runtime_predecessor<'a>(
+        &self,
+        ordinal: u128,
+        pending_outputs: impl ExactSizeIterator<Item = &'a PendingLifecycleOutputAdmissionV1>,
+    ) -> Result<
+        Option<AttestedLifecycleDecisionApplySuccessorOutputsV1>,
+        ReadyLifecycleDecisionApplyAttestationErrorV1,
+    > {
+        let Some(authority) = self
+            .registry
+            .prepare_ready_live_decision_apply_reconciliation(&self.coordinator, ordinal)?
+        else {
+            return Ok(None);
+        };
+        if authority.dispatch_key().lifecycle_ordinal() != ordinal {
+            return Err(ReadyLifecycleDecisionApplyAttestationErrorV1::InvalidCarrier);
+        }
+        Ok(self.attest_lifecycle_decision_apply_successor_outputs(authority, pending_outputs))
+    }
+
     /// Confirm the already-durable terminal frame, then retire only the stray
     /// process-local carrier installed at that same immutable address.
     fn settle_terminal_installed_lifecycle_output_duplicate<E>(
@@ -1991,10 +2055,14 @@ mod tests {
                     power: 1,
                 })
                 .collect::<Vec<_>>();
+            let network_id =
+                crate::sumeragi::synthetic_network_id("sumeragi-v2-concrete-admission-test");
+            let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
+                crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
+                    network_id, 1, &roster,
+                );
             let context = wire::HeightContext {
-                network_id: crate::sumeragi::synthetic_network_id(
-                    "sumeragi-v2-concrete-admission-test",
-                ),
+                network_id,
                 protocol_version: wire::PROTOCOL_VERSION,
                 height: 1,
                 epoch: 1,
@@ -2005,6 +2073,8 @@ mod tests {
                 snapshot_bootstrap: None,
                 quorum: wire::DualQuorum::from_roster(&roster).expect("fixture quorum"),
                 roster,
+                kagemusha_mint_finality_epoch_id,
+                kagemusha_mint_finality_epoch_roster,
                 nexus_amx_context_hash: Hash::new(b"concrete admission nexus context"),
                 execution_policy_hash: Hash::new(b"concrete admission execution policy"),
                 da_layout: wire::DataAvailabilityLayout {
@@ -2055,13 +2125,14 @@ mod tests {
             subject: wire::BlockSubject,
             marker: u8,
         ) -> wire::QuorumCertificate {
-            let execution_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
-                Hash::new([marker, 0xA1]),
-                Hash::new([marker, 0xA2]),
-                Hash::new([marker, 0xA3]),
-                1,
-                Hash::new([marker, 0xA4]),
-            );
+            let execution_commitment =
+                wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+                    Hash::new([marker, 0xA1]),
+                    Hash::new([marker, 0xA2]),
+                    Hash::new([marker, 0xA3]),
+                    1,
+                    Hash::new([marker, 0xA4]),
+                );
             let unsigned_vote = wire::Vote {
                 round: self.round,
                 proposal_round: self.round,
@@ -2100,7 +2171,7 @@ mod tests {
                 block_hash: HashOf::from_untyped_unchecked(Hash::new([marker, 1])),
                 payload_hash: Hash::new([marker, 2]),
             };
-            let commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
+            let commitment = wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
                 Hash::new([marker, 3]),
                 Hash::new([marker, 4]),
                 Hash::new([marker, 5]),
@@ -2202,13 +2273,14 @@ mod tests {
                 &chunks,
             )
             .expect("derive certified Fetch fixture manifest");
-            let execution_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
-                Hash::new([marker, 0xF2]),
-                Hash::new([marker, 0xF3]),
-                Hash::new([marker, 0xF4]),
-                1,
-                Hash::new([marker, 0xF5]),
-            );
+            let execution_commitment =
+                wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+                    Hash::new([marker, 0xF2]),
+                    Hash::new([marker, 0xF3]),
+                    Hash::new([marker, 0xF4]),
+                    1,
+                    Hash::new([marker, 0xF5]),
+                );
             let unsigned_vote = wire::Vote {
                 round: self.round,
                 proposal_round: self.round,

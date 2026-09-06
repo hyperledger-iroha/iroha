@@ -47,6 +47,10 @@ const FRAME_KIND_OPERATION_RESPONSE_V1: u8 = 4;
 const FRAME_KIND_PROVIDER_INGEST_SOURCE_CHUNK_V1: u8 = 5;
 const FRAME_KIND_PROVIDER_INGEST_SOURCE_TRAILER_V1: u8 = 6;
 const MAX_HANDSHAKE_FRAME_BYTES_V1: usize = 256 * 1024;
+// Qualification requests are canonical unit values and replies contain only
+// bounded public provider metadata. Keep this shared operation far below the
+// generic unary ceiling so a provider probe cannot reserve a 33 MiB decode frame.
+const MAX_QUALIFICATION_FRAME_BYTES_V1: usize = 80 * 1024;
 // Appeal-finance's local data model permits a 512 MiB canonical recovery
 // checkpoint, while the V1 broker protocol intentionally admits only the
 // fixed unary ceiling selected in `operation_frame_limit`; an exact
@@ -199,7 +203,7 @@ const MAX_PROVIDER_INGEST_SOURCE_CHUNK_FRAME_BYTES_V1: usize = 320 * 1024;
 const MAX_PROVIDER_INGEST_SOURCE_TRAILER_FRAME_BYTES_V1: usize = 64 * 1024;
 const MAX_PROVIDER_INGEST_SOURCE_STREAMS_V1: u32 = 1_024;
 // These bounds mirror the canonical moderation quarantine object envelope.
-// The broker validates them independently before any KMS operation.
+// The broker validates them independently before any key-provider operation.
 const MAX_MODERATION_QUARANTINE_KEY_ID_BYTES_V1: usize = 512;
 const MAX_MODERATION_QUARANTINE_WRAPPED_DEK_BYTES_V1: usize = 64 * 1024;
 const MAX_MODERATION_QUARANTINE_OPERATION_BYTES_V1: usize = 72 * 1024;

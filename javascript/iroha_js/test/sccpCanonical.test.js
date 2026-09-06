@@ -62,24 +62,24 @@ const CONTEXT = Object.freeze({
 });
 
 const GOLDEN_TRANSFER_HEX =
-  "010000000002000000070000000000000001000000000000000103000000786f72" +
-  "0b000000000000000000000000000000010b000000616c69636540746169726102" +
-  "140000001111111111111111111111111111111111111111010d00000074616972615f6273635f786f72";
-const GOLDEN_PAYLOAD_HEX = `02${GOLDEN_TRANSFER_HEX}`;
+  "010000000002000000070000000000000001000000000000000003000000786f72" +
+  "0b000000000000000000000000000000000b000000616c69636540746169726101" +
+  "140000001111111111111111111111111111111111111111000d00000074616972615f6273635f786f72";
+const GOLDEN_PAYLOAD_HEX = `00${GOLDEN_TRANSFER_HEX}`;
 const GOLDEN_LANE_HASH =
   "0xf71bfe17ca31ff2c0396f328327fbbcb052af40588b777860341328d146ab00e";
 const GOLDEN_MESSAGE_ID =
-  "0x03feec37ab66cb47cf04b2aab7a06c6f15e3e0dd16c50ba38ba0c654a3691917";
+  "0x1071e13061d5661089c5d8b59fd9c3561f94aa8af7b619ae55b078ff552c1741";
 const GOLDEN_PAYLOAD_HASH =
-  "0xe972db5f05760e959c89c940500f01c068816ac91ed717c7d1e3e2fb437cacfa";
+  "0x72192c184d3893442da4c7b00e9684b885b7dc23c63b46499dcf9e58df7be4a5";
 const GOLDEN_COMMITMENT_HEX =
-  "01054042" +
+  "01004042" +
   "22".repeat(32) +
   "33".repeat(32) +
   GOLDEN_MESSAGE_ID.slice(2) +
   GOLDEN_PAYLOAD_HASH.slice(2);
 const GOLDEN_ROOT =
-  "0x27f040864c87b1fe7162c9e8e15a555123121933827bd4ff3d45d59706307de6";
+  "0x2c9eeac2496a503025d63a7060ba45cbc849334eb621a4cd63953db44c6098f9";
 const GOLDEN_PUBLIC_INPUTS_HEX =
   "01" +
   GOLDEN_MESSAGE_ID.slice(2) +
@@ -192,10 +192,13 @@ test("canonical helpers reject retired networks, codecs, aliases, and role colli
       /unsupported|retired/u,
     );
   }
-  for (const retiredCodec of [3, 4, 6]) {
+  for (const retiredCodec of [4, 5, 6]) {
     const candidate = clone(TRANSFER);
     candidate.recipient_codec = retiredCodec;
-    assert.throws(() => canonicalSccpTransferPayloadBytes(candidate), /retired|protocol domain/u);
+    assert.throws(
+      () => canonicalSccpTransferPayloadBytes(candidate),
+      /0\.\.3|unsupported|retired/u,
+    );
   }
 
   const stalePayloadOnly = `0x${Buffer.from(

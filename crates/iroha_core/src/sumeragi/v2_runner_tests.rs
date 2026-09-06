@@ -42,6 +42,39 @@ include!("tests/v2_runner_upstream_recovery.rs");
 include!("tests/v2_runner_lifecycle_startup_order.rs");
 
 #[test]
+fn historical_subject_mismatch_classification_preserves_fail_stop_boundary() {
+    let remote_guard = ConsensusOutputGuard::isolated();
+    let remote_result = serve_block_sync_while_guarded::<()>(
+        remote_guard.as_ref(),
+        || Err(V2BlockSyncError::HistoricalRequestSubjectMismatch { height: 7 }),
+        |(), _| unreachable!("a rejected historical request cannot produce a response"),
+    );
+    assert!(matches!(
+        remote_result,
+        Err(V2BlockSyncError::HistoricalRequestSubjectMismatch { height: 7 })
+    ));
+    assert!(
+        !remote_guard.restart_required(),
+        "a quorum-valid noncanonical remote request must retire without fail-stop"
+    );
+
+    let local_guard = ConsensusOutputGuard::isolated();
+    let local_result = serve_block_sync_while_guarded::<()>(
+        local_guard.as_ref(),
+        || Err(V2BlockSyncError::HistoricalSubjectMismatch { height: 7 }),
+        |(), _| unreachable!("an inconsistent local artifact cannot produce a response"),
+    );
+    assert!(matches!(
+        local_result,
+        Err(V2BlockSyncError::HistoricalSubjectMismatch { height: 7 })
+    ));
+    assert!(
+        local_guard.restart_required(),
+        "a Kura-versus-finality inconsistency must remain fail-stop"
+    );
+}
+
+#[test]
 fn recovered_lifecycle_factory_dependency_permit_retains_exact_signer_and_cadence() {
     let local_signer = KeyPair::random();
     let expected = local_signer.public_key().clone();

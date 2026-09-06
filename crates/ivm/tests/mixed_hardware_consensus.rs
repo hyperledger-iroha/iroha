@@ -1,12 +1,12 @@
 //! Consensus surface must remain stable across mixed hardware configurations.
-use ivm::{ExecutionProof, IVM, encoding, instruction, runtime};
+use ivm::{ExecutionSummary, IVM, encoding, instruction, runtime};
 mod common;
 use common::assemble_with_mode;
 #[derive(Debug, PartialEq, Eq)]
 struct RunOutcome {
     register_value: u64,
     gas_used: u64,
-    execution_proof: ExecutionProof,
+    execution_summary: ExecutionSummary,
 }
 fn build_add_program() -> Vec<u8> {
     let mut code = Vec::new();
@@ -37,7 +37,7 @@ fn run_with(
     RunOutcome {
         register_value: vm.register(5),
         gas_used: gas_limit.saturating_sub(vm.remaining_gas()),
-        execution_proof: vm.execution_proof(),
+        execution_summary: vm.execution_summary(),
     }
 }
 #[test]
@@ -54,5 +54,5 @@ fn consensus_across_mixed_hardware_configs() {
     // Results must not diverge across hardware configurations.
     assert_eq!(hw_enabled, hw_disabled);
     assert_eq!(hw_enabled.register_value, 579);
-    assert_eq!(hw_enabled.gas_used, hw_enabled.execution_proof.gas_used);
+    assert_eq!(hw_enabled.gas_used, hw_enabled.execution_summary.gas_used);
 }

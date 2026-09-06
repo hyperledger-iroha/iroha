@@ -744,10 +744,10 @@ mod tests {
         Mutex,
         atomic::{AtomicBool, Ordering},
     };
-    const RECEIPT_SIGNER_HANDLE: &str = "pkcs11:prod-evidence-receipts";
+    const RECEIPT_SIGNER_HANDLE: &str = "provider:prod-evidence-receipts";
     const CHECKPOINT_STORE_HANDLE: &str = "sealed:prod-evidence-checkpoints";
     const ARCHIVE_HANDLE: &str = "object-lock:prod-evidence-archive";
-    const PUBLISHER_HANDLE: &str = "hsm:prod-evidence-transparency";
+    const PUBLISHER_HANDLE: &str = "provider:prod-evidence-transparency";
     const CHECKPOINT_STORE_REVISION: u64 = 4;
     const CHECKPOINT_STORE_POLICY_DIGEST: [u8; 32] = [0x41; 32];
     const ARCHIVE_QUALIFICATION: EvidenceViewerRuntimeProviderQualificationV1 =
@@ -1090,9 +1090,9 @@ mod tests {
             Err(EvidenceViewerTransparencyProducerConstructionErrorV1::UnexpectedPublisher)
         ));
         let mut test_marked = config();
-        test_marked.publisher_handle = "hsm:test-evidence-transparency".to_owned();
+        test_marked.publisher_handle = "provider:test-evidence-transparency".to_owned();
         let test_provider: Arc<dyn EvidenceViewerTransparencyPublisherV1> =
-            Arc::new(FakePublisher::new("hsm:test-evidence-transparency"));
+            Arc::new(FakePublisher::new("provider:test-evidence-transparency"));
         assert!(matches!(
             EvidenceViewerTransparencyProducerV1::try_new(test_marked, test_provider),
             Err(
@@ -1102,7 +1102,7 @@ mod tests {
             )
         ));
         let substituted: Arc<dyn EvidenceViewerTransparencyPublisherV1> =
-            Arc::new(FakePublisher::new("hsm:prod-substituted-transparency"));
+            Arc::new(FakePublisher::new("provider:prod-substituted-transparency"));
         assert!(matches!(
             EvidenceViewerTransparencyProducerV1::try_new(config(), substituted),
             Err(

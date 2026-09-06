@@ -1,0 +1,41 @@
+//! Immutable compiler-captured identities for this source owner’s existing codecs.
+
+#[test]
+fn captured_codec_schema_identities() {
+    crate::captured_schema_tests::assert_bidirectional::<super::PopIssuerPolicyV1>(
+        "iroha_data_model::sorafs::pop_registry::PopIssuerPolicyV1",
+    );
+    crate::captured_schema_tests::assert_bidirectional::<super::PopCredentialCommitmentV1>(
+        "iroha_data_model::sorafs::pop_registry::PopCredentialCommitmentV1",
+    );
+    crate::captured_schema_tests::assert_bidirectional::<super::PopCredentialCommitmentBatchV1>(
+        "iroha_data_model::sorafs::pop_registry::PopCredentialCommitmentBatchV1",
+    );
+    crate::captured_schema_tests::assert_bidirectional::<super::PopIssuerPolicyRecordV1>(
+        "iroha_data_model::sorafs::pop_registry::PopIssuerPolicyRecordV1",
+    );
+    crate::captured_schema_tests::assert_bidirectional::<super::PopCredentialCommitmentRecordV1>(
+        "iroha_data_model::sorafs::pop_registry::PopCredentialCommitmentRecordV1",
+    );
+    crate::captured_schema_tests::assert_bidirectional::<super::PopCommitmentRootRecordV1>(
+        "iroha_data_model::sorafs::pop_registry::PopCommitmentRootRecordV1",
+    );
+    crate::captured_schema_tests::assert_bidirectional::<super::PopRevocationPublicationRecordV1>(
+        "iroha_data_model::sorafs::pop_registry::PopRevocationPublicationRecordV1",
+    );
+    crate::captured_schema_tests::assert_bidirectional::<super::PopRegistryRevocationReasonV1>(
+        "iroha_data_model::sorafs::pop_registry::PopRegistryRevocationReasonV1",
+    );
+    crate::captured_schema_tests::assert_bidirectional::<super::PopRevocationRecordV1>(
+        "iroha_data_model::sorafs::pop_registry::PopRevocationRecordV1",
+    );
+    crate::captured_schema_tests::assert_bidirectional::<super::PopRegistryAuditEventKindV1>(
+        "iroha_data_model::sorafs::pop_registry::PopRegistryAuditEventKindV1",
+    );
+    crate::captured_schema_tests::assert_bidirectional::<super::PopRegistryAuditDigestRecordV1>(
+        "iroha_data_model::sorafs::pop_registry::PopRegistryAuditDigestRecordV1",
+    );
+    crate::captured_schema_tests::assert_bidirectional::<super::PopRegistryStatusV1>(
+        "iroha_data_model::sorafs::pop_registry::PopRegistryStatusV1",
+    );
+}

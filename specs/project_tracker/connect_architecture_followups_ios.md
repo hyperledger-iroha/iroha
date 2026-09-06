@@ -78,7 +78,7 @@ status, or scope change.
   handling.
 - **Deliverables:**
   - Android wallet implementation + tests validating StrongBox/TEE output.
-  - JS verification code path (browser optional, Node HSM plug-in).
+  - JS verification code path (browser optional, Node signing-provider plug-in).
   - Doc updates describing attestation payload consumption.
 
 ## IOS-CONNECT-005: Rotation control frame

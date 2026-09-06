@@ -1001,6 +1001,63 @@ Ok(())
         errors,
     )
 
+    successor_census = _require_rust_item(
+        effects_path,
+        source,
+        "lifecycle_decision_apply_successor_census_is_exact",
+        errors,
+    )
+    _require_rust_item_context(
+        effects_path,
+        successor_census,
+        production_executor_context,
+        "lifecycle Decision Apply successor census binding",
+        errors,
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        successor_census,
+        """
+self.lifecycle_decision_apply_successor_outputs.is_none()
+    && self.exactly_owns_live_lifecycle_decision_apply(attestation.live_apply_authority())
+    && attestation.pending_count() == self.pending_lifecycle_output_admissions.len()
+    && attestation
+        .exactly_matches_pending_keys(self.pending_lifecycle_output_admissions.keys())
+""",
+        "lifecycle Apply successor census must bind the live owner and every pending output key",
+        errors,
+    )
+
+    successor_batch = _require_rust_item(
+        effects_path,
+        source,
+        "lifecycle_decision_apply_successor_batch_is_exact",
+        errors,
+    )
+    _require_rust_item_context(
+        effects_path,
+        successor_batch,
+        production_executor_context,
+        "lifecycle Decision Apply retained-batch binding",
+        errors,
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        successor_batch,
+        """
+batch.effects.len() == 1
+    && batch.effects.front().is_some_and(|owned| {
+        attestation.exactly_matches_retransmit_apply(&owned.effect)
+            && pending_output.exactly_precedes_periodic_retransmit_apply(
+                &owned.effect,
+                &owned.ownership,
+            )
+    })
+""",
+        "lifecycle Apply retained batch must contain only the exact retransmit Apply behind its output",
+        errors,
+    )
+
     dispatch_available = _require_rust_item(
         effects_path,
         source,
@@ -1018,20 +1075,147 @@ Ok(())
         effects_path,
         dispatch_available,
         """
-Ok(
-    self.pending_work() == self.pending_lifecycle_output_admissions.len()
-        && successor_debt_is_exact
-        && self.pending_runner_decision_cleanup.is_none()
-        && self.recovered_decision_fetch_request_index_is_exact_and_empty()
-        && self.parked_effect_batch.is_none()
-        && self.finality_completion.is_none()
-        && self.runtime.queued_commands() == 0
-        && self.runtime.lifecycle_decision_apply_dispatch_available(),
-)
+let pending_work_is_exact =
+    self.pending_work() == self.pending_lifecycle_output_admissions.len();
+let runner_cleanup_is_empty = self.pending_runner_decision_cleanup.is_none();
+let recovered_fetch_is_empty =
+    self.recovered_decision_fetch_request_index_is_exact_and_empty();
+let parked_batch_is_empty = self.parked_effect_batch.is_none();
+let finality_is_empty = self.finality_completion.is_none();
+let runtime_queue_is_empty = self.runtime.queued_commands() == 0;
+let runtime_available = self.runtime.lifecycle_decision_apply_dispatch_available();
+Ok(pending_work_is_exact
+    && successor_debt_is_exact
+    && runner_cleanup_is_empty
+    && recovered_fetch_is_empty
+    && parked_batch_is_empty
+    && finality_is_empty
+    && runtime_queue_is_empty
+    && runtime_available)
 """,
         "lifecycle Apply dispatch must bind the exact attested successor debt while freezing every other executor mutation owner and the runtime barrier",
         errors,
     )
+
+    predecessor_available = _require_rust_item(
+        effects_path,
+        source,
+        "lifecycle_decision_apply_runtime_predecessor_drain_available",
+        errors,
+    )
+    _require_rust_item_context(
+        effects_path,
+        predecessor_available,
+        production_executor_context,
+        "live Apply runtime-predecessor availability",
+        errors,
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        predecessor_available,
+        """
+let remains_exact =
+    self.lifecycle_decision_apply_runtime_predecessor_remains_exact(attestation)?;
+if self.parked_effect_batch.is_some() && !remains_exact {
+    return Err(EffectExecutorError::Contract(
+        "parked live Apply lost its complete pre-Apply runtime queue bound".to_owned(),
+    ));
+}
+""",
+        "a parked Apply must fail closed when its complete runtime queue bound changes",
+        errors,
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        predecessor_available,
+        """
+let predecessor_turn_available = self.parked_effect_batch.is_some()
+    || self
+        .runtime
+        .lifecycle_decision_apply_runtime_predecessor_drain_available(
+            attestation.dispatch_key().lifecycle_ordinal(),
+        );
+Ok(remains_exact && predecessor_turn_available)
+""",
+        "live Apply predecessor availability must bind the exact attested ordinal",
+        errors,
+    )
+
+    predecessor_remains = _require_rust_item(
+        effects_path,
+        source,
+        "lifecycle_decision_apply_runtime_predecessor_remains_exact",
+        errors,
+    )
+    _require_rust_item_context(
+        effects_path,
+        predecessor_remains,
+        production_executor_context,
+        "live Apply runtime-predecessor continuation",
+        errors,
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        predecessor_remains,
+        """
+self
+    .runtime
+    .lifecycle_decision_apply_runtime_predecessor_remains_exact(
+        attestation.dispatch_key().lifecycle_ordinal(),
+    )
+""",
+        "live Apply continuation must recheck the complete queue against its exact ordinal",
+        errors,
+    )
+
+    for step_name, corridor in (
+        (
+            "step_lifecycle_decision_apply_runtime_predecessor_after_cut",
+            "pre-Apply runtime",
+        ),
+        (
+            "step_lifecycle_decision_apply_completion_capacity_relief_after_cut",
+            "pre-Apply capacity-relief",
+        ),
+    ):
+        step_item = _require_rust_item(effects_path, source, step_name, errors)
+        _require_rust_item_context(
+            effects_path,
+            step_item,
+            production_executor_context,
+            f"{corridor} parked-Apply restoration",
+            errors,
+        )
+        _require_rust_token_sequence(
+            effects_path,
+            step_item,
+            """
+let restored = match self.restore_parked_effect_batch_after_foreground_drain() {
+    Ok(true) => {
+        if let Err(error) = self.publish_status(services) {
+            return Err(self.close(error, services));
+        }
+        true
+    }
+    Ok(false) => false,
+    Err(error) => return Err(self.close(error, services)),
+};
+if !restored {
+""",
+            f"{corridor} continuation must reject a retained foreground instead of idling forever",
+            errors,
+        )
+        _require_rust_token_sequence(
+            effects_path,
+            step_item,
+            """
+Ok(false) => {
+    return Err(self.close(
+        EffectExecutorError::Contract(
+""",
+            f"{corridor} first turn must restore its parked Apply before returning",
+            errors,
+        )
 
     prepare_dispatch = _require_rust_item(
         effects_path,
@@ -1697,6 +1881,32 @@ fn commit_body_pipeline_candidate_terminals(
         )
         bounded_ingress_context = (
             ("impl", "BoundedIngress", "<", "AdapterCommand", ">"),
+        )
+        runtime_predecessor_remains = _require_rust_item(
+            runtime_path,
+            runtime_source,
+            "lifecycle_decision_apply_runtime_predecessor_remains_exact",
+            errors,
+        )
+        _require_rust_item_context(
+            runtime_path,
+            runtime_predecessor_remains,
+            serialized_runtime_context,
+            "complete pre-Apply runtime queue continuation bound",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            runtime_predecessor_remains,
+            """
+self.lifecycle_decision_apply_runtime_gate_is_open()
+    && (self.ingress.len() == 0
+        || self
+            .ingress
+            .all_lifecycle_ordinals_before(apply_ordinal))
+""",
+            "a parked Apply continuation must recheck every queued lifecycle ordinal",
+            errors,
         )
         retransmit_ownership_helper = _require_rust_item(
             runtime_path,

@@ -26,29 +26,60 @@ default = ["node-api"]
 # excluded; tests can request `ws_integration_tests` explicitly.
 node-api = [
     "app_api",
+    "app_api_https",
     "transparent_api",
     "app_api_wss",
     "connect",
     "push",
+    "telemetry",
+    "schema",
     "circuit-params",
     "proofs-full",
     "ipa-commitment",
+    "zk-verify-batch",
+    "gost",
+    "sm",
 ]
 proofs-halo2 = ["zk-halo2", "zk-halo2-ipa"]
 proofs-stark = ["zk-stark"]
 proofs-full = ["proofs-halo2", "proofs-stark"]
 # Enables Telemetry (i.e. Status, Metrics, and API Version) endpoints
-telemetry = ["iroha_telemetry", "iroha_core/telemetry", "dep:prometheus"]
+telemetry = [
+    "iroha_telemetry",
+    "iroha_core/telemetry",
+    "iroha_futures/telemetry",
+    "dep:prometheus",
+]
 # Enables profiling endpoint
 profiling = ["pprof"]
 # Enables Data Model Schema endpoint
 schema = ["iroha_schema", "iroha_schema_gen"]
 # App-facing JSON API (convenience endpoints, JSON DSL).
 app_api = []
+# Feature-isolated, owner-only controller for authenticated private-settlement
+# route faults in real-process tests. Shipping/default builds never enable it.
+test-network-private-settlement-route-control = [
+    "iroha_core/test-network-private-settlement-evidence",
+]
 ## Enable ZK batch verify handler and tests that depend on iroha_zkp_halo2.
 zk-verify-batch = ["dep:iroha_zkp_halo2", "app_api"]
 # Forward `transparent_api` to data model so Torii can gate fields like authority/timestamp
 transparent_api = ["iroha_data_model/transparent_api"]
+# Enable TC26 GOST algorithm family plumbing in dependent crates.
+gost = [
+    "iroha_config/gost",
+    "iroha_core/gost",
+    "iroha_crypto/gost",
+    "iroha_data_model/gost",
+]
+# Enable portable SM support and advertise it through capability telemetry.
+sm = [
+    "iroha_config/sm",
+    "iroha_core/sm",
+    "iroha_crypto/sm",
+    "iroha_data_model/sm",
+    "iroha_telemetry?/sm",
+]
 ## WalletConnect-style WS + minimal in-node relay. Non-consensus.
 connect = []
 ## Enable HTTPS webhook delivery using reqwest + rustls native roots (client-only).
@@ -57,17 +88,11 @@ app_api_https = []
 app_api_wss = ["dep:tokio-tungstenite"]
 ## Optional push notification bridge for app-facing API (FCM/APNS via HTTP).
 push = ["app_api"]
-## Enable WebSocket integration tests (requires tokio-tungstenite). On by default; disable with
-## `--no-default-features --features app_api,transparent_api`.
+## Enable the WebSocket integration-test marker explicitly. The shipping aggregate already
+## includes the WSS transport without compiling test-only hooks.
 ws_integration_tests = ["app_api_wss"]
 ## Prototype: read-only debug endpoints for proof tag index; forwards to `iroha_core/zk-proof-tags`.
 zk-proof-tags = ["iroha_core/zk-proof-tags"]
-goldilocks_backend = [
-    "dep:iroha_zkp_halo2",
-    "iroha_zkp_halo2/goldilocks_backend",
-    "iroha_core/goldilocks_backend",
-    "ivm/goldilocks_backend",
-]
 zk-halo2 = ["iroha_core/zk-halo2"]
 zk-halo2-ipa = ["iroha_core/zk-halo2-ipa"]
 zk-stark = ["iroha_core/zk-stark"]
@@ -117,7 +142,7 @@ prometheus = { workspace = true, optional = true }
 thiserror = { workspace = true }
 displaydoc = { workspace = true }
 futures = { workspace = true, features = ["std", "async-await"] }
-axum = { workspace = true, features = ["ws", "query", "json", "tokio", "http1", "macros", "matched-path"] }
+axum = { workspace = true, features = ["ws", "query", "json", "tokio", "http1", "macros", "matched-path", "original-uri"] }
 tower-http = { version = "0.6.6", features = ["cors", "trace", "timeout"] }
 tower = "0.5.2"
 tokio = { workspace = true, features = ["sync", "time", "macros"] }
@@ -167,6 +192,7 @@ rustix = { version = "1.1.4", features = ["fs", "process"] }
 build-support = { path = "../build-support", default-features = false }
 
 [dev-dependencies]
+iroha_service_model = { workspace = true }
 criterion = { workspace = true }
 tower = "0.5.2"
 hyper = "1.7.0"
@@ -220,16 +246,21 @@ path = "tests/grouped/zk.rs"
 required-features = ["app_api"]
 
 [[test]]
-name = "offline_redeem_contract"
-path = "tests/offline_redeem_contract.rs"
+name = "kagemusha_redeem_contract"
+path = "tests/kagemusha_redeem_contract.rs"
 required-features = ["app_api"]
 
 [[test]]
-name = "offline_top_up_contract"
-path = "tests/offline_top_up_contract.rs"
+name = "kagemusha_top_up_contract"
+path = "tests/kagemusha_top_up_contract.rs"
 required-features = ["app_api"]
 
 [[test]]
-name = "offline_operation_contract"
-path = "tests/offline_operation_contract.rs"
+name = "kagemusha_operation_contract"
+path = "tests/kagemusha_operation_contract.rs"
 required-features = ["app_api"]
+
+[[test]]
+name = "account_capabilities_contract"
+path = "tests/account_capabilities_contract.rs"
+required-features = ["node-api"]

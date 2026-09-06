@@ -225,47 +225,50 @@ try archive.enqueue(envelope)
 This archive is storage only. The application remains responsible for inspecting and
 removing entries, and no queue operation transmits bytes to Torii.
 
-### Kagemusha offline cash
+### KAGEMUSHA V1
 
-Production offline value flows use Kagemusha top-up, transfer, and recursive redeem.
-Torii's `GET /v1/offline/readiness` endpoint reports universal
+Production offline value flows use the sole KAGEMUSHA V1 aggregate-balance
+protocol for top-up, transfer, and recursive redemption.
+Torii's `GET /v1/kagemusha/readiness` endpoint reports universal
 protocol capability only. Offline UI and peer handoff must remain available
 without making this or any other network discovery call.
 
 Peer transfers exchange a nonce-bound payment request, one constant-size recursive
 spend bundle, and a signed durable acknowledgement over QR or NFC with networking disabled.
 
-The non-shipping
-[physical-iPhone candidate evidence lab](readiness/kagemusha_candidate_ios_lab.md)
-exercises the complete Taira-testnet lifecycle in two fresh XCTest processes
-while a real network-path monitor remains offline. Its signed raw evidence is a
-testnet policy input; it is not a production wallet binary or an Android-parity
-claim.
+### KAGEMUSHA V1 Torii API
 
-### Kagemusha Torii API
-
-Torii exposes the asset-neutral `GET /v1/offline/readiness`
+Torii exposes the asset-neutral `GET /v1/kagemusha/readiness`
 universal capability endpoint,
-plus `POST /v1/offline/top-up`, `POST /v1/offline/redeem`, and
-`GET /v1/offline/operations/{operation_id}` for separate online consensus
-lifecycles. Use `getOfflineCapability()`, `submitKagemushaTopUp(_:)`,
-`submitKagemushaRedeem(_:)`, and
-`getKagemushaOperationStatus(operationId:chainDiscriminant:)`.
+plus payer-signed `POST /v1/kagemusha/top-up`, `POST /v1/kagemusha/redeem`, and
+`GET /v1/kagemusha/operations/{operation_id}` for separate online consensus
+lifecycles. Top-up sends one canonical versioned `SignedTransaction` containing
+exactly one `TopUpKagemushaV1`; Torii verifies that its authority is the
+embedded payer and submits the same transaction without rebuilding or signing
+it. Redemption retains its direct canonical request body. Requests and
+responses use the sole canonical KAGEMUSHA V1 Norito schemas. Operation results
+are monetary authority and must remain
+unusable until verified against the authenticated release artifacts.
 Capability discovery takes no selector.
 
 Capability discovery is not per-asset or per-dataspace backend readiness. The
-SDK accepts only the exact four-field ABI-21 `cash_handoff_v1` contract with
-maximum hop count 8 and `ready: true`.
+SDK accepts only the exact four-field `kagemusha_handoff_v1` contract with wire
+version `1`, secure-device lifecycle version `1`, and `ready: true`; no hop or
+proof-history ceiling is advertised.
+The native recursion capability must advertise the sole release profile and
+the 6,528-byte paired-proof ceiling. That transport bound is independent of
+transaction history and is not a hop, ancestry, fan-in, or receipt-count cap.
 No asset metadata, escrow catalog, dataspace enrollment, or backend enable flag
 is required for an app to expose offline user interfaces. Apps must not gate
 offline UI on this network discovery call; Torii reachability is not an
 offline-capability prerequisite.
 
-Top-up and redemption send canonical Norito archives and return a
-`KagemushaOperationReference`; follow its status URI until the tagged
-`KagemushaOperationStatus` is applied or rejected. Command-specific proof and
-verifier material is validated when the corresponding operation consumes it
-and never changes universal offline capability.
+Top-up and redemption derive immutable operation identities from their complete
+canonical V1 request archives. Pending, applied, and rejected responses repeat
+that identity and operation kind; there is no compatibility schema.
+Command-specific proof and verifier material is validated when the operation
+consumes it and never changes universal offline capability.
+
 ## SoraFS orchestrator client
 
 `SorafsOrchestratorClient` wraps the same native Norito bridge used by the CLI parity harness, making
@@ -669,10 +672,7 @@ For higher-level walkthroughs, see:
 - **Network time:** `getTimeNow` for `/v1/time/now` snapshots.
 - **Zero-knowledge:** attachment operations and verifying key registry read/event helpers (`getVerifyingKey`, `listVerifyingKeys`, `streamVerifyingKeyEvents`).
 - **Confidential assets:** derive the wallet key hierarchy locally through `deriveConfidentialKeyset`, build memo envelopes with
-  `ConfidentialEncryptedPayload`, use the proof-bound Kagemusha public-to-confidential
-  top-up flow through `prepareKagemushaTopUpShield` and `submitKagemushaTopUp`,
-  redeem confidential balances through the typed Kagemusha V4 flow and
-  `submitKagemushaRedeem(_:)`, and inspect rollout windows with
+  `ConfidentialEncryptedPayload`, and inspect rollout windows with
   `getConfidentialAssetPolicy(assetDefinitionId:)`, which wraps
   `GET /v1/confidential/assets/{definition_id}/transitions` and exposes pending transition
   metadata (transition id, conversion window, derived window-open height). Use

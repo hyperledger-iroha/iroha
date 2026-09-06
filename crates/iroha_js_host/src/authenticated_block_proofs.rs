@@ -500,7 +500,7 @@ mod tests {
         let executed_block_wire = block
             .encode_wire()
             .expect("encode authenticated proof fixture block wire");
-        let execution_commitment = ExecutionCommitment::without_topups_or_merge_carrier(
+        let execution_commitment = ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
             Hash::new(b"authenticated proof fixture parent state"),
             Hash::new(b"authenticated proof fixture post state"),
             Hash::new(b"authenticated proof fixture ordinary writes"),
@@ -689,7 +689,7 @@ mod tests {
             height,
             view: 0,
         };
-        let execution_commitment = ExecutionCommitment::without_topups_or_merge_carrier(
+        let execution_commitment = ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
             Hash::new([b"successor parent state".as_slice(), &height.to_be_bytes()].concat()),
             Hash::new([b"successor post state".as_slice(), &height.to_be_bytes()].concat()),
             Hash::new([b"successor writes".as_slice(), &height.to_be_bytes()].concat()),

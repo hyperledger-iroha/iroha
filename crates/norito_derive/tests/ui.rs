@@ -11,6 +11,13 @@ fn ui() {
     t.compile_fail("tests/ui/fail/*.rs");
     scrub_trybuild_manifest_paths();
 }
+#[test]
+fn schema_identity_ui() {
+    let tests = trybuild::TestCases::new();
+    tests.pass("tests/ui/pass/schema_identity.rs");
+    tests.compile_fail("tests/ui/fail/schema_identity_*.rs");
+    scrub_trybuild_manifest_paths();
+}
 fn scrub_trybuild_manifest_paths() {
     // trybuild emits absolute paths; rewrite them so target-codex artifacts stay portable.
     let Some(target_dir) = cargo_target_dir() else {

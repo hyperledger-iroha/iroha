@@ -50,20 +50,20 @@ def create_torii_client_runtime_auth_mixin(
     """Create protected runtime helpers without coupling to client model imports."""
 
     class ToriiClientRuntimeAuthMixin:
-        get_configuration_typed: Callable[..., Any]
+        get_configuration: Callable[..., Any]
         list_peers_typed: Callable[..., Any]
-        get_time_status_typed: Callable[..., Any]
-        get_time_now_typed: Callable[..., Any]
+        get_time_status: Callable[..., Any]
+        get_time_now: Callable[..., Any]
         list_telemetry_peers_info_typed: Callable[..., Any]
         _account_request_json: Callable[..., Any]
 
         def capture_node_admin_snapshot(
             self, *, canonical_auth: Any, include_peer_telemetry: bool = True
         ) -> Any:
-            configuration = self.get_configuration_typed()
+            configuration = self.get_configuration()
             peers = self.list_peers_typed()
-            time_status = self.get_time_status_typed()
-            time_now = self.get_time_now_typed()
+            time_status = self.get_time_status()
+            time_now = self.get_time_now()
             node_capabilities = self.get_node_capabilities_typed(
                 canonical_auth=canonical_auth
             )

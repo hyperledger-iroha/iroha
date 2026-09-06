@@ -9,17 +9,16 @@ use iroha_data_model::{
     block::{
         BlockHeader, SignedBlock,
         consensus_v2::finality::{V2FinalityArtifact, V2QuorumCertificateVerificationError},
-        consensus_v2::{MAX_VALIDATORS_PER_HEIGHT, SumeragiV2Status},
+        consensus_v2::{MAX_VALIDATORS_PER_HEIGHT, PROTOCOL_VERSION, SumeragiV2Status},
     },
     bridge::{
         BRIDGE_FINALITY_ATTESTATION_VERSION_V1, BRIDGE_FINALITY_PROOF_VERSION_V2, BridgeCommitment,
         BridgeFinalityAttestationBodyV1, BridgeFinalityAttestationV1,
         BridgeFinalityAttestationValidationError, BridgeFinalityBundle, BridgeFinalityProof,
-        SCCP_V1_SUMERAGI_PROTOCOL_VERSION, SccpGovernedRouteV1, SccpLaneIdV1, SccpNetworkV1,
-        SccpOutboundMessageKeyV1, SccpReplayAccumulatorIdV1, SccpReplayActorV1,
-        SccpReplayBoundaryV1, SccpReplayDomainV1, SccpReplayForestV1, SccpReplayPrincipalV1,
-        SccpReplayRecordV1, SccpRouteKeyV1, SccpSoraFinalityAnchorV1,
-        sccp_sora_taira_chain_id_hash_v1,
+        SccpGovernedRouteV1, SccpLaneIdV1, SccpNetworkV1, SccpOutboundMessageKeyV1,
+        SccpReplayAccumulatorIdV1, SccpReplayActorV1, SccpReplayBoundaryV1, SccpReplayDomainV1,
+        SccpReplayForestV1, SccpReplayPrincipalV1, SccpReplayRecordV1, SccpRouteKeyV1,
+        SccpSoraFinalityAnchorV1, sccp_sora_taira_chain_id_hash_v1,
     },
     isi::InstructionBox,
     name::Name,
@@ -152,7 +151,7 @@ impl VerifiedV2FinalityArtifact {
         let anchor = SccpSoraFinalityAnchorV1 {
             version: 1,
             source_network: SccpNetworkV1::SoraTaira,
-            protocol_version: SCCP_V1_SUMERAGI_PROTOCOL_VERSION,
+            protocol_version: PROTOCOL_VERSION,
             chain_id_hash: sccp_sora_taira_chain_id_hash_v1(),
             epoch: context.epoch,
             epoch_end_height: context.epoch_end_height,
@@ -195,7 +194,7 @@ fn sccp_sora_roster_commitment_v1(
             + MAX_VALIDATORS_PER_HEIGHT * 64,
     );
     preimage.extend_from_slice(SCCP_SORA_ROSTER_SEMANTIC_DOMAIN_V1);
-    preimage.push(u8::try_from(SCCP_V1_SUMERAGI_PROTOCOL_VERSION).ok()?);
+    preimage.push(u8::try_from(PROTOCOL_VERSION).ok()?);
     preimage.extend_from_slice(&validator_count.to_le_bytes());
     for (entry, pop) in roster.iter().zip(validator_set_pops) {
         let (algorithm, public_key) = entry.validator.public_key().try_to_bytes().ok()?;
@@ -2066,19 +2065,19 @@ fn committed_outbound_replay_admission(
         transfer,
     )?;
     let boundary = SccpReplayBoundaryV1::SoraOutboundLock;
+    let domain = SccpReplayDomainV1 {
+        source_network: validated.context.lane.source,
+        target_network: validated.context.lane.target,
+        boundary,
+        route_revision: transfer.route_revision,
+        route_configuration_hash: validated.context.route_configuration_hash,
+        actor: SccpReplayActorV1::Route,
+    };
+    let accumulator_id = SccpReplayAccumulatorIdV1::from_domain(route_key, &domain)
+        .map_err(|_| SccpReplayRebuildErrorV1::MalformedAdmission)?;
     Ok(SccpCommittedReplayAdmissionV1 {
-        accumulator_id: SccpReplayAccumulatorIdV1 {
-            route_key,
-            boundary,
-        },
-        domain: SccpReplayDomainV1 {
-            source_network: validated.context.lane.source,
-            target_network: validated.context.lane.target,
-            boundary,
-            route_revision: transfer.route_revision,
-            route_configuration_hash: validated.context.route_configuration_hash,
-            actor: SccpReplayActorV1::Route,
-        },
+        accumulator_id,
+        domain,
         record: SccpReplayRecordV1 {
             operation: boundary,
             replay_id: validated.key.message_id,
@@ -2152,19 +2151,19 @@ fn committed_native_replay_admission(
     let payload_bytes = iroha_sccp::canonical_sccp_payload_bytes(&decoded.payload)
         .map_err(|_| SccpReplayRebuildErrorV1::MalformedAdmission)?;
     let boundary = SccpReplayBoundaryV1::SoraInboundRelease;
+    let domain = SccpReplayDomainV1 {
+        source_network: decoded.source.lane.source,
+        target_network: decoded.source.lane.target,
+        boundary,
+        route_revision: transfer.route_revision,
+        route_configuration_hash: native.route_configuration_hash,
+        actor: SccpReplayActorV1::Route,
+    };
+    let accumulator_id = SccpReplayAccumulatorIdV1::from_domain(route_key, &domain)
+        .map_err(|_| SccpReplayRebuildErrorV1::MalformedAdmission)?;
     Ok(Some(SccpCommittedReplayAdmissionV1 {
-        accumulator_id: SccpReplayAccumulatorIdV1 {
-            route_key,
-            boundary,
-        },
-        domain: SccpReplayDomainV1 {
-            source_network: decoded.source.lane.source,
-            target_network: decoded.source.lane.target,
-            boundary,
-            route_revision: transfer.route_revision,
-            route_configuration_hash: native.route_configuration_hash,
-            actor: SccpReplayActorV1::Route,
-        },
+        accumulator_id,
+        domain,
         record: SccpReplayRecordV1 {
             operation: boundary,
             replay_id: decoded.source.message_id,
@@ -2380,16 +2379,12 @@ pub fn rebuild_sccp_replay_archive_from_kura_v1(
             if expected_domain != &admission.domain {
                 return Err(SccpReplayRebuildErrorV1::UnknownAccumulator);
             }
-            let mut forest = archive
-                .forest(&admission.accumulator_id)
-                .map_err(|_| SccpReplayRebuildErrorV1::UnknownAccumulator)?
-                .1
-                .clone();
-            let delta = forest
-                .occupy(&admission.domain, &admission.record, &admission.witness)
-                .map_err(|_| SccpReplayRebuildErrorV1::ForestMismatch)?;
             archive
-                .apply_delta(admission.accumulator_id, delta)
+                .apply_record(
+                    admission.accumulator_id,
+                    &admission.record,
+                    &admission.witness,
+                )
                 .map_err(|_| SccpReplayRebuildErrorV1::ForestMismatch)?;
         }
     }
@@ -3244,7 +3239,7 @@ mod tests {
             &trusted_finality,
         )
         .expect("locally anchored destination proof verifies against governed route");
-        assert_eq!(call.public_inputs, fixture.request.public_inputs);
+        assert_eq!(call.public_inputs(), &fixture.request.public_inputs);
         assert_eq!(
             iroha_sccp::sccp_destination_proof_work_counters_v1(),
             iroha_sccp::SccpDestinationProofWorkCountersV1 {
@@ -3338,7 +3333,8 @@ mod tests {
             iroha_data_model::bridge::canonical_sccp_sora_finality_anchor_bytes_v1(anchor)
                 .expect("derived anchor has canonical bytes")
                 .len(),
-            iroha_data_model::bridge::SCCP_V1_SORA_FINALITY_ANCHOR_BYTES
+            188,
+            "canonical epoch-aware SORA finality anchor wire length"
         );
 
         let assert_internal_boundary_rejected =

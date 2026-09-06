@@ -13,16 +13,49 @@ use rand_core::RngCore;
 use std::io;
 use std::marker::PhantomData;
 
-/// IPA multi-open prover
+/// IPA multi-open prover.
+///
+/// `QUERY_INSTANCE = false` selects the direct-instance transcript used by
+/// recursive circuits: public values are absorbed verbatim and their queried
+/// evaluations are reconstructed by the verifier, so they do not allocate an
+/// instance commitment or enter the IPA opening set. When `QUERY_INSTANCE` is
+/// true, each bit in `PROOF_SUPPLIED_INSTANCE_COMMITMENT_MASK` selects an
+/// instance column whose commitment is written into the proof. Other instance
+/// commitments retain the legacy verifier-computed behavior.
 #[derive(Debug)]
-pub struct ProverIPA<'params, C: CurveAffine> {
+pub struct ProverIPA<
+    'params,
+    C: CurveAffine,
+    const QUERY_INSTANCE: bool = true,
+    const PROOF_SUPPLIED_INSTANCE_COMMITMENT_MASK: u64 = 0,
+> {
     pub(crate) params: &'params ParamsIPA<C>,
 }
 
-impl<'params, C: CurveAffine> Prover<'params, IPACommitmentScheme<C>> for ProverIPA<'params, C> {
-    const QUERY_INSTANCE: bool = true;
+/// Direct-instance IPA multi-open prover.
+pub type ProverIPADirect<'params, C> = ProverIPA<'params, C, false, 0>;
+
+/// IPA multi-open prover with a per-column proof-supplied instance commitment
+/// mask.
+pub type ProverIPAHybrid<'params, C, const PROOF_SUPPLIED_INSTANCE_COMMITMENT_MASK: u64> =
+    ProverIPA<'params, C, true, PROOF_SUPPLIED_INSTANCE_COMMITMENT_MASK>;
+
+impl<
+    'params,
+    C: CurveAffine,
+    const QUERY_INSTANCE: bool,
+    const PROOF_SUPPLIED_INSTANCE_COMMITMENT_MASK: u64,
+> Prover<'params, IPACommitmentScheme<C>>
+    for ProverIPA<'params, C, QUERY_INSTANCE, PROOF_SUPPLIED_INSTANCE_COMMITMENT_MASK>
+{
+    const QUERY_INSTANCE: bool = QUERY_INSTANCE;
+    const PROOF_SUPPLIED_INSTANCE_COMMITMENT_MASK: u64 = PROOF_SUPPLIED_INSTANCE_COMMITMENT_MASK;
 
     fn new(params: &'params ParamsIPA<C>) -> Self {
+        assert!(
+            QUERY_INSTANCE || PROOF_SUPPLIED_INSTANCE_COMMITMENT_MASK == 0,
+            "proof-supplied instance commitments require QUERY_INSTANCE"
+        );
         Self { params }
     }
 

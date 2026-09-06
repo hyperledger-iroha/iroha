@@ -273,7 +273,7 @@ async fn wait_for_blocks_non_empty(
     client: &Client,
     target: u64,
     timeout: Duration,
-) -> Result<iroha::client::Status> {
+) -> Result<iroha_torii_shared::status::Status> {
     let deadline = Instant::now() + timeout;
     loop {
         let status = client.get_status()?;

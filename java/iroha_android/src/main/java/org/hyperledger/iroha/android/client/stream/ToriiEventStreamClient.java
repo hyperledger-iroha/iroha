@@ -24,11 +24,14 @@ import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import org.hyperledger.iroha.android.client.CanonicalRequestSigner;
 import org.hyperledger.iroha.android.client.ClientObserver;
 import org.hyperledger.iroha.android.client.ClientResponse;
 import org.hyperledger.iroha.android.client.JsonEncoder;
 import org.hyperledger.iroha.android.client.JsonParser;
+import org.hyperledger.iroha.android.client.LocalSigningContext;
 import org.hyperledger.iroha.android.client.PlatformHttpTransportExecutor;
+import org.hyperledger.iroha.android.client.ToriiCanonicalRequestAuth;
 import org.hyperledger.iroha.android.client.TransportSecurity;
 import org.hyperledger.iroha.android.client.transport.StreamingTransportExecutor;
 import org.hyperledger.iroha.android.client.transport.TransportExecutor;
@@ -53,12 +56,20 @@ public final class ToriiEventStreamClient {
   private final TransportExecutor transport;
   private final Map<String, String> defaultHeaders;
   private final List<ClientObserver> observers;
+  private final LocalSigningContext localSigningContext;
+  private final ToriiCanonicalRequestAuth canonicalRequestAuth;
 
   private ToriiEventStreamClient(final Builder builder) {
     this.baseUri = builder.baseUri;
     this.transport = builder.transport;
     this.defaultHeaders = Collections.unmodifiableMap(new LinkedHashMap<>(builder.defaultHeaders));
     this.observers = Collections.unmodifiableList(new ArrayList<>(builder.observers));
+    this.localSigningContext = builder.localSigningContext;
+    this.canonicalRequestAuth = builder.canonicalRequestAuth;
+    if ((localSigningContext == null) != (canonicalRequestAuth == null)) {
+      throw new IllegalArgumentException(
+          "localSigningContext and canonicalRequestAuth must be configured together");
+    }
   }
 
   public static Builder builder() {
@@ -109,6 +120,10 @@ public final class ToriiEventStreamClient {
     headers.putIfAbsent("Connection", "keep-alive");
     options.headers().forEach(headers::put);
     rejectUnsupportedCanonicalResume(path, target, headers);
+    requireCanonicalHeadersUnset(headers);
+    if (canonicalRequestAuth != null) {
+      buildCanonicalHeaders(target).forEach(headers::put);
+    }
     TransportSecurity.requireHttpRequestAllowed(
         "ToriiEventStreamClient", baseUri, target, headers, null);
     final TransportRequest.Builder builder = TransportRequest.builder().setUri(target).setMethod("GET");
@@ -118,6 +133,26 @@ public final class ToriiEventStreamClient {
     }
     headers.forEach(builder::addHeader);
     return builder.build();
+  }
+
+  private Map<String, String> buildCanonicalHeaders(final URI target) {
+    final Long timestampMs = canonicalRequestAuth.timestampMs();
+    final String nonce = canonicalRequestAuth.nonce();
+    if ((timestampMs == null) != (nonce == null)) {
+      throw new IllegalArgumentException("timestampMs and nonce must be provided together");
+    }
+    if (timestampMs == null) {
+      return CanonicalRequestSigner.buildHeaders(
+          localSigningContext.networkId(), "GET", target, null, canonicalRequestAuth);
+    }
+    return CanonicalRequestSigner.buildHeaders(
+        localSigningContext.networkId(),
+        "GET",
+        target,
+        null,
+        canonicalRequestAuth,
+        timestampMs.longValue(),
+        nonce);
   }
 
   private URI resolvePath(final String path) {
@@ -164,6 +199,18 @@ public final class ToriiEventStreamClient {
       if ("Last-Event-ID".equalsIgnoreCase(headerName)) {
         throw new IllegalArgumentException(
             "Last-Event-ID is unsupported for canonical live SSE streams because they have no replay log");
+      }
+    }
+  }
+
+  private static void requireCanonicalHeadersUnset(final Map<String, String> headers) {
+    for (final String candidate : headers.keySet()) {
+      if (candidate.equalsIgnoreCase(CanonicalRequestSigner.HEADER_ACCOUNT)
+          || candidate.equalsIgnoreCase(CanonicalRequestSigner.HEADER_SIGNATURE)
+          || candidate.equalsIgnoreCase(CanonicalRequestSigner.HEADER_TIMESTAMP_MS)
+          || candidate.equalsIgnoreCase(CanonicalRequestSigner.HEADER_NONCE)) {
+        throw new IllegalArgumentException(
+            "canonical request headers must be supplied only through canonicalRequestAuth");
       }
     }
   }
@@ -638,6 +685,8 @@ public final class ToriiEventStreamClient {
     private TransportExecutor transport = PlatformHttpTransportExecutor.createDefault();
     private final Map<String, String> defaultHeaders = new LinkedHashMap<>();
     private final List<ClientObserver> observers = new ArrayList<>();
+    private LocalSigningContext localSigningContext;
+    private ToriiCanonicalRequestAuth canonicalRequestAuth;
 
     private Builder() {}
 
@@ -675,6 +724,17 @@ public final class ToriiEventStreamClient {
       if (values != null) {
         values.forEach(this::addObserver);
       }
+      return this;
+    }
+
+    /** Configures canonical account signing for every stream request opened by this client. */
+    public Builder canonicalRequestAuth(
+        final LocalSigningContext localSigningContext,
+        final ToriiCanonicalRequestAuth canonicalRequestAuth) {
+      this.localSigningContext =
+          Objects.requireNonNull(localSigningContext, "localSigningContext");
+      this.canonicalRequestAuth =
+          Objects.requireNonNull(canonicalRequestAuth, "canonicalRequestAuth");
       return this;
     }
 

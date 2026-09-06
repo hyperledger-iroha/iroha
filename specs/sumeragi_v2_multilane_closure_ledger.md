@@ -12,6 +12,13 @@ activation contract in [Nexus cross-lane execution](nexus_cross_lane.md), and
 the persistence contract in [Merge ledger](merge_ledger.md). It does not replace
 those documents.
 
+The [2026-09-06 implementation goals](sumeragi_v2_multilane_completion_goals.md)
+set the active dependency order and fresh revalidation work. That source audit
+supersedes the older snapshot's no-TODO assertion and mirrored-Java delivery
+target: Kotlin owns JVM production models and Java-source consumer tests must
+exercise them. Existing implementation rows remain leads for revalidation;
+their presence does not close a milestone or any release evidence gate.
+
 The ledger deliberately distinguishes a reachable production implementation
 from a release-evidenced end-to-end path. The mutable development source
 contains autonomous production, Native application evidence, evidence-aware
@@ -870,12 +877,20 @@ canonical bytes and the exact derived key. Bounded prefix enumeration rejects
 cap overflow, malformed or wrong-route members, and any member without its
 exact pending obligation. Registry/application-state reads enumerate that
 roster and require the obligation's exact member instead of trusting a lossy
-summary. The obligation and all of its members are inserted or removed through
-one nested MV transaction; whole-list admission staging, ordinary bulk
-resolution, and autonomous required resolution call `apply` only after every
-item succeeds. Both native marker prefixes are in
+summary. An obligation with a distinct authenticated signed transaction alias
+also installs one canonical signed-first reverse member. Direct application
+removes the obligation, reverse member, and route roster atomically. Application
+through that signed alias performs the same removal and installs one compact
+outer-identity terminal binding that commits the exact network, signed hash,
+outer hash, and binding hash. Thus replay evidence remains exact without
+retaining a potentially 2 MiB obligation forever. The obligation and all of its
+members are inserted or removed through one nested MV transaction; whole-list
+admission staging, ordinary bulk resolution, signed-alias terminalization, and
+autonomous required resolution call `apply` only after every item succeeds.
+All four native marker prefixes (obligation, route member, pending signed-alias
+member, and compact signed-alias terminal) are in
 `OPAQUE_SYSTEM_CONTRACT_STATE_PREFIXES`, so generic contracts cannot read,
-forge, overwrite, enumerate, or delete either half of the paired state.
+forge, overwrite, enumerate, or delete any part of the state machine.
 
 Pending application state is lifecycle-aware. It is `Pending` only when every
 bound lane/dataspace remains in the current Nexus catalog and
@@ -907,7 +922,12 @@ roster validates every enumerated compact canonical member claim and requires
 its exact obligation key to exist without decoding a potentially 2 MiB
 obligation per roster item. Target application and resolution still decode and
 compare the exact obligation/member pair, and every known obligation is checked
-for its exact member on each bound route.
+for its exact member on each bound route. Signed-alias resolution additionally
+requires its exact bounded reverse member and refuses an existing conflicting
+terminal. After resolution, only the canonical compact terminal can establish
+`AppliedViaSignedAlias`; missing, malformed, substituted, partial, or
+route-retaining evidence fails closed. Direct application establishes
+`AppliedDirect` and leaves no alias terminal.
 Missing, phantom, orphaned, malformed, oversized, wrong-key, or over-cap
 evidence must fail closed without publishing a stage or resolution prefix;
 same-route coordinator and participant roles contribute only one route member.
@@ -1137,6 +1157,16 @@ transaction membership is rejected in
 `crates/iroha_core/src/block.rs`. The application path in
 `crates/iroha_core/src/sumeragi/v2_apply.rs` finalizes queue reservations only
 after canonical Kura/WSV commit.
+Each `MergeLaneExecution` also carries aligned
+`authenticated_signed_replay_aliases`. State derives and validates that
+transcript against pre-carrier authentication, binds it to carrier membership,
+and reuses it during Kura recovery. V2 apply retires ordinary sibling carriers
+sharing a committed signed alias. For a globally admitted sibling, State first
+atomically consumes the exact pending obligation, signed-first reverse member,
+and route members and, only for a distinct signed-alias commit, publishes its
+compact outer terminal. Runtime and startup Queue cleanup require the matching
+`AppliedDirect` or `AppliedViaSignedAlias` evidence and refuse to bypass active
+reservations, selection ownership, or the exact Kura terminal corridor.
 
 **Closure condition.** Every peer deterministically re-executes the exact
 certified batch on the committed base WSV and atomically commits canonical
@@ -1180,6 +1210,10 @@ The focused inventory names
 `state::tests::autonomous_execution_pre_vote_rejects_premature_pending_carrier_hash`,
 and
 `state::tests::autonomous_execution_finality_rejects_unbound_event_surface_drift`.
+Replay-alias coverage additionally includes
+`sealed_reveal_membership_requires_exact_preblock_authentication`,
+`committed_sealed_signed_alias_releases_ordinary_sibling_carriers`, and
+`committed_merge_entry_lookup_reconstructs_from_canonical_indexes_after_restart`.
 The final test also corrupts the QC-bound autonomous event prefix before
 pre-vote and requires rejection before retained-root reconstruction can mask
 the drift.
@@ -1619,10 +1653,11 @@ diagnostics models live in
 `kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/consensus/SumeragiStatusModels.kt`
 and
 `kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/consensus/SumeragiDiagnosticsModels.kt`;
-the mirrored Java status, diagnostics, and exact JSON support live in
-`SumeragiStatusModels.java`, `SumeragiDiagnosticsModels.java`, and
-`SumeragiJsonSupport.java` under
-`java/iroha_android/src/main/java/org/hyperledger/iroha/android/consensus/`.
+private diagnostics JSON serializers live beside them in
+`SumeragiDiagnosticsSerialization.kt`. Kotlin owns the production implementation
+for both JVM languages. Java-source status, diagnostics, transport and wire
+consumer suites live under `kotlin/core-jvm/src/test/java/org/hyperledger/iroha/sdk/`
+and run through Kotlin `:core-jvm:test`; duplicate Java consensus APIs are removed.
 Each client keeps status and diagnostics on distinct methods, parsers, and
 return models. Ten Rust-owned receipt-graph types and the typed SDK parsers
 reject unknown fields and duplicate or over-bound input rather than accepting
@@ -1630,8 +1665,8 @@ an implicit compatibility shape.
 
 **Closure condition.** Give status and diagnostics separate parsers, return
 types, and methods in every client. Extend Rust and Swift with the Native
-application row and state enum. Add the full diagnostics surface to Kotlin
-core-jvm and mirror it in Java. Python and JavaScript must not parse diagnostics
+application row and state enum. Keep the full diagnostics surface in Kotlin
+core-jvm and exercise it directly from Java-source consumers. Python and JavaScript must not parse diagnostics
 with the authoritative status parser or expose lane evidence through the
 status-only method.
 
@@ -1745,9 +1780,9 @@ The source inventories now require OpenAPI 7, Python 63, JavaScript 61, Swift
 5, Kotlin 7, and Java 6 tests. The current recursive mutable-tree closure
 contains exactly 1,451 grouped and 1,453 diagnostics records. Its grouped and
 diagnostics suite-source SHA-256 values are
-`bdf4efd88885521e3806cfe610e7ab3d72d690ebe329a4b7acfc0b2fe9b22ae0`
+`ecef1796ff203f77891e91e6b492d85d13f70f10df6d85e8f9e1dfebf167d52b`
 and
-`90235165ad20cc6e4363d4fd6935b8c25bc2e1856cdbbad3323dcc5c4843c2a3`.
+`33e2610b3878a45d58052448b394787df693dd4bb402e153ea8cc92126a8bc77`.
 The checked-in grouped fixture has SHA-256
 `e4fb62addba3c3b8aecdbff55840e21620c770ab96d346ca55b156cf0239942b`.
 The diagnostics closure directly includes the 48-line wire fixture whose
@@ -1824,7 +1859,11 @@ the then-current count; the autonomous-retirement regression added here raised
 that checkpoint to 857 tests. The retired-attempt, mixed-carrier, and two-link
 cold-restart rows plus the two predecessor-durability handoff rows, followed by
 retirement of the dormant generic persisted-continuation regression, leave the
-current production inventory at 864 tests while
+864-test checkpoint. The two sealed Certified-Serve storage regressions and
+the CompleteTip payload-before-ledger-repair regression produced a historical
+867-test inventory. The Kagemusha clean-break retired two one-test module legs
+and replaced their rows with one consensus-signature-envelope regression in an
+existing module, leaving the current production inventory at 866 tests while
 the G-UNIT inventory contains 522 tests. Source binding is not an execution receipt.
 The finalized predecessor remains active while the shared ordinary/PendingKura
 preflight rehydrates late canonical lane ownership, services bounded
@@ -1897,7 +1936,7 @@ fetches, and every persistence crash boundary. Tests that exercise only
 `#[cfg(test)]` producer helpers do not close a live-path obligation.
 
 The mutable source inventory is internally count-consistent. The production
-inventory contains exactly 864 tests across 44 modules, including 448
+inventory contains exactly 866 tests across 42 modules, including 453
 source-sealed ownership/regression names. The duplicate inline V2 core network
 simulations are retired; the standalone `iroha_sumeragi_core` harness remains. The three Kura recovery
 regressions and governance-unlock audit are retained beside the prior source-bound closure.
@@ -2057,9 +2096,9 @@ grouped JSON, and wire TSV. Its record totals and suite-source digests must be
 derived and receipt-bound from the exact immutable candidate. The current
 mutable-tree closure contains exactly 1,451 grouped and 1,453 diagnostics
 records, with grouped and diagnostics suite-source SHA-256 values
-`bdf4efd88885521e3806cfe610e7ab3d72d690ebe329a4b7acfc0b2fe9b22ae0`
+`ecef1796ff203f77891e91e6b492d85d13f70f10df6d85e8f9e1dfebf167d52b`
 and
-`90235165ad20cc6e4363d4fd6935b8c25bc2e1856cdbbad3323dcc5c4843c2a3`.
+`33e2610b3878a45d58052448b394787df693dd4bb402e153ea8cc92126a8bc77`.
 The current grouped JSON and wire TSV SHA-256 values are
 `e4fb62addba3c3b8aecdbff55840e21620c770ab96d346ca55b156cf0239942b`
 and
@@ -2141,15 +2180,38 @@ diagnostics must be added here or mapped to a ledger row before release.
   latch, and producer-episode scheduler authorities are retired. Fresh
   immutable-candidate execution and release evidence remains Open.
 
-### No unresolved in-scope explicit TODO marker
+### Current TODO reconciliation — open
 
-The current reviewed closure contains no explicit TODO in lane routing,
-autoscale, merge, reservation ownership, Native AMX, drain, retirement, or
-multilane diagnostics. The former SafetyWal filesystem-identity marker is now
-implemented and source-bound: production runner cutover mints the opened WAL
-directory authority from Kura's retained opened root, and the adapter consumes
-that move-only authority only for the exact Kura instance. Any newly introduced
-marker must be classified here before release.
+The 2026-09-06 audit found explicit lifecycle TODOs requiring current call-graph
+classification and closure evidence. The older no-TODO assertion is superseded.
+Track these under `ML-AUT-06`, `ML-LIFE-05`, and `G-FORMAL` until each is
+implemented and tested or explicitly proven unrelated to multilane execution:
+
+- `v2_lifecycle_projection.rs::settle_certified_serve_completed`: replace the
+  unlaunched-owner seam with worker-authenticated completion bound to the
+  retained body-store instance after the consuming launch is wired.
+- `v2_lifecycle_scheduler_inputs.rs`: finish durable applied-height handoff
+  and owner rollover for the still-live recovered Broadcast.
+- `v2_lifecycle_ingress_position.rs::capture_lifecycle_queue_cut`: join the
+  frozen queue cut and complete executor-authenticated verdicts in the
+  composite planner factory.
+- `v2_runner/outer_ingress_cursor.rs::OuterIngressTurns`: wire the owner
+  transaction at the borrowed live Ingress turn with consuming body-store launch.
+
+The `v2_ready_durable_validate_adapter_preview.rs` post-WAL-append TODO now has
+token-local test-only injection and
+`ready_validate_crash_after_wal_append_replays_exact_prepare_and_commit`.
+It checks fresh reopen/replay before live Sign publication for both vote
+phases. Execution evidence remains open until the focused Rust test runs.
+
+The former `queue.rs` QueuePlan intent TODO is stale and has been replaced with
+the current invariant. `TransactionAdmissionIntent` is signature-bound; both
+gossip receive paths reject strict intent without its certificate, and
+candidate/block/State admission enforce the autonomous-owner boundary. Existing
+tests include `queue_plan_intent_remains_an_autonomous_fifo_barrier_after_exact_binding`,
+`exact_parent_queue_plan_admission_rejects_ordinary_external_execution`, and
+`autonomous_merge_admission_intent_follower_and_historical_reject_ordinary_external`.
+These are inspected test definitions, not fresh execution evidence.
 
 ### Unresolved in scope without a TODO marker
 
@@ -2157,7 +2219,7 @@ marker must be classified here before release.
   implementation gaps are resolved and source-bound. Their focused Rust,
   formal-engine, SDK, and multi-peer execution receipts remain open; structural
   source validation alone cannot close those gates.
-- `G-UNIT`, `G-SDK`, and `G-FORMAL` remain Open. The exact 864-production-test,
+- `G-UNIT`, `G-SDK`, and `G-FORMAL` remain Open. The exact 866-production-test,
   522-G-UNIT-test, and 56-control counts, SDK group counts, recursive closure
   shapes, and 27-action formal extraction partition are mutable-development
   inventories only. Historical focused Rust and direct SDK subsets do not
@@ -2243,11 +2305,9 @@ marker must be classified here before release.
   evidence, autoscale, drain, or retirement and remains outside this multilane
   ledger.
 - **Unrelated source markers:** the TODOs in
-  `crates/iroha_core/src/privacy_profiles.rs`, the Kagemusha SHA-256 table
-  implementation, and `crates/ivm/build.rs` concern privacy-engine activation,
-  an optional spread-word representation, and reproducible CUDA PTX artifacts.
-  None consumes a multilane identity or evidence class. They account for the
-  three non-consensus source TODO comments in the audit and are outside this
+  `crates/iroha_core/src/privacy_profiles.rs` and `crates/ivm/build.rs` concern
+  privacy-engine activation and reproducible CUDA PTX artifacts. Neither
+  consumes a multilane identity or evidence class; both remain outside this
   ledger.
 - **Wallet query roadmap items:** the two active TODO bullets in `roadmap.md`
   request an authenticated account-activity feed and a timestamp-bounded

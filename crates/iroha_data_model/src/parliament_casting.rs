@@ -12,7 +12,8 @@ use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
 use crate::parliament_types::{
-    BallotAttemptId, BodyInstanceId, GovernanceAttemptId, ProposalContentId, TleKeySessionId,
+    BallotAttemptId, BodyInstanceId, GovernanceAttemptId, MAX_PARLIAMENT_BALLOT_CORPUS_ENTRIES_V1,
+    PARLIAMENT_TIMED_OVN_REGISTRATION_RECORD_BYTES_V1, ProposalContentId, TleKeySessionId,
 };
 
 /// Current compact casting-context commitment version.
@@ -38,6 +39,10 @@ const REGISTRATION_CORPUS_DOMAIN_V1: &[u8] = b"iroha:parliament:timed-ovn:regist
 const EMPTY_CONTEXT_ROOT_DOMAIN_V1: &[u8] =
     b"iroha:parliament:timed-ovn:casting-contexts:empty:v1\0";
 
+fn is_zero_prehash_sentinel(hash: Hash) -> bool {
+    hash == Hash::prehashed([0; Hash::LENGTH])
+}
+
 /// Cast-capable lifecycle phases admitted to the authenticated context set.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -45,6 +50,8 @@ const EMPTY_CONTEXT_ROOT_DOMAIN_V1: &[u8] =
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize),
     norito(tag = "phase", content = "value", rename_all = "SCREAMING_SNAKE_CASE")
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parliament_casting::ParliamentTimedOvnCastingPhaseV1")]
 pub enum ParliamentTimedOvnCastingPhaseV1 {
     /// Participant registration is open.
     Registered,
@@ -61,6 +68,8 @@ pub enum ParliamentTimedOvnCastingPhaseV1 {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parliament_casting::ParliamentTimedOvnRegistrationCorpusCommitmentV1")]
 pub struct ParliamentTimedOvnRegistrationCorpusCommitmentV1 {
     /// Commitment format version.
     pub version: u16,
@@ -75,6 +84,13 @@ impl ParliamentTimedOvnRegistrationCorpusCommitmentV1 {
     #[must_use]
     pub fn from_records(records: &[Vec<u8>]) -> Option<Self> {
         let record_count = u32::try_from(records.len()).ok()?;
+        if record_count > MAX_PARLIAMENT_BALLOT_CORPUS_ENTRIES_V1
+            || records
+                .iter()
+                .any(|record| record.len() != PARLIAMENT_TIMED_OVN_REGISTRATION_RECORD_BYTES_V1)
+        {
+            return None;
+        }
         let digest = Hash::new_from_writer(|writer| {
             writer.write_all(REGISTRATION_CORPUS_DOMAIN_V1)?;
             writer.write_all(&PARLIAMENT_TIMED_OVN_CASTING_COMMITMENT_VERSION_V1.to_be_bytes())?;
@@ -113,6 +129,8 @@ impl ParliamentTimedOvnRegistrationCorpusCommitmentV1 {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parliament_casting::ParliamentTimedOvnReleaseBindingV1")]
 pub struct ParliamentTimedOvnReleaseBindingV1 {
     /// Long-lived TLE threshold key session.
     pub tle_key_session_id: TleKeySessionId,
@@ -139,6 +157,8 @@ pub struct ParliamentTimedOvnReleaseBindingV1 {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parliament_casting::ParliamentTimedOvnCastingContextBindingV1")]
 pub struct ParliamentTimedOvnCastingContextBindingV1 {
     /// Binding format version.
     pub version: u16,
@@ -193,6 +213,16 @@ impl ParliamentTimedOvnCastingContextBindingV1 {
                 != PARLIAMENT_TIMED_OVN_CASTING_COMMITMENT_VERSION_V1
             || self.registration_corpus.record_count
                 > crate::parliament_types::MAX_PARLIAMENT_BALLOT_CORPUS_ENTRIES_V1
+            || self.network_id == [0; 32]
+            || self.proposal_content_id.as_bytes() == &[0; 32]
+            || self.governance_attempt_id.as_bytes() == &[0; 32]
+            || self.body_instance_id.as_bytes() == &[0; 32]
+            || self.ballot_attempt_id.as_bytes() == &[0; 32]
+            || self.parameter_hash == [0; 32]
+            || self.tle_key_session_id.as_bytes() == &[0; 32]
+            || self.tle_key_transcript_hash == [0; 32]
+            || self.tle_master_public_key == [0; 96]
+            || is_zero_prehash_sentinel(self.registration_corpus.digest)
             || self.registration_opened_at_finalized_height == 0
             || !(self.registration_opened_at_finalized_height < self.registration_close_height
                 && self.registration_close_height < self.survivor_freeze_height
@@ -263,6 +293,8 @@ impl ParliamentTimedOvnCastingContextBindingV1 {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parliament_casting::ParliamentTimedOvnCastingSnapshotCommitmentV1")]
 pub struct ParliamentTimedOvnCastingSnapshotCommitmentV1 {
     /// Snapshot format version.
     pub version: u16,
@@ -331,7 +363,8 @@ impl ParliamentTimedOvnCastingSnapshotCommitmentV1 {
             && if self.count == 0 {
                 self.root == parliament_timed_ovn_empty_casting_root_v1()
             } else {
-                self.root != parliament_timed_ovn_empty_casting_root_v1()
+                !is_zero_prehash_sentinel(self.root)
+                    && self.root != parliament_timed_ovn_empty_casting_root_v1()
             }
     }
 }
@@ -343,6 +376,8 @@ impl ParliamentTimedOvnCastingSnapshotCommitmentV1 {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parliament_casting::ParliamentTimedOvnCastingContextMembershipProofV1")]
 pub struct ParliamentTimedOvnCastingContextMembershipProofV1 {
     proof: MerkleProof<ParliamentTimedOvnCastingContextBindingV1>,
 }
@@ -395,6 +430,8 @@ impl ParliamentTimedOvnCastingContextMembershipProofV1 {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parliament_casting::ParliamentTimedOvnCastingWitnessProofV1")]
 pub struct ParliamentTimedOvnCastingWitnessProofV1 {
     /// Fixed raw execution-witness key.
     pub key: Vec<u8>,
@@ -411,6 +448,8 @@ pub struct ParliamentTimedOvnCastingWitnessProofV1 {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parliament_casting::ParliamentTimedOvnFinalizedCastingProofV1")]
 pub struct ParliamentTimedOvnFinalizedCastingProofV1 {
     /// Fixed-write proof tying the snapshot to the block's ordinary-write root.
     pub snapshot_witness: ParliamentTimedOvnCastingWitnessProofV1,
@@ -533,7 +572,7 @@ mod tests {
     }
 
     #[test]
-    fn empty_snapshot_uses_fixed_root() {
+    fn empty_snapshot_uses_fixed_root_and_rejects_zero_prehash_sentinel() {
         let snapshot =
             ParliamentTimedOvnCastingSnapshotCommitmentV1::from_ordered_bindings(12, &[])
                 .expect("empty commitment");
@@ -543,6 +582,20 @@ mod tests {
         );
         assert!(snapshot.is_valid());
         assert!(!ParliamentTimedOvnCastingSnapshotCommitmentV1::empty(0).is_valid());
+        let zero_prehash_sentinel = Hash::prehashed([0; Hash::LENGTH]);
+        assert!(
+            zero_prehash_sentinel.as_ref().iter().any(|byte| *byte != 0),
+            "the mandatory hash marker makes a generic nonzero-byte check insufficient"
+        );
+        assert!(
+            !ParliamentTimedOvnCastingSnapshotCommitmentV1 {
+                version: PARLIAMENT_TIMED_OVN_CASTING_COMMITMENT_VERSION_V1,
+                evaluated_height: 12,
+                root: zero_prehash_sentinel,
+                count: 1,
+            }
+            .is_valid()
+        );
         assert!(
             ParliamentTimedOvnCastingSnapshotCommitmentV1::from_ordered_bindings(0, &[]).is_err()
         );
@@ -570,12 +623,64 @@ mod tests {
 
     #[test]
     fn registration_commitment_binds_order_lengths_and_bytes() {
-        let records = vec![vec![1, 2], vec![3]];
+        let records = vec![
+            vec![1; PARLIAMENT_TIMED_OVN_REGISTRATION_RECORD_BYTES_V1],
+            vec![2; PARLIAMENT_TIMED_OVN_REGISTRATION_RECORD_BYTES_V1],
+        ];
         let commitment = ParliamentTimedOvnRegistrationCorpusCommitmentV1::from_records(&records)
             .expect("corpus commitment");
         assert!(commitment.matches_records(&records));
-        assert!(!commitment.matches_records(&[vec![1], vec![2, 3]]));
-        assert!(!commitment.matches_records(&[vec![3], vec![1, 2]]));
+        let different = vec![
+            vec![1; PARLIAMENT_TIMED_OVN_REGISTRATION_RECORD_BYTES_V1],
+            vec![3; PARLIAMENT_TIMED_OVN_REGISTRATION_RECORD_BYTES_V1],
+        ];
+        assert!(!commitment.matches_records(&different));
+        assert!(!commitment.matches_records(&[records[1].clone(), records[0].clone()]));
+        assert!(
+            ParliamentTimedOvnRegistrationCorpusCommitmentV1::from_records(&[vec![1]]).is_none()
+        );
+        assert!(
+            ParliamentTimedOvnRegistrationCorpusCommitmentV1::from_records(&vec![
+                Vec::new();
+                usize::try_from(
+                    MAX_PARLIAMENT_BALLOT_CORPUS_ENTRIES_V1
+                )
+                .expect(
+                    "corpus bound fits usize"
+                ) + 1
+            ])
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn casting_binding_rejects_inert_consensus_bindings() {
+        let baseline = binding(12, 1);
+        assert!(baseline.is_valid());
+
+        let mut invalid = baseline.clone();
+        invalid.network_id = [0; 32];
+        assert!(!invalid.is_valid());
+
+        let mut invalid = baseline.clone();
+        invalid.proposal_content_id = ProposalContentId::new([0; 32]);
+        assert!(!invalid.is_valid());
+
+        let mut invalid = baseline.clone();
+        invalid.parameter_hash = [0; 32];
+        assert!(!invalid.is_valid());
+
+        let mut invalid = baseline.clone();
+        invalid.tle_key_transcript_hash = [0; 32];
+        assert!(!invalid.is_valid());
+
+        let mut invalid = baseline.clone();
+        invalid.tle_master_public_key = [0; 96];
+        assert!(!invalid.is_valid());
+
+        let mut invalid = baseline;
+        invalid.registration_corpus.digest = Hash::prehashed([0; Hash::LENGTH]);
+        assert!(!invalid.is_valid());
     }
 
     #[test]
@@ -617,3 +722,6 @@ mod tests {
         assert!(decoded_membership.verify(&decoded_binding, &decoded_snapshot));
     }
 }
+
+#[cfg(test)]
+mod captured_parliament_casting_schema_tests;

@@ -7,31 +7,34 @@ use iroha::data_model::{
     governance::types::{
         BodyElectionAttemptStatusV1, GovernanceCertificateV1, GovernanceExpectedHeadPresentV1,
         GovernanceExpectedHeadV1, MAX_PARLIAMENT_SORTITION_RETRIES_V1,
-        ParliamentBallotFailureKindV1, RuntimeUpgradeProposal,
-        parliament_execution_failure_root_v1,
+        MIN_PARLIAMENT_HIDDEN_BALLOT_ANONYMITY_V1, ParliamentBallotFailureKindV1,
+        RuntimeUpgradeProposal, parliament_execution_failure_root_v1,
     },
-    isi::{
-        governance::{ProposeRuntimeUpgradeProposal, UnregisterCitizen},
-        smart_contract_code::ActivateContractInstance,
-    },
+    isi::governance::{ProposeRuntimeUpgradeProposal, UnregisterCitizen},
     prelude::{AssetDefinitionId, AssetId, FindAssetById, Mint, Quantity},
     runtime::RuntimeUpgradeManifest,
+};
+use iroha_executor_data_model::permission::account::{
+    AccountAliasPermissionScope, CanManageAccountAlias,
 };
 use iroha_executor_data_model::permission::governance::CanProposeRuntimeUpgrade;
 use iroha_test_samples::BOB_ID;
 
 const CAPACITY_BOND_AMOUNT: u64 = 37;
 const CAPACITY_PUBLIC_SEATS: u32 = 1;
-const CAPACITY_HIDDEN_SEATS: u32 = 2;
+const CAPACITY_HIDDEN_SEATS: u32 = MIN_PARLIAMENT_HIDDEN_BALLOT_ANONYMITY_V1;
 const CAPACITY_SORTITION_DELAY_BLOCKS: u64 = 4;
 const CONFIRMATION_CITIZENS: usize = 22;
 const CONFIRMATION_POLICY_SEATS: u32 = 21;
-const CONFIRMATION_REGISTRATION_BLOCKS: u64 = 50;
-const CONFIRMATION_PHASE_BLOCKS: u64 = 4;
+const CONFIRMATION_INVITATION_BLOCKS: u64 = 68;
+const CONFIRMATION_REGISTRATION_BLOCKS: u64 = 66;
+const CONFIRMATION_SURVIVOR_FREEZE_PHASE_BLOCKS: u64 = 32;
+const TERMINAL_SURVIVOR_FREEZE_PHASE_BLOCKS: u64 = 8;
+const BALLOT_COMMITMENT_PHASE_BLOCKS: u64 = 4;
 const CONFIRMATION_RELEASE_DELAY_BLOCKS: u64 = 4;
 const CONFIRMATION_OPENING_BLOCKS: u64 = 8;
 const TERMINAL_POLICY_SEATS: u32 = 3;
-const TERMINAL_REGISTRATION_BLOCKS: u64 = 10;
+const TERMINAL_REGISTRATION_BLOCKS: u64 = 12;
 const TERMINAL_ENACTMENT_DELAY: u64 = 4;
 
 struct ThresholdSessionsV1 {
@@ -57,7 +60,7 @@ async fn install_threshold_sessions(
     network: &sandbox::SerializedNetwork,
     client: &Client,
 ) -> Result<ThresholdSessionsV1> {
-    let ordered_roster = ordered_validator_roster(network)?;
+    let ordered_roster = ordered_validator_roster(network, client)?;
     let beacon_record =
         deterministic_parliament_beacon_key_record_v1(network.network_id(), &ordered_roster)
             .wrap_err("derive failure-corridor beacon fixture")?;
@@ -127,6 +130,10 @@ fn capacity_failure_builder(
         .with_block_cadence(EXACT_HEIGHT_SUBMISSION_CADENCE)
         .with_config_layer(move |layer| {
             layer
+                .write(
+                    ["concurrency", "rayon_global_threads"],
+                    PARLIAMENT_NETWORK_RAYON_THREADS_PER_PEER,
+                )
                 .write(
                     [
                         "network",
@@ -230,6 +237,10 @@ fn confirmation_capacity_builder(
         .with_config_layer(|layer| {
             layer
                 .write(
+                    ["concurrency", "rayon_global_threads"],
+                    PARLIAMENT_NETWORK_RAYON_THREADS_PER_PEER,
+                )
+                .write(
                     [
                         "network",
                         "soranet_handshake",
@@ -254,7 +265,10 @@ fn confirmation_capacity_builder(
                 )
                 .write(["gov", "citizenship_bond_amount"], "0")
                 .write(["gov", "parliament_alternate_size"], 0_i64)
-                .write(["gov", "parliament_invitation_phase_blocks"], 60_i64)
+                .write(
+                    ["gov", "parliament_invitation_phase_blocks"],
+                    CONFIRMATION_INVITATION_BLOCKS as i64,
+                )
                 .write(["gov", "parliament_public_finding_phase_blocks"], 8_i64)
                 .write(
                     ["gov", "rules_committee_size"],
@@ -291,11 +305,11 @@ fn confirmation_capacity_builder(
                         "parliament_timed_ovn",
                         "survivor_freeze_phase_blocks",
                     ],
-                    CONFIRMATION_PHASE_BLOCKS as i64,
+                    CONFIRMATION_SURVIVOR_FREEZE_PHASE_BLOCKS as i64,
                 )
                 .write(
                     ["gov", "parliament_timed_ovn", "commitment_phase_blocks"],
-                    CONFIRMATION_PHASE_BLOCKS as i64,
+                    BALLOT_COMMITMENT_PHASE_BLOCKS as i64,
                 )
                 .write(
                     ["gov", "parliament_timed_ovn", "release_delay_blocks"],
@@ -345,6 +359,10 @@ fn certified_terminal_builder(
         .with_block_cadence(EXACT_HEIGHT_SUBMISSION_CADENCE)
         .with_config_layer(|layer| {
             layer
+                .write(
+                    ["concurrency", "rayon_global_threads"],
+                    PARLIAMENT_NETWORK_RAYON_THREADS_PER_PEER,
+                )
                 .write(
                     [
                         "network",
@@ -423,11 +441,11 @@ fn certified_terminal_builder(
                         "parliament_timed_ovn",
                         "survivor_freeze_phase_blocks",
                     ],
-                    CONFIRMATION_PHASE_BLOCKS as i64,
+                    TERMINAL_SURVIVOR_FREEZE_PHASE_BLOCKS as i64,
                 )
                 .write(
                     ["gov", "parliament_timed_ovn", "commitment_phase_blocks"],
-                    CONFIRMATION_PHASE_BLOCKS as i64,
+                    BALLOT_COMMITMENT_PHASE_BLOCKS as i64,
                 )
                 .write(
                     ["gov", "parliament_timed_ovn", "release_delay_blocks"],
@@ -447,6 +465,14 @@ fn certified_terminal_builder(
         .with_genesis_instruction(Grant::account_permission(
             Permission::from(CanProposeContractDeployment {
                 contract_address: contract_address.clone(),
+            }),
+            ALICE_ID.clone(),
+        ))
+        .with_genesis_instruction(Grant::account_permission(
+            Permission::from(CanManageAccountAlias {
+                scope: AccountAliasPermissionScope::Dataspace(
+                    iroha::data_model::nexus::DataSpaceId::UNIVERSAL,
+                ),
             }),
             ALICE_ID.clone(),
         ))
@@ -715,6 +741,8 @@ async fn finalize_failure_path_policy_ballot(
     sessions: &ThresholdSessionsV1,
     policy_seats: u32,
     registration_phase_blocks: u64,
+    survivor_freeze_phase_blocks: u64,
+    commitment_phase_blocks: u64,
     aye_ballots: usize,
 ) -> Result<BallotAttemptId> {
     let policy_body_id = body_ids[&ParliamentBody::PolicyJury];
@@ -746,10 +774,10 @@ async fn finalize_failure_path_policy_ballot(
         .checked_add(registration_phase_blocks)
         .ok_or_else(|| eyre!("confirmation-capacity registration height overflow"))?;
     let survivor_freeze_height = registration_close_height
-        .checked_add(CONFIRMATION_PHASE_BLOCKS)
+        .checked_add(survivor_freeze_phase_blocks)
         .ok_or_else(|| eyre!("confirmation-capacity survivor height overflow"))?;
     let commitment_close_height = survivor_freeze_height
-        .checked_add(CONFIRMATION_PHASE_BLOCKS)
+        .checked_add(commitment_phase_blocks)
         .ok_or_else(|| eyre!("confirmation-capacity commitment height overflow"))?;
     let release_height = commitment_close_height
         .checked_add(CONFIRMATION_RELEASE_DELAY_BLOCKS)
@@ -1018,6 +1046,8 @@ async fn certify_failure_path_attempt(
         sessions,
         TERMINAL_POLICY_SEATS,
         TERMINAL_REGISTRATION_BLOCKS,
+        TERMINAL_SURVIVOR_FREEZE_PHASE_BLOCKS,
+        BALLOT_COMMITMENT_PHASE_BLOCKS,
         2,
     )
     .await?;
@@ -1101,7 +1131,48 @@ async fn four_validator_certified_effects_record_supersession_and_execution_fail
         competing_abi_hash, abi_hash,
         "the competing artifact must preserve the proposal's exact ABI surface",
     );
+    let competing_deploy_proposal = ProposalKind::DeployContract(DeployContractProposal {
+        proposal_operator: client.account.clone(),
+        contract_address: contract_address.clone(),
+        code_hash: competing_contract_code_hash,
+        abi_hash: competing_abi_hash,
+        abi_version: AbiVersion::new(1),
+        manifest_provenance: None,
+    });
+    let competing_deploy_create = CreateParliamentGovernanceAttemptV1 {
+        proposal: competing_deploy_proposal,
+        attempt_sequence: 0,
+    };
+    let competing_deploy_attempt_id = competing_deploy_create.governance_attempt_id();
+    client.submit_all_blocking(
+        [
+            InstructionBox::from(ProposeDeployContract {
+                contract_address: contract_address.clone(),
+                code_hash: competing_contract_code_hash,
+                abi_hash: competing_abi_hash,
+                abi_version: AbiVersion::new(1),
+                manifest_provenance: None,
+            }),
+            InstructionBox::from(competing_deploy_create),
+        ],
+        fee(),
+    )?;
+    let competing_deploy_certificate = certify_failure_path_attempt(
+        &network,
+        &client,
+        &citizens,
+        &citizen_keys,
+        competing_deploy_attempt_id,
+        &sessions,
+    )
+    .await?;
+
+    // Register the proposal under test while the competing certificate is
+    // certified but not yet due. Its immutable expected head is therefore the
+    // same absent head; ordinary block progression enacts the competitor before
+    // this attempt finishes certification.
     let deploy_proposal = ProposalKind::DeployContract(DeployContractProposal {
+        proposal_operator: client.account.clone(),
         contract_address: contract_address.clone(),
         code_hash,
         abi_hash,
@@ -1127,6 +1198,7 @@ async fn four_validator_certified_effects_record_supersession_and_execution_fail
         ],
         fee(),
     )?;
+    assert!(current_height(&client)? < competing_deploy_certificate.enact_at_height);
     let deploy_certificate = certify_failure_path_attempt(
         &network,
         &client,
@@ -1136,22 +1208,27 @@ async fn four_validator_certified_effects_record_supersession_and_execution_fail
         &sessions,
     )
     .await?;
-
-    let competing_code_hash = Hash::prehashed(competing_contract_code_hash.into_bytes());
-    client.submit_blocking(
-        ActivateContractInstance {
-            contract_address: contract_address.clone(),
-            code_hash: competing_code_hash,
-        },
-        fee(),
-    )?;
+    assert_eq!(
+        deploy_certificate.expected_head, competing_deploy_certificate.expected_head,
+        "both certified deployments must compare against the same pre-enactment head",
+    );
+    assert!(current_height(&client)? >= competing_deploy_certificate.enact_at_height);
+    let competing_enacted = read_attempt(&client, competing_deploy_attempt_id)?;
+    assert_eq!(
+        competing_enacted.attempt().status,
+        GovernanceAttemptStatusV1::Enacted,
+    );
+    assert_eq!(
+        competing_enacted.certificate(),
+        Some(&competing_deploy_certificate),
+    );
     assert!(current_height(&client)? < deploy_certificate.enact_at_height);
     assert_governed_contract_binding(
         &client,
         &contract_address,
         competing_contract_code_hash,
         competing_abi_hash,
-        "the competing direct binding must be authoritative before enactment",
+        "the certified competing binding must be authoritative before enactment",
     )?;
     advance_to_autonomous_predecessor(
         &network,
@@ -1178,7 +1255,7 @@ async fn four_validator_certified_effects_record_supersession_and_execution_fail
             GovernanceExpectedHeadPresentV1 {
                 subject_id: deploy_subject_id,
                 version: 1,
-                head_root: competing_code_hash.into(),
+                head_root: competing_contract_code_hash.into(),
             },
         )),
         "supersession must bind the exact authoritative contract head",
@@ -1223,6 +1300,7 @@ async fn four_validator_certified_effects_record_supersession_and_execution_fail
         provenance: Vec::new(),
     };
     let runtime_proposal = ProposalKind::RuntimeUpgrade(RuntimeUpgradeProposal {
+        proposal_operator: client.account.clone(),
         manifest: runtime_manifest.clone(),
     });
     let runtime_create = CreateParliamentGovernanceAttemptV1 {
@@ -1398,6 +1476,7 @@ async fn four_validator_narrow_policy_aborts_when_confirmation_capacity_is_one_i
 
     let (code_hash, abi_hash) = stage_contract_artifact(&client, &minimal_contract_artifact())?;
     let proposal = ProposalKind::DeployContract(DeployContractProposal {
+        proposal_operator: client.account.clone(),
         contract_address: contract_address.clone(),
         code_hash,
         abi_hash,
@@ -1463,6 +1542,8 @@ async fn four_validator_narrow_policy_aborts_when_confirmation_capacity_is_one_i
         &sessions,
         CONFIRMATION_POLICY_SEATS,
         CONFIRMATION_REGISTRATION_BLOCKS,
+        CONFIRMATION_SURVIVOR_FREEZE_PHASE_BLOCKS,
+        BALLOT_COMMITMENT_PHASE_BLOCKS,
         11,
     )
     .await?;
@@ -1626,6 +1707,7 @@ async fn four_validator_hidden_capacity_retains_then_releases_citizenship_bond_i
 
     let (code_hash, abi_hash) = stage_contract_artifact(&client, &minimal_contract_artifact())?;
     let proposal = ProposalKind::DeployContract(DeployContractProposal {
+        proposal_operator: client.account.clone(),
         contract_address: contract_address.clone(),
         code_hash,
         abi_hash,

@@ -20,7 +20,7 @@ fi
 
 cd "${REPO_ROOT}"
 
-echo "+ ${PYTHON_BIN} -m pytest python/iroha_python/tests/test_norito_rpc.py -q"
-"${PYTHON_BIN}" -m pytest python/iroha_python/tests/test_norito_rpc.py -q
+echo "+ ${PYTHON_BIN} -m pytest python/iroha_python/tests/norito_rpc_test.py -q"
+"${PYTHON_BIN}" -m pytest python/iroha_python/tests/norito_rpc_test.py -q
 
 echo "[ok] Norito RPC smoke tests passed"

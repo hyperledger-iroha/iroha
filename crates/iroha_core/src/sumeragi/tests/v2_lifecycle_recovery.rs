@@ -398,8 +398,11 @@ fn lifecycle_context_for_peer(local_peer: &PeerId) -> wire::HeightContext {
             power: 1,
         })
         .collect::<Vec<_>>();
+    let network_id = crate::sumeragi::synthetic_network_id("lifecycle-recovery-test");
+    let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
+        crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(network_id, 0, &roster);
     wire::HeightContext {
-        network_id: crate::sumeragi::synthetic_network_id("lifecycle-recovery-test"),
+        network_id,
         protocol_version: wire::PROTOCOL_VERSION,
         height: 1,
         epoch: 0,
@@ -410,9 +413,11 @@ fn lifecycle_context_for_peer(local_peer: &PeerId) -> wire::HeightContext {
         snapshot_bootstrap: None,
         quorum: wire::DualQuorum::from_roster(&roster).expect("four-validator quorum"),
         roster,
+        kagemusha_mint_finality_epoch_id,
+        kagemusha_mint_finality_epoch_roster,
         nexus_amx_context_hash: Hash::new(b"lifecycle-empty-nexus"),
         execution_policy_hash: Hash::new(b"lifecycle-empty-policy"),
-        da_layout: wire::SumeragiV2GenesisContextParameters::recommended().da_layout,
+        da_layout: wire::recommended_data_availability_layout(),
         leader_seed: [0x55; 32],
     }
 }
@@ -588,7 +593,6 @@ fn install_lifecycle_queue_plan_validator_authority(
             ),
             activation_height: 0,
             expiry_height: None,
-            hsm: None,
             replaces: None,
             status: ConsensusKeyStatus::Active,
         };
@@ -2501,8 +2505,9 @@ fn exercise_nonproducer_retired_attempt_startup(
     );
     assert!(terminal_path.is_file());
     let terminal_bytes = std::fs::read(&terminal_path).expect("read Complete replica outcome");
-    let terminal: crate::kura::AutonomousLifecycleTerminalOutcomeV1 =
-        norito::decode_canonical(&terminal_bytes).expect("decode Complete replica outcome");
+    let terminal =
+        crate::kura::AutonomousLifecycleTerminalOutcomeV1::decode_framed(&terminal_bytes)
+            .expect("decode Complete replica outcome");
     let terminal_debug = format!("{terminal:?}");
     assert!(terminal_debug.contains("RetiredReplicaQueueDisposition"));
     assert!(terminal_debug.contains("Complete"));

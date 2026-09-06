@@ -16,7 +16,7 @@ impl Kura {
         expected_epoch: u64,
         cursor_read: AutonomousLifecycleCursorRead,
         authorization: AutonomousLaneReplicaQueueDispositionAuthorization<'_>,
-    ) -> Result<()> {
+    ) -> Result<AutonomousLifecycleReplicaQueueDispositionV1> {
         if retirement.version != AutonomousLaneSlotRetirementV1::VERSION
             || retirement.network_id != expected_network_id
             || retirement.epoch != expected_epoch
@@ -273,7 +273,7 @@ impl Kura {
         // reverse drop order therefore releases sidecar/geometry/canonical/
         // prune locks first and the Queue fence only after the Complete write
         // and directory fsync, avoiding a Kura -> Queue lock edge.
-        Ok(())
+        Ok(source_disposition)
     }
 
     /// Persist the retirement while the caller retains the same sidecar lock

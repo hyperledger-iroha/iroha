@@ -4,9 +4,9 @@
 """
 Cross-platform Norito bindings parity check.
 
-This script replaces the previous Bash helper and ensures that changes to the
-Rust Norito implementation are mirrored in the Python, Java, and Kotlin
-bindings. It is intended to be run from the repository root.
+Checks the Python implementation and the Kotlin-owned JVM implementation,
+including Java-source runtime consumers. Run from the repository root with
+Python 3 and JDK 21; the Gradle build restricts consumer APIs to JDK 8.
 """
 
 from __future__ import annotations
@@ -102,7 +102,7 @@ def compute_merge_base(base_ref: str) -> str:
 class PathFlags:
     needs_reference_update: bool = False
     python_updated: bool = False
-    java_updated: bool = False
+    java_affected: bool = False
     kotlin_updated: bool = False
 
 
@@ -141,7 +141,7 @@ def update_flags(flags: PathFlags, raw_path: str) -> None:
         flags.python_updated = True
         return
     if path.startswith("java/norito_java/"):
-        flags.java_updated = True
+        flags.java_affected = True
         return
     if path.startswith("kotlin/core-jvm/"):
         flags.kotlin_updated = True
@@ -159,7 +159,6 @@ def gather_flags(merge_base: str) -> PathFlags:
         if (
             flags.needs_reference_update
             and flags.python_updated
-            and flags.java_updated
             and flags.kotlin_updated
         ):
             return flags
@@ -175,7 +174,6 @@ def gather_flags(merge_base: str) -> PathFlags:
         if (
             flags.needs_reference_update
             and flags.python_updated
-            and flags.java_updated
             and flags.kotlin_updated
         ):
             break
@@ -430,78 +428,40 @@ def run_python_parity_checks() -> None:
         raise CheckError("Python streaming control frame parity mismatch")
 
 
-def run_java_parity_checks() -> None:
-    """Execute Norito Java binding parity checks."""
+def run_jvm_parity_checks() -> None:
+    """Execute Kotlin-owned JVM parity checks, including Java consumers."""
 
-    if os.environ.get("NORITO_JAVA_SKIP_TESTS") == "1":
-        if java_checks_are_strict():
+    if os.environ.get("NORITO_JVM_SKIP_TESTS") == "1":
+        if jvm_checks_are_strict():
             raise CheckError(
-                "NORITO_JAVA_SKIP_TESTS=1 is forbidden in strict Java parity mode"
+                "NORITO_JVM_SKIP_TESTS=1 is forbidden in strict JVM parity mode"
             )
         print(
-            "[norito-java] Skipping JVM parity tests (NORITO_JAVA_SKIP_TESTS=1).",
+            "[norito-jvm] Skipping JVM parity tests (NORITO_JVM_SKIP_TESTS=1).",
             file=sys.stderr,
         )
         return
 
-    print("[norito] Running Java binding parity checks...", file=sys.stderr)
-
-    java_path = ensure_java_tool("java")
-    if not java_path:
-        if java_checks_are_strict():
-            raise CheckError("java runtime not found; install JDK 21+ to run tests")
-        print(
-            "[norito-java] java runtime not found; skipping JVM parity checks outside strict mode.",
-            file=sys.stderr,
-        )
-        return
-
-    root = REPO_ROOT / "java" / "norito_java"
-    gradlew_name = "gradlew.bat" if os.name == "nt" else "gradlew"
-    gradlew_path = REPO_ROOT / "java" / "iroha_android" / gradlew_name
-    if not gradlew_path.exists():
-        raise CheckError(f"Java Gradle wrapper not found at {gradlew_path}")
-
-    run_command(
-        [gradlew_path, "-p", root, "runNoritoTests", "--console=plain"],
-        cwd=root,
-    )
-
-
-def run_kotlin_parity_checks() -> None:
-    """Execute Norito Kotlin binding parity checks."""
-
-    if os.environ.get("NORITO_KOTLIN_SKIP_TESTS") == "1":
-        if kotlin_checks_are_strict():
-            raise CheckError(
-                "NORITO_KOTLIN_SKIP_TESTS=1 is forbidden in strict Kotlin parity mode"
-            )
-        print(
-            "[norito-kotlin] Skipping Kotlin parity tests (NORITO_KOTLIN_SKIP_TESTS=1).",
-            file=sys.stderr,
-        )
-        return
-
-    print("[norito] Running Kotlin binding parity checks...", file=sys.stderr)
+    print("[norito] Running JVM binding and Java-consumer parity checks...", file=sys.stderr)
 
     javac_path = ensure_java_tool("javac")
     if not javac_path:
-        if kotlin_checks_are_strict():
-            raise CheckError("javac not found; install JDK 21+ to run Kotlin parity tests")
+        if jvm_checks_are_strict():
+            raise CheckError("javac not found; install JDK 21+ to run JVM parity tests")
         print(
-            "[norito-kotlin] javac not found; skipping Kotlin parity checks outside strict mode.",
+            "[norito-jvm] javac not found; skipping JVM parity checks outside strict mode.",
             file=sys.stderr,
         )
         return
 
     java_path = ensure_java_tool("java")
     if not java_path:
-        if kotlin_checks_are_strict():
+        if jvm_checks_are_strict():
             raise CheckError(
-                "java runtime not found; install JDK 21+ or set JAVA_HOME for Kotlin parity tests"
+                "java runtime not found; install JDK 21+ or set JAVA_HOME for JVM parity tests"
             )
         print(
-            "[norito-kotlin] java runtime not found; skipping Kotlin parity checks outside strict mode.",
+            "[norito-jvm] java runtime not found; skipping JVM parity checks outside strict mode.",
             file=sys.stderr,
         )
         return
@@ -518,6 +478,8 @@ def run_kotlin_parity_checks() -> None:
             ":core-jvm:test",
             "--console=plain",
             "--tests",
+            "org.hyperledger.iroha.sdk.norito.*",
+            "--tests",
             "org.hyperledger.iroha.sdk.tx.norito.NoritoJavaCodecAdapterParityTest",
             "--tests",
             "org.hyperledger.iroha.sdk.tx.norito.TransactionFixtureParityTest",
@@ -526,20 +488,10 @@ def run_kotlin_parity_checks() -> None:
     )
 
 
-def java_checks_are_strict() -> bool:
-    """Return whether missing Java tooling should fail parity checks."""
-
-    if os.environ.get("NORITO_JAVA_STRICT") == "1":
-        return True
-
-    ci_value = os.environ.get("CI", "").strip().lower()
-    return ci_value in {"1", "true", "yes", "on"}
-
-
-def kotlin_checks_are_strict() -> bool:
+def jvm_checks_are_strict() -> bool:
     """Return whether missing Kotlin/JVM tooling should fail parity checks."""
 
-    if os.environ.get("NORITO_KOTLIN_STRICT") == "1":
+    if os.environ.get("NORITO_JVM_STRICT") == "1":
         return True
 
     ci_value = os.environ.get("CI", "").strip().lower()
@@ -560,16 +512,11 @@ def main() -> int:
     flags = gather_flags(merge_base)
 
     if flags.needs_reference_update and (
-        not flags.python_updated or not flags.java_updated or not flags.kotlin_updated
+        not flags.python_updated or not flags.kotlin_updated
     ):
         if not flags.python_updated:
             print(
                 "Detected changes to Norito sources without updates under python/norito_py.",
-                file=sys.stderr,
-            )
-        if not flags.java_updated:
-            print(
-                "Detected changes to Norito sources without updates under java/norito_java.",
                 file=sys.stderr,
             )
         if not flags.kotlin_updated:
@@ -587,10 +534,8 @@ def main() -> int:
         run_all = all_checks_are_required()
         if run_all or flags.python_updated or flags.needs_reference_update:
             run_python_parity_checks()
-        if run_all or flags.java_updated or flags.needs_reference_update:
-            run_java_parity_checks()
-        if run_all or flags.kotlin_updated or flags.needs_reference_update:
-            run_kotlin_parity_checks()
+        if run_all or flags.java_affected or flags.kotlin_updated or flags.needs_reference_update:
+            run_jvm_parity_checks()
     except CheckError as error:
         print(error, file=sys.stderr)
         message_lower = str(error).lower()
@@ -600,36 +545,20 @@ def main() -> int:
                 "'python3 -m unittest discover -s python/norito_py/tests' to investigate.",
                 file=sys.stderr,
             )
-        elif "java" in message_lower:
+        else:
             print(
-                "Java Norito parity checks failed. Ensure a JDK is installed and rerun "
-                "java/norito_java/run_tests.sh to investigate.",
-                file=sys.stderr,
-            )
-        elif "kotlin" in message_lower:
-            print(
-                "Kotlin Norito parity checks failed. Run "
-                "'cd kotlin && ./gradlew :core-jvm:test --console=plain --tests "
-                "org.hyperledger.iroha.sdk.tx.norito.NoritoJavaCodecAdapterParityTest --tests "
-                "org.hyperledger.iroha.sdk.tx.norito.TransactionFixtureParityTest' to investigate.",
+                "JVM Norito checks failed. Run 'cd kotlin && ./gradlew :core-jvm:test "
+                "--console=plain' to investigate.",
                 file=sys.stderr,
             )
         return 1
     except subprocess.CalledProcessError as error:
         print(error.stderr or error.stdout, file=sys.stderr)
         command = Path(str(error.cmd[0])).name.lower()
-        if "javac" in command:
+        if "javac" in command or "gradlew" in command:
             print(
-                "Java Norito parity checks failed. Ensure a JDK is installed and rerun "
-                "java/norito_java/run_tests.sh to investigate.",
-                file=sys.stderr,
-            )
-        elif "gradlew" in command:
-            print(
-                "Kotlin Norito parity checks failed. Run "
-                "'cd kotlin && ./gradlew :core-jvm:test --console=plain --tests "
-                "org.hyperledger.iroha.sdk.tx.norito.NoritoJavaCodecAdapterParityTest --tests "
-                "org.hyperledger.iroha.sdk.tx.norito.TransactionFixtureParityTest' to investigate.",
+                "JVM Norito checks failed. Run 'cd kotlin && ./gradlew :core-jvm:test "
+                "--console=plain' to investigate.",
                 file=sys.stderr,
             )
         else:

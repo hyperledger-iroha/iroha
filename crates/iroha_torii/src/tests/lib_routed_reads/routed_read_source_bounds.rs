@@ -151,7 +151,7 @@ fn asset_definition_source_lookup_never_calls_cloning_world_accessor() {
     assert!(source.contains("ToriiAssetDefinitionJsonSource"));
 }
 #[test]
-fn space_directory_bindings_borrowed_json_matches_legacy_shape() {
+fn space_directory_bindings_borrowed_json_matches_canonical_shape() {
     let uaid: iroha_data_model::nexus::UniversalAccountId =
         "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
             .parse()
@@ -160,12 +160,13 @@ fn space_directory_bindings_borrowed_json_matches_legacy_shape() {
         uaid: &uaid,
         bindings: None,
         catalog: &iroha_data_model::nexus::DataSpaceCatalog::default(),
+        visibility: &routing::DataspaceReadVisibility::all_for_tests(),
     };
     let expected = norito::json::to_json_bounded_boxed(
         &norito::json!({ "dataspaces": [], "uaid": (uaid.to_string()) }),
         usize::MAX,
     )
-    .expect("legacy empty binding response");
+    .expect("canonical empty binding response");
     let actual = norito::json::to_json_bounded_boxed(&source, expected.len())
         .expect("borrowed empty response fits exact boundary");
     assert_eq!(actual, expected);

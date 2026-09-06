@@ -3,14 +3,17 @@
 use super::*;
 use crate::private_settlement::{
     carrier::{
+        private_settlement_abort_carrier_instruction_digest_v1,
         private_settlement_carrier_instruction_digest_v1,
         private_settlement_commit_bundle_digest_v1,
+        private_settlement_prepare_lock_carrier_instruction_digest_v1,
     },
     state::PrivateSettlementPoolGovernanceProjectionV1,
 };
 use iroha_data_model::isi::private_settlement::{
     AbortAtomicPrivateSettlementV1, ActivatePrivateSettlementPoolV1,
-    FinalizeAtomicPrivateSettlementV1,
+    FinalizeAtomicPrivateSettlementV1, RegisterAtomicPrivateSettlementPrepareV1,
+    RotatePrivateSettlementPoolPolicyV1,
 };
 use iroha_data_model::nexus::{
     ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1, PrivateSettlementAbortReasonV1,
@@ -34,9 +37,36 @@ impl Execute for ActivatePrivateSettlementPoolV1 {
             audit_key_epoch: self.audit_key_epoch,
             lifecycle: self.lifecycle,
             governance_digest: self.governance_digest,
+            prior_revisions: Vec::new(),
         };
         state_transaction
             .bootstrap_private_settlement_pool_v1(projection, &self.initial_commitments)
+            .map_err(|_| invalid_pool_activation())?;
+        Ok(())
+    }
+}
+
+impl Execute for RotatePrivateSettlementPoolPolicyV1 {
+    fn execute(
+        self,
+        authority: &AccountId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        super::privacy::ensure_privacy_governance(authority, state_transaction)?;
+        self.validate().map_err(|_| invalid_pool_activation())?;
+        let replacement = PrivateSettlementPoolGovernanceProjectionV1 {
+            version: self.version,
+            route: self.route,
+            pool_id: self.pool_id,
+            asset_binding_commitment: self.asset_binding_commitment,
+            audit_policy_digest: self.audit_policy_digest,
+            audit_key_epoch: self.audit_key_epoch,
+            lifecycle: self.lifecycle,
+            governance_digest: self.governance_digest,
+            prior_revisions: Vec::new(),
+        };
+        state_transaction
+            .rotate_private_settlement_pool_policy_v1(self.expected_governance_digest, replacement)
             .map_err(|_| invalid_pool_activation())?;
         Ok(())
     }
@@ -68,12 +98,48 @@ impl Execute for FinalizeAtomicPrivateSettlementV1 {
     }
 }
 
+impl Execute for RegisterAtomicPrivateSettlementPrepareV1 {
+    fn execute(
+        self,
+        authority: &AccountId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        if authority != &self.barrier.manifest.sponsor {
+            return Err(invalid_carrier());
+        }
+        let payload_digest = self.barrier.prepared_bundle_digest;
+        let instruction_digest =
+            private_settlement_prepare_lock_carrier_instruction_digest_v1(&self)
+                .map_err(|_| invalid_carrier())?;
+        state_transaction
+            .consume_private_settlement_carrier_binding_v1(payload_digest, instruction_digest)
+            .map_err(|_| invalid_carrier())?;
+        state_transaction
+            .apply_private_settlement_prepare_locks_v1(self.barrier)
+            .map_err(|_| invalid_carrier())?;
+        Ok(())
+    }
+}
+
 impl Execute for AbortAtomicPrivateSettlementV1 {
     fn execute(
         self,
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
+        if authority != &self.manifest.sponsor {
+            return Err(invalid_abort());
+        }
+        let manifest_digest = self
+            .manifest
+            .manifest_digest()
+            .map_err(|_| invalid_abort())?;
+        let instruction_digest = private_settlement_abort_carrier_instruction_digest_v1(&self)
+            .map_err(|_| invalid_abort())?;
+        state_transaction
+            .consume_private_settlement_carrier_binding_v1(manifest_digest, instruction_digest)
+            .map_err(|_| invalid_abort())?;
+
         let finalized_height = state_transaction.block_height();
         let receipt = private_settlement_abort_receipt_v1(self, authority, finalized_height)?;
         state_transaction

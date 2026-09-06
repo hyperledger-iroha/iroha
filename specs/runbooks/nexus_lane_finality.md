@@ -14,12 +14,12 @@
 
 - **Grafana (`dashboards/grafana/nexus_lanes.json`)** — publishes the “Nexus Lane Finality & Oracles” board. Panels track:
   - `histogram_quantile()` on `iroha_slot_duration_ms` (p50/p95/p99) plus the latest sample gauge.
-  - `iroha_da_quorum_ratio` and `sumeragi_da_gate_block_total{reason="missing_local_data"}` to highlight DA payload recovery lag.
+  - `iroha_da_quorum_ratio` to highlight DA admission health.
   - Oracle surfaces: `iroha_oracle_price_local_per_xor`, `iroha_oracle_staleness_seconds`, `iroha_oracle_twap_window_seconds`, and `iroha_oracle_haircut_basis_points`.
   - Settlement buffer panel (`iroha_settlement_buffer_xor`) showing live per-lane debits sourced from `LaneBlockCommitment` receipts.
 - **Alert rules** — reuse the Slot/DA SLO clauses from `ans3.md`. Page when:
   - slot-duration p95 > 1000 ms for two consecutive 5 m windows,
-  - DA quorum ratio < 0.95 or spikes in `sumeragi_da_gate_block_total{reason="missing_local_data"}`,
+  - DA quorum ratio < 0.95,
   - oracle staleness > 90 s or TWAP window ≠ configured 60 s,
   - settlement buffer < 25 % (soft) / 10 % (hard) once the metric is live.
 
@@ -29,8 +29,7 @@
 |--------|----------------|-------|
 | `histogram_quantile(0.95, iroha_slot_duration_ms)` | ≤ 1000 ms (hard), 950 ms warning | Use the dashboard panel or run `scripts/telemetry/check_slot_duration.py` (`--json-out artifacts/nx18/slot_summary.json`) against the Prometheus export gathered during chaos runs. |
 | `iroha_slot_duration_ms_latest` | Mirrors most recent slot; investigate if > 1100 ms even when quantiles look OK. | Export value when filing incidents. |
-| `iroha_da_quorum_ratio` | ≥ 0.95 over rolling 30 m window. | Derived from DA availability telemetry during block commits. |
-| `sumeragi_da_gate_block_total{reason="missing_local_data"}` | Should remain flat outside chaos rehearsals. | Treat sustained increases as missing local payloads. |
+| `iroha_da_quorum_ratio` | ≥ 0.95 over rolling 30 m window. | Updated during block commits after mandatory signed-RS16 admission. |
 | `lane_relay_emergency_override_total{outcome="applied"}` | Should stay at 0 outside emergency drills. | Non-zero indicates admin override of lane relay validators. Check `outcome="disabled"` if overrides are not configured. |
 | `iroha_oracle_staleness_seconds` | ≤ 60 s. Alert at 75 s. | Indicates stale 60 s TWAP feeds. |
 | `iroha_oracle_twap_window_seconds` | Exactly 60 s ± 5 s tolerance. | Divergence means the oracle is misconfigured. |

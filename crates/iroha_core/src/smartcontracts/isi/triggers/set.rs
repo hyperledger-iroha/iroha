@@ -4,7 +4,11 @@
 //! The point of the idea is to create an ordering (or hash function) which maps the event filter
 //! and the event that triggers it to the same approximate location in the hierarchy, thus using
 //! Binary search trees (common lisp) or hash tables (racket) to quickly trigger hooks.
-use super::{trigger_is_enabled, trigger_was_registered_before_block};
+use super::{
+    data_trigger_global_permission_grantee, data_trigger_scope_authorization_is_well_formed,
+    replace_data_trigger_global_permission_grantee, trigger_is_enabled,
+    trigger_was_registered_before_block,
+};
 use crate::smartcontracts::isi::triggers::specialized::{
     LoadedAction, LoadedActionTrait, SpecializedAction, SpecializedTrigger, TimeTriggerRetryState,
 };
@@ -33,13 +37,23 @@ use norito::codec::{Decode, Encode};
 use norito::json;
 #[cfg(feature = "json")]
 use norito::json::{FastJsonWrite, JsonSerialize as JsonSerializeTrait};
-use std::{collections::BTreeMap, fmt, num::NonZeroU64};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt,
+    num::NonZeroU64,
+};
 use thiserror::Error;
 /// Error type for [`Set`] operations.
 #[derive(Debug, Error, displaydoc::Display)]
 pub enum Error {
     /// Failed to preload IVM trigger
     Preload(#[from] VMError),
+    /// Data trigger is missing canonical v1 scope-authorization metadata
+    InvalidDataScopeAuthorization,
+    /// Data trigger capacity exceeded: maximum 4096
+    DataTriggerCapacity,
+    /// Data trigger authority `{0}` capacity exceeded: maximum 64
+    DataTriggerAuthorityCapacity(AccountId),
 }
 /// Result type for [`Set`] operations.
 pub type Result<T, E = Error> = core::result::Result<T, E>;
@@ -129,6 +143,505 @@ type ActiveTriggerIdStoreBlock<'set> = StorageBlock<'set, TriggerId, ()>;
 type ActiveTriggerIdStoreTransaction<'block, 'set> =
     StorageTransaction<'block, 'set, TriggerId, ()>;
 type ActiveTriggerIdStoreView<'set> = StorageView<'set, TriggerId, ()>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum DataTriggerFamily {
+    Peer,
+    Domain,
+    Account,
+    Asset,
+    AssetDefinition,
+    Nft,
+    Rwa,
+    Trigger,
+    Role,
+    Configuration,
+    Executor,
+    Proof,
+    VerifyingKey,
+    RuntimeUpgrade,
+    SmartContract,
+    Soradns,
+    Sorafs,
+    Musubi,
+    SpaceDirectory,
+    Escrow,
+    Oracle,
+    Social,
+    Bridge,
+    Governance,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum DataTriggerSubjectKind {
+    Domain,
+    Account,
+    Asset,
+    AssetDefinitionForAsset,
+    AssetDefinition,
+    AssetTransferSource,
+    AssetTransferDestination,
+    Nft,
+    Rwa,
+    Trigger,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum DataTriggerIndexKey {
+    Any,
+    Family(DataTriggerFamily),
+    Subject(DataTriggerSubjectKind, Vec<u8>),
+}
+
+#[derive(Clone, Debug, Default)]
+struct DataTriggerIndex {
+    postings: BTreeMap<DataTriggerIndexKey, BTreeSet<TriggerId>>,
+}
+
+impl DataTriggerIndex {
+    fn from_triggers(
+        triggers: &impl StorageReadOnly<TriggerId, LoadedAction<DataEventFilter>>,
+    ) -> Self {
+        let mut index = Self::default();
+        for (id, action) in triggers.iter() {
+            index.insert(id, &action.filter);
+        }
+        index
+    }
+
+    fn insert(&mut self, id: &TriggerId, filter: &DataEventFilter) {
+        for key in data_trigger_filter_index_keys(filter) {
+            self.postings.entry(key).or_default().insert(id.clone());
+        }
+    }
+
+    fn remove(&mut self, id: &TriggerId) {
+        self.postings.retain(|_, ids| {
+            ids.remove(id);
+            !ids.is_empty()
+        });
+    }
+
+    fn candidates(&self, event: &DataEvent) -> Vec<TriggerId> {
+        let mut candidates = BTreeSet::new();
+        for key in data_event_index_keys(event) {
+            if let Some(ids) = self.postings.get(&key) {
+                candidates.extend(ids.iter().cloned());
+            }
+        }
+        candidates.into_iter().collect()
+    }
+
+    /// Return a deterministic upper bound on candidate IDs visited for `event`.
+    ///
+    /// A trigger may occur in more than one posting list, so this deliberately
+    /// counts duplicates. Charging this bound before constructing the deduped
+    /// candidate vector prevents an installed trigger population from causing
+    /// unmetered allocation or tree work in another transaction.
+    fn candidate_scan_work(&self, event: &DataEvent) -> usize {
+        data_event_index_keys(event)
+            .iter()
+            .filter_map(|key| self.postings.get(key))
+            .fold(0_usize, |work, ids| work.saturating_add(ids.len()))
+    }
+}
+
+/// Constant-size watermark freezing data-trigger eligibility for an event batch.
+///
+/// Trigger registration and inactive-to-active transitions receive a monotonic
+/// transaction-local generation. A callback can therefore mutate the live index
+/// without requiring a deep copy of all 4,096 trigger filters for every DFS frame.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct DataTriggerMatchSnapshot {
+    generation_watermark: u64,
+}
+
+fn validate_data_trigger_capacities<'a>(
+    triggers: impl IntoIterator<Item = (&'a TriggerId, &'a LoadedAction<DataEventFilter>)>,
+) -> core::result::Result<(), String> {
+    let mut total = 0_usize;
+    let mut per_authority = BTreeMap::<&AccountId, usize>::new();
+    for (_, action) in triggers {
+        total = total.saturating_add(1);
+        if total > super::isi::MAX_DATA_TRIGGERS_TOTAL {
+            return Err(format!(
+                "data trigger capacity exceeds first-release maximum {}",
+                super::isi::MAX_DATA_TRIGGERS_TOTAL
+            ));
+        }
+        let count = per_authority.entry(&action.authority).or_default();
+        *count = count.saturating_add(1);
+        if *count > super::isi::MAX_DATA_TRIGGERS_PER_AUTHORITY {
+            return Err(format!(
+                "data trigger authority `{}` exceeds first-release maximum {}",
+                action.authority,
+                super::isi::MAX_DATA_TRIGGERS_PER_AUTHORITY
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn data_trigger_subject_key<T: Encode>(
+    kind: DataTriggerSubjectKind,
+    subject: &T,
+) -> DataTriggerIndexKey {
+    DataTriggerIndexKey::Subject(kind, subject.encode())
+}
+
+fn data_trigger_filter_index_keys(filter: &DataEventFilter) -> Vec<DataTriggerIndexKey> {
+    let family = |family| vec![DataTriggerIndexKey::Family(family)];
+    match filter {
+        DataEventFilter::Any => vec![DataTriggerIndexKey::Any],
+        DataEventFilter::Peer(_) => family(DataTriggerFamily::Peer),
+        DataEventFilter::Domain(filter) => filter.id_matcher().as_ref().map_or_else(
+            || family(DataTriggerFamily::Domain),
+            |id| vec![data_trigger_subject_key(DataTriggerSubjectKind::Domain, id)],
+        ),
+        DataEventFilter::Account(filter) => filter.id_matcher().as_ref().map_or_else(
+            || family(DataTriggerFamily::Account),
+            |id| {
+                vec![data_trigger_subject_key(
+                    DataTriggerSubjectKind::Account,
+                    id,
+                )]
+            },
+        ),
+        DataEventFilter::Asset(filter) => {
+            let mut keys = Vec::new();
+            if let Some(id) = filter.id_matcher() {
+                keys.push(data_trigger_subject_key(DataTriggerSubjectKind::Asset, id));
+            }
+            if let Some(id) = filter.asset_definition_matcher() {
+                keys.push(data_trigger_subject_key(
+                    DataTriggerSubjectKind::AssetDefinitionForAsset,
+                    id,
+                ));
+            }
+            if let Some(id) = filter.transfer_source_account_matcher() {
+                keys.push(data_trigger_subject_key(
+                    DataTriggerSubjectKind::AssetTransferSource,
+                    id,
+                ));
+            }
+            if let Some(id) = filter.transfer_destination_account_matcher() {
+                keys.push(data_trigger_subject_key(
+                    DataTriggerSubjectKind::AssetTransferDestination,
+                    id,
+                ));
+            }
+            if keys.is_empty() {
+                keys.push(DataTriggerIndexKey::Family(DataTriggerFamily::Asset));
+            }
+            keys
+        }
+        DataEventFilter::AssetDefinition(filter) => filter.id_matcher().as_ref().map_or_else(
+            || family(DataTriggerFamily::AssetDefinition),
+            |id| {
+                vec![data_trigger_subject_key(
+                    DataTriggerSubjectKind::AssetDefinition,
+                    id,
+                )]
+            },
+        ),
+        DataEventFilter::Nft(filter) => filter.id_matcher().as_ref().map_or_else(
+            || family(DataTriggerFamily::Nft),
+            |id| vec![data_trigger_subject_key(DataTriggerSubjectKind::Nft, id)],
+        ),
+        DataEventFilter::Rwa(filter) => filter.id_matcher().as_ref().map_or_else(
+            || family(DataTriggerFamily::Rwa),
+            |id| vec![data_trigger_subject_key(DataTriggerSubjectKind::Rwa, id)],
+        ),
+        DataEventFilter::Trigger(filter) => filter.id_matcher().as_ref().map_or_else(
+            || family(DataTriggerFamily::Trigger),
+            |id| {
+                vec![data_trigger_subject_key(
+                    DataTriggerSubjectKind::Trigger,
+                    id,
+                )]
+            },
+        ),
+        DataEventFilter::Role(_) => family(DataTriggerFamily::Role),
+        DataEventFilter::Configuration(_) => family(DataTriggerFamily::Configuration),
+        DataEventFilter::Executor(_) => family(DataTriggerFamily::Executor),
+        DataEventFilter::Proof(_) => family(DataTriggerFamily::Proof),
+        DataEventFilter::VerifyingKey(_) => family(DataTriggerFamily::VerifyingKey),
+        DataEventFilter::RuntimeUpgrade(_) => family(DataTriggerFamily::RuntimeUpgrade),
+        DataEventFilter::Soradns(_) => family(DataTriggerFamily::Soradns),
+        DataEventFilter::Sorafs(_) => family(DataTriggerFamily::Sorafs),
+        DataEventFilter::Musubi(_) => family(DataTriggerFamily::Musubi),
+        DataEventFilter::SpaceDirectory(_) => family(DataTriggerFamily::SpaceDirectory),
+        DataEventFilter::Escrow(_) => family(DataTriggerFamily::Escrow),
+        DataEventFilter::Oracle(_) => family(DataTriggerFamily::Oracle),
+        DataEventFilter::Social(_) => family(DataTriggerFamily::Social),
+        DataEventFilter::Bridge(_) => family(DataTriggerFamily::Bridge),
+        DataEventFilter::Governance(_) => family(DataTriggerFamily::Governance),
+    }
+}
+
+fn add_asset_event_index_keys(keys: &mut BTreeSet<DataTriggerIndexKey>, event: &AssetEvent) {
+    keys.insert(DataTriggerIndexKey::Family(DataTriggerFamily::Asset));
+    let asset_id = event.origin();
+    keys.insert(data_trigger_subject_key(
+        DataTriggerSubjectKind::Asset,
+        asset_id,
+    ));
+    keys.insert(data_trigger_subject_key(
+        DataTriggerSubjectKind::AssetDefinitionForAsset,
+        asset_id.definition(),
+    ));
+    if let AssetEvent::Transferred(transfer) = event {
+        keys.insert(data_trigger_subject_key(
+            DataTriggerSubjectKind::AssetTransferSource,
+            transfer.source().account(),
+        ));
+        keys.insert(data_trigger_subject_key(
+            DataTriggerSubjectKind::AssetTransferDestination,
+            transfer.destination().account(),
+        ));
+    }
+}
+
+fn data_event_index_keys(event: &DataEvent) -> BTreeSet<DataTriggerIndexKey> {
+    let mut keys = BTreeSet::from([DataTriggerIndexKey::Any]);
+    match event {
+        DataEvent::Peer(_) => {
+            keys.insert(DataTriggerIndexKey::Family(DataTriggerFamily::Peer));
+        }
+        DataEvent::Domain(event) => {
+            keys.insert(DataTriggerIndexKey::Family(DataTriggerFamily::Domain));
+            keys.insert(data_trigger_subject_key(
+                DataTriggerSubjectKind::Domain,
+                event.origin(),
+            ));
+            match event {
+                DomainEvent::Account(scoped) => {
+                    keys.insert(DataTriggerIndexKey::Family(DataTriggerFamily::Account));
+                    keys.insert(data_trigger_subject_key(
+                        DataTriggerSubjectKind::Account,
+                        scoped.event.origin(),
+                    ));
+                }
+                DomainEvent::Asset(scoped) => {
+                    add_asset_event_index_keys(&mut keys, &scoped.event);
+                }
+                DomainEvent::AssetDefinition(scoped) => {
+                    keys.insert(DataTriggerIndexKey::Family(
+                        DataTriggerFamily::AssetDefinition,
+                    ));
+                    keys.insert(data_trigger_subject_key(
+                        DataTriggerSubjectKind::AssetDefinition,
+                        scoped.event.origin(),
+                    ));
+                }
+                DomainEvent::Nft(event) => {
+                    keys.insert(DataTriggerIndexKey::Family(DataTriggerFamily::Nft));
+                    keys.insert(data_trigger_subject_key(
+                        DataTriggerSubjectKind::Nft,
+                        event.origin(),
+                    ));
+                }
+                DomainEvent::Rwa(event) => {
+                    keys.insert(DataTriggerIndexKey::Family(DataTriggerFamily::Rwa));
+                    keys.insert(data_trigger_subject_key(
+                        DataTriggerSubjectKind::Rwa,
+                        event.origin(),
+                    ));
+                }
+                _ => {}
+            }
+        }
+        DataEvent::Account(event) => {
+            keys.insert(DataTriggerIndexKey::Family(DataTriggerFamily::Account));
+            keys.insert(data_trigger_subject_key(
+                DataTriggerSubjectKind::Account,
+                event.origin(),
+            ));
+        }
+        DataEvent::Asset(event) => add_asset_event_index_keys(&mut keys, event),
+        DataEvent::AssetDefinition(event) => {
+            keys.insert(DataTriggerIndexKey::Family(
+                DataTriggerFamily::AssetDefinition,
+            ));
+            keys.insert(data_trigger_subject_key(
+                DataTriggerSubjectKind::AssetDefinition,
+                event.origin(),
+            ));
+        }
+        DataEvent::Trigger(event) => {
+            keys.insert(DataTriggerIndexKey::Family(DataTriggerFamily::Trigger));
+            keys.insert(data_trigger_subject_key(
+                DataTriggerSubjectKind::Trigger,
+                event.origin(),
+            ));
+        }
+        DataEvent::Role(_) => {
+            keys.insert(DataTriggerIndexKey::Family(DataTriggerFamily::Role));
+        }
+        DataEvent::Configuration(_) => {
+            keys.insert(DataTriggerIndexKey::Family(
+                DataTriggerFamily::Configuration,
+            ));
+        }
+        DataEvent::Executor(_) => {
+            keys.insert(DataTriggerIndexKey::Family(DataTriggerFamily::Executor));
+        }
+        DataEvent::Proof(_) => {
+            keys.insert(DataTriggerIndexKey::Family(DataTriggerFamily::Proof));
+        }
+        DataEvent::VerifyingKey(_) => {
+            keys.insert(DataTriggerIndexKey::Family(DataTriggerFamily::VerifyingKey));
+        }
+        DataEvent::RuntimeUpgrade(_) => {
+            keys.insert(DataTriggerIndexKey::Family(
+                DataTriggerFamily::RuntimeUpgrade,
+            ));
+        }
+        DataEvent::SmartContract(_) => {
+            keys.insert(DataTriggerIndexKey::Family(
+                DataTriggerFamily::SmartContract,
+            ));
+        }
+        DataEvent::Soradns(_) => {
+            keys.insert(DataTriggerIndexKey::Family(DataTriggerFamily::Soradns));
+        }
+        DataEvent::Sorafs(_) => {
+            keys.insert(DataTriggerIndexKey::Family(DataTriggerFamily::Sorafs));
+        }
+        DataEvent::Musubi(_) => {
+            keys.insert(DataTriggerIndexKey::Family(DataTriggerFamily::Musubi));
+        }
+        DataEvent::SpaceDirectory(_) => {
+            keys.insert(DataTriggerIndexKey::Family(
+                DataTriggerFamily::SpaceDirectory,
+            ));
+        }
+        DataEvent::Escrow(_) => {
+            keys.insert(DataTriggerIndexKey::Family(DataTriggerFamily::Escrow));
+        }
+        DataEvent::Oracle(_) => {
+            keys.insert(DataTriggerIndexKey::Family(DataTriggerFamily::Oracle));
+        }
+        DataEvent::Social(_) => {
+            keys.insert(DataTriggerIndexKey::Family(DataTriggerFamily::Social));
+        }
+        DataEvent::Bridge(_) => {
+            keys.insert(DataTriggerIndexKey::Family(DataTriggerFamily::Bridge));
+        }
+        DataEvent::Governance(_) => {
+            keys.insert(DataTriggerIndexKey::Family(DataTriggerFamily::Governance));
+        }
+    }
+    keys
+}
+
+#[cfg(test)]
+mod data_trigger_index_tests {
+    use super::*;
+    use iroha_crypto::KeyPair;
+
+    fn account_id() -> AccountId {
+        AccountId::new(
+            KeyPair::try_random()
+                .expect("data-trigger index fixture key generation should succeed")
+                .public_key()
+                .clone(),
+        )
+    }
+
+    #[test]
+    fn exact_account_and_domain_postings_bound_nested_event_candidates() {
+        let alice = account_id();
+        let bob = account_id();
+        let domain = DomainId::try_new("wonderland", "universal").expect("valid domain");
+        let any_id: TriggerId = "a_any".parse().expect("valid trigger id");
+        let account_family_id: TriggerId = "b_account_family".parse().expect("valid trigger id");
+        let alice_id: TriggerId = "c_alice".parse().expect("valid trigger id");
+        let domain_id: TriggerId = "d_domain".parse().expect("valid trigger id");
+        let bob_id: TriggerId = "e_bob".parse().expect("valid trigger id");
+
+        let mut index = DataTriggerIndex::default();
+        index.insert(&any_id, &DataEventFilter::Any);
+        index.insert(
+            &account_family_id,
+            &DataEventFilter::Account(AccountEventFilter::new()),
+        );
+        index.insert(
+            &alice_id,
+            &DataEventFilter::Account(AccountEventFilter::new().for_account(alice.clone())),
+        );
+        index.insert(
+            &domain_id,
+            &DataEventFilter::Domain(DomainEventFilter::new().for_domain(domain.clone())),
+        );
+        index.insert(
+            &bob_id,
+            &DataEventFilter::Account(AccountEventFilter::new().for_account(bob)),
+        );
+
+        let event = DataEvent::account_in_domain(AccountEvent::Deleted(alice), domain);
+        assert_eq!(
+            index.candidates(&event),
+            vec![
+                any_id.clone(),
+                account_family_id.clone(),
+                alice_id.clone(),
+                domain_id.clone(),
+            ]
+        );
+
+        index.remove(&alice_id);
+        assert_eq!(
+            index.candidates(&event),
+            vec![any_id, account_family_id, domain_id]
+        );
+    }
+
+    #[test]
+    fn asset_postings_deduplicate_multi_constraint_candidates() {
+        let source = account_id();
+        let destination = account_id();
+        let unrelated = account_id();
+        let definition = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("assets", "universal").expect("valid domain"),
+            "rose".parse().expect("valid asset name"),
+        );
+        let source_asset = AssetId::new(definition.clone(), source.clone());
+        let destination_asset = AssetId::new(definition.clone(), destination.clone());
+        let matching_id: TriggerId = "asset_match".parse().expect("valid trigger id");
+        let unrelated_id: TriggerId = "asset_unrelated".parse().expect("valid trigger id");
+        let definition_event_id: TriggerId = "definition_event".parse().expect("valid trigger id");
+
+        let mut index = DataTriggerIndex::default();
+        index.insert(
+            &matching_id,
+            &DataEventFilter::Asset(
+                AssetEventFilter::new()
+                    .for_asset(source_asset.clone())
+                    .for_asset_definition(definition.clone())
+                    .for_transfer_source_account(source)
+                    .for_transfer_destination_account(destination),
+            ),
+        );
+        index.insert(
+            &unrelated_id,
+            &DataEventFilter::Asset(AssetEventFilter::new().for_transfer_source_account(unrelated)),
+        );
+        index.insert(
+            &definition_event_id,
+            &DataEventFilter::AssetDefinition(
+                AssetDefinitionEventFilter::new().for_asset_definition(definition),
+            ),
+        );
+
+        let event = DataEvent::Asset(AssetEvent::Transferred(AssetTransferred {
+            source: source_asset,
+            destination: destination_asset,
+            amount: 1_u32.into(),
+        }));
+        assert_eq!(index.candidates(&event), vec![matching_id]);
+    }
+}
 /// Specialized structure that maps event filters to Triggers.
 // NB: `Set` has custom `Serialize` and `DeserializeSeed` implementations
 // which need to be manually updated when changing the struct
@@ -222,6 +735,34 @@ impl json::JsonDeserialize for Set {
             by_call_triggers.ok_or_else(|| json::MapVisitor::missing_field("by_call_triggers"))?;
         let ids = ids.ok_or_else(|| json::MapVisitor::missing_field("ids"))?;
         let contracts = contracts.ok_or_else(|| json::MapVisitor::missing_field("contracts"))?;
+        let incompatible_data_trigger = {
+            let view = data_triggers.view();
+            view.iter()
+                .find(|(_, action)| {
+                    !data_trigger_scope_authorization_is_well_formed(action.metadata())
+                })
+                .map(|(id, _)| id.clone())
+        };
+        if let Some(id) = incompatible_data_trigger {
+            return Err(json::Error::InvalidField {
+                field: "data_triggers".into(),
+                message: format!(
+                    "incompatible data trigger `{id}`: missing or malformed v1 scope authorization metadata; regenerate the first-release snapshot"
+                ),
+            });
+        }
+        let capacity_error = {
+            let view = data_triggers.view();
+            validate_data_trigger_capacities(view.iter()).err()
+        };
+        if let Some(message) = capacity_error {
+            return Err(json::Error::InvalidField {
+                field: "data_triggers".into(),
+                message: format!(
+                    "incompatible first-release data-trigger snapshot: {message}; regenerate the snapshot"
+                ),
+            });
+        }
         let active_data_trigger_ids = Self::collect_active_ids(&data_triggers);
         let active_pipeline_trigger_ids = Self::collect_active_ids(&pipeline_triggers);
         let active_time_trigger_ids = Self::collect_active_ids(&time_triggers);
@@ -477,12 +1018,21 @@ mod merge_write_set_tests {
 }
 /// Trigger set for transaction's aggregated changes
 pub struct SetTransaction<'block, 'set> {
+    /// Last transaction-local trigger lifecycle generation allocated.
+    next_registration_generation: u64,
     /// Per-ID registration generation within this transaction overlay.
     ///
     /// This is intentionally ephemeral: it distinguishes an ID that was
     /// removed and re-registered after a match was materialized without
     /// changing the persisted trigger wire format.
     registration_generations: BTreeMap<TriggerId, u64>,
+    /// Generation at which each data trigger most recently became eligible.
+    ///
+    /// Inherited active triggers implicitly use generation zero. An explicitly
+    /// inactive trigger uses `u64::MAX` until an inactive-to-active transition.
+    data_trigger_eligibility_generations: BTreeMap<TriggerId, u64>,
+    /// Deterministic, transaction-local postings for bounded data-event matching.
+    data_trigger_index: DataTriggerIndex,
     /// Triggers using [`DataEventFilter`]
     data_triggers: StorageTransaction<'block, 'set, TriggerId, LoadedAction<DataEventFilter>>,
     /// Triggers using [`PipelineEventFilterBox`]
@@ -1248,8 +1798,12 @@ impl Set {
 impl<'set> SetBlock<'set> {
     /// Create struct to apply transaction's changes
     pub fn transaction(&mut self) -> SetTransaction<'_, 'set> {
+        let data_trigger_index = DataTriggerIndex::from_triggers(&self.data_triggers);
         SetTransaction {
+            next_registration_generation: 0,
             registration_generations: BTreeMap::new(),
+            data_trigger_eligibility_generations: BTreeMap::new(),
+            data_trigger_index,
             data_triggers: self.data_triggers.transaction(),
             pipeline_triggers: self.pipeline_triggers.transaction(),
             time_triggers: self.time_triggers.transaction(),
@@ -1314,6 +1868,51 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
     pub(crate) fn registration_generation(&self, id: &TriggerId) -> u64 {
         self.registration_generations.get(id).copied().unwrap_or(0)
     }
+    fn advance_registration_generation(&mut self) -> u64 {
+        self.next_registration_generation = self
+            .next_registration_generation
+            .checked_add(1)
+            .expect("trigger lifecycle generation must not overflow within one transaction");
+        self.next_registration_generation
+    }
+    /// Freeze data-trigger eligibility for one buffered event batch.
+    pub(crate) fn data_trigger_match_snapshot(&self) -> DataTriggerMatchSnapshot {
+        DataTriggerMatchSnapshot {
+            generation_watermark: self.next_registration_generation,
+        }
+    }
+    /// Return the pre-allocation work charge for indexed candidates of `event`.
+    pub(crate) fn data_trigger_candidate_scan_work(&self, event: &DataEvent) -> usize {
+        self.data_trigger_index.candidate_scan_work(event)
+    }
+    /// Return canonically ordered candidates from the live deterministic index.
+    pub(crate) fn data_trigger_candidates(&self, event: &DataEvent) -> Vec<TriggerId> {
+        self.data_trigger_index.candidates(event)
+    }
+    /// Match a live candidate only if it was continuously eligible at capture.
+    pub(crate) fn data_trigger_matching_generation(
+        &self,
+        snapshot: DataTriggerMatchSnapshot,
+        id: &TriggerId,
+        event: &DataEvent,
+    ) -> Option<u64> {
+        let generation = self.registration_generation(id);
+        let eligible_since = self
+            .data_trigger_eligibility_generations
+            .get(id)
+            .copied()
+            .unwrap_or(0);
+        if generation > snapshot.generation_watermark
+            || eligible_since > snapshot.generation_watermark
+        {
+            return None;
+        }
+        let action = self.data_triggers.get(id)?;
+        (trigger_is_enabled(action.metadata())
+            && !action.repeats.is_depleted()
+            && action.filter.matches(event))
+        .then_some(generation)
+    }
     fn set_active_id(
         active_ids: &mut ActiveTriggerIdStoreTransaction<'block, 'set>,
         id: &TriggerId,
@@ -1360,21 +1959,110 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
         self.pipeline_triggers.apply();
         self.data_triggers.apply();
     }
-    /// Replace occurrences of `old` with `new` in trigger authorities and filters.
-    pub fn replace_account_id(&mut self, old: &AccountId, new: &AccountId) {
+    /// Return global-trigger capability grants whose target must follow a rekey.
+    ///
+    /// Each pair contains the current grantee and the grantee after the account
+    /// migration. The caller still has to verify that the old direct capability
+    /// is live; a revoked capability must never be resurrected by rekeying.
+    pub(crate) fn global_data_trigger_permission_rekeys(
+        &self,
+        old: &AccountId,
+        new: &AccountId,
+    ) -> Result<BTreeSet<(AccountId, AccountId)>> {
+        self.ensure_account_id_rekey_capacity(old, new)?;
         if old == new {
-            return;
+            return Ok(BTreeSet::new());
+        }
+        let mut rekeys = BTreeSet::new();
+        for (_, action) in self.data_triggers.iter() {
+            let grantee = data_trigger_global_permission_grantee(action.metadata())
+                .map_err(|()| Error::InvalidDataScopeAuthorization)?;
+            if action.authority != *old {
+                continue;
+            }
+            if let Some(grantee) = grantee {
+                let migrated = if grantee == *old {
+                    new.clone()
+                } else {
+                    grantee.clone()
+                };
+                rekeys.insert((grantee, migrated));
+            }
+        }
+        Ok(rekeys)
+    }
+
+    fn ensure_account_id_rekey_capacity(&self, old: &AccountId, new: &AccountId) -> Result<()> {
+        if old == new {
+            return Ok(());
+        }
+        let merged_authority_count = self
+            .data_triggers
+            .iter()
+            .filter(|(_, action)| action.authority == *old || action.authority == *new)
+            .count();
+        if merged_authority_count > super::isi::MAX_DATA_TRIGGERS_PER_AUTHORITY {
+            return Err(Error::DataTriggerAuthorityCapacity(new.clone()));
+        }
+        Ok(())
+    }
+
+    /// Replace occurrences of `old` with `new` in trigger authorities, filters,
+    /// and captured global-capability provenance.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidDataScopeAuthorization`] before mutation when a
+    /// persisted data trigger lacks the canonical v1 authorization record, or
+    /// [`Error::DataTriggerAuthorityCapacity`] when merging the two authorities
+    /// would exceed the first-release per-authority trigger cap.
+    pub fn replace_account_id(&mut self, old: &AccountId, new: &AccountId) -> Result<()> {
+        if old == new {
+            return Ok(());
+        }
+        self.ensure_account_id_rekey_capacity(old, new)?;
+        if self
+            .data_triggers
+            .iter()
+            .any(|(_, action)| !data_trigger_scope_authorization_is_well_formed(action.metadata()))
+        {
+            return Err(Error::InvalidDataScopeAuthorization);
         }
         let trigger_ids: Vec<_> = self.ids.iter().map(|(id, _)| id.clone()).collect();
         for trigger_id in trigger_ids {
             let Some(event_type) = self.ids.get(&trigger_id).copied() else {
                 continue;
             };
+            let mut replacement_filter = None;
+            let mut replacement_filter_is_active = false;
             let updated = match event_type {
-                TriggeringEventType::Data => self
-                    .data_triggers
-                    .get_mut(&trigger_id)
-                    .map(|action| replace_trigger_authority(action, old, new)),
+                TriggeringEventType::Data => {
+                    let updated = self.data_triggers.get_mut(&trigger_id).map(|action| {
+                        let mut updated = replace_trigger_authority(action, old, new);
+                        if action.filter.replace_account_id(old, new) {
+                            replacement_filter = Some(action.filter.clone());
+                            replacement_filter_is_active = Set::action_is_active(action);
+                            updated = true;
+                        }
+                        updated |= replace_data_trigger_global_permission_grantee(
+                            &mut action.metadata,
+                            old,
+                            new,
+                        )
+                        .expect("data-trigger authorization was preflighted");
+                        updated
+                    });
+                    if let Some(filter) = replacement_filter {
+                        self.data_trigger_index.remove(&trigger_id);
+                        self.data_trigger_index.insert(&trigger_id, &filter);
+                        if replacement_filter_is_active {
+                            let generation = self.advance_registration_generation();
+                            self.data_trigger_eligibility_generations
+                                .insert(trigger_id.clone(), generation);
+                        }
+                    }
+                    updated
+                }
                 TriggeringEventType::Pipeline => self
                     .pipeline_triggers
                     .get_mut(&trigger_id)
@@ -1396,6 +2084,7 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
                 );
             }
         }
+        Ok(())
     }
     /// Add trigger with [`DataEventFilter`]
     ///
@@ -1403,15 +2092,41 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
     ///
     /// # Errors
     ///
-    /// Return [`Err`] if failed to preload IVM trigger
+    /// Returns [`Err`] when scope authorization is malformed or a global/per-authority
+    /// registration cap has already been reached.
     #[inline]
     pub fn add_data_trigger(
         &mut self,
         trigger: SpecializedTrigger<DataEventFilter>,
     ) -> Result<bool> {
-        Ok(self.add_to(trigger, TriggeringEventType::Data, |me| {
+        if self.ids.get(&trigger.id).is_some() {
+            return Ok(false);
+        }
+        if !data_trigger_scope_authorization_is_well_formed(&trigger.action.metadata) {
+            return Err(Error::InvalidDataScopeAuthorization);
+        }
+        if self.data_triggers.len() >= super::isi::MAX_DATA_TRIGGERS_TOTAL {
+            return Err(Error::DataTriggerCapacity);
+        }
+        let authority = &trigger.action.authority;
+        if self
+            .data_triggers
+            .iter()
+            .filter(|(_, action)| &action.authority == authority)
+            .count()
+            >= super::isi::MAX_DATA_TRIGGERS_PER_AUTHORITY
+        {
+            return Err(Error::DataTriggerAuthorityCapacity(authority.clone()));
+        }
+        let trigger_id = trigger.id.clone();
+        let filter = trigger.action.filter.clone();
+        let added = self.add_to(trigger, TriggeringEventType::Data, |me| {
             &mut me.data_triggers
-        }))
+        });
+        if added {
+            self.data_trigger_index.insert(&trigger_id, &filter);
+        }
+        Ok(added)
     }
     /// Add trigger with [`PipelineEventFilterBox`]
     ///
@@ -1554,10 +2269,13 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
         );
         self.ids.insert(trigger_id.clone(), event_type);
         self.set_active_id_by_event_type(event_type, &trigger_id, active);
-        let generation = self.registration_generations.entry(trigger_id).or_insert(0);
-        *generation = generation
-            .checked_add(1)
-            .expect("trigger registration generation must not overflow within one transaction");
+        let generation = self.advance_registration_generation();
+        self.registration_generations
+            .insert(trigger_id.clone(), generation);
+        if event_type == TriggeringEventType::Data {
+            self.data_trigger_eligibility_generations
+                .insert(trigger_id, if active { generation } else { u64::MAX });
+        }
         true
     }
     /// Apply `f` to the trigger identified by `id`.
@@ -1568,9 +2286,11 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
         F: Fn(&mut dyn LoadedActionTrait) -> R,
     {
         let event_type = self.ids.get(id).copied()?;
+        let mut prior_active = None;
         let mut active = None;
         let result = match event_type {
             TriggeringEventType::Data => self.data_triggers.get_mut(id).map(|entry| {
+                prior_active = Some(Set::action_is_active(entry));
                 let result = f(entry);
                 active = Some(Set::action_is_active(entry));
                 result
@@ -1593,6 +2313,11 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
         };
         if let Some(active) = active {
             self.set_active_id_by_event_type(event_type, id, active);
+            if event_type == TriggeringEventType::Data && prior_active == Some(false) && active {
+                let generation = self.advance_registration_generation();
+                self.data_trigger_eligibility_generations
+                    .insert(id.clone(), generation);
+            }
         }
         if result.is_none() {
             warn!(
@@ -1611,9 +2336,12 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
         let Some(event_type) = self.ids.remove(id.clone()) else {
             return false;
         };
+        self.registration_generations.remove(id);
+        self.data_trigger_eligibility_generations.remove(id);
         self.set_active_id_by_event_type(event_type, id, false);
         let removed = match event_type {
             TriggeringEventType::Data => {
+                self.data_trigger_index.remove(id);
                 Self::remove_from(&mut self.contracts, &mut self.data_triggers, id.clone())
             }
             TriggeringEventType::Pipeline => {
@@ -1713,6 +2441,9 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
         }
         let mut removed = Vec::new();
         let Self {
+            registration_generations,
+            data_trigger_eligibility_generations,
+            data_trigger_index,
             data_triggers,
             pipeline_triggers,
             time_triggers,
@@ -1753,6 +2484,11 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
             contracts,
             by_call_triggers,
         );
+        for id in &removed {
+            registration_generations.remove(id);
+            data_trigger_eligibility_generations.remove(id);
+            data_trigger_index.remove(id);
+        }
         removed
     }
     /// Update internal retry runtime state for a time trigger.
@@ -2109,6 +2845,10 @@ mod tests {
         let executable = Executable::Instructions(ConstVec::from(vec![instruction.clone()]));
         let time_trigger_id: TriggerId = "time_trigger_rekey".parse().expect("valid id");
         let call_trigger_id: TriggerId = "call_trigger_rekey".parse().expect("valid id");
+        let owned_data_trigger_id: TriggerId =
+            "owned_data_trigger_rekey".parse().expect("valid id");
+        let global_data_trigger_id: TriggerId =
+            "global_data_trigger_rekey".parse().expect("valid id");
         let time_action = SpecializedAction::new(
             executable.clone(),
             Repeats::Exactly(1),
@@ -2123,6 +2863,26 @@ mod tests {
             ExecuteTriggerEventFilter::new(),
         )
         .expect("test by-call action satisfies its authority invariant");
+        let mut owned_data_action = SpecializedAction::new(
+            Executable::Instructions(ConstVec::new_empty()),
+            Repeats::Indefinitely,
+            old.clone(),
+            DataEventFilter::Account(AccountEventFilter::new().for_account(old.clone())),
+        )
+        .expect("test owned data-trigger action satisfies its authority invariant");
+        owned_data_action.metadata =
+            crate::smartcontracts::isi::triggers::owned_data_trigger_scope_metadata_for_testing();
+        let mut global_data_action = SpecializedAction::new(
+            Executable::Instructions(ConstVec::new_empty()),
+            Repeats::Indefinitely,
+            old.clone(),
+            DataEventFilter::Any,
+        )
+        .expect("test global data-trigger action satisfies its authority invariant");
+        global_data_action.metadata =
+            crate::smartcontracts::isi::triggers::global_data_trigger_scope_metadata_for_testing(
+                &old,
+            );
         let mut block = set.block();
         let mut tx = block.transaction();
         tx.add_time_trigger(SpecializedTrigger::new(
@@ -2135,7 +2895,23 @@ mod tests {
             call_action,
         ))
         .expect("add call trigger");
-        tx.replace_account_id(&old, &new);
+        tx.add_data_trigger(SpecializedTrigger::new(
+            owned_data_trigger_id.clone(),
+            owned_data_action,
+        ))
+        .expect("add owned data trigger");
+        tx.add_data_trigger(SpecializedTrigger::new(
+            global_data_trigger_id.clone(),
+            global_data_action,
+        ))
+        .expect("add global data trigger");
+        assert_eq!(
+            tx.global_data_trigger_permission_rekeys(&old, &new)
+                .expect("canonical provenance"),
+            BTreeSet::from([(old.clone(), new.clone())])
+        );
+        tx.replace_account_id(&old, &new)
+            .expect("canonical trigger state rekeys");
         tx.apply();
         block.commit();
         let view = set.view();
@@ -2153,6 +2929,214 @@ mod tests {
             call_action.filter.authority(),
             Some(&new),
             "by-call filter authority should be updated"
+        );
+        let owned_data_action = view
+            .data_triggers()
+            .get(&owned_data_trigger_id)
+            .expect("owned data trigger present");
+        assert_eq!(owned_data_action.authority, new);
+        let DataEventFilter::Account(filter) = &owned_data_action.filter else {
+            panic!("owned data trigger remains an account filter")
+        };
+        assert_eq!(filter.id_matcher().as_ref(), Some(&new));
+        let global_data_action = view
+            .data_triggers()
+            .get(&global_data_trigger_id)
+            .expect("global data trigger present");
+        assert_eq!(global_data_action.authority, new);
+        assert_eq!(
+            data_trigger_global_permission_grantee(global_data_action.metadata())
+                .expect("canonical global provenance"),
+            Some(new)
+        );
+    }
+
+    #[test]
+    fn replace_account_id_rejects_merged_data_trigger_authority_over_cap_without_mutation() {
+        let set = Set::default();
+        let old = sample_authority();
+        let new = sample_authority();
+        let action = |authority: AccountId| {
+            let mut action = SpecializedAction::new(
+                Executable::Instructions(ConstVec::new_empty()),
+                Repeats::Indefinitely,
+                authority.clone(),
+                DataEventFilter::Any,
+            )
+            .expect("valid data-trigger action");
+            action.metadata = crate::smartcontracts::isi::triggers::global_data_trigger_scope_metadata_for_testing(
+                &authority,
+            );
+            action
+        };
+        let mut block = set.block();
+        let mut tx = block.transaction();
+        for index in 0..super::super::isi::MAX_DATA_TRIGGERS_PER_AUTHORITY {
+            let id = format!("new_authority_{index}")
+                .parse()
+                .expect("valid trigger id");
+            tx.add_data_trigger(SpecializedTrigger::new(id, action(new.clone())))
+                .expect("new authority remains within its cap");
+        }
+        let old_trigger_id: TriggerId = "old_authority_extra".parse().expect("valid trigger id");
+        tx.add_data_trigger(SpecializedTrigger::new(
+            old_trigger_id.clone(),
+            action(old.clone()),
+        ))
+        .expect("old authority remains within its cap");
+
+        let error = tx
+            .global_data_trigger_permission_rekeys(&old, &new)
+            .expect_err("multisig preflight must reject an over-cap authority merge");
+        assert!(
+            matches!(error, Error::DataTriggerAuthorityCapacity(ref account) if account == &new)
+        );
+        let error = tx
+            .replace_account_id(&old, &new)
+            .expect_err("direct trigger rekey must reject an over-cap authority merge");
+        assert!(
+            matches!(error, Error::DataTriggerAuthorityCapacity(ref account) if account == &new)
+        );
+        assert_eq!(
+            tx.data_triggers
+                .get(&old_trigger_id)
+                .expect("old trigger remains present")
+                .authority,
+            old,
+            "failed preflight must not mutate trigger state"
+        );
+    }
+
+    #[test]
+    fn rekeyed_data_filter_does_not_inherit_a_pre_rekey_event() {
+        let set = Set::default();
+        let old = sample_authority();
+        let new = sample_authority();
+        let trigger_id: TriggerId = "rekeyed_filter_watermark"
+            .parse()
+            .expect("valid trigger id");
+        let event = DataEvent::Account(AccountEvent::Deleted(new.clone()));
+        let mut action = SpecializedAction::new(
+            Executable::Instructions(ConstVec::new_empty()),
+            Repeats::Indefinitely,
+            old.clone(),
+            DataEventFilter::Account(AccountEventFilter::new().for_account(old.clone())),
+        )
+        .expect("valid owned data-trigger action");
+        action.metadata =
+            crate::smartcontracts::isi::triggers::owned_data_trigger_scope_metadata_for_testing();
+        let mut block = set.block();
+        let mut tx = block.transaction();
+        tx.add_data_trigger(SpecializedTrigger::new(trigger_id.clone(), action))
+            .expect("add owned data trigger");
+        let pre_rekey_snapshot = tx.data_trigger_match_snapshot();
+        assert!(
+            !tx.data_trigger_candidates(&event).contains(&trigger_id),
+            "the event must not match the old account selector"
+        );
+
+        tx.replace_account_id(&old, &new)
+            .expect("canonical trigger state rekeys");
+        assert!(
+            tx.data_trigger_candidates(&event).contains(&trigger_id),
+            "the live index must follow the rekeyed selector"
+        );
+        assert!(
+            tx.data_trigger_matching_generation(pre_rekey_snapshot, &trigger_id, &event)
+                .is_none(),
+            "a rewritten selector must not inherit an event captured before the rekey"
+        );
+        let post_rekey_snapshot = tx.data_trigger_match_snapshot();
+        assert!(
+            tx.data_trigger_matching_generation(post_rekey_snapshot, &trigger_id, &event)
+                .is_some(),
+            "the rekeyed selector must remain eligible for later events"
+        );
+    }
+
+    #[test]
+    fn data_trigger_watermark_excludes_later_registration_and_reactivation() {
+        let set = Set::default();
+        let authority = sample_authority();
+        let event = DataEvent::Account(AccountEvent::Deleted(authority.clone()));
+        let mut block = set.block();
+        let mut tx = block.transaction();
+        let active_id: TriggerId = "watermark_active".parse().expect("valid id");
+        let later_id: TriggerId = "watermark_later".parse().expect("valid id");
+        let reactivated_id: TriggerId = "watermark_reactivated".parse().expect("valid id");
+        let action = |metadata| {
+            let mut action = SpecializedAction::new(
+                Executable::Instructions(ConstVec::new_empty()),
+                Repeats::Indefinitely,
+                authority.clone(),
+                DataEventFilter::Any,
+            )
+            .expect("valid data-trigger action");
+            action.metadata = metadata;
+            action
+        };
+        tx.add_data_trigger(SpecializedTrigger::new(
+            active_id.clone(),
+            action(
+                crate::smartcontracts::isi::triggers::global_data_trigger_scope_metadata_for_testing(
+                    &authority,
+                ),
+            ),
+        ))
+        .expect("add active trigger");
+        let mut disabled_metadata =
+            crate::smartcontracts::isi::triggers::global_data_trigger_scope_metadata_for_testing(
+                &authority,
+            );
+        disabled_metadata.insert(
+            TRIGGER_ENABLED_METADATA_KEY.parse().expect("valid key"),
+            Json::from(false),
+        );
+        tx.add_data_trigger(SpecializedTrigger::new(
+            reactivated_id.clone(),
+            action(disabled_metadata),
+        ))
+        .expect("add disabled trigger");
+        let snapshot = tx.data_trigger_match_snapshot();
+        tx.add_data_trigger(SpecializedTrigger::new(
+            later_id.clone(),
+            action(
+                crate::smartcontracts::isi::triggers::global_data_trigger_scope_metadata_for_testing(
+                    &authority,
+                ),
+            ),
+        ))
+        .expect("add later trigger");
+        tx.inspect_by_id_mut(&reactivated_id, |action| {
+            action.metadata_mut().insert(
+                TRIGGER_ENABLED_METADATA_KEY.parse().expect("valid key"),
+                Json::from(true),
+            );
+        })
+        .expect("reactivate trigger");
+
+        assert!(
+            tx.data_trigger_matching_generation(snapshot, &active_id, &event)
+                .is_some()
+        );
+        assert!(
+            tx.data_trigger_matching_generation(snapshot, &later_id, &event)
+                .is_none(),
+            "a later registration must not inherit a captured event"
+        );
+        assert!(
+            tx.data_trigger_matching_generation(snapshot, &reactivated_id, &event)
+                .is_none(),
+            "an inactive trigger reactivated later must not inherit a captured event"
+        );
+        let later_snapshot = tx.data_trigger_match_snapshot();
+        assert!(
+            tx.data_trigger_matching_generation(later_snapshot, &later_id, &event)
+                .is_some()
+        );
+        assert!(
+            tx.data_trigger_matching_generation(later_snapshot, &reactivated_id, &event)
+                .is_some()
         );
     }
     #[test]
@@ -2564,6 +3548,21 @@ impl TryFrom<SetDto> for Set {
             &mut duplicate_ids,
             &mut missing_contracts,
         )?;
+        if let Some((id, _)) = data
+            .iter()
+            .find(|(_, action)| !data_trigger_scope_authorization_is_well_formed(action.metadata()))
+        {
+            return Err(format!(
+                "incompatible data trigger `{id}`: missing or malformed v1 scope authorization metadata; regenerate the first-release snapshot"
+            ));
+        }
+        validate_data_trigger_capacities(data.iter().map(|(id, action)| (id, action))).map_err(
+            |message| {
+                format!(
+                    "incompatible first-release data-trigger snapshot: {message}; regenerate the snapshot"
+                )
+            },
+        )?;
         let pipeline = load_trigger_entries(
             pipeline,
             TriggeringEventType::Pipeline,
@@ -2724,6 +3723,7 @@ impl TryFrom<SetDto> for Set {
 #[cfg(test)]
 mod dto_tests {
     use super::*;
+    use crate::smartcontracts::isi::triggers::global_data_trigger_scope_metadata_for_testing;
     use iroha_crypto::{Algorithm, HashOf, KeyPair};
     use iroha_data_model::{
         events::pipeline,
@@ -2758,13 +3758,14 @@ mod dto_tests {
             let instr =
                 dm::InstructionBox::from(dm::Log::new(dm::Level::INFO, "hello".to_string()));
             let exec = dm::Executable::Instructions(ConstVec::from(vec![instr]));
-            let action = SpecializedAction::new(
+            let mut action = SpecializedAction::new(
                 exec,
                 dm::Repeats::Exactly(1),
                 authority.clone(),
                 data_filter,
             )
             .expect("test data-trigger action satisfies its authority invariant");
+            action.metadata = global_data_trigger_scope_metadata_for_testing(&authority);
             let trig = SpecializedTrigger::new(data_id, action);
             tx.add_data_trigger(trig).expect("add data trigger");
             // Pipeline trigger with BlockEventFilter variant
@@ -2911,6 +3912,74 @@ mod dto_tests {
         assert_eq!(dto3.by_call.len(), 1);
         assert_eq!(dto3.ids.len(), 4);
         assert_eq!(dto3.contracts.len(), 1);
+    }
+    #[test]
+    fn data_trigger_snapshot_without_v1_scope_authorization_fails_fast() {
+        let mut dto = SetDto::from(&sample_set());
+        dto.data
+            .first_mut()
+            .expect("sample set has one data trigger")
+            .1
+            .metadata = dm::Metadata::default();
+        let error = match Set::try_from(dto) {
+            Ok(_) => panic!("legacy data-trigger snapshot must be rejected"),
+            Err(error) => error,
+        };
+        assert!(
+            error.contains("missing or malformed v1 scope authorization metadata")
+                && error.contains("regenerate the first-release snapshot"),
+            "unexpected compatibility error: {error}"
+        );
+    }
+    #[test]
+    fn data_trigger_snapshot_with_legacy_genesis_global_scope_fails_fast() {
+        let mut dto = SetDto::from(&sample_set());
+        let legacy_metadata =
+            crate::smartcontracts::isi::triggers::legacy_genesis_global_scope_metadata_for_testing(
+            );
+        dto.data
+            .first_mut()
+            .expect("sample set has one data trigger")
+            .1
+            .metadata = legacy_metadata;
+        let error = match Set::try_from(dto) {
+            Ok(_) => panic!("legacy genesis-global trigger snapshot must be rejected"),
+            Err(error) => error,
+        };
+        assert!(
+            error.contains("missing or malformed v1 scope authorization metadata")
+                && error.contains("regenerate the first-release snapshot"),
+            "unexpected legacy genesis-global compatibility error: {error}"
+        );
+    }
+    #[test]
+    fn data_trigger_snapshot_above_authority_cap_fails_fast() {
+        let mut dto = SetDto::from(&sample_set());
+        let action = dto
+            .data
+            .first()
+            .expect("sample set has one data trigger")
+            .1
+            .clone();
+        dto.data = (0..=super::super::isi::MAX_DATA_TRIGGERS_PER_AUTHORITY)
+            .map(|index| {
+                (
+                    format!("over_capacity_{index}")
+                        .parse()
+                        .expect("valid trigger id"),
+                    action.clone(),
+                )
+            })
+            .collect();
+        let error = match Set::try_from(dto) {
+            Ok(_) => panic!("over-capacity data-trigger snapshot must be rejected"),
+            Err(error) => error,
+        };
+        assert!(
+            error.contains("exceeds first-release maximum 64")
+                && error.contains("regenerate the snapshot"),
+            "unexpected compatibility error: {error}"
+        );
     }
     #[test]
     fn set_roundtrips_rebuild_active_trigger_ids() {

@@ -7,9 +7,6 @@ import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicLong
-import java.util.concurrent.atomic.AtomicReference
 
 /**
  * Convenience helper that keeps a Torii WebSocket session alive by reconnecting when the underlying
@@ -24,108 +21,165 @@ class ToriiWebSocketSubscription private constructor(builder: Builder) : AutoClo
 
     private val opener: SessionOpener = builder.opener
     private val delegate: ToriiWebSocketListener = builder.listener
-    private val executor: ScheduledExecutorService = builder.executor!!
-    private val ownsExecutor: Boolean = builder.ownsExecutor
+    private val executor: ScheduledExecutorService = builder.executor ?: Executors.newSingleThreadScheduledExecutor {
+        Thread(it, "torii-websocket-subscription").apply { isDaemon = true }
+    }
+    private val ownsExecutor: Boolean = builder.executor == null
     private val initialBackoffMs: Long = builder.initialBackoffMs
     private val maxBackoffMs: Long = builder.maxBackoffMs
-    private val started = AtomicBoolean(false)
-    private val closed = AtomicBoolean(false)
-    private val nextBackoffMs = AtomicLong(builder.initialBackoffMs)
-    private val sessionGeneration = AtomicLong(0)
-    private val currentSession = AtomicReference<ToriiWebSocketSession?>(null)
-    private val scheduledTask = AtomicReference<ScheduledFuture<*>?>(null)
     private val observers: List<ToriiWebSocketObserver> = builder.observers.toList()
+    private val lock = Any()
+    private var started = false
+    private var closed = false
+    private var nextBackoffMs = initialBackoffMs
+    private var scheduled: PendingOpen? = null
+    private var current: Attempt? = null
 
-    @Synchronized
+    /** Start the subscription once; a closed subscription cannot be restarted. */
     fun start(): ToriiWebSocketSubscription {
-        check(started.compareAndSet(false, true)) { "subscription already started" }
+        synchronized(lock) {
+            check(!started && !closed) { "subscription is already started or closed" }
+            started = true
+        }
         scheduleReconnect(0, ToriiWebSocketObserver.ReconnectReason.INITIAL)
         return this
     }
 
-    val isRunning: Boolean get() = started.get() && !closed.get()
+    val isRunning: Boolean get() = synchronized(lock) { started && !closed }
 
     override fun close() {
-        if (!closed.compareAndSet(false, true)) return
-        scheduledTask.getAndSet(null)?.cancel(true)
-        val session = currentSession.getAndSet(null)
-        if (session != null && session.isOpen) session.close(1000, "client_shutdown")
-        if (ownsExecutor) executor.shutdownNow()
+        val task: ScheduledFuture<*>?
+        val session: ToriiWebSocketSession?
+        synchronized(lock) {
+            if (closed) return
+            closed = true
+            task = scheduled?.future
+            scheduled = null
+            val attempt = current
+            current = null
+            session = attempt?.session?.takeUnless { attempt.disposed }
+            if (attempt != null) {
+                attempt.terminal = true
+                if (session != null) attempt.disposed = true
+            }
+        }
+        task?.cancel(false)
+        try { session?.close(1000, "client_shutdown") }
+        finally { if (ownsExecutor) executor.shutdownNow() }
     }
 
     private fun scheduleReconnect(delayMs: Long, reason: ToriiWebSocketObserver.ReconnectReason) {
-        if (closed.get()) return
-        val existing = scheduledTask.get()
-        if (existing != null && !existing.isDone && !existing.isCancelled) return
-        val clampedDelay = maxOf(0L, delayMs)
-        notifyReconnectScheduled(clampedDelay, reason)
-        scheduledTask.set(executor.schedule(::openSession, clampedDelay, TimeUnit.MILLISECONDS))
-    }
-
-    private fun notifyReconnectScheduled(delayMs: Long, reason: ToriiWebSocketObserver.ReconnectReason) {
-        if (observers.isEmpty()) return
-        val duration = Duration.ofMillis(maxOf(0L, delayMs))
-        for (observer in observers) observer.onReconnectScheduled(duration, reason)
-    }
-
-    private fun notifySessionOpened() { for (observer in observers) observer.onSessionOpened() }
-    private fun notifySessionClosed() { for (observer in observers) observer.onSessionClosed() }
-    private fun notifySessionFailure(error: Throwable) { for (observer in observers) observer.onSessionFailure(error) }
-
-    private fun openSession() {
-        if (closed.get()) return
-        val generation = sessionGeneration.incrementAndGet()
-        val listener = ManagedListener(generation)
+        val pending = PendingOpen()
+        synchronized(lock) {
+            if (closed || scheduled != null) return
+            scheduled = pending
+        }
         try {
-            val session = opener.open(listener)
-            currentSession.set(session)
-        } catch (ex: RuntimeException) {
-            handleFailure(generation, null, ex)
+            for (observer in observers) observer.onReconnectScheduled(Duration.ofMillis(delayMs), reason)
+            val future = executor.schedule({ openSession(pending) }, delayMs, TimeUnit.MILLISECONDS)
+            synchronized(lock) {
+                pending.future = future
+                if (closed || scheduled !== pending) future.cancel(false)
+            }
+        } catch (error: RuntimeException) {
+            val active = synchronized(lock) {
+                if (scheduled === pending) scheduled = null
+                !closed
+            }
+            if (active) throw error
         }
     }
 
-    private fun handleFailure(generation: Long, session: ToriiWebSocketSession?, error: Throwable) {
-        if (closed.get()) return
-        if (generation != sessionGeneration.get()) return
-        val targetSession = session ?: currentSession.get()
-        delegate.onError(targetSession ?: NullSession, error)
-        notifySessionFailure(error)
-        scheduleReconnect(pickBackoffDelay(), ToriiWebSocketObserver.ReconnectReason.SESSION_FAILURE)
+    private fun openSession(pending: PendingOpen) {
+        val attempt = synchronized(lock) {
+            if (closed || scheduled !== pending) return
+            // Clear scheduling admission before calling the opener: it may fail synchronously.
+            scheduled = null
+            Attempt().also { current = it }
+        }
+        try { attach(attempt, opener.open(ManagedListener(attempt))) }
+        catch (error: RuntimeException) { terminate(attempt, null, error, null) }
     }
 
-    private fun pickBackoffDelay(): Long = nextBackoffMs.getAndUpdate(::computeNextBackoff)
-
-    private fun computeNextBackoff(current: Long): Long {
-        val doubled = minOf(maxBackoffMs, current * 2)
-        return if (doubled <= 0) maxBackoffMs else doubled
+    private fun attach(attempt: Attempt, session: ToriiWebSocketSession): Boolean {
+        var dispose = false
+        val active = synchronized(lock) {
+            if (attempt.session == null) attempt.session = session
+            val same = attempt.session === session
+            val accepted = same && !closed && current === attempt && !attempt.terminal
+            if (!accepted && (!same || !attempt.disposed)) {
+                if (same) attempt.disposed = true
+                dispose = true
+            }
+            accepted
+        }
+        // A late opener return owns a real pending handshake even when isOpen is still false.
+        if (dispose) session.close(1000, "subscription no longer active")
+        return active
     }
 
-    private inner class ManagedListener(private val generation: Long) : ToriiWebSocketListener {
-        private fun isCurrent(): Boolean = generation == sessionGeneration.get()
+    private fun terminate(
+        attempt: Attempt,
+        session: ToriiWebSocketSession?,
+        error: Throwable?,
+        close: Pair<Int, String>?,
+    ) {
+        val target: ToriiWebSocketSession
+        val delay: Long
+        synchronized(lock) {
+            if (closed || current !== attempt || attempt.terminal) return
+            attempt.terminal = true
+            current = null
+            if (session != null) { attempt.session = session; attempt.disposed = true }
+            target = session ?: attempt.session ?: NullSession
+            delay = nextBackoffMs
+            nextBackoffMs = if (nextBackoffMs >= maxBackoffMs / 2) maxBackoffMs else nextBackoffMs * 2
+        }
+        try {
+            if (error != null) {
+                delegate.onError(target, error)
+                for (observer in observers) observer.onSessionFailure(error)
+            } else {
+                delegate.onClose(target, requireNotNull(close).first, close.second)
+                for (observer in observers) observer.onSessionClosed()
+            }
+        } finally {
+            scheduleReconnect(delay, if (error != null) ToriiWebSocketObserver.ReconnectReason.SESSION_FAILURE
+                else ToriiWebSocketObserver.ReconnectReason.SESSION_CLOSED)
+        }
+    }
+
+    private inner class ManagedListener(private val attempt: Attempt) : ToriiWebSocketListener {
+        private fun isCurrent(): Boolean = synchronized(lock) { !closed && current === attempt && !attempt.terminal }
         override fun onOpen(session: ToriiWebSocketSession) {
-            if (!isCurrent()) return
-            nextBackoffMs.set(initialBackoffMs)
+            if (!attach(attempt, session)) return
+            synchronized(lock) {
+                if (closed || current !== attempt || attempt.terminal || attempt.opened) return
+                attempt.opened = true
+                nextBackoffMs = initialBackoffMs
+            }
             delegate.onOpen(session)
-            notifySessionOpened()
+            for (observer in observers) observer.onSessionOpened()
         }
-        override fun onText(session: ToriiWebSocketSession, data: CharSequence, last: Boolean) { if (isCurrent()) delegate.onText(session, data, last) }
-        override fun onBinary(session: ToriiWebSocketSession, data: ByteBuffer, last: Boolean) { if (isCurrent()) delegate.onBinary(session, data, last) }
-        override fun onPing(session: ToriiWebSocketSession, message: ByteBuffer) { if (isCurrent()) delegate.onPing(session, message) }
-        override fun onPong(session: ToriiWebSocketSession, message: ByteBuffer) { if (isCurrent()) delegate.onPong(session, message) }
+        override fun onText(session: ToriiWebSocketSession, data: String) { if (isCurrent()) delegate.onText(session, data) }
+        override fun onBinary(session: ToriiWebSocketSession, data: ByteBuffer) { if (isCurrent()) delegate.onBinary(session, data) }
         override fun onClose(session: ToriiWebSocketSession, statusCode: Int, reason: String) {
-            if (!isCurrent()) return
-            delegate.onClose(session, statusCode, reason)
-            notifySessionClosed()
-            scheduleReconnect(pickBackoffDelay(), ToriiWebSocketObserver.ReconnectReason.SESSION_CLOSED)
+            terminate(attempt, session, null, statusCode to reason)
         }
-        override fun onError(session: ToriiWebSocketSession, error: Throwable) { handleFailure(generation, session, error) }
+        override fun onError(session: ToriiWebSocketSession, error: Throwable) { terminate(attempt, session, error, null) }
+    }
+
+    private class PendingOpen { var future: ScheduledFuture<*>? = null }
+    private class Attempt {
+        var session: ToriiWebSocketSession? = null
+        var terminal = false
+        var opened = false
+        var disposed = false
     }
 
     private object NullSession : ToriiWebSocketSession {
-        override fun sendText(data: CharSequence, last: Boolean): CompletableFuture<Void> = failedFuture(IllegalStateException("session not open"))
-        override fun sendBinary(data: ByteBuffer, last: Boolean): CompletableFuture<Void> = failedFuture(IllegalStateException("session not open"))
-        override fun sendPing(message: ByteBuffer): CompletableFuture<Void> = failedFuture(IllegalStateException("session not open"))
-        override fun sendPong(message: ByteBuffer): CompletableFuture<Void> = failedFuture(IllegalStateException("session not open"))
+        override fun sendText(data: String): CompletableFuture<Void> = failedFuture(IllegalStateException("session not open"))
+        override fun sendBinary(data: ByteBuffer): CompletableFuture<Void> = failedFuture(IllegalStateException("session not open"))
 
         private fun <T> failedFuture(ex: Throwable): CompletableFuture<T> =
             CompletableFuture<T>().also { it.completeExceptionally(ex) }
@@ -139,21 +193,16 @@ class ToriiWebSocketSubscription private constructor(builder: Builder) : AutoClo
         internal val opener: SessionOpener
     ) {
         internal var executor: ScheduledExecutorService? = null
-        internal var ownsExecutor = false
         internal var initialBackoffMs = 1_000L
         internal var maxBackoffMs = 30_000L
         internal val observers = ArrayList<ToriiWebSocketObserver>()
 
-        fun setExecutor(executor: ScheduledExecutorService): Builder { this.executor = executor; ownsExecutor = false; return this }
+        fun setExecutor(executor: ScheduledExecutorService): Builder { this.executor = executor; return this }
         fun setInitialBackoff(duration: Duration?): Builder { if (duration != null) initialBackoffMs = maxOf(0L, duration.toMillis()); return this }
         fun setMaxBackoff(duration: Duration?): Builder { if (duration != null) maxBackoffMs = maxOf(0L, duration.toMillis()); return this }
         fun addObserver(observer: ToriiWebSocketObserver): Builder { observers.add(observer); return this }
         fun observers(values: List<ToriiWebSocketObserver>?): Builder { observers.clear(); values?.forEach { addObserver(it) }; return this }
         fun build(): ToriiWebSocketSubscription {
-            if (executor == null) {
-                executor = Executors.newSingleThreadScheduledExecutor { r -> Thread(r, "torii-websocket-subscription").apply { isDaemon = true } }
-                ownsExecutor = true
-            }
             if (initialBackoffMs == 0L) initialBackoffMs = 1_000L
             if (maxBackoffMs < initialBackoffMs) maxBackoffMs = initialBackoffMs
             return ToriiWebSocketSubscription(this)

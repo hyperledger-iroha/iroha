@@ -14,6 +14,15 @@ pub const MUSUBI_REGISTRY_GOVERNANCE_V1: &[u8] =
     b"iroha.governance.proposal.musubi_registry_governance.v1";
 pub const SORAFS_PROVIDER_GOVERNANCE_V1: &[u8] =
     b"iroha.governance.proposal.sorafs_provider_governance.v1";
+/// Owner-consented contract lifecycle proposal domain.
+pub const CONTRACT_LIFECYCLE_GOVERNANCE_V1: &[u8] =
+    b"iroha.governance.proposal.contract_lifecycle.v1";
+/// Emergency contract-containment proposal domain.
+pub const CONTRACT_EMERGENCY_HOLD_V1: &[u8] =
+    b"iroha.governance.proposal.contract_emergency_hold.v1";
+/// Exact-account global data-trigger permission proposal domain.
+pub const GLOBAL_DATA_TRIGGER_PERMISSION_GOVERNANCE_V1: &[u8] =
+    b"iroha.governance.proposal.global_data_trigger_permission.v1";
 pub const GOVERNANCE_EFFECT_PREIMAGE_V1: &[u8] = b"iroha.governance.effect_preimage.v1";
 pub const GOVERNANCE_SUBJECT_ID_V1: &[u8] = b"iroha.governance.subject.id.v1";
 pub const GOVERNANCE_ATTEMPT_ID_V1: &[u8] = b"iroha.governance.attempt.id.v1";
@@ -69,6 +78,9 @@ mod tests {
             VALIDATION_FEE_PAYOUT_LIFECYCLE_V1,
             MUSUBI_REGISTRY_GOVERNANCE_V1,
             SORAFS_PROVIDER_GOVERNANCE_V1,
+            CONTRACT_LIFECYCLE_GOVERNANCE_V1,
+            CONTRACT_EMERGENCY_HOLD_V1,
+            GLOBAL_DATA_TRIGGER_PERMISSION_GOVERNANCE_V1,
             GOVERNANCE_EFFECT_PREIMAGE_V1,
             GOVERNANCE_SUBJECT_ID_V1,
             GOVERNANCE_ATTEMPT_ID_V1,

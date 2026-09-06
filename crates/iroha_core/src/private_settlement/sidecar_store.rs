@@ -25,7 +25,14 @@ fn validate_provisional_authority_cryptography_v1(
     validate_authority_cryptography_v1(authority)
         .map_err(|_| PrivateSettlementSidecarStoreErrorV1::InvalidSidecar)
 }
-use iroha_crypto::{Algorithm, Hash, PublicKey};
+
+fn phase_certificates_are_quorum_equivalent_v1(
+    left: &PrivateSettlementPhaseCertificateV1,
+    right: &PrivateSettlementPhaseCertificateV1,
+) -> bool {
+    left.body == right.body && left.authority_catalog_index == right.authority_catalog_index
+}
+use iroha_crypto::{Algorithm, Hash};
 use iroha_data_model::{
     account::AccountId,
     nexus::{
@@ -86,8 +93,135 @@ pub const PRIVATE_SETTLEMENT_SIDECAR_DEFAULT_MAX_TOTAL_BYTES_V1: u64 =
 /// Maximum records examined by one finality-reconciliation page.
 pub const PRIVATE_SETTLEMENT_RECONCILIATION_MAX_PAGE_RECORDS_V1: usize = 256;
 
+/// Exact staged-lock counts bound by the non-shipping private-settlement
+/// sidecar commitment used in adversarial real-process tests.
+#[cfg(any(test, feature = "test-network-private-settlement-evidence"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
+pub struct PrivateSettlementStagedLockCountsV1 {
+    /// Reserved opaque pool heads.
+    pub pool_heads: u64,
+    /// Reserved nullifiers.
+    pub nullifiers: u64,
+    /// Reserved output commitments.
+    pub output_commitments: u64,
+    /// Sum of all three reservation-map counts.
+    pub total: u64,
+}
+
+/// Evidence-only commitment to every staged private-settlement reservation.
+///
+/// The digest and counts expose no reservation keys. They are compiled only
+/// for the authenticated test-network diagnostic and are not a production
+/// privacy API.
+#[cfg(any(test, feature = "test-network-private-settlement-evidence"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PrivateSettlementStagedLockEvidenceV1 {
+    /// Domain-separated commitment to canonical reservation maps and counts.
+    pub commitment: Hash,
+    /// Exact staged-lock count vector committed by `commitment`.
+    pub counts: PrivateSettlementStagedLockCountsV1,
+}
+
+#[cfg(any(test, feature = "test-network-private-settlement-evidence"))]
+const PRIVATE_SETTLEMENT_STAGED_LOCK_EVIDENCE_DOMAIN_V1: &[u8] =
+    b"iroha:test-network:private-settlement:staged-lock-evidence:v1\0";
+
+#[cfg(any(test, feature = "test-network-private-settlement-evidence"))]
+fn private_settlement_staged_lock_commitment_v1(
+    sections: &[(&[u8], &[u8])],
+    counts: PrivateSettlementStagedLockCountsV1,
+) -> Result<Hash, PrivateSettlementSidecarStoreErrorV1> {
+    let counts_bytes = norito::encode_canonical(&counts)
+        .map_err(|_| PrivateSettlementSidecarStoreErrorV1::Backend)?;
+    let mut preimage = Vec::with_capacity(
+        PRIVATE_SETTLEMENT_STAGED_LOCK_EVIDENCE_DOMAIN_V1.len()
+            + counts_bytes.len()
+            + sections
+                .iter()
+                .map(|(label, bytes)| label.len().saturating_add(bytes.len()).saturating_add(16))
+                .sum::<usize>(),
+    );
+    preimage.extend_from_slice(PRIVATE_SETTLEMENT_STAGED_LOCK_EVIDENCE_DOMAIN_V1);
+    for (label, bytes) in sections {
+        let label_len = u64::try_from(label.len()).expect("static evidence label length fits u64");
+        let bytes_len = u64::try_from(bytes.len()).expect("canonical map length fits u64");
+        preimage.extend_from_slice(&label_len.to_le_bytes());
+        preimage.extend_from_slice(label);
+        preimage.extend_from_slice(&bytes_len.to_le_bytes());
+        preimage.extend_from_slice(bytes);
+    }
+    let counts_len = u64::try_from(counts_bytes.len()).expect("canonical count vector fits u64");
+    preimage.extend_from_slice(&counts_len.to_le_bytes());
+    preimage.extend_from_slice(&counts_bytes);
+    Ok(Hash::new(&preimage))
+}
+
+#[cfg(test)]
+mod staged_lock_evidence_tests {
+    use super::*;
+
+    const LABELS: [&[u8]; 3] = [b"pool_heads", b"nullifiers", b"output_commitments"];
+
+    fn counts() -> PrivateSettlementStagedLockCountsV1 {
+        PrivateSettlementStagedLockCountsV1 {
+            pool_heads: 1,
+            nullifiers: 2,
+            output_commitments: 3,
+            total: 6,
+        }
+    }
+
+    fn commitment(sections: &[Vec<u8>], counts: PrivateSettlementStagedLockCountsV1) -> Hash {
+        let borrowed: Vec<_> = LABELS
+            .iter()
+            .zip(sections)
+            .map(|(label, bytes)| (*label, bytes.as_slice()))
+            .collect();
+        private_settlement_staged_lock_commitment_v1(&borrowed, counts)
+            .expect("fixture evidence encodes")
+    }
+
+    #[test]
+    fn commitment_changes_for_every_reservation_map() {
+        let sections: Vec<_> = (0_u8..3).map(|index| vec![index, index + 1]).collect();
+        let baseline = commitment(&sections, counts());
+        for index in 0..sections.len() {
+            let mut changed = sections.clone();
+            changed[index].push(0x5a);
+            assert_ne!(
+                commitment(&changed, counts()),
+                baseline,
+                "reservation map {} was not bound",
+                String::from_utf8_lossy(LABELS[index])
+            );
+        }
+    }
+
+    #[test]
+    fn commitment_changes_for_every_staged_lock_count() {
+        let sections: Vec<_> = (0_u8..3).map(|index| vec![index, index + 1]).collect();
+        let baseline_counts = counts();
+        let baseline = commitment(&sections, baseline_counts);
+        for index in 0..4 {
+            let mut changed = baseline_counts;
+            match index {
+                0 => changed.pool_heads += 1,
+                1 => changed.nullifiers += 1,
+                2 => changed.output_commitments += 1,
+                3 => changed.total += 1,
+                _ => unreachable!("bounded count mutation index"),
+            }
+            assert_ne!(
+                commitment(&sections, changed),
+                baseline,
+                "staged-lock count field {index} was not bound"
+            );
+        }
+    }
+}
+
 /// Stable first-release durable restricted-sidecar profile descriptor.
-pub const PRIVATE_SETTLEMENT_SIDECAR_STORE_PROFILE_DESCRIPTOR_V1: &[u8] = b"APV1+APS1:provisional=magic-APV1,version-1,exact-zero-certificate-manifest,policy,authority,proof,delta,encrypted-capsule,availability-body,stored-height,address=payload-digest.apv1|certified=magic-APS1,version-1,manifest,policy,authority,encrypted-leg-payload,stored-height,lifecycle,lifecycle-height,audit-approvals,audit-approval-validation-height,verified-leg,prepare-qc,commit-qc,terminal-evidence-digest,verification-evidence-digest,address=payload-digest.aps1|promotion=exact-material+exact-body+valid-3-of-4-certificate,final-fsync-before-provisional-delete,restart-reconcile-exact-pair|bounds=each-record<=12MiB,combined-count<=4096,combined-total<=48GiB|access=owner-only-provisional,exact-four-validator-proof-view,governed-auditor-capsule-view,missing-and-denied-share-unavailable|durability=owner-0700,files-0600,nofollow,single-link,same-euid,process-lease+held-flock,temp-create-new+fsync+rename+directory-fsync|restart=reject-unknown-or-noncanonical-or-substituted-evidence,remove-only-well-formed-stale-temp,rebuild-pool-nullifier-output-reservations|retention=collecting-audited-prepared-commit-certified-never-pruned,terminal-only-at-ticket-height|plaintext=forbidden";
+pub const PRIVATE_SETTLEMENT_SIDECAR_STORE_PROFILE_DESCRIPTOR_V1: &[u8] = b"APV1+APS1:provisional=magic-APV1,version-1,exact-zero-certificate-manifest,policy,authority,proof,delta,encrypted-capsule,availability-body,stored-height,address=payload-digest.apv1|certified=magic-APS1,version-1,manifest,policy,authority,encrypted-leg-payload,stored-height,lifecycle,lifecycle-height,audit-approvals,audit-approval-validation-height,verified-leg,prepare-qc,commit-qc,terminal-evidence-digest,verification-evidence-digest,address=payload-digest.aps1|promotion=exact-material+exact-body+valid-3-of-4-certificate,final-fsync-before-provisional-delete,restart-reconcile-exact-pair|bounds=each-record<=12MiB,combined-count<=4096,combined-total<=48GiB|access=owner-only-provisional,exact-four-validator-proof-view,governed-auditor-capsule-view,missing-and-denied-share-unavailable|durability=owner-0700,files-0600,nofollow,single-link,same-euid,process-lease+held-flock,temp-create-new+fsync+rename+directory-fsync|restart=reject-unknown-or-noncanonical-or-substituted-evidence,quorum-equivalent-qc-body+authority-index-replay-is-write-free,remove-only-well-formed-stale-temp,rebuild-pool-nullifier-output-reservations|retention=collecting-audited-prepared-commit-certified-never-pruned,terminal-only-at-ticket-height|plaintext=forbidden";
 
 /// Capacity policy for one durable restricted-sidecar store.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -223,6 +357,10 @@ impl PrivateSettlementRestrictedSidecarV1 {
                 .digest()
                 .ok()
                 .is_none_or(|digest| digest != self.payload.availability.body.authority_digest)
+            || self.payload.audit_capsule.aad.authority_digest
+                != self.payload.availability.body.authority_digest
+            || self.payload.audit_capsule.aad.authority_context_height
+                != self.payload.availability.body.authority_context_height
             || self.stored_at_height < self.manifest.authority_context_height
             || self.stored_at_height > self.manifest.expiry_height
             || self
@@ -336,7 +474,6 @@ impl fmt::Debug for PrivateSettlementCommitteeSidecarViewV1 {
             .field("bundle_id", &self.manifest.bundle_id)
             .field("leg_ordinal", &self.statement.leg_ordinal)
             .field("route", &self.statement.route)
-            .field("proof_bytes", &self.proof.len())
             .field("lifecycle", &self.lifecycle)
             .finish_non_exhaustive()
     }
@@ -388,6 +525,8 @@ pub struct PrivateSettlementAuditorSidecarViewV1 {
 pub struct PrivateSettlementAuthenticatedAuditorViewV1 {
     /// Governed account identity bound to the authenticated signing key.
     pub auditor_id: AccountId,
+    /// Exact current policy that authorized access to this retained capsule.
+    pub access_policy: PrivateSettlementAuditPolicyV1,
     /// Least-privilege encrypted capsule view.
     pub view: PrivateSettlementAuditorSidecarViewV1,
 }
@@ -396,9 +535,8 @@ impl fmt::Debug for PrivateSettlementAuthenticatedAuditorViewV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("PrivateSettlementAuthenticatedAuditorViewV1")
-            .field("auditor_id", &self.auditor_id)
             .field("view", &self.view)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -455,10 +593,27 @@ pub struct PrivateSettlementPublicSidecarStatusV1 {
     pub expiry_height: u64,
     /// Current durable lifecycle.
     pub lifecycle: PrivateSettlementSidecarLifecycleV1,
-    /// Number of distinct governed approvals now durable.
-    pub audit_approvals: u8,
-    /// Governed approval threshold.
-    pub required_audit_approvals: u8,
+}
+
+/// Sponsor-only recovery projection for exact durable phase certificates.
+///
+/// The certificates contain only protocol-public quorum material. The view
+/// deliberately excludes proof bytes, capsules, approvals, and every audit
+/// plaintext field.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PrivateSettlementSponsorPhaseCertificatesV1 {
+    /// Public bundle identifier.
+    pub bundle_id: Hash,
+    /// Content address of the exact encrypted leg.
+    pub payload_digest: Hash,
+    /// Canonical participant ordinal.
+    pub leg_ordinal: u8,
+    /// Current monotonic local lifecycle.
+    pub lifecycle: PrivateSettlementSidecarLifecycleV1,
+    /// Exact locally durable Prepare QC, when present.
+    pub prepare_certificate: Option<PrivateSettlementPhaseCertificateV1>,
+    /// Exact locally durable Commit QC, when present.
+    pub commit_certificate: Option<PrivateSettlementPhaseCertificateV1>,
 }
 
 /// Allowlisted aggregate lifecycle projection for one public bundle.
@@ -846,6 +1001,7 @@ struct IndexedPrivateSettlementSidecarV1 {
     leg_ordinal: u8,
     expiry_height: u64,
     retention_until_height: u64,
+    stored_at_height: u64,
     lifecycle: PrivateSettlementSidecarLifecycleV1,
     lifecycle_height: u64,
     reservations: Option<PrivateSettlementReservationKeysV1>,
@@ -861,9 +1017,22 @@ struct IndexedPrivateSettlementProvisionalSidecarV1 {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct PrivateSettlementReservationKeysV1 {
-    pool_head: (PrivacyPoolIdV1, u64, PrivacyRootV1),
-    nullifiers: Vec<(PrivacyPoolIdV1, PrivacyNullifierV1)>,
-    output_commitments: Vec<(PrivacyPoolIdV1, PrivacyCommitmentV1)>,
+    pool_head: (
+        PrivateSettlementRouteV1,
+        PrivacyPoolIdV1,
+        u64,
+        PrivacyRootV1,
+    ),
+    nullifiers: Vec<(
+        PrivateSettlementRouteV1,
+        PrivacyPoolIdV1,
+        PrivacyNullifierV1,
+    )>,
+    output_commitments: Vec<(
+        PrivateSettlementRouteV1,
+        PrivacyPoolIdV1,
+        PrivacyCommitmentV1,
+    )>,
 }
 
 #[derive(Debug)]
@@ -872,9 +1041,31 @@ struct SidecarStoreStateV1 {
     by_leg: BTreeMap<(Hash, u8), Hash>,
     provisional_index: BTreeMap<Hash, IndexedPrivateSettlementProvisionalSidecarV1>,
     provisional_by_leg: BTreeMap<(Hash, u8), Hash>,
-    pool_reservations: BTreeMap<(PrivacyPoolIdV1, u64, PrivacyRootV1), Hash>,
-    nullifier_reservations: BTreeMap<(PrivacyPoolIdV1, PrivacyNullifierV1), Hash>,
-    output_reservations: BTreeMap<(PrivacyPoolIdV1, PrivacyCommitmentV1), Hash>,
+    pool_reservations: BTreeMap<
+        (
+            PrivateSettlementRouteV1,
+            PrivacyPoolIdV1,
+            u64,
+            PrivacyRootV1,
+        ),
+        Hash,
+    >,
+    nullifier_reservations: BTreeMap<
+        (
+            PrivateSettlementRouteV1,
+            PrivacyPoolIdV1,
+            PrivacyNullifierV1,
+        ),
+        Hash,
+    >,
+    output_reservations: BTreeMap<
+        (
+            PrivateSettlementRouteV1,
+            PrivacyPoolIdV1,
+            PrivacyCommitmentV1,
+        ),
+        Hash,
+    >,
     canonical_bytes: u64,
     poisoned: bool,
 }
@@ -964,6 +1155,54 @@ impl PrivateSettlementFileSidecarStoreV1 {
         &self.root
     }
 
+    /// Commit every staged reservation for a test-network atomicity
+    /// observation without exposing any reservation key.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when the store is poisoned, its lock is unavailable, or
+    /// canonical encoding fails. Shipping builds do not compile this method.
+    #[cfg(any(test, feature = "test-network-private-settlement-evidence"))]
+    pub fn staged_lock_evidence_v1(
+        &self,
+    ) -> Result<PrivateSettlementStagedLockEvidenceV1, PrivateSettlementSidecarStoreErrorV1> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| PrivateSettlementSidecarStoreErrorV1::Backend)?;
+        ensure_healthy_v1(&state)?;
+        let pool_heads = norito::encode_canonical(&state.pool_reservations)
+            .map_err(|_| PrivateSettlementSidecarStoreErrorV1::Backend)?;
+        let nullifiers = norito::encode_canonical(&state.nullifier_reservations)
+            .map_err(|_| PrivateSettlementSidecarStoreErrorV1::Backend)?;
+        let output_commitments = norito::encode_canonical(&state.output_reservations)
+            .map_err(|_| PrivateSettlementSidecarStoreErrorV1::Backend)?;
+        let pool_head_count = u64::try_from(state.pool_reservations.len())
+            .expect("private-settlement pool reservation count fits u64");
+        let nullifier_count = u64::try_from(state.nullifier_reservations.len())
+            .expect("private-settlement nullifier reservation count fits u64");
+        let output_count = u64::try_from(state.output_reservations.len())
+            .expect("private-settlement output reservation count fits u64");
+        let counts = PrivateSettlementStagedLockCountsV1 {
+            pool_heads: pool_head_count,
+            nullifiers: nullifier_count,
+            output_commitments: output_count,
+            total: pool_head_count
+                .checked_add(nullifier_count)
+                .and_then(|count| count.checked_add(output_count))
+                .expect("private-settlement staged-lock count fits u64"),
+        };
+        let commitment = private_settlement_staged_lock_commitment_v1(
+            &[
+                (b"pool_heads", &pool_heads),
+                (b"nullifiers", &nullifiers),
+                (b"output_commitments", &output_commitments),
+            ],
+            counts,
+        )?;
+        Ok(PrivateSettlementStagedLockEvidenceV1 { commitment, counts })
+    }
+
     /// Durably persist exact pre-certification material before issuing a share.
     ///
     /// Exact retries are idempotent. The durable record is fsynced and its
@@ -974,7 +1213,7 @@ impl PrivateSettlementFileSidecarStoreV1 {
     ///
     /// Returns a redacted validation, conflict, capacity, corruption, or
     /// persistence error.
-    pub fn store_provisional(
+    pub(super) fn store_provisional(
         &self,
         material: PrivateSettlementProvisionalLegMaterialV1,
         stored_at_height: u64,
@@ -1051,6 +1290,11 @@ impl PrivateSettlementFileSidecarStoreV1 {
         }
         insert_provisional_index_v1(&mut state, &candidate, encoded_len)?;
         state.canonical_bytes = next_bytes;
+        #[cfg(feature = "test-network-native-amx-fault-injection")]
+        crate::native_amx_fault_injection::maybe_abort(
+            crate::native_amx_fault_injection::NativeAmxFaultPhase::AfterPrivateSettlementSidecarFsync,
+            *candidate.material.manifest.bundle_id.as_ref(),
+        );
         Ok(PrivateSettlementSidecarStoreOutcomeV1::Stored)
     }
 
@@ -1256,8 +1500,6 @@ impl PrivateSettlementFileSidecarStoreV1 {
             return Err(PrivateSettlementSidecarStoreErrorV1::Unavailable);
         }
         let durable = self.read_record_v1(digest)?;
-        let audit_approvals = u8::try_from(durable.audit_approvals.len())
-            .map_err(|_| PrivateSettlementSidecarStoreErrorV1::Corrupt)?;
         Ok(PrivateSettlementPublicSidecarStatusV1 {
             bundle_id: durable.sidecar.manifest.bundle_id,
             payload_digest: digest,
@@ -1267,8 +1509,48 @@ impl PrivateSettlementFileSidecarStoreV1 {
             lifecycle_height: durable.lifecycle_height,
             expiry_height: durable.sidecar.manifest.expiry_height,
             lifecycle: durable.lifecycle,
-            audit_approvals,
-            required_audit_approvals: durable.sidecar.policy.body.min_approvals,
+        })
+    }
+
+    /// Recover exact durable phase certificates as the immutable bundle sponsor.
+    ///
+    /// Unknown, wrong-sponsor, and retention-expired records deliberately share
+    /// the same unavailable result. The full owner-only record is decoded and
+    /// validated before any quorum material is returned.
+    ///
+    /// # Errors
+    ///
+    /// Returns unavailable or a local corruption/backend error.
+    pub fn sponsor_phase_certificates(
+        &self,
+        digest: Hash,
+        sponsor: &AccountId,
+        authoritative_height: u64,
+    ) -> Result<PrivateSettlementSponsorPhaseCertificatesV1, PrivateSettlementSidecarStoreErrorV1>
+    {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| PrivateSettlementSidecarStoreErrorV1::Backend)?;
+        ensure_healthy_v1(&state)?;
+        let metadata = state
+            .index
+            .get(&digest)
+            .ok_or(PrivateSettlementSidecarStoreErrorV1::Unavailable)?;
+        if authoritative_height > metadata.retention_until_height {
+            return Err(PrivateSettlementSidecarStoreErrorV1::Unavailable);
+        }
+        let durable = self.read_record_v1(digest)?;
+        if &durable.sidecar.manifest.sponsor != sponsor {
+            return Err(PrivateSettlementSidecarStoreErrorV1::Unavailable);
+        }
+        Ok(PrivateSettlementSponsorPhaseCertificatesV1 {
+            bundle_id: durable.sidecar.manifest.bundle_id,
+            payload_digest: digest,
+            leg_ordinal: durable.sidecar.payload.statement.leg_ordinal,
+            lifecycle: durable.lifecycle,
+            prepare_certificate: durable.prepare_certificate,
+            commit_certificate: durable.commit_certificate,
         })
     }
 
@@ -1551,10 +1833,37 @@ impl PrivateSettlementFileSidecarStoreV1 {
     /// # Errors
     ///
     /// Returns unavailable or a local corruption/backend error.
-    pub fn fetch_for_auditor(
+    #[cfg(test)]
+    pub(crate) fn fetch_for_auditor(
         &self,
         digest: Hash,
         auditor: &AccountId,
+        authoritative_height: u64,
+    ) -> Result<PrivateSettlementAuditorSidecarViewV1, PrivateSettlementSidecarStoreErrorV1> {
+        let view = self.auditor_material_v1(digest, authoritative_height)?;
+        if !view
+            .policy
+            .body
+            .auditors
+            .iter()
+            .any(|entry| &entry.auditor_id == auditor)
+        {
+            return Err(PrivateSettlementSidecarStoreErrorV1::Unavailable);
+        }
+        Ok(view)
+    }
+
+    /// Read the exact immutable auditor material for core authorization.
+    ///
+    /// This least-privilege primitive is module-private: callers outside core
+    /// cannot turn knowledge of a payload digest into capsule access. The
+    /// public core operation validates the returned route, pool, network,
+    /// historical governance revision, current governance revision, and
+    /// authenticated signing key against one exact state snapshot before the
+    /// view crosses the crate boundary.
+    pub(super) fn auditor_material_v1(
+        &self,
+        digest: Hash,
         authoritative_height: u64,
     ) -> Result<PrivateSettlementAuditorSidecarViewV1, PrivateSettlementSidecarStoreErrorV1> {
         let state = self
@@ -1566,20 +1875,13 @@ impl PrivateSettlementFileSidecarStoreV1 {
             .index
             .get(&digest)
             .ok_or(PrivateSettlementSidecarStoreErrorV1::Unavailable)?;
-        if authoritative_height > metadata.retention_until_height {
-            return Err(PrivateSettlementSidecarStoreErrorV1::Unavailable);
-        }
-        let durable = self.read_record_v1(digest)?;
-        if !durable
-            .sidecar
-            .policy
-            .body
-            .auditors
-            .iter()
-            .any(|entry| &entry.auditor_id == auditor)
+        if authoritative_height < metadata.stored_at_height
+            || authoritative_height < metadata.lifecycle_height
+            || authoritative_height > metadata.retention_until_height
         {
             return Err(PrivateSettlementSidecarStoreErrorV1::Unavailable);
         }
+        let durable = self.read_record_v1(digest)?;
         Ok(PrivateSettlementAuditorSidecarViewV1 {
             manifest: durable.sidecar.manifest,
             policy: durable.sidecar.policy,
@@ -1589,60 +1891,6 @@ impl PrivateSettlementFileSidecarStoreV1 {
             audit_capsule: durable.sidecar.payload.audit_capsule,
             availability: durable.sidecar.payload.availability,
             lifecycle: durable.lifecycle,
-        })
-    }
-
-    /// Fetch an auditor capsule by the exact request-authenticated signing key.
-    ///
-    /// This is the Torii capability boundary: it derives the governed auditor
-    /// account from immutable policy state instead of trusting a caller-
-    /// supplied account identifier. Missing records, retired retention, and
-    /// ungoverned keys all return the same unavailable error.
-    ///
-    /// # Errors
-    ///
-    /// Returns unavailable or a local corruption/backend error.
-    pub fn fetch_for_auditor_signing_key(
-        &self,
-        digest: Hash,
-        signing_key: &PublicKey,
-        authoritative_height: u64,
-    ) -> Result<PrivateSettlementAuthenticatedAuditorViewV1, PrivateSettlementSidecarStoreErrorV1>
-    {
-        let state = self
-            .state
-            .lock()
-            .map_err(|_| PrivateSettlementSidecarStoreErrorV1::Backend)?;
-        ensure_healthy_v1(&state)?;
-        let metadata = state
-            .index
-            .get(&digest)
-            .ok_or(PrivateSettlementSidecarStoreErrorV1::Unavailable)?;
-        if authoritative_height > metadata.retention_until_height {
-            return Err(PrivateSettlementSidecarStoreErrorV1::Unavailable);
-        }
-        let durable = self.read_record_v1(digest)?;
-        let auditor_id = durable
-            .sidecar
-            .policy
-            .body
-            .auditors
-            .iter()
-            .find(|entry| &entry.signing_key == signing_key)
-            .map(|entry| entry.auditor_id.clone())
-            .ok_or(PrivateSettlementSidecarStoreErrorV1::Unavailable)?;
-        Ok(PrivateSettlementAuthenticatedAuditorViewV1 {
-            auditor_id,
-            view: PrivateSettlementAuditorSidecarViewV1 {
-                manifest: durable.sidecar.manifest,
-                policy: durable.sidecar.policy,
-                authority: durable.sidecar.authority,
-                statement: durable.sidecar.payload.statement,
-                delta: durable.sidecar.payload.delta,
-                audit_capsule: durable.sidecar.payload.audit_capsule,
-                availability: durable.sidecar.payload.availability,
-                lifecycle: durable.lifecycle,
-            },
         })
     }
 
@@ -1699,7 +1947,12 @@ impl PrivateSettlementFileSidecarStoreV1 {
             .binary_search_by(|candidate| candidate.body.auditor_id.cmp(&approval.body.auditor_id))
         {
             Ok(index) => {
-                if durable.audit_approvals[index] != approval {
+                // External providers may produce different valid encodings for
+                // the same purpose-separated approval body.
+                // Identity and every settlement binding live in the body, so
+                // a body-equivalent retry is idempotent after the new
+                // signature has already passed validation above.
+                if durable.audit_approvals[index].body != approval.body {
                     return Err(PrivateSettlementSidecarStoreErrorV1::Conflict);
                 }
                 let collected = u8::try_from(durable.audit_approvals.len())
@@ -1862,17 +2115,25 @@ impl PrivateSettlementFileSidecarStoreV1 {
         durable.lifecycle_evidence_digest = Some(verified.verification_digest());
         durable.verified_leg = Some(verified);
         durable.validate()?;
-        self.persist_lifecycle_record_v1(&mut state, digest, &metadata, &durable)
+        self.persist_lifecycle_record_v1(&mut state, digest, &metadata, &durable)?;
+        #[cfg(feature = "test-network-native-amx-fault-injection")]
+        crate::native_amx_fault_injection::maybe_abort(
+            crate::native_amx_fault_injection::NativeAmxFaultPhase::AfterPrivateSettlementStagedDeltaFsync,
+            *durable.sidecar.manifest.bundle_id.as_ref(),
+        );
+        Ok(())
     }
 
-    /// Confirm that a phase request names the exact locally retained manifest.
+    /// Confirm that a phase request names the exact locally retained manifest
+    /// and return its validator index and retained authority record.
     pub(super) fn validate_phase_manifest(
         &self,
         digest: Hash,
         validator: &PeerId,
         manifest: &AtomicPrivateSettlementV1,
         authoritative_height: u64,
-    ) -> Result<u8, PrivateSettlementSidecarStoreErrorV1> {
+    ) -> Result<(u8, PrivateSettlementCommitteeAuthorityV1), PrivateSettlementSidecarStoreErrorV1>
+    {
         let state = self
             .state
             .lock()
@@ -1904,14 +2165,17 @@ impl PrivateSettlementFileSidecarStoreV1 {
         {
             return Err(PrivateSettlementSidecarStoreErrorV1::Unavailable);
         }
-        u8::try_from(validator_index).map_err(|_| PrivateSettlementSidecarStoreErrorV1::Corrupt)
+        let validator_index = u8::try_from(validator_index)
+            .map_err(|_| PrivateSettlementSidecarStoreErrorV1::Corrupt)?;
+        Ok((validator_index, durable.sidecar.authority))
     }
 
     /// Build the sole Commit body admissible for one locally prepared leg.
     ///
     /// This is a read-only operation. It requires the exact complete all-Prepare
-    /// barrier, the exact local staged transition, and the exact locally durable
-    /// Prepare QC before returning a body that the node capability may sign.
+    /// barrier, the exact local staged transition, and a quorum-equivalent
+    /// locally durable Prepare QC before returning a body that the node
+    /// capability may sign.
     pub(super) fn commit_phase_body(
         &self,
         digest: Hash,
@@ -1953,8 +2217,8 @@ impl PrivateSettlementFileSidecarStoreV1 {
             .ok_or(PrivateSettlementSidecarStoreErrorV1::InvalidTransition)?;
         let authority = barrier
             .authority_catalog
-            .get(ordinal)
-            .ok_or(PrivateSettlementSidecarStoreErrorV1::InvalidTransition)?;
+            .authority_for_leg(&barrier.manifest, ordinal)
+            .map_err(|_| PrivateSettlementSidecarStoreErrorV1::InvalidTransition)?;
         let delta = barrier
             .deltas
             .get(ordinal)
@@ -1967,18 +2231,22 @@ impl PrivateSettlementFileSidecarStoreV1 {
             .verified_leg
             .as_ref()
             .ok_or(PrivateSettlementSidecarStoreErrorV1::Corrupt)?;
+        let durable_prepare_is_equivalent = durable
+            .prepare_certificate
+            .as_ref()
+            .is_some_and(|existing| phase_certificates_are_quorum_equivalent_v1(existing, prepare));
         if manifest_leg.payload_digest != digest
-            || authority != &durable.sidecar.authority
+            || authority != durable.sidecar.authority
             || delta != &durable.sidecar.payload.delta
             || staged.delta() != delta
-            || durable.prepare_certificate.as_ref() != Some(prepare)
+            || !durable_prepare_is_equivalent
         {
             return Err(PrivateSettlementSidecarStoreErrorV1::InvalidTransition);
         }
         private_settlement_phase_body_v1(
             &barrier.manifest,
             delta,
-            authority,
+            &authority,
             PrivateSettlementPhaseV1::Commit,
             barrier.prepared_bundle_digest,
         )
@@ -1986,6 +2254,12 @@ impl PrivateSettlementFileSidecarStoreV1 {
     }
 
     /// Persist the local Prepare QC after the verified delta is already locked.
+    ///
+    /// A quorum-equivalent retry remains idempotent after the same record
+    /// advances to `CommitCertified`; it never rewinds the lifecycle or
+    /// rewrites the journal. Different signer subsets over the exact same body
+    /// are equivalent because the prepared-bundle digest normalizes their
+    /// aggregate encoding.
     pub(crate) fn record_prepare_certificate(
         &self,
         digest: Hash,
@@ -2037,9 +2311,11 @@ impl PrivateSettlementFileSidecarStoreV1 {
             .ok_or(PrivateSettlementSidecarStoreErrorV1::Unavailable)?
             .clone();
         let lifecycle_accepts_phase = match phase {
-            PrivateSettlementPhaseV1::Prepare => {
-                metadata.lifecycle == PrivateSettlementSidecarLifecycleV1::Prepared
-            }
+            PrivateSettlementPhaseV1::Prepare => matches!(
+                metadata.lifecycle,
+                PrivateSettlementSidecarLifecycleV1::Prepared
+                    | PrivateSettlementSidecarLifecycleV1::CommitCertified
+            ),
             PrivateSettlementPhaseV1::Commit => matches!(
                 metadata.lifecycle,
                 PrivateSettlementSidecarLifecycleV1::Prepared
@@ -2079,7 +2355,7 @@ impl PrivateSettlementFileSidecarStoreV1 {
             PrivateSettlementPhaseV1::Commit => &mut durable.commit_certificate,
         };
         if let Some(existing) = slot.as_ref() {
-            return if existing == &certificate {
+            return if phase_certificates_are_quorum_equivalent_v1(existing, &certificate) {
                 Ok(())
             } else {
                 Err(PrivateSettlementSidecarStoreErrorV1::Conflict)
@@ -2091,7 +2367,16 @@ impl PrivateSettlementFileSidecarStoreV1 {
             durable.lifecycle = PrivateSettlementSidecarLifecycleV1::CommitCertified;
         }
         durable.validate()?;
-        self.persist_lifecycle_record_v1(&mut state, digest, &metadata, &durable)
+        self.persist_lifecycle_record_v1(&mut state, digest, &metadata, &durable)?;
+        #[cfg(feature = "test-network-native-amx-fault-injection")]
+        crate::native_amx_fault_injection::maybe_abort(
+            match phase {
+                PrivateSettlementPhaseV1::Prepare => crate::native_amx_fault_injection::NativeAmxFaultPhase::AfterPrivateSettlementPrepareQcFsync,
+                PrivateSettlementPhaseV1::Commit => crate::native_amx_fault_injection::NativeAmxFaultPhase::AfterPrivateSettlementCommitQcFsync,
+            },
+            *durable.sidecar.manifest.bundle_id.as_ref(),
+        );
+        Ok(())
     }
 
     /// Reconcile one local record against an immutable global terminal snapshot.
@@ -2186,19 +2471,17 @@ impl PrivateSettlementFileSidecarStoreV1 {
             .ok_or(PrivateSettlementSidecarStoreErrorV1::InvalidTransition)?;
         let receipt_authority = receipt
             .authority_catalog
-            .get(ordinal)
-            .ok_or(PrivateSettlementSidecarStoreErrorV1::InvalidTransition)?;
+            .authority_for_leg(&receipt.manifest, ordinal)
+            .map_err(|_| PrivateSettlementSidecarStoreErrorV1::InvalidTransition)?;
         if receipt.manifest != durable.sidecar.manifest
-            || receipt_authority != &durable.sidecar.authority
+            || receipt_authority != durable.sidecar.authority
             || receipt_leg.delta != durable.sidecar.payload.delta
-            || durable
-                .prepare_certificate
-                .as_ref()
-                .is_some_and(|prepare| prepare != &receipt_leg.prepare)
-            || durable
-                .commit_certificate
-                .as_ref()
-                .is_some_and(|commit| commit != &receipt_leg.commit)
+            || durable.prepare_certificate.as_ref().is_some_and(|prepare| {
+                !phase_certificates_are_quorum_equivalent_v1(prepare, &receipt_leg.prepare)
+            })
+            || durable.commit_certificate.as_ref().is_some_and(|commit| {
+                !phase_certificates_are_quorum_equivalent_v1(commit, &receipt_leg.commit)
+            })
         {
             return Err(PrivateSettlementSidecarStoreErrorV1::InvalidTransition);
         }
@@ -2206,7 +2489,13 @@ impl PrivateSettlementFileSidecarStoreV1 {
         durable.lifecycle_height = metadata.lifecycle_height.max(receipt.finalized_height);
         durable.terminal_evidence_digest = Some(receipt_digest);
         durable.validate()?;
-        self.persist_lifecycle_record_v1(&mut state, digest, &metadata, &durable)
+        self.persist_lifecycle_record_v1(&mut state, digest, &metadata, &durable)?;
+        #[cfg(feature = "test-network-native-amx-fault-injection")]
+        crate::native_amx_fault_injection::maybe_abort(
+            crate::native_amx_fault_injection::NativeAmxFaultPhase::AfterPrivateSettlementReceiptPublication,
+            *receipt.manifest.bundle_id.as_ref(),
+        );
+        Ok(())
     }
 
     fn abort_with_receipt(
@@ -2979,20 +3268,21 @@ fn indexed_metadata_v1(
             .as_ref()
             .expect("validated staged record carries verified-leg evidence");
         let pool_id = verified.pool_id();
+        let route = verified.delta().route;
         let (epoch, root) = verified.parent_head();
         PrivateSettlementReservationKeysV1 {
-            pool_head: (pool_id, epoch, root),
+            pool_head: (route, pool_id, epoch, root),
             nullifiers: verified
                 .nullifiers()
                 .iter()
                 .copied()
-                .map(|nullifier| (pool_id, nullifier))
+                .map(|nullifier| (route, pool_id, nullifier))
                 .collect(),
             output_commitments: verified
                 .output_commitments()
                 .iter()
                 .copied()
-                .map(|commitment| (pool_id, commitment))
+                .map(|commitment| (route, pool_id, commitment))
                 .collect(),
         }
     });
@@ -3007,6 +3297,7 @@ fn indexed_metadata_v1(
             .availability
             .body
             .retention_until_height,
+        stored_at_height: record.sidecar.stored_at_height,
         lifecycle: record.lifecycle,
         lifecycle_height: record.lifecycle_height,
         reservations,
@@ -3485,7 +3776,11 @@ pub(crate) mod tests {
             sign_private_settlement_phase_vote_v1,
         },
         seal_private_settlement_audit_capsule_v1_with_rng,
-        state::validated_private_settlement_leg_for_sidecar_test_v1,
+        state::{
+            PrivateSettlementPoolGovernanceProjectionV1,
+            authorize_private_settlement_auditor_view_against_governance_v1,
+            validated_private_settlement_leg_for_sidecar_test_v1,
+        },
     };
     use iroha_crypto::{Algorithm, HashOf, HybridKeyPair, KeyPair, Signature, SignatureOf};
     use iroha_data_model::{
@@ -3502,11 +3797,12 @@ pub(crate) mod tests {
             PrivateSettlementAuditPayerSignatureV1, PrivateSettlementAuditPlaintextV1,
             PrivateSettlementAuditPolicyBodyV1, PrivateSettlementAuditViewKeyAuthorizationBodyV1,
             PrivateSettlementAuditViewKeyAuthorizationV1, PrivateSettlementAuditViewKeySignatureV1,
-            PrivateSettlementAuditorV1, PrivateSettlementCapsulePaddingV1,
-            PrivateSettlementHybridPublicKeyV1, PrivateSettlementLegCommitmentV1,
-            PrivateSettlementLegReceiptV1, PrivateSettlementPoolGovernanceLifecycleV1,
-            PrivateSettlementPoolGovernanceV1, PrivateSettlementProofProfileV1,
-            PrivateSettlementRouteV1, PrivateSettlementSidecarAvailabilityBodyV1,
+            PrivateSettlementAuditorV1, PrivateSettlementAuthorityCatalogV1,
+            PrivateSettlementCapsulePaddingV1, PrivateSettlementHybridPublicKeyV1,
+            PrivateSettlementLegCommitmentV1, PrivateSettlementLegReceiptV1,
+            PrivateSettlementPoolGovernanceLifecycleV1, PrivateSettlementPoolGovernanceV1,
+            PrivateSettlementProofProfileV1, PrivateSettlementRouteV1,
+            PrivateSettlementSidecarAvailabilityBodyV1,
         },
         privacy::{
             PRIVACY_IVM_PRIVATE_ENCRYPTED_OUTPUT_BYTES_V1, PrivacyCommitmentV1,
@@ -3566,6 +3862,25 @@ pub(crate) mod tests {
                 }
             })
             .collect()
+    }
+
+    fn second_leg_delta_v1(
+        manifest: &AtomicPrivateSettlementV1,
+        first: &PrivateSettlementDeltaV1,
+    ) -> PrivateSettlementDeltaV1 {
+        let leg = manifest.legs[1];
+        let mut second = first.clone();
+        second.leg_ordinal = leg.ordinal;
+        second.route = leg.route;
+        second.pool_id = leg.pool_id;
+        second.asset_binding_commitment = leg.asset_binding_commitment;
+        second.audit_policy_digest = leg.audit_policy_digest;
+        for (index, output) in second.encrypted_outputs.iter_mut().enumerate() {
+            output.recipient = PrivacyRecipientIdV1::new(
+                [0xD0_u8 + u8::try_from(index).expect("fixed output ordinal fits u8"); 32],
+            );
+        }
+        second
     }
 
     fn active_opening(seed: u8, value: u128) -> PrivateSettlementAuditNoteOpeningV1 {
@@ -3934,7 +4249,9 @@ pub(crate) mod tests {
             pool_id: manifest.legs[0].pool_id,
             asset_binding_commitment: manifest.legs[0].asset_binding_commitment,
             old_root: PrivacyRootV1::new([0x31; 32]),
+            new_root: PrivacyRootV1::new([0x34; 32]),
             old_epoch: 1,
+            new_epoch: 2,
             nullifiers: vec![
                 PrivacyNullifierV1::new([0x32; 32]),
                 PrivacyNullifierV1::new([0x33; 32]),
@@ -3945,6 +4262,7 @@ pub(crate) mod tests {
                 .collect(),
             encrypted_outputs: encrypted_outputs.clone(),
             audit_plaintext_commitment: hash(0x38),
+            audit_input_commitment: [0x3A; 32],
             audit_capsule_digest: hash(0x39),
             audit_policy_digest: policy.policy_digest,
             audit_key_epoch: policy.body.key_epoch,
@@ -3973,7 +4291,7 @@ pub(crate) mod tests {
         )
         .expect("dummy input memo");
         let provisional_relation =
-            PrivateNoteRelationProfileV1::exact_three_output_balanced([[0xD1; 32]; 3]);
+            PrivateNoteRelationProfileV1::exact_three_output_balanced([[0xD1; 32]; 3], [1; 32]);
         for opening in &mut plaintext.inputs {
             let note = PrivateNotePlaintextV1::new_profiled_input_v1(
                 opening.value,
@@ -3991,10 +4309,15 @@ pub(crate) mod tests {
 
         let plaintext_commitment = plaintext.commitment().expect("plaintext commitment");
         statement.audit_plaintext_commitment = plaintext_commitment;
+        statement.audit_input_commitment = crate::privacy_engines::atomic_private_settlement::
+            atomic_private_settlement_audit_input_commitment_v1(&plaintext.inputs)
+                .expect("audit input commitment");
         let output_memos = atomic_private_settlement_output_memo_digests_v1(&manifest, &statement)
             .expect("fixed output memos");
-        let settlement_relation =
-            PrivateNoteRelationProfileV1::exact_three_output_balanced(output_memos);
+        let settlement_relation = PrivateNoteRelationProfileV1::exact_three_output_balanced(
+            output_memos,
+            statement.audit_input_commitment,
+        );
         let program_id = atomic_private_settlement_program_id_v1().expect("settlement program");
         let mut output_rng = StdRng::seed_from_u64(0x4150_535f_4f55_5450);
         encrypted_outputs.clear();
@@ -4050,6 +4373,8 @@ pub(crate) mod tests {
             bundle_id: manifest.bundle_id,
             leg_ordinal: 0,
             route,
+            authority_digest,
+            authority_context_height: manifest.authority_context_height,
             audit_policy_digest: policy.policy_digest,
             audit_key_epoch: policy.body.key_epoch,
             plaintext_commitment,
@@ -4078,9 +4403,9 @@ pub(crate) mod tests {
                 pool_id: statement.pool_id,
                 asset_binding_commitment: statement.asset_binding_commitment,
                 old_root: statement.old_root,
-                new_root: PrivacyRootV1::new([0x34; 32]),
+                new_root: statement.new_root,
                 old_epoch: statement.old_epoch,
-                new_epoch: statement.old_epoch + 1,
+                new_epoch: statement.new_epoch,
                 nullifiers: statement.nullifiers.clone(),
                 output_commitments: statement.output_commitments.clone(),
                 encrypted_outputs,
@@ -4110,12 +4435,7 @@ pub(crate) mod tests {
         };
         payload.delta.proof_digest = payload.proof_digest();
         manifest.legs[0].delta_digest = payload.delta.digest().expect("delta digest");
-        let mut second_delta = payload.delta.clone();
-        second_delta.leg_ordinal = 1;
-        second_delta.route = manifest.legs[1].route;
-        second_delta.pool_id = manifest.legs[1].pool_id;
-        second_delta.asset_binding_commitment = manifest.legs[1].asset_binding_commitment;
-        second_delta.audit_policy_digest = manifest.legs[1].audit_policy_digest;
+        let second_delta = second_leg_delta_v1(&manifest, &payload.delta);
         manifest.legs[1].delta_digest = second_delta.digest().expect("second delta digest");
         let payload_digest = payload.payload_digest().expect("payload digest");
         payload.availability.body.payload_digest = payload_digest;
@@ -4174,6 +4494,113 @@ pub(crate) mod tests {
             pool_governance,
             plaintext,
         }
+    }
+
+    fn extend_sidecar_retention(fixture: &mut SidecarFixtureV1, retention_until_height: u64) {
+        fixture
+            .sidecar
+            .payload
+            .availability
+            .body
+            .retention_until_height = retention_until_height;
+        let preimage = fixture
+            .sidecar
+            .payload
+            .availability
+            .signature_preimage()
+            .expect("retention availability preimage");
+        let signatures = fixture.validator_keys[..3]
+            .iter()
+            .map(|key| {
+                Signature::try_new(key.private_key(), &preimage)
+                    .expect("retention availability signature")
+                    .payload()
+                    .to_vec()
+            })
+            .collect::<Vec<_>>();
+        let signature_refs = signatures.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        fixture.sidecar.payload.availability.aggregate_signature =
+            iroha_crypto::bls_normal_aggregate_signatures(&signature_refs)
+                .expect("retention availability aggregate");
+        fixture.sidecar.manifest.legs[0].availability_certificate_digest = fixture
+            .sidecar
+            .payload
+            .availability
+            .digest()
+            .expect("retention availability digest");
+        fixture
+            .sidecar
+            .validate()
+            .expect("retention-extended sidecar");
+    }
+
+    fn make_successor_policy(
+        fixture: &SidecarFixtureV1,
+        auditor_id: AccountId,
+        signing: &KeyPair,
+        hybrid: &HybridKeyPair,
+    ) -> PrivateSettlementAuditPolicyV1 {
+        PrivateSettlementAuditPolicyV1::new(PrivateSettlementAuditPolicyBodyV1 {
+            version: ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
+            dataspace_id: fixture.sidecar.policy.body.dataspace_id,
+            policy_id: fixture.sidecar.policy.body.policy_id,
+            revision: fixture.sidecar.policy.body.revision + 1,
+            key_epoch: fixture.sidecar.policy.body.key_epoch + 1,
+            activation_height: fixture
+                .sidecar
+                .policy
+                .body
+                .retirement_height
+                .expect("fixture predecessor retires")
+                - 100,
+            retirement_height: None,
+            min_approvals: 1,
+            auditors: vec![PrivateSettlementAuditorV1 {
+                auditor_id,
+                signing_key: signing.public_key().clone(),
+                encryption_key: PrivateSettlementHybridPublicKeyV1::from_hybrid(hybrid.public()),
+            }],
+        })
+        .expect("successor policy")
+    }
+
+    fn successor_governance_projection(
+        fixture: &SidecarFixtureV1,
+        policy: &PrivateSettlementAuditPolicyV1,
+    ) -> PrivateSettlementPoolGovernanceProjectionV1 {
+        let current =
+            PrivateSettlementPoolGovernanceProjectionV1::from_restricted(&fixture.pool_governance)
+                .expect("current projection");
+        let lifecycle = PrivateSettlementPoolGovernanceLifecycleV1 {
+            governance_revision: current.lifecycle.governance_revision + 1,
+            activation_height: current
+                .lifecycle
+                .retirement_height
+                .expect("fixture governance predecessor retires"),
+            retirement_height: policy.body.retirement_height,
+        };
+        let replacement = PrivateSettlementPoolGovernanceV1::from_restricted_mapping(
+            fixture.pool_governance.body.route,
+            fixture.pool_governance.body.pool_id,
+            fixture.pool_governance.body.asset_definition_id.clone(),
+            fixture.pool_governance.body.asset_binding_salt,
+            policy,
+            lifecycle,
+        )
+        .expect("restricted replacement governance");
+        current
+            .with_replacement(PrivateSettlementPoolGovernanceProjectionV1 {
+                version: replacement.body.version,
+                route: replacement.body.route,
+                pool_id: replacement.body.pool_id,
+                asset_binding_commitment: replacement.body.asset_binding_commitment,
+                audit_policy_digest: replacement.body.audit_policy_digest,
+                audit_key_epoch: replacement.body.audit_key_epoch,
+                lifecycle: replacement.body.lifecycle,
+                governance_digest: replacement.governance_digest,
+                prior_revisions: Vec::new(),
+            })
+            .expect("successor projection")
     }
 
     pub(crate) fn audit_approval(
@@ -4287,12 +4714,8 @@ pub(crate) mod tests {
 
     fn global_receipt_fixture(fixture: &SidecarFixtureV1) -> PrivateSettlementReceiptV1 {
         let second_manifest_leg = fixture.sidecar.manifest.legs[1];
-        let mut second_delta = fixture.sidecar.payload.delta.clone();
-        second_delta.leg_ordinal = 1;
-        second_delta.route = second_manifest_leg.route;
-        second_delta.pool_id = second_manifest_leg.pool_id;
-        second_delta.asset_binding_commitment = second_manifest_leg.asset_binding_commitment;
-        second_delta.audit_policy_digest = second_manifest_leg.audit_policy_digest;
+        let second_delta =
+            second_leg_delta_v1(&fixture.sidecar.manifest, &fixture.sidecar.payload.delta);
         let mut second_authority = fixture.sidecar.authority.clone();
         second_authority.route = second_manifest_leg.route;
         let local_prepare = phase_certificate(
@@ -4308,9 +4731,15 @@ pub(crate) mod tests {
             PrivateSettlementPhaseV1::Prepare,
             private_settlement_reserved_prepared_bundle_digest_v1(),
         );
+        let authorities = vec![fixture.sidecar.authority.clone(), second_authority.clone()];
+        let authority_catalog = PrivateSettlementAuthorityCatalogV1::from_leg_authorities(
+            &fixture.sidecar.manifest,
+            &authorities,
+        )
+        .expect("fixture authority catalog");
         let prepared_bundle_digest = private_settlement_prepared_bundle_digest_v1(
             &fixture.sidecar.manifest,
-            &[fixture.sidecar.authority.clone(), second_authority.clone()],
+            &authority_catalog,
             &[fixture.sidecar.payload.delta.clone(), second_delta.clone()],
             &[local_prepare.clone(), second_prepare.clone()],
         )
@@ -4331,7 +4760,7 @@ pub(crate) mod tests {
         PrivateSettlementReceiptV1 {
             version: ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
             manifest: fixture.sidecar.manifest.clone(),
-            authority_catalog: vec![fixture.sidecar.authority.clone(), second_authority],
+            authority_catalog,
             legs: vec![
                 PrivateSettlementLegReceiptV1 {
                     delta: fixture.sidecar.payload.delta.clone(),
@@ -4419,17 +4848,48 @@ pub(crate) mod tests {
     #[test]
     fn pool_head_nullifier_and_output_reservations_are_exclusive_and_releasable() {
         let pool = PrivacyPoolIdV1::new([0xE1; 32]);
+        let participant_route = route(1);
         let reservations = PrivateSettlementReservationKeysV1 {
-            pool_head: (pool, 4, PrivacyRootV1::new([0xE2; 32])),
+            pool_head: (participant_route, pool, 4, PrivacyRootV1::new([0xE2; 32])),
             nullifiers: vec![
-                (pool, PrivacyNullifierV1::new([0xE3; 32])),
-                (pool, PrivacyNullifierV1::new([0xE4; 32])),
+                (participant_route, pool, PrivacyNullifierV1::new([0xE3; 32])),
+                (participant_route, pool, PrivacyNullifierV1::new([0xE4; 32])),
             ],
             output_commitments: vec![
-                (pool, PrivacyCommitmentV1::new([0xE5; 32])),
-                (pool, PrivacyCommitmentV1::new([0xE6; 32])),
-                (pool, PrivacyCommitmentV1::new([0xE7; 32])),
+                (
+                    participant_route,
+                    pool,
+                    PrivacyCommitmentV1::new([0xE5; 32]),
+                ),
+                (
+                    participant_route,
+                    pool,
+                    PrivacyCommitmentV1::new([0xE6; 32]),
+                ),
+                (
+                    participant_route,
+                    pool,
+                    PrivacyCommitmentV1::new([0xE7; 32]),
+                ),
             ],
+        };
+        let other_route_reservations = PrivateSettlementReservationKeysV1 {
+            pool_head: (
+                route(2),
+                reservations.pool_head.1,
+                reservations.pool_head.2,
+                reservations.pool_head.3,
+            ),
+            nullifiers: reservations
+                .nullifiers
+                .iter()
+                .map(|(_, pool, nullifier)| (route(2), *pool, *nullifier))
+                .collect(),
+            output_commitments: reservations
+                .output_commitments
+                .iter()
+                .map(|(_, pool, commitment)| (route(2), *pool, *commitment))
+                .collect(),
         };
         let owner_a = Hash::new(b"bundle-a");
         let owner_b = Hash::new(b"bundle-b");
@@ -4451,6 +4911,8 @@ pub(crate) mod tests {
             ensure_reservations_available_v1(&state, owner_b, Some(&reservations)),
             Err(PrivateSettlementSidecarStoreErrorV1::Conflict)
         );
+        ensure_reservations_available_v1(&state, owner_b, Some(&other_route_reservations))
+            .expect("identical opaque values in a different route are independent");
         remove_reservations_v1(&mut state, owner_a, Some(&reservations)).expect("terminal release");
         ensure_reservations_available_v1(&state, owner_b, Some(&reservations))
             .expect("released resources can be reserved by another bundle");
@@ -4558,6 +5020,9 @@ pub(crate) mod tests {
             committee.lifecycle,
             PrivateSettlementSidecarLifecycleV1::Prepared
         );
+        let committee_debug = format!("{committee:?}");
+        assert!(!committee_debug.contains("proof"));
+        assert!(!committee_debug.contains(&hex::encode(&committee.proof)));
         let abort = abort_receipt(
             &fixture,
             21,
@@ -4590,13 +5055,41 @@ pub(crate) mod tests {
         .expect("open store");
         store.store(fixture.sidecar.clone()).expect("store");
 
-        let authenticated_auditor = store
-            .fetch_for_auditor_signing_key(digest, fixture.signing.public_key(), 12)
+        let governance =
+            PrivateSettlementPoolGovernanceProjectionV1::from_restricted(&fixture.pool_governance)
+                .expect("governance projection");
+        assert_eq!(
+            store.auditor_material_v1(digest, 10),
+            Err(PrivateSettlementSidecarStoreErrorV1::Unavailable)
+        );
+        let view = store
+            .auditor_material_v1(digest, 12)
+            .expect("exact target material");
+        let authenticated_auditor =
+            authorize_private_settlement_auditor_view_against_governance_v1(
+                &governance,
+                &fixture.sidecar.manifest.network_id,
+                &fixture.sidecar.policy,
+                fixture.signing.public_key(),
+                12,
+                view.clone(),
+            )
             .expect("governed signing key resolves without caller-selected identity");
         assert_eq!(authenticated_auditor.auditor_id, fixture.auditor);
+        assert_eq!(authenticated_auditor.access_policy, fixture.sidecar.policy);
+        let authenticated_debug = format!("{authenticated_auditor:?}");
+        assert!(!authenticated_debug.contains("auditor_id"));
+        assert!(!authenticated_debug.contains(&fixture.auditor.to_string()));
         let unknown_signer = KeyPair::from_seed(vec![0xF4; 32], Algorithm::Ed25519);
         assert_eq!(
-            store.fetch_for_auditor_signing_key(digest, unknown_signer.public_key(), 12),
+            authorize_private_settlement_auditor_view_against_governance_v1(
+                &governance,
+                &fixture.sidecar.manifest.network_id,
+                &fixture.sidecar.policy,
+                unknown_signer.public_key(),
+                12,
+                view,
+            ),
             Err(PrivateSettlementSidecarStoreErrorV1::Unavailable)
         );
 
@@ -4605,8 +5098,6 @@ pub(crate) mod tests {
             initial.lifecycle,
             PrivateSettlementSidecarLifecycleV1::Collecting
         );
-        assert_eq!(initial.audit_approvals, 0);
-        assert_eq!(initial.required_audit_approvals, 2);
 
         let first = audit_approval(&store, &fixture, digest, 12);
         let first_outcome = store
@@ -4638,8 +5129,6 @@ pub(crate) mod tests {
         let partial = reopened
             .public_status(digest, 13)
             .expect("recovered status");
-        assert_eq!(partial.audit_approvals, 1);
-        assert_eq!(partial.required_audit_approvals, 2);
         assert_eq!(
             partial.lifecycle,
             PrivateSettlementSidecarLifecycleV1::Collecting
@@ -4688,15 +5177,145 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn governed_auditor_access_uses_current_key_and_stable_historical_identity() {
+        let mut fixture = sidecar_fixture();
+        extend_sidecar_retention(&mut fixture, 600);
+        let digest = fixture.sidecar.payload_digest();
+        let temp = tempfile::tempdir().expect("tempdir");
+        let store = PrivateSettlementFileSidecarStoreV1::open(
+            temp.path().join("rotated-auditor-access"),
+            PrivateSettlementSidecarStoreConfigV1::default(),
+        )
+        .expect("open store");
+        store.store(fixture.sidecar.clone()).expect("store");
+
+        let successor_signing = KeyPair::from_seed(vec![0xD1; 32], Algorithm::Ed25519);
+        let mut successor_hybrid_rng =
+            iroha_crypto::rng_from_seed_slice(b"successor auditor encryption key");
+        let successor_hybrid =
+            HybridKeyPair::generate(&mut successor_hybrid_rng).expect("successor hybrid key");
+        let successor_policy = make_successor_policy(
+            &fixture,
+            fixture.auditor.clone(),
+            &successor_signing,
+            &successor_hybrid,
+        );
+        let successor_governance = successor_governance_projection(&fixture, &successor_policy);
+        assert!(
+            successor_policy.body.activation_height
+                < successor_governance.lifecycle.activation_height,
+            "a pre-activated restricted policy is selected only by the WSV governance revision"
+        );
+        let historical_view = store
+            .auditor_material_v1(digest, 500)
+            .expect("retained historical capsule");
+        let historical = authorize_private_settlement_auditor_view_against_governance_v1(
+            &successor_governance,
+            &fixture.sidecar.manifest.network_id,
+            &successor_policy,
+            successor_signing.public_key(),
+            500,
+            historical_view.clone(),
+        )
+        .expect("same stable auditor may fetch the retained old wrapped capsule");
+        assert_eq!(historical.auditor_id, fixture.auditor);
+        assert_eq!(historical.access_policy, successor_policy);
+        assert!(
+            historical
+                .view
+                .audit_capsule
+                .wrapped_deks
+                .iter()
+                .any(|wrapped| wrapped.auditor_id == historical.auditor_id)
+        );
+
+        let unavailable = PrivateSettlementSidecarStoreErrorV1::Unavailable;
+        assert_eq!(
+            authorize_private_settlement_auditor_view_against_governance_v1(
+                &successor_governance,
+                &fixture.sidecar.manifest.network_id,
+                &successor_policy,
+                fixture.signing.public_key(),
+                500,
+                historical_view.clone(),
+            ),
+            Err(unavailable),
+            "the retired signing key cannot authenticate under the current WSV policy"
+        );
+        let mut wrong_route_view = historical_view.clone();
+        wrong_route_view.statement.route = route(8);
+        assert_eq!(
+            authorize_private_settlement_auditor_view_against_governance_v1(
+                &successor_governance,
+                &fixture.sidecar.manifest.network_id,
+                &successor_policy,
+                successor_signing.public_key(),
+                500,
+                wrong_route_view,
+            ),
+            Err(unavailable),
+            "a retained capsule from another route cannot inherit access"
+        );
+        let mut wrong_pool_view = historical_view.clone();
+        wrong_pool_view.statement.pool_id = PrivacyPoolIdV1::new([0xEE; 32]);
+        assert_eq!(
+            authorize_private_settlement_auditor_view_against_governance_v1(
+                &successor_governance,
+                &fixture.sidecar.manifest.network_id,
+                &successor_policy,
+                successor_signing.public_key(),
+                500,
+                wrong_pool_view,
+            ),
+            Err(unavailable),
+            "a retained capsule from another pool cannot inherit access"
+        );
+
+        let unrelated_signing = KeyPair::from_seed(vec![0xD2; 32], Algorithm::Ed25519);
+        let unrelated_id = AccountId::new(unrelated_signing.public_key().clone());
+        let mut unrelated_hybrid_rng =
+            iroha_crypto::rng_from_seed_slice(b"unrelated successor encryption key");
+        let unrelated_hybrid =
+            HybridKeyPair::generate(&mut unrelated_hybrid_rng).expect("unrelated hybrid key");
+        let unrelated_policy = make_successor_policy(
+            &fixture,
+            unrelated_id,
+            &unrelated_signing,
+            &unrelated_hybrid,
+        );
+        let unrelated_governance = successor_governance_projection(&fixture, &unrelated_policy);
+        assert_eq!(
+            authorize_private_settlement_auditor_view_against_governance_v1(
+                &unrelated_governance,
+                &fixture.sidecar.manifest.network_id,
+                &successor_policy,
+                successor_signing.public_key(),
+                500,
+                historical_view.clone(),
+            ),
+            Err(unavailable),
+            "a full policy must match the exact active WSV policy digest and epoch"
+        );
+        assert_eq!(
+            authorize_private_settlement_auditor_view_against_governance_v1(
+                &unrelated_governance,
+                &fixture.sidecar.manifest.network_id,
+                &unrelated_policy,
+                unrelated_signing.public_key(),
+                500,
+                historical_view,
+            ),
+            Err(unavailable),
+            "a different stable auditor must not inherit historical capsule access"
+        );
+    }
+
+    #[test]
     fn audited_prepare_commit_and_global_receipt_are_durable_and_typed() {
         let fixture = sidecar_fixture();
         let second_manifest_leg = fixture.sidecar.manifest.legs[1];
-        let mut second_delta = fixture.sidecar.payload.delta.clone();
-        second_delta.leg_ordinal = 1;
-        second_delta.route = second_manifest_leg.route;
-        second_delta.pool_id = second_manifest_leg.pool_id;
-        second_delta.asset_binding_commitment = second_manifest_leg.asset_binding_commitment;
-        second_delta.audit_policy_digest = second_manifest_leg.audit_policy_digest;
+        let second_delta =
+            second_leg_delta_v1(&fixture.sidecar.manifest, &fixture.sidecar.payload.delta);
         assert_eq!(
             fixture.sidecar.manifest.legs[1].delta_digest,
             second_delta.digest().expect("second delta digest")
@@ -4744,9 +5363,15 @@ pub(crate) mod tests {
             PrivateSettlementPhaseV1::Prepare,
             private_settlement_reserved_prepared_bundle_digest_v1(),
         );
+        let authorities = vec![fixture.sidecar.authority.clone(), second_authority.clone()];
+        let authority_catalog = PrivateSettlementAuthorityCatalogV1::from_leg_authorities(
+            &fixture.sidecar.manifest,
+            &authorities,
+        )
+        .expect("fixture authority catalog");
         let prepared_bundle_digest = private_settlement_prepared_bundle_digest_v1(
             &fixture.sidecar.manifest,
-            &[fixture.sidecar.authority.clone(), second_authority.clone()],
+            &authority_catalog,
             &[fixture.sidecar.payload.delta.clone(), second_delta.clone()],
             &[local_prepare.clone(), second_prepare.clone()],
         )
@@ -4826,6 +5451,123 @@ pub(crate) mod tests {
         store
             .record_commit_certificate(digest, local_commit.clone(), prepared_bundle_digest, 14)
             .expect("commit QC");
+        drop(store);
+        let store = PrivateSettlementFileSidecarStoreV1::open(
+            &root,
+            PrivateSettlementSidecarStoreConfigV1::default(),
+        )
+        .expect("reopen after durable Commit QC");
+        let commit_certified_record =
+            fs::read(&record_path).expect("read Commit-certified journal");
+        let sponsor_recovery = store
+            .sponsor_phase_certificates(digest, &fixture.sidecar.manifest.sponsor, 15)
+            .expect("exact sponsor recovers both durable QCs");
+        assert_eq!(
+            sponsor_recovery.prepare_certificate,
+            Some(local_prepare.clone())
+        );
+        assert_eq!(
+            sponsor_recovery.commit_certificate,
+            Some(local_commit.clone())
+        );
+        assert_eq!(
+            sponsor_recovery.lifecycle,
+            PrivateSettlementSidecarLifecycleV1::CommitCertified
+        );
+        let wrong_sponsor = AccountId::new(
+            KeyPair::from_seed(vec![0x3B; 32], Algorithm::Ed25519)
+                .public_key()
+                .clone(),
+        );
+        assert_eq!(
+            store.sponsor_phase_certificates(digest, &wrong_sponsor, 15),
+            Err(PrivateSettlementSidecarStoreErrorV1::Unavailable)
+        );
+        assert_eq!(
+            store.sponsor_phase_certificates(
+                digest,
+                &fixture.sidecar.manifest.sponsor,
+                fixture
+                    .sidecar
+                    .payload
+                    .availability
+                    .body
+                    .retention_until_height
+                    + 1,
+            ),
+            Err(PrivateSettlementSidecarStoreErrorV1::Unavailable)
+        );
+        store
+            .record_prepare_certificate(digest, local_prepare.clone(), 15)
+            .expect("exact Prepare QC replay survives restart after Commit certification");
+        assert_eq!(
+            store
+                .public_status(digest, 15)
+                .expect("Commit-certified replay status")
+                .lifecycle,
+            PrivateSettlementSidecarLifecycleV1::CommitCertified,
+            "replaying older phase evidence must not regress lifecycle"
+        );
+        assert_eq!(
+            fs::read(&record_path).expect("read journal after exact Prepare QC replay"),
+            commit_certified_record,
+            "exact Prepare QC replay after Commit certification must be write-free"
+        );
+        let alternate_prepare_votes = fixture.validator_keys[1..]
+            .iter()
+            .map(|key| {
+                sign_private_settlement_phase_vote_v1(local_prepare.body, key)
+                    .expect("alternate Prepare vote")
+            })
+            .collect::<Vec<_>>();
+        let alternate_prepare = aggregate_private_settlement_phase_votes_v1(
+            local_prepare.body,
+            local_prepare.authority_catalog_index,
+            &fixture.sidecar.authority,
+            &alternate_prepare_votes,
+        )
+        .expect("quorum-equivalent Prepare QC");
+        assert_ne!(alternate_prepare, local_prepare);
+        let mut recovered_barrier = barrier.clone();
+        recovered_barrier.prepare_certificates[0] = alternate_prepare.clone();
+        assert_eq!(
+            store
+                .commit_phase_body(digest, &fixture.validator, &recovered_barrier, 15)
+                .expect("quorum-equivalent barrier admits Commit after recovery"),
+            commit_body,
+            "Commit identity must not depend on the recovered Prepare signer subset"
+        );
+        store
+            .record_prepare_certificate(digest, alternate_prepare.clone(), 15)
+            .expect("quorum-equivalent Prepare replay survives restart");
+        assert_eq!(
+            fs::read(&record_path).expect("read journal after equivalent Prepare QC replay"),
+            commit_certified_record,
+            "quorum-equivalent Prepare QC replay must be write-free"
+        );
+        let alternate_commit_votes = fixture.validator_keys[1..]
+            .iter()
+            .map(|key| {
+                sign_private_settlement_phase_vote_v1(local_commit.body, key)
+                    .expect("alternate Commit vote")
+            })
+            .collect::<Vec<_>>();
+        let alternate_commit = aggregate_private_settlement_phase_votes_v1(
+            local_commit.body,
+            local_commit.authority_catalog_index,
+            &fixture.sidecar.authority,
+            &alternate_commit_votes,
+        )
+        .expect("quorum-equivalent Commit QC");
+        assert_ne!(alternate_commit, local_commit);
+        store
+            .record_commit_certificate(digest, alternate_commit.clone(), prepared_bundle_digest, 15)
+            .expect("quorum-equivalent Commit replay survives restart");
+        assert_eq!(
+            fs::read(&record_path).expect("read journal after equivalent Commit QC replay"),
+            commit_certified_record,
+            "quorum-equivalent Commit QC replay must be write-free"
+        );
         let second_commit = phase_certificate_for(
             &fixture.sidecar.manifest,
             &second_delta,
@@ -4837,12 +5579,12 @@ pub(crate) mod tests {
         let receipt = PrivateSettlementReceiptV1 {
             version: ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
             manifest: fixture.sidecar.manifest.clone(),
-            authority_catalog: vec![fixture.sidecar.authority.clone(), second_authority],
+            authority_catalog,
             legs: vec![
                 PrivateSettlementLegReceiptV1 {
                     delta: fixture.sidecar.payload.delta.clone(),
-                    prepare: local_prepare,
-                    commit: local_commit,
+                    prepare: alternate_prepare,
+                    commit: alternate_commit,
                 },
                 PrivateSettlementLegReceiptV1 {
                     delta: second_delta,
@@ -5438,7 +6180,6 @@ pub(crate) mod tests {
         let unaudited_status = unaudited_restarted
             .public_status(unaudited_digest, unaudited_expiry)
             .expect("unaudited expiry status");
-        assert_eq!(unaudited_status.audit_approvals, 0);
         assert_eq!(
             unaudited_status.lifecycle,
             PrivateSettlementSidecarLifecycleV1::Expired
@@ -5479,8 +6220,6 @@ pub(crate) mod tests {
         let partial_status = partial_restarted
             .public_status(partial_digest, partial_expiry)
             .expect("partial expiry status");
-        assert_eq!(partial_status.audit_approvals, 1);
-        assert_eq!(partial_status.required_audit_approvals, 2);
         assert_eq!(
             partial_status.lifecycle,
             PrivateSettlementSidecarLifecycleV1::Expired
@@ -5534,17 +6273,38 @@ pub(crate) mod tests {
             store.store(body_substitution),
             Err(PrivateSettlementSidecarStoreErrorV1::InvalidSidecar)
         );
+        let mut roster_aad_substitution = fixture.sidecar.clone();
+        roster_aad_substitution
+            .payload
+            .audit_capsule
+            .aad
+            .authority_digest = Hash::new(b"substituted capsule authority");
+        assert_eq!(
+            store.store(roster_aad_substitution),
+            Err(PrivateSettlementSidecarStoreErrorV1::InvalidSidecar)
+        );
+        let mut context_aad_substitution = fixture.sidecar.clone();
+        context_aad_substitution
+            .payload
+            .audit_capsule
+            .aad
+            .authority_context_height += 1;
+        assert_eq!(
+            store.store(context_aad_substitution),
+            Err(PrivateSettlementSidecarStoreErrorV1::InvalidSidecar)
+        );
         let mut four_signers = fixture.sidecar.clone();
         four_signers.payload.availability.signers_bitmap = 0b1111;
         assert_eq!(
             store.store(four_signers),
             Err(PrivateSettlementSidecarStoreErrorV1::InvalidSidecar)
         );
-        let mut same_digest_different_record = fixture.sidecar.clone();
-        same_digest_different_record.stored_at_height += 1;
+        let mut same_material_new_observation_height = fixture.sidecar.clone();
+        same_material_new_observation_height.stored_at_height += 1;
         assert_eq!(
-            store.store(same_digest_different_record),
-            Err(PrivateSettlementSidecarStoreErrorV1::Conflict)
+            store.store(same_material_new_observation_height),
+            Ok(PrivateSettlementSidecarStoreOutcomeV1::AlreadyStored),
+            "local observation height is not restricted material and cannot make an exact retry conflict"
         );
         assert_eq!(
             store
@@ -5571,6 +6331,20 @@ pub(crate) mod tests {
         let sidecar_debug = format!("{:?}", fixture.sidecar);
         assert!(!sidecar_debug.contains("proof"));
         assert!(!sidecar_debug.contains("ciphertext"));
+        let payload_debug = format!("{:?}", fixture.sidecar.payload);
+        assert!(!payload_debug.contains("proof"));
+        assert!(!payload_debug.contains("ciphertext"));
+        assert_eq!(
+            format!("{:?}", fixture.sidecar.payload.audit_capsule),
+            "PrivateSettlementAuditCapsuleV1(<redacted>)"
+        );
+        assert_eq!(
+            format!(
+                "{:?}",
+                fixture.sidecar.payload.audit_capsule.wrapped_deks[0]
+            ),
+            "PrivateSettlementWrappedDekV1(<redacted>)"
+        );
     }
 
     #[cfg(unix)]

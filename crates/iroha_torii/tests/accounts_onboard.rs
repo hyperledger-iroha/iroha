@@ -57,11 +57,16 @@ const ONBOARDING_WRONG_SCOPE_API_TOKEN: &str = "torii-onboarding-wrong-scope-tok
 const ONBOARDING_SIGNER_PATH: &str = "/runtime-only/onboarding-test-signer.key";
 static ONBOARDING_TORII_INIT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 struct OnboardingTestContext {
-    app: axum::Router,
+    app: iroha_torii::TestApiRouterRuntime,
     state: Arc<State>,
     queue: Arc<Queue>,
     chain_id: iroha_data_model::ChainId,
     _data_dir: tempfile::TempDir,
+}
+impl OnboardingTestContext {
+    async fn shutdown(self) {
+        self.app.shutdown().await;
+    }
 }
 struct JsonResponse {
     status: StatusCode,
@@ -506,6 +511,9 @@ async fn sponsored_onboarding_receipt_binds_exact_network_and_active_signer() {
         assert_eq!(response_field(&response.payload, "code"), "conflict");
         assert_eq!(context.queue.active_len(), 0);
     }
+    origin.shutdown().await;
+    foreign_genesis.shutdown().await;
+    rotated_signer.shutdown().await;
 }
 #[tokio::test]
 async fn sponsored_onboarding_receipt_rejects_genesis_and_retired_network_keys() {
@@ -570,6 +578,7 @@ async fn sponsored_onboarding_receipt_rejects_genesis_and_retired_network_keys()
         }
     }
     assert_eq!(context.queue.active_len(), 0);
+    context.shutdown().await;
 }
 
 #[tokio::test]
@@ -663,6 +672,7 @@ async fn sponsored_onboarding_submit_rejects_old_and_tampered_envelopes() {
         rejected.raw_body
     );
     assert_eq!(context.queue.active_len(), 0);
+    context.shutdown().await;
 }
 
 #[tokio::test]
@@ -862,6 +872,7 @@ async fn sponsored_onboarding_prepare_is_non_mutating_and_exact_submit_is_replay
     );
     assert!(current_state.account_exists);
     assert_eq!(alias_target, Some(target_id));
+    context.shutdown().await;
 }
 
 #[tokio::test]
@@ -917,6 +928,7 @@ async fn expired_onboarding_envelope_only_reconciles_an_already_known_hash() {
         expired_unknown.raw_body
     );
     assert_eq!(context.queue.active_len(), 1);
+    context.shutdown().await;
 }
 
 #[tokio::test]
@@ -1023,4 +1035,5 @@ async fn sponsored_onboarding_stale_create_receipt_returns_redacted_conflict() {
             "removed onboarding route must remain absent: {removed}"
         );
     }
+    context.shutdown().await;
 }

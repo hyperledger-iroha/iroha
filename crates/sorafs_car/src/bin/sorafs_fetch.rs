@@ -21,6 +21,7 @@
 use blake3::Hasher;
 use hex::encode as hex_encode;
 use iroha_crypto::HybridSuite;
+use iroha_service_model::soranet::{AnonymityPolicy, TransportPolicy};
 use norito::{
     decode_from_bytes,
     json::{Map, Value, from_slice, to_string_pretty},
@@ -40,10 +41,7 @@ use sorafs_car::{
         ObserverError, ProviderMetadata, ProviderReport, ProviderScoreContext,
         ProviderScoreDecision, RangeCapability, ScorePolicy, StreamBudget, TransportHint,
     },
-    policy::{
-        AnonymityPolicy, PolicyLabelSummary, TransportPolicy, anonymity_policy_labels,
-        transport_policy_labels,
-    },
+    policy::{PolicyLabelSummary, anonymity_policy_labels, transport_policy_labels},
     scoreboard::{self, ProviderTelemetry, TelemetrySnapshot},
 };
 use sorafs_chunker::ChunkProfile;

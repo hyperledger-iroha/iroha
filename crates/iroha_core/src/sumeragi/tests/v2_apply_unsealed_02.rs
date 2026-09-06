@@ -998,6 +998,49 @@ v2_apply_test!(
                 .expect("exact replay preserves archive generation"),
             generation
         );
+        let successor_key = reopened_qualification.archive_tip().clone();
+        let successor_record = reopened
+            .record_path(&successor_key)
+            .expect("exact retained successor record path");
+        let retained_bytes = std::fs::read(&successor_record)
+            .expect("retain successor evidence before the damaged-storage probe");
+        let successor_height = NonZeroUsize::new(2).expect("successor height");
+        assert!(
+            fixture.kura.get_block(successor_height).is_some(),
+            "the damaged durable body must have a previously valid cached copy"
+        );
+        let primary = fixture
+            .state
+            .nexus_snapshot()
+            .lane_config
+            .entry(LaneId::SINGLE)
+            .expect("primary storage lane")
+            .clone();
+        let body_file = primary
+            .blocks_dir(fixture.kura.store_root())
+            .join("blocks.data");
+        let mut bytes = std::fs::read(&body_file).expect("read actual canonical body file");
+        *bytes
+            .last_mut()
+            .expect("two committed bodies occupy the file") ^= 1;
+        std::fs::write(&body_file, bytes).expect("damage actual durable successor bytes");
+        std::fs::File::open(&body_file)
+            .expect("open damaged canonical body file")
+            .sync_all()
+            .expect("sync damaged canonical body bytes");
+        drop(view);
+        drop(reopened);
+        assert!(matches!(
+            ReputationFinalizedArchive::try_open_with_retention_authority(
+                archive_root.path(), bounds, &fixture.service.network_id,
+                fixture.kura.as_ref(), &retention_binding, &retention_authority,
+            ),
+            Err(crate::query::reputation_finalized::ReputationFinalizedArchiveError::KuraAuthentication { .. })
+        ), "cached successor bytes cannot authorize a damaged durable archive suffix");
+        assert_eq!(
+            std::fs::read(&successor_record).expect("failed reopen retains successor evidence"),
+            retained_bytes
+        );
     }
 );
 v2_apply_test!(

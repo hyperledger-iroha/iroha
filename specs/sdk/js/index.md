@@ -88,6 +88,6 @@ The only other valid response is `200` with the exact closed status payload and 
 marked transaction hash (64 lowercase hexadecimal characters with an odd final nibble). Empty
 `200`, `202`, `204`, and every other HTTP status fail closed.
 `ToriiClient.submitTransaction` validates `data_model_version` from `/v1/node/capabilities` and
-throws `ToriiDataModelCompatibilityError` when it differs from the SDK's built-in value.
+throws `ToriiDataModelMismatchError` when it differs from the SDK's built-in value.
 See {doc}`torii_retry_policy` for the full table of defaults, override knobs,
 and error-handling expectations that governance audits during JS4/JS7 reviews.

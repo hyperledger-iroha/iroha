@@ -1,20 +1,24 @@
 impl ConcreteLifecycleWorkRegistry {
     #[allow(clippy::too_many_lines)]
-    fn exactly_covers_all_live_work_with_optional_active_producer(
+    fn exactly_covers_all_live_work_with_optional_active_lease(
         &self,
         verified: &VerifiedHeightContext,
         coordinator: &LifecycleCoordinator,
-        active_producer: Option<&TurnLease>,
+        active_lease: Option<&TurnLease>,
     ) -> bool {
-        let active_producer_is_exact = match (&coordinator.active_lease, active_producer) {
+        let active_lease_is_exact = match (&coordinator.active_lease, active_lease) {
             (None, None) => true,
             (Some(active), Some(expected)) => {
-                active == expected && active.work_class == LifecycleWorkClass::ProducerTurn
+                active == expected
+                    && matches!(
+                        active.work_class,
+                        LifecycleWorkClass::CertifiedServe | LifecycleWorkClass::ProducerTurn
+                    )
             }
             (None, Some(_)) | (Some(_), None) => false,
         };
         if coordinator.fault.is_some()
-            || !active_producer_is_exact
+            || !active_lease_is_exact
             || coordinator.active_context != projection::lifecycle_context(verified.context())
             || coordinator.episode_authority.context() != coordinator.active_context
             || coordinator.episode_authority.capacity_geometry() != &coordinator.capacity_geometry
@@ -182,9 +186,9 @@ impl ConcreteLifecycleWorkRegistry {
                     }
                 },
                 super::LifecycleState::Ready | super::LifecycleState::Terminal(_) => false,
-                super::LifecycleState::Claimed(lease_id) => active_producer.is_none_or(|lease| {
+                super::LifecycleState::Claimed(lease_id) => active_lease.is_none_or(|lease| {
                     record.ordinal != lease.ordinal
-                        || record.work_class != LifecycleWorkClass::ProducerTurn
+                        || record.work_class != lease.work_class
                         || lease_id != lease.id
                 }),
             };
@@ -347,6 +351,7 @@ impl ConcreteLifecycleWorkRegistry {
             })
             .collect::<std::collections::BTreeSet<_>>();
         let mut paired_next_vote_addresses = std::collections::BTreeSet::new();
+        let mut paired_live_next_vote_addresses = std::collections::BTreeSet::new();
         if self.entries.values().any(|work| {
             let ConcreteLifecycleWorkKind::DurableRecoveredLifecycleSignedBroadcast(broadcast) =
                 &work.kind
@@ -358,14 +363,28 @@ impl ConcreteLifecycleWorkRegistry {
             };
             !broadcast.pairs_exact_next_sign(next_address, next_digest)
                 || !paired_next_vote_addresses.insert(next_address)
-                || self.entries.get(&next_address).is_none_or(|next_work| {
-                    next_work.digest != next_digest
-                        || !matches!(
-                            &next_work.kind,
-                            ConcreteLifecycleWorkKind::DurableRecoveredLifecycleNextWalVoteSign(_)
-                        )
-                })
-        }) || !paired_next_vote_addresses.is_subset(&exact_next_vote_addresses)
+                || self.entries.get(&next_address).map_or_else(
+                    || {
+                        !broadcast.matches_current_parked_record(
+                            broadcast.address,
+                            work.digest,
+                            coordinator,
+                            active_lease,
+                        ) || !broadcast
+                            .paired_next_sign_matches_terminal_record(coordinator, &exact_ledger)
+                    },
+                    |next_work| {
+                        !paired_live_next_vote_addresses.insert(next_address)
+                            || next_work.digest != next_digest
+                            || !matches!(
+                                &next_work.kind,
+                                ConcreteLifecycleWorkKind::DurableRecoveredLifecycleNextWalVoteSign(
+                                    _
+                                )
+                            )
+                    },
+                )
+        }) || !paired_live_next_vote_addresses.is_subset(&exact_next_vote_addresses)
         {
             return false;
         }
@@ -373,7 +392,7 @@ impl ConcreteLifecycleWorkRegistry {
         live.into_iter().all(|(&ordinal, record)| {
             if record.ordinal != ordinal
                 || matches!(record.state, super::LifecycleState::Claimed(_))
-                    && active_producer.is_none_or(|lease| {
+                    && active_lease.is_none_or(|lease| {
                         record.ordinal != lease.ordinal
                             || record.state != super::LifecycleState::Claimed(lease.id)
                     })
@@ -551,7 +570,12 @@ impl ConcreteLifecycleWorkRegistry {
                 }
                 ConcreteLifecycleWorkKind::DurableRecoveredLifecycleSignedBroadcast(broadcast) => {
                     broadcast.validates_in_ledger(&exact_ledger)
-                        && broadcast.matches_current_ready_record(address, digest, coordinator)
+                        && broadcast.matches_current_live_census_record(
+                            address,
+                            digest,
+                            coordinator,
+                            active_lease,
+                        )
                 }
                 ConcreteLifecycleWorkKind::DurableRecoveredWalDecisionFetch(fetch) => {
                     fetch.carrier.validates_in_ledger(verified, &exact_ledger)
@@ -588,10 +612,18 @@ impl ConcreteLifecycleWorkRegistry {
                         )
                         && apply.matches_current_ready_record(address, digest, coordinator)
                 }
-                ConcreteLifecycleWorkKind::DurableCertifiedServe(serve) => {
-                    serve.matches_record(record, metadata, digest)
-                }
-                ConcreteLifecycleWorkKind::DurableProducerTurn(producer) => active_producer
+                ConcreteLifecycleWorkKind::DurableCertifiedServe(serve) => active_lease
+                    .map_or_else(
+                        || serve.matches_record(record, metadata, digest),
+                        |lease| {
+                            if record.ordinal == lease.ordinal {
+                                serve.matches_claimed_record(record, metadata, digest, lease)
+                            } else {
+                                serve.matches_record(record, metadata, digest)
+                            }
+                        },
+                    ),
+                ConcreteLifecycleWorkKind::DurableProducerTurn(producer) => active_lease
                     .map_or_else(
                         || producer.matches_record(record, metadata, digest),
                         |lease| {

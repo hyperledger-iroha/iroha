@@ -171,6 +171,7 @@ async fn nexus_dataspaces_summary_endpoint_returns_joined_snapshot() {
     );
     let router = build_test_router(Arc::new(state), &kura, local_peer_id);
     let response = router
+        .router()
         .oneshot(
             Request::builder()
                 .uri(format!(
@@ -214,6 +215,7 @@ async fn nexus_dataspaces_summary_endpoint_returns_joined_snapshot() {
     assert_eq!(row["consensus"]["lane_ids"][0], Value::from(7));
     assert_eq!(row["consensus"]["last_block_height"], Value::from(123));
     sumeragi::status::set_lane_commitments(Vec::new(), Vec::new());
+    router.shutdown().await;
 }
 #[tokio::test(flavor = "current_thread")]
 async fn nexus_dataspaces_summary_endpoint_returns_zeroed_snapshot_for_account_without_uaid() {
@@ -240,7 +242,7 @@ async fn nexus_dataspaces_summary_endpoint_returns_zeroed_snapshot_for_account_w
     let spaced_literal = format!("  {account_literal}  ");
     let literal = urlencoding::encode(&spaced_literal);
     let uri = format!("/v1/nexus/dataspaces/accounts/{literal}/summary");
-    let (status, body) = request_summary(router, &uri).await;
+    let (status, body) = request_summary(&router, &uri).await;
     assert_eq!(status, StatusCode::OK, "unexpected body: {body}");
     let payload: Value = json::from_str(&body).expect("json payload");
     assert_eq!(payload["account_id"], Value::from(account_literal.as_str()));
@@ -264,6 +266,7 @@ async fn nexus_dataspaces_summary_endpoint_returns_zeroed_snapshot_for_account_w
         payload["dataspaces"].as_array().expect("dataspaces"),
         &Vec::<Value>::new()
     );
+    router.shutdown().await;
 }
 #[tokio::test(flavor = "current_thread")]
 async fn nexus_dataspaces_summary_endpoint_reports_portfolio_only_default_dataspace() {
@@ -315,7 +318,7 @@ async fn nexus_dataspaces_summary_endpoint_reports_portfolio_only_default_datasp
     let router = build_test_router(state, &kura, local_peer_id);
     let literal = urlencoding::encode(&account_literal);
     let uri = format!("/v1/nexus/dataspaces/accounts/{literal}/summary");
-    let (status, body) = request_summary(router, &uri).await;
+    let (status, body) = request_summary(&router, &uri).await;
     assert_eq!(status, StatusCode::OK, "unexpected body: {body}");
     let payload: Value = json::from_str(&body).expect("json payload");
     assert_eq!(payload["account_id"], Value::from(account_literal.as_str()));
@@ -354,6 +357,7 @@ async fn nexus_dataspaces_summary_endpoint_reports_portfolio_only_default_datasp
         row["consensus"]["details"].as_array().expect("details"),
         &Vec::<Value>::new()
     );
+    router.shutdown().await;
 }
 #[tokio::test(flavor = "current_thread")]
 async fn nexus_dataspaces_summary_endpoint_reports_pending_expired_and_revoked_manifests() {
@@ -463,7 +467,7 @@ async fn nexus_dataspaces_summary_endpoint_reports_pending_expired_and_revoked_m
     let router = build_test_router(Arc::new(state), &kura, local_peer_id);
     let literal = urlencoding::encode(&account_literal);
     let uri = format!("/v1/nexus/dataspaces/accounts/{literal}/summary");
-    let (status, body) = request_summary(router, &uri).await;
+    let (status, body) = request_summary(&router, &uri).await;
     assert_eq!(status, StatusCode::OK, "unexpected body: {body}");
     let payload: Value = json::from_str(&body).expect("json payload");
     assert_eq!(payload["account_id"], Value::from(account_literal.as_str()));
@@ -543,6 +547,7 @@ async fn nexus_dataspaces_summary_endpoint_reports_pending_expired_and_revoked_m
     assert_eq!(revoked["portfolio"]["accounts"], Value::from(0));
     assert_eq!(revoked["consensus"]["entries"], Value::from(0));
     sumeragi::status::set_lane_commitments(Vec::new(), Vec::new());
+    router.shutdown().await;
 }
 #[tokio::test(flavor = "current_thread")]
 async fn nexus_dataspaces_summary_endpoint_reports_null_alias_for_uncataloged_dataspace() {
@@ -629,7 +634,7 @@ async fn nexus_dataspaces_summary_endpoint_reports_null_alias_for_uncataloged_da
     let router = build_test_router(Arc::new(state), &kura, local_peer_id);
     let literal = urlencoding::encode(&account_literal);
     let uri = format!("/v1/nexus/dataspaces/accounts/{literal}/summary");
-    let (status, body) = request_summary(router, &uri).await;
+    let (status, body) = request_summary(&router, &uri).await;
     assert_eq!(status, StatusCode::OK, "unexpected body: {body}");
     let payload: Value = json::from_str(&body).expect("json payload");
     assert_eq!(payload["account_id"], Value::from(account_literal.as_str()));
@@ -659,6 +664,7 @@ async fn nexus_dataspaces_summary_endpoint_reports_null_alias_for_uncataloged_da
     assert_eq!(row["portfolio"]["asset_definitions"], Value::from(1));
     assert_eq!(row["manifest"]["status"], Value::from("Active"));
     assert_eq!(row["consensus"]["entries"], Value::from(0));
+    router.shutdown().await;
 }
 #[tokio::test(flavor = "current_thread")]
 async fn nexus_dataspaces_summary_endpoint_merges_bound_accounts_and_consensus_totals() {
@@ -798,7 +804,7 @@ async fn nexus_dataspaces_summary_endpoint_merges_bound_accounts_and_consensus_t
     let router = build_test_router(Arc::new(state), &kura, local_peer_id);
     let literal = urlencoding::encode(&primary_literal);
     let uri = format!("/v1/nexus/dataspaces/accounts/{literal}/summary");
-    let (status, body) = request_summary(router, &uri).await;
+    let (status, body) = request_summary(&router, &uri).await;
     assert_eq!(status, StatusCode::OK, "unexpected body: {body}");
     let payload: Value = json::from_str(&body).expect("json payload");
     assert_eq!(payload["account_id"], Value::from(primary_literal.as_str()));
@@ -853,6 +859,7 @@ async fn nexus_dataspaces_summary_endpoint_merges_bound_accounts_and_consensus_t
         Value::from(3_u64)
     );
     sumeragi::status::set_lane_commitments(Vec::new(), Vec::new());
+    router.shutdown().await;
 }
 #[tokio::test(flavor = "current_thread")]
 async fn nexus_dataspaces_summary_endpoint_rejects_invalid_account_literal() {
@@ -861,7 +868,7 @@ async fn nexus_dataspaces_summary_endpoint_rejects_invalid_account_literal() {
     let (state, kura, local_peer_id) = minimal_state();
     let router = build_test_router(state, &kura, local_peer_id);
     let (status, body) = request_summary(
-        router,
+        &router,
         "/v1/nexus/dataspaces/accounts/not-a-valid-literal/summary",
     )
     .await;
@@ -870,6 +877,7 @@ async fn nexus_dataspaces_summary_endpoint_rejects_invalid_account_literal() {
         body.contains("invalid account literal"),
         "expected invalid account literal message, got: {body}"
     );
+    router.shutdown().await;
 }
 #[tokio::test(flavor = "current_thread")]
 async fn nexus_dataspaces_summary_endpoint_rejects_empty_account_literal() {
@@ -878,12 +886,13 @@ async fn nexus_dataspaces_summary_endpoint_rejects_empty_account_literal() {
     let (state, kura, local_peer_id) = minimal_state();
     let router = build_test_router(state, &kura, local_peer_id);
     let (status, body) =
-        request_summary(router, "/v1/nexus/dataspaces/accounts/%20%20/summary").await;
+        request_summary(&router, "/v1/nexus/dataspaces/accounts/%20%20/summary").await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(
         body.contains("account literal must not be empty"),
         "expected empty account literal error, got: {body}"
     );
+    router.shutdown().await;
 }
 #[tokio::test(flavor = "current_thread")]
 async fn nexus_dataspaces_summary_endpoint_returns_not_found_for_missing_account() {
@@ -894,8 +903,9 @@ async fn nexus_dataspaces_summary_endpoint_returns_not_found_for_missing_account
     let account_literal = valid_missing_account_literal();
     let literal = urlencoding::encode(&account_literal);
     let uri = format!("/v1/nexus/dataspaces/accounts/{literal}/summary");
-    let (status, _body) = request_summary(router, &uri).await;
+    let (status, _body) = request_summary(&router, &uri).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+    router.shutdown().await;
 }
 fn minimal_state() -> (Arc<State>, Arc<Kura>, PeerId) {
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
@@ -907,8 +917,9 @@ fn minimal_state() -> (Arc<State>, Arc<Kura>, PeerId) {
     let state = State::new_for_testing(world, Arc::clone(&kura), query);
     (Arc::new(state), kura, local_peer_id)
 }
-async fn request_summary(router: axum::Router, uri: &str) -> (StatusCode, String) {
+async fn request_summary(router: &axum::Router, uri: &str) -> (StatusCode, String) {
     let response = router
+        .clone()
         .oneshot(
             Request::builder()
                 .uri(uri)
@@ -934,7 +945,11 @@ fn valid_missing_account_literal() -> String {
     let key_pair = checked_nexus_dataspaces_summary_ed25519_key_fixture();
     AccountId::new(key_pair.public_key().clone()).to_string()
 }
-fn build_test_router(state: Arc<State>, kura: &Arc<Kura>, local_peer_id: PeerId) -> axum::Router {
+fn build_test_router(
+    state: Arc<State>,
+    kura: &Arc<Kura>,
+    local_peer_id: PeerId,
+) -> iroha_torii::TestApiRouterRuntime {
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let queue_cfg = Queue::default();
     let (events_tx, _events_rx) = broadcast::channel(1);

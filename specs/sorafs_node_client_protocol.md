@@ -555,12 +555,9 @@ and telemetry stay in sync.【crates/iroha_torii/tests/sorafs_discovery.rs:989-1
    derives a durable idempotency key from those committed fields before
    ingesting provider-supplied bytes. V1 exposes no public storage-upload route;
    HTTP requests cannot change storage/quota state or provider-keyed metadata.
-3. For a local operator diagnostic only, submit an exact-network
-   operator-signed `POST /v1/sorafs/storage/fetch` using the returned manifest
-   id, an offset, and a bounded length. Authentication and replay admission run
-   before JSON decoding. The response echoes the request fields and returns the
-   bytes as `data_b64`; public and provider-to-provider content transport uses
-   request-bound stream tokens with the CAR/chunk GET routes instead.
+3. Issue an exact-network operator-authenticated stream token, then read the
+   provider-ingested bytes through the capability-bound CAR or chunk GET route.
+   Torii exposes no JSON range-fetch diagnostic or compatibility fallback.
 4. Submit an authenticated `POST /v1/sorafs/proof/stream` PoR request bound to
    the canonical manifest digest and provider identifier. The request must carry
    the non-zero `expected_finalized_height` and canonical
@@ -678,35 +675,15 @@ budget (which would reset its quota); the gateway instead returns HTTP `503`
 with `Retry-After: 1`. Clock rollback and poisoned accounting state also fail
 closed with `503`.
 
-### Legacy Storage Fetch Diagnostic
+### Storage Byte Transport
 
-`POST /v1/sorafs/storage/fetch` is retained only as an operator-signed local
-diagnostic. The four `X-Iroha-Operator-*` headers bind the exact `NetworkId`,
-method, path, query, body, timestamp, and fresh nonce; middleware authenticates
-the retained body before JSON decoding. The request mirrors
-`StorageFetchRequestDto` and includes the manifest digest, byte offset, and
-number of bytes to return. The serving provider identity comes from governed
-runtime configuration and cannot be supplied or overridden by the caller.
-
-```json
-{
-  "manifest_id_hex": "4e548e7d6336c8f47f31d4615a6ad3424c5b421ec8d2157d5c8c1f963602f9cc",
-  "offset": 0,
-  "length": 65536
-}
-```
-
-Nodes respond with a base64-encoded payload (`StorageFetchResponseDto`) and echo
-the offset and length so higher layers can verify alignment and track
-progress.【crates/iroha_torii/src/sorafs/api.rs:83】
-
-This route is not a provider-to-provider fallback. CID-site and
-query-projection cache misses preserve local-cache lookup but stop with a clear
-capability-required error before any legacy payload POST. Implementations must
-use a request-bound stream capability with
+Torii serves payload bytes only through request-bound stream capabilities with
 `GET /v1/sorafs/storage/car/{manifest_id}` or
-`GET /v1/sorafs/storage/chunk/{manifest_id}/{chunk_digest}`; they must not
-invent operator credentials or retry the legacy endpoint unsigned.
+`GET /v1/sorafs/storage/chunk/{manifest_id}/{chunk_digest}`. It exposes no JSON
+range-fetch diagnostic or compatibility fallback. CID-site and query-projection
+cache misses preserve local-cache lookup but fail with a capability-required
+error before remote hydration; implementations must not invent operator
+credentials.
 
 Request parameters must honour the provider’s advertisement:
 

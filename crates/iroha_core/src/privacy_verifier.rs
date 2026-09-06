@@ -2264,20 +2264,19 @@ mod tests {
             BootleLanternAllowedAttributeValuesV1, BootleLanternAttributeValueV1,
             BootleLanternDisclosedAttributeV1, IROHA_JINDO_MAX_ROUNDED_COMMITMENT_COEFFICIENT_V1,
             IrohaZkAmsProofV1, PrivacyActiveLifecycleV1, PrivacyBootleLanternIssuerPolicyDigestV1,
-            PrivacyChallengeV1, PrivacyEncryptionKeyV1, PrivacyEngineIdV1,
-            PrivacyFcmpInputPublicV1, PrivacyFcmpKeyImageV1, PrivacyFcmpPoolBootstrapV1,
-            PrivacyFcmpTreeRootV1, PrivacyIssuerIdV1, PrivacyIvmPrivateNotePoolBootstrapV1,
-            PrivacyJindoFieldElementV1, PrivacyNamespaceScopeV1, PrivacyNoteEncryptionKeyDigestV1,
-            PrivacyOrchardActionV1, PrivacyP256PointV1, PrivacyParameterDigestV1,
-            PrivacyParameterIdV1, PrivacyPgcAccountBootstrapDigestV1,
+            PrivacyEncryptionKeyV1, PrivacyEngineIdV1, PrivacyFcmpInputPublicV1,
+            PrivacyFcmpKeyImageV1, PrivacyFcmpPoolBootstrapV1, PrivacyFcmpTreeRootV1,
+            PrivacyIssuerIdV1, PrivacyIvmPrivateNotePoolBootstrapV1, PrivacyJindoFieldElementV1,
+            PrivacyNamespaceScopeV1, PrivacyNoteEncryptionKeyDigestV1, PrivacyOrchardActionV1,
+            PrivacyP256PointV1, PrivacyParameterIdV1, PrivacyPgcAccountBootstrapDigestV1,
             PrivacyPgcBootstrapProofDigestV1, PrivacyPolicyIdV1, PrivacyPoolIdV1,
             PrivacyPoolNamespaceV1, PrivacyPqMaspPoolBootstrapV1,
             PrivacyProofManagedPoolBootstrapV1, PrivacyProofSystemIdV1, PrivacyProofV1,
             PrivacyProposedLifecycleV1, PrivacyProtocolLifecycleV1, PrivacyRecipientIdV1,
-            PrivacyRootPublicationV1, PrivacySessionTranscriptDigestV1, PrivacyStatementContextV1,
-            PrivacyStatementValidationError, PrivacyTransactionIntentDigestV1,
-            PrivacyValueBalanceDirectionV1, PrivacyValueBalanceV1, PrivacyZkAmsAdmissionAnchorV1,
-            PrivacyZkAmsBatchAdmissionV1, PrivacyZkAmsCredentialNonceV1, PrivacyZkAmsKeyImageV1,
+            PrivacyStatementContextV1, PrivacyStatementValidationError,
+            PrivacyTransactionIntentDigestV1, PrivacyValueBalanceDirectionV1,
+            PrivacyValueBalanceV1, PrivacyZkAmsAdmissionAnchorV1, PrivacyZkAmsBatchAdmissionV1,
+            PrivacyZkAmsCredentialNonceV1, PrivacyZkAmsKeyImageV1,
             PrivacyZkAmsPersonhoodCredentialV1, PrivacyZkAmsProvisionAccountV1,
             PrivacyZkAmsRegistryBootstrapV1, PrivacyZkAmsRegistryIdV1, PrivacyZkAmsSeedPublicKeyV1,
             PrivacyZkAmsSubjectCommitmentV1, VeRangeTransparentRangeStatementV1,
@@ -2286,7 +2285,6 @@ mod tests {
         },
     };
     use iroha_zkp_halo2::vega::ZkAmsMaskedProverConfigV1;
-    use mv::storage::Storage;
     use p256::ecdsa::{
         Signature as P256Signature, SigningKey as P256SigningKey,
         signature::hazmat::PrehashSigner as _,
@@ -5104,9 +5102,10 @@ mod tests {
         statement.authorization_key_digest = key_digest;
         let unsigned = fixture.envelope(statement.clone(), Vec::new());
         let invalid_inner = vec![0xA5; 64];
+        let genesis_hash = *statement.context.network_id.as_bytes();
         let consensus_binding = PrivacyNativeConsensusBindingV1::new(
             &statement.context,
-            [0xA7; 32],
+            genesis_hash,
             &TEST_CONSENSUS_LIMITS,
         )
         .expect("canonical runtime PQ-MASP consensus binding");
@@ -5129,7 +5128,7 @@ mod tests {
             activation: &activation,
             consensus_limits: &TEST_CONSENSUS_LIMITS,
             network_id: &network_id,
-            genesis_hash: [0xA7; 32],
+            genesis_hash,
             current_height: 10,
             expected_action_index: 0,
             block_timestamp_ms: 1_800_000_000_000,

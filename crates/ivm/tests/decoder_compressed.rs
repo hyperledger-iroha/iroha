@@ -1,7 +1,8 @@
 use ivm::{Memory, Perm, VMError, decode};
 fn decode_from_bytes(bytes: &[u8]) -> Result<u32, VMError> {
-    let mut mem = Memory::new(bytes.len() as u64);
-    mem.load_code(bytes);
+    let mut mem = Memory::new();
+    mem.load_code(bytes)
+        .expect("decoder fixture fits code region");
     decode(&mem, 0)
 }
 fn encode_r16(op: u8, rd: u8, rs1: u8, rs2: u8) -> u16 {

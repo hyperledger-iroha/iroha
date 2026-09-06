@@ -1,10 +1,21 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { chacha20orig } from "@noble/ciphers/chacha";
+import { KAIGI_MAX_PARTICIPANTS_V1 } from "./commonLiterals.js";
+import { readAccountCapabilitiesResponseV1 } from "./accountCapabilities.js";
 import {
   resolveToriiClientConfig,
   extractConfidentialGasConfig,
 } from "./config.js";
-import { getNativeBinding } from "./native.js";
+import {
+  createNativeRuntime,
+  defaultNativeRuntime,
+  resolveNativeRuntimeBinding,
+  resolveOptionalNativeRuntimeBinding,
+} from "./nativeRuntime.js";
+import {
+  TORII_TEST_HOOKS,
+  TORII_TEST_NATIVE_BINDING,
+} from "./toriiTestHooks.js";
 import { crc64Xz } from "./crc64Xz.js";
 import { computeHashLiteralCrc } from "./hashLiteralCrc.js";
 import {
@@ -13,12 +24,10 @@ import {
   normalizeAccountAliasFqn,
   normalizeAccountAliasLiteral,
   normalizeAccountId,
-  normalizeAccountIdOrAliasLiteral,
   normalizeAssetDefinitionId,
   normalizeAssetId,
   normalizeAssetHoldingId,
   normalizeIdentifierInput,
-  normalizeOpaqueLiteral,
   normalizeRwaId,
 } from "./normalizers.js";
 import {
@@ -31,12 +40,14 @@ import {
   validatePublicKeyForCurve,
 } from "./address.js";
 import {
+  _createDataAvailabilityApi,
   buildDaIngestRequest,
-  deriveDaChunkerHandle,
-  generateDaProofSummary,
   emitDaProofSummaryArtifact,
 } from "./dataAvailability.js";
-import { normaliseGatewayProvider, sorafsGatewayFetch } from "./sorafs.js";
+import {
+  _createSorafsGatewayApi,
+  normaliseGatewayProvider,
+} from "./sorafs.js";
 import { normalizeIsoWeekLabel } from "./sorafsPorWeek.js";
 import { buildPacs008Message, buildPacs009Message } from "./isoBridge.js";
 import { looksLikeIban, normalizeIban } from "./identifiers.js";
@@ -56,9 +67,7 @@ import {
   ValidationErrorCode,
   ValidationError,
 } from "./validationError.js";
-import { KAIGI_MAX_PARTICIPANTS_V1 } from "./instructionBuilders.js";
 import {
-  assertNonBlankString,
   normalizeTransactionStatusScope,
   readHeaderValue,
 } from "./toriiClientPrimitives.js";
@@ -109,28 +118,6 @@ import {
   createToriiGovernanceNormalizers,
   VERIFYING_KEY_PRIVATE_KEY_FIELDS,
 } from "./toriiGovernanceNormalizers.js";
-import {
-  PARLIAMENT_ATTEMPT_DRAFT_PATH_V1,
-  PARLIAMENT_ATTEMPT_STATE_MAX_BYTES_V1,
-  PARLIAMENT_TIMED_OVN_CASTING_CONTEXT_ARCHIVE_MAX_BYTES_V1,
-  PARLIAMENT_TIMED_OVN_CASTING_PROOF_RESPONSE_MAX_BYTES_V1,
-  PARLIAMENT_TRANSITION_DRAFT_PATH_V1,
-  buildParliamentAttemptDraftRequestV1,
-  buildParliamentTransitionDraftRequestV1,
-  encodeParliamentTimedOvnCastingProofRequestV1,
-  normalizeParliamentAttemptDraftResponseV1,
-  normalizeParliamentAttemptReadResponseV1,
-  normalizeParliamentTimedOvnCastingContextResponseV1,
-  normalizeParliamentTlePartialReleaseShareV1,
-  normalizeParliamentTleReleaseContextResponseV1,
-  normalizeParliamentTransitionDraftResponseV1,
-  parliamentAttemptReadPathV1,
-  parliamentTimedOvnCastingContextReadPathV1,
-  parliamentTimedOvnCastingProofPathV1,
-  parliamentTlePartialReleasePathV1,
-  parliamentTleReleaseContextReadPathV1,
-  validateParliamentTimedOvnCastingProofResponseFrameV1,
-} from "./parliamentApiV1.js";
 import { createSubscriptionResponseNormalizers } from "./subscriptionResponses.js";
 import {
   decodeExactSoracloudJsonResponse,
@@ -161,25 +148,7 @@ import { SM2_DEFAULT_DISTINGUISHED_ID, verifyEd25519, verifySm2 } from "./crypto
 import {
   getCurveEntryByPublicKeyMulticodec,
 } from "./curveRegistry.js";
-import {
-  noritoEncodeFeePaymentIntentArchive,
-  noritoEncodeSorafsBillingAcknowledgementProofV1,
-  noritoEncodeMultisigProposeRequest,
-  noritoEncodeTransactionPayloadBatch,
-  validateNoritoFrame,
-} from "./norito.js";
-import { inspectCanonicalTransactionPayloadBindings } from "./transactionCodec.js";
 import { IVM_ARTIFACT_MAX_BYTES } from "./ivmArtifact.js";
-import {
-  normalizeKagemushaOperationId,
-  normalizeKagemushaOperationReference,
-  normalizeKagemushaOperationStatus,
-  normalizeKagemushaRedeemRequestV4,
-  normalizeOfflineStatus,
-  normalizeKagemushaTopUpRequestV4,
-  requireKagemushaJsonContentType,
-} from "./kagemushaOffline.js";
-import { assertValidEd25519PublicKey } from "./ed25519Strict.js";
 import { AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1 } from "./authenticatedBlockProofs.js";
 import { createVpnSchema } from "./vpnSchema.js";
 import {
@@ -243,7 +212,8 @@ const VERIFYING_KEY_CLIENT_URL = new URL(
   import.meta.url,
 ).href;
 const PRIVACY_EXACT12_CAPABILITY_MANIFEST_MAX_BYTES = 256 * 1024;
-const KAGEMUSHA_JSON_RESPONSE_MAX_BYTES = 256 * 1024;
+const KAGEMUSHA_READINESS_JSON_MAX_BYTES_V1 = 4 * 1024;
+const KAGEMUSHA_OPERATION_STATUS_JSON_MAX_BYTES_V1 = 16 * 1024 * 1024;
 const FEE_QUOTE_JSON_MAX_BYTES = 64 * 1024;
 const FEE_SPONSOR_PROGRAM_JSON_MAX_BYTES = 64 * 1024;
 const PIPELINE_RECEIPT_MAX_BYTES = 1024 * 1024;
@@ -371,6 +341,16 @@ const eventTargetRemoveEventListener =
   typeof EventTarget === "undefined"
     ? null
     : EventTarget.prototype.removeEventListener;
+const AbortControllerConstructor = globalThis.AbortController;
+const abortControllerAbort = AbortControllerConstructor?.prototype?.abort ?? null;
+const abortControllerSignalGetter = AbortControllerConstructor
+  ? Object.getOwnPropertyDescriptor(
+      AbortControllerConstructor.prototype,
+      "signal",
+    )?.get ?? null
+  : null;
+const scheduleTimeout = globalThis.setTimeout;
+const cancelTimeout = globalThis.clearTimeout;
 const BOUNDED_JSON_MAX_READ_TIMEOUT_MS = 30_000;
 const HTTP_ERROR_BODY_MAX_BYTES = 64 * 1024;
 const DEFAULT_ISO_POLL_INTERVAL_MS = 2_000;
@@ -381,7 +361,10 @@ const DEFAULT_ISO_POLL_ATTEMPTS = 12;
 const SCCP_CAPABILITIES_RESPONSE_MAX_BYTES = 64 * 1024;
 const SCCP_RECENT_RESPONSE_MAX_BYTES = 8 * 1024 * 1024;
 const SCCP_JSON_RESPONSE_MAX_BYTES = 64 * 1024 * 1024;
-const SCCP_SUBMIT_RESPONSE_MAX_BYTES = SCCP_JSON_RESPONSE_MAX_BYTES;
+const SUMERAGI_EVIDENCE_COUNT_JSON_RESPONSE_MAX_BYTES = 1024;
+// The maximum 1,000-record fixed evidence envelope remains below this ceiling,
+// including full-width u64 integers and terminal penalty details.
+const SUMERAGI_EVIDENCE_LIST_JSON_RESPONSE_MAX_BYTES = 1024 * 1024;
 const SCCP_NATIVE_NORITO_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 const SCCP_DESTINATION_NORITO_RESPONSE_MAX_BYTES =
   SCCP_NATIVE_NORITO_RESPONSE_MAX_BYTES + 64 * 1024;
@@ -401,8 +384,6 @@ const MAX_UINT64_BIGINT = (1n << 64n) - 1n;
 function loadToriiOptionalModule() {
   return import("./toriiOptional.js");
 }
-const MAX_SIGNED_INT32 = 0x7fffffff;
-const MAX_SIGNED_INT32_BIGINT = BigInt(MAX_SIGNED_INT32);
 const UINT64_MASK = 0xffff_ffff_ffff_ffffn;
 const BFV_IDENTIFIER_SCHEMA_NAME =
   "iroha_crypto::fhe_bfv::BfvIdentifierCiphertext";
@@ -502,34 +483,43 @@ const MULTISIG_PROPOSAL_STATUS_VALUES = new Set([
   "CANCELED",
   "EXPIRED",
 ]);
-function resolveNativeBinding(nativeBinding) {
-  return nativeBinding ?? globalThis.__IROHA_NATIVE_BINDING__ ?? getNativeBinding();
+function resolveNativeBinding(nativeRuntime) {
+  return resolveNativeRuntimeBinding(nativeRuntime);
 }
 
-function resolveOptionalNativeBinding(nativeBinding) {
-  if (nativeBinding !== undefined) {
-    return nativeBinding;
-  }
-  if (globalThis.__IROHA_NATIVE_BINDING__ !== undefined) {
-    return globalThis.__IROHA_NATIVE_BINDING__;
-  }
-  try {
-    return getNativeBinding();
-  } catch {
-    return null;
-  }
+function resolveOptionalNativeBinding(nativeRuntime) {
+  return resolveOptionalNativeRuntimeBinding(nativeRuntime);
 }
 
-function decodeTransactionReceiptPayload(payload) {
-  const native = resolveNativeBinding();
-  if (!native || typeof native.decodeTransactionReceiptJson !== "function") {
-    return null;
+function decodeTransactionReceiptPayload(payload, nativeRuntime) {
+  let native;
+  try {
+    native = resolveNativeBinding(nativeRuntime);
+  } catch (cause) {
+    throw new Error(
+      "cannot decode a non-empty Norito transaction receipt: the native decoder is unavailable",
+      { cause },
+    );
+  }
+  if (typeof native.decodeTransactionReceiptJson !== "function") {
+    throw new Error(
+      "cannot decode a non-empty Norito transaction receipt: the native binding does not expose decodeTransactionReceiptJson",
+    );
+  }
+  let json;
+  try {
+    json = native.decodeTransactionReceiptJson(payload);
+  } catch (cause) {
+    throw new Error("failed to decode the non-empty Norito transaction receipt", {
+      cause,
+    });
   }
   try {
-    const json = native.decodeTransactionReceiptJson(payload);
     return JSON.parse(json);
-  } catch {
-    return null;
+  } catch (cause) {
+    throw new Error("native transaction receipt decoder returned invalid JSON", {
+      cause,
+    });
   }
 }
 
@@ -538,27 +528,27 @@ const HEADER_SORA_NAME = "sora-name";
 const HEADER_SORA_PROOF_STATUS = "sora-proof-status";
 const HEADER_SORA_PDP_COMMITMENT = "sora-pdp-commitment";
 
-const EVIDENCE_KIND_VALUES = new Set([
-  "DoublePrepare",
-  "DoubleCommit",
-  "InvalidQc",
-  "InvalidProposal",
-  "Censorship",
-  "SumeragiV2Equivocation",
-]);
-
-const EVIDENCE_PHASE_VALUES = new Set(["Prepare", "Commit", "NewView"]);
+const EVIDENCE_KIND = "SumeragiV2Equivocation";
 const EVIDENCE_EQUIVOCATION_CLASS_VALUES = new Set([
   "proposal",
   "phase_vote",
   "timeout_vote",
 ]);
-const EVIDENCE_BASE_FIELDS = Object.freeze([
+const EVIDENCE_RECORD_FIELDS = Object.freeze([
   "kind",
+  "class",
+  "height",
+  "view",
+  "epoch",
+  "signer",
+  "context_id",
+  "artifact_hash_1",
+  "artifact_hash_2",
   "recorded_height",
   "recorded_view",
   "recorded_ms",
   "consensus_admitted_height",
+  "penalty_status",
 ]);
 
 const KAIGI_HEALTH_STATUS_VALUES = new Set(["healthy", "degraded", "unavailable"]);
@@ -995,8 +985,8 @@ const SUBSCRIPTION_LIST_OPTION_KEYS = new Set([
   "offset",
   "signal",
 ]);
-function encodeCanonicalVersionedSignedTransactionV1(payload, nativeBinding) {
-  const native = resolveNativeBinding(nativeBinding);
+function encodeCanonicalVersionedSignedTransactionV1(payload, nativeRuntime) {
+  const native = resolveNativeBinding(nativeRuntime);
   if (
     !native ||
     typeof native.encodeSignedTransactionVersioned !== "function"
@@ -1020,8 +1010,8 @@ function encodeCanonicalVersionedSignedTransactionV1(payload, nativeBinding) {
   return encoded;
 }
 
-function encodeTransactionPayloadBatch(payloads, nativeBinding) {
-  const native = resolveOptionalNativeBinding(nativeBinding);
+async function encodeTransactionPayloadBatch(payloads, nativeRuntime) {
+  const native = resolveOptionalNativeBinding(nativeRuntime);
   if (
     native &&
     typeof native.encodeTransactionPayloadBatch === "function"
@@ -1036,6 +1026,7 @@ function encodeTransactionPayloadBatch(payloads, nativeBinding) {
     }
     return encoded;
   }
+  const { noritoEncodeTransactionPayloadBatch } = await loadToriiOptionalModule();
   return noritoEncodeTransactionPayloadBatch(payloads);
 }
 
@@ -1074,6 +1065,12 @@ const ITERABLE_LIST_OPTION_KEYS = new Set([
 const ASSET_ID_LIST_OPTION_KEYS = new Set([
   ...ITERABLE_LIST_OPTION_KEYS,
   "assetId",
+]);
+const ACCOUNT_PERMISSIONS_LIST_OPTION_KEYS = new Set([
+  "limit",
+  "offset",
+  "signal",
+  "canonicalAuth",
 ]);
 const CONTRACT_ACTIVITY_LIST_OPTION_KEYS = new Set([
   ...ITERABLE_LIST_OPTION_KEYS,
@@ -1446,9 +1443,7 @@ export function decodePdpCommitmentHeader(headers) {
 
 /**
  * @typedef {Object} BlockListOptions
- * @property {number} [page]
- * @property {number} [perPage]
- * @property {number} [per_page]
+ * @property {string} [cursor]
  * @property {number} [limit]
  * @property {AbortSignal} [signal]
  *
@@ -1464,6 +1459,7 @@ export function decodePdpCommitmentHeader(headers) {
  * @property {"bounded" | "exact"} [countMode]
  * @property {"bounded" | "exact"} [count_mode]
  * @property {AbortSignal} [signal]
+ * @property {CanonicalRequestAuth | null} [canonicalAuth]
  * @property {string} [assetId]
  * @property {number} [certificateExpiresBeforeMs]
  * @property {number} [certificateExpiresAfterMs]
@@ -1533,6 +1529,20 @@ export { OperatorSigningContext };
  * @property {string | null} raw
  */
 export class ToriiClient {
+  #allowInsecure;
+  #baseHost;
+  #baseProtocol;
+  #canonicalRequestAuth;
+  #config;
+  #dataModelState = {
+    dataModelValidation: { status: "unknown", actual: null },
+    dataModelValidationPromise: null,
+  };
+  #sorafsAliasWarningHook;
+  #sorafsPolicyOverrides;
+  #sorafsResolvedPolicy = null;
+  #statusState = createStatusSnapshotState();
+
   /**
    * @param {string} baseUrl Base Torii URL (e.g. http://localhost:8080).
    * @param {object} [options]
@@ -1551,12 +1561,9 @@ export class ToriiClient {
    * @param {string} [options.apiToken]
    * @param {LocalSigningContext} [options.localSigningContext] Immutable context required by local-signing APIs.
    * @param {OperatorSigningContext} [options.operatorSigningContext] Immutable exact-network signer required by operator-only APIs.
-   * @param {CanonicalRequestAuth} [options.canonicalRequestAuth] Default exact-network signer for authenticated calls, including expensive query POSTs.
-   * @param {typeof sorafsGatewayFetch} [options.sorafsGatewayFetch] Custom gateway fetch hook (tests).
+   * @param {CanonicalRequestAuth} [options.canonicalRequestAuth] Default exact-network signer for authenticated calls, including expensive query POSTs and optional-auth dataspace reads.
    * @param {object} [options.sorafsAliasPolicy] Override SoraFS alias cache TTLs (seconds).
    * @param {(warning: {alias: string | null, evaluation: {state: string | null, statusLabel: string | null, rotationDue: boolean, ageSeconds: number | null, generatedAtUnix: number | null, expiresAtUnix: number | null, expiresInSeconds: number | null, servable: boolean}}) => void} [options.onSorafsAliasWarning]
-   * @param {(manifest: Buffer, payload: Buffer, options: Record<string, unknown>) => unknown} [options.generateDaProofSummary] Custom proof summary generator (tests).
- * @param {object} [options.__nativeBinding] Custom native binding (tests).
  */
   constructor(baseUrl, options = {}) {
     if (!baseUrl) {
@@ -1571,6 +1578,19 @@ export class ToriiClient {
         throw createValidationError(
           ValidationErrorCode.INVALID_OBJECT,
           `ToriiClient options.${field} is not supported; use a LocalSigningContext`,
+          `ToriiClient.options.${field}`,
+        );
+      }
+    }
+    for (const field of [
+      "__nativeBinding",
+      "sorafsGatewayFetch",
+      "generateDaProofSummary",
+    ]) {
+      if (Object.prototype.hasOwnProperty.call(opts, field)) {
+        throw createValidationError(
+          ValidationErrorCode.INVALID_OBJECT,
+          `ToriiClient options.${field} is not a public option`,
           `ToriiClient.options.${field}`,
         );
       }
@@ -1594,69 +1614,115 @@ export class ToriiClient {
       enumerable: false,
     });
     installOperatorSigningContext(this, opts.operatorSigningContext);
-    Object.defineProperty(this, "_canonicalRequestAuth", { value: ToriiClient._normalizeCanonicalAuth(opts.canonicalRequestAuth, "ToriiClient options.canonicalRequestAuth"), writable: false });
+    this.#canonicalRequestAuth = ToriiClient._normalizeCanonicalAuth(
+      opts.canonicalRequestAuth,
+      "ToriiClient options.canonicalRequestAuth",
+    );
     const normalizedBaseUrl = baseUrl.endsWith("/") ? baseUrl.slice(0, -1) : baseUrl;
-    const fetchImpl = opts.fetchImpl ?? opts.fetch ?? globalThis.fetch;
+    const fetchImpl = opts.fetchImpl ?? globalThis.fetch;
     if (typeof fetchImpl !== "function") {
       throw new Error("fetch implementation is required");
     }
     Object.defineProperties(this, { _baseUrl: { value: normalizedBaseUrl }, _fetch: { value: fetchImpl } });
     if (
-      opts.__nativeBinding !== undefined &&
-      (opts.__nativeBinding === null || typeof opts.__nativeBinding !== "object")
+      opts[TORII_TEST_NATIVE_BINDING] !== undefined &&
+      (opts[TORII_TEST_NATIVE_BINDING] === null ||
+        typeof opts[TORII_TEST_NATIVE_BINDING] !== "object")
     ) {
       throw createValidationError(
         ValidationErrorCode.INVALID_OBJECT,
-        "ToriiClient options.__nativeBinding must be an object when provided",
-        "ToriiClient.options.__nativeBinding",
+        "ToriiClient internal native binding must be an object when provided",
+        "ToriiClient.testNativeBinding",
       );
     }
-    this._nativeBinding = opts.__nativeBinding;
+    const injectedNativeBinding = opts[TORII_TEST_NATIVE_BINDING];
+    Object.defineProperty(this, "_nativeRuntime", {
+      value:
+        injectedNativeBinding === undefined
+          ? defaultNativeRuntime
+          : createNativeRuntime(injectedNativeBinding),
+      writable: false,
+      configurable: false,
+      enumerable: false,
+    });
+    const dataAvailabilityApi = _createDataAvailabilityApi(
+      this._nativeRuntime,
+    );
+    const sorafsGatewayApi = _createSorafsGatewayApi(this._nativeRuntime);
+    const testHooks = opts[TORII_TEST_HOOKS] ?? {};
+    if (testHooks === null || typeof testHooks !== "object" || Array.isArray(testHooks)) {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_OBJECT,
+        "ToriiClient internal test hooks must be an object",
+        "ToriiClient.testHooks",
+      );
+    }
     if (
-      opts.sorafsGatewayFetch !== undefined &&
-      typeof opts.sorafsGatewayFetch !== "function"
+      testHooks.sorafsGatewayFetch !== undefined &&
+      typeof testHooks.sorafsGatewayFetch !== "function"
     ) {
       throw createValidationError(
         ValidationErrorCode.INVALID_OBJECT,
-        "ToriiClient options.sorafsGatewayFetch must be a function",
-        "ToriiClient.options.sorafsGatewayFetch",
+        "ToriiClient internal sorafsGatewayFetch hook must be a function",
+        "ToriiClient.testHooks.sorafsGatewayFetch",
       );
     }
-    this._sorafsGatewayFetch =
-      typeof opts.sorafsGatewayFetch === "function" ? opts.sorafsGatewayFetch : sorafsGatewayFetch;
     if (
-      opts.generateDaProofSummary !== undefined &&
-      typeof opts.generateDaProofSummary !== "function"
+      testHooks.generateDaProofSummary !== undefined &&
+      typeof testHooks.generateDaProofSummary !== "function"
     ) {
       throw createValidationError(
         ValidationErrorCode.INVALID_OBJECT,
-        "ToriiClient options.generateDaProofSummary must be a function when provided",
-        "ToriiClient.options.generateDaProofSummary",
+        "ToriiClient internal generateDaProofSummary hook must be a function",
+        "ToriiClient.testHooks.generateDaProofSummary",
       );
     }
-    this._generateDaProofSummary =
-      typeof opts.generateDaProofSummary === "function"
-        ? opts.generateDaProofSummary
-        : generateDaProofSummary;
-    this._allowInsecure = Boolean(
+    Object.defineProperties(this, {
+      _sorafsGatewayFetch: {
+        value:
+          testHooks.sorafsGatewayFetch ??
+          sorafsGatewayApi.sorafsGatewayFetch,
+        writable: false,
+        configurable: false,
+        enumerable: false,
+      },
+      _generateDaProofSummary: {
+        value:
+          testHooks.generateDaProofSummary ??
+          dataAvailabilityApi.generateDaProofSummary,
+        writable: false,
+        configurable: false,
+        enumerable: false,
+      },
+      _deriveDaChunkerHandle: {
+        value: dataAvailabilityApi.deriveDaChunkerHandle,
+        writable: false,
+        configurable: false,
+        enumerable: false,
+      },
+    });
+    const allowInsecure =
       opts.allowInsecure ??
-        (opts.config &&
-          typeof opts.config === "object" &&
-          opts.config.allowInsecure),
+      (opts.config &&
+        typeof opts.config === "object" &&
+        opts.config.allowInsecure) ??
+      false;
+    this.#allowInsecure = requireExactBoolean(
+      allowInsecure,
+      "ToriiClient options.allowInsecure",
     );
     const overrides = { ...opts };
     delete overrides.fetchImpl;
-    delete overrides.fetch;
     delete overrides.config;
     delete overrides.allowInsecure;
     delete overrides.sorafsAliasPolicy;
     delete overrides.onSorafsAliasWarning;
-    delete overrides.sorafsGatewayFetch;
-    delete overrides.generateDaProofSummary;
-    delete overrides.__nativeBinding;
+    delete overrides[TORII_TEST_HOOKS];
+    delete overrides[TORII_TEST_NATIVE_BINDING];
     delete overrides.localSigningContext;
     delete overrides.operatorSigningContext;
-    this._config = resolveToriiClientConfig({
+    delete overrides.canonicalRequestAuth;
+    this.#config = resolveToriiClientConfig({
       config: opts.config,
       overrides,
     });
@@ -1671,8 +1737,7 @@ export class ToriiClient {
         "ToriiClient.options.sorafsAliasPolicy",
       );
     }
-    this._sorafsPolicyOverrides = opts.sorafsAliasPolicy ? { ...opts.sorafsAliasPolicy } : null;
-    this._sorafsResolvedPolicy = null;
+    this.#sorafsPolicyOverrides = opts.sorafsAliasPolicy ? { ...opts.sorafsAliasPolicy } : null;
     if (
       opts.onSorafsAliasWarning !== undefined &&
       opts.onSorafsAliasWarning !== null &&
@@ -1684,136 +1749,185 @@ export class ToriiClient {
         "ToriiClient.options.onSorafsAliasWarning",
       );
     }
-    this._sorafsAliasWarningHook =
+    this.#sorafsAliasWarningHook =
       typeof opts.onSorafsAliasWarning === "function" ? opts.onSorafsAliasWarning : null;
-    this._statusState = createStatusSnapshotState();
-    this._dataModelValidation = { status: "unknown", actual: null };
-    this._dataModelValidationPromise = null;
     const parsedBase = new URL(this._baseUrl.endsWith("/") ? this._baseUrl : `${this._baseUrl}/`);
-    this._baseOrigin = `${parsedBase.protocol}//${parsedBase.host}`;
-    this._baseHost = parsedBase.host;
-    this._baseProtocol = parsedBase.protocol.toLowerCase();
+    this.#baseHost = parsedBase.host;
+    this.#baseProtocol = parsedBase.protocol.toLowerCase();
     const hasCredentials =
-      Boolean(this._config.authToken || this._config.apiToken) ||
-      headersContainCredentials(this._config.defaultHeaders);
-    if (hasCredentials && !this._allowInsecure && !isSecureProtocol(this._baseProtocol)) {
+      Boolean(this.#config.authToken || this.#config.apiToken) ||
+      headersContainCredentials(this.#config.defaultHeaders);
+    if (hasCredentials && !this.#allowInsecure && !isSecureProtocol(this.#baseProtocol)) {
       throw new Error(
         "ToriiClient: auth/api tokens require an https base URL; pass allowInsecure: true for local/dev use only.",
       );
     }
   }
 
-  /** Fetch the universally compiled, asset-neutral OfflineStatus projection. */
-  async getOfflineCapability(options = {}) {
+  /** Discover exact network identity and the explicit V1 account-signing default without credentials. */
+  async getAccountCapabilities(options = {}) {
+    const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(options, "getAccountCapabilities");
+    assertSupportedOptionKeys(rest, new Set([]), "getAccountCapabilities options");
+    const response = await this._request("GET", "/v1/accounts/capabilities", {
+      headers: JSON_ACCEPT_HEADERS,
+      signal,
+      redirect: "error",
+      disableRetries: true,
+      publicRequest: true,
+    });
+    return readAccountCapabilitiesResponseV1(response, { signal });
+  }
+
+  /** Fetch the universally compiled, asset-neutral KagemushaReadinessV1 projection. */
+  async getKagemushaReadiness(options = {}) {
     const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(
       options,
-      "getOfflineCapability",
+      "getKagemushaReadiness",
     );
-    assertSupportedOptionKeys(rest, new Set([]), "getOfflineCapability options");
-    const response = await this._request("GET", "/v1/offline/readiness", {
+    assertSupportedOptionKeys(rest, new Set([]), "getKagemushaReadiness options");
+    const optionalModulePromise = loadToriiOptionalModule();
+    const response = await this._request("GET", "/v1/kagemusha/readiness", {
       headers: JSON_ACCEPT_HEADERS,
       signal,
       redirect: "error",
     });
     await this._expectStatus(response, [200]);
-    requireKagemushaJsonContentType(
+    const {
+      normalizeKagemushaReadinessV1,
+      requireKagemushaJsonContentTypeV1,
+    } = await optionalModulePromise;
+    requireKagemushaJsonContentTypeV1(
       this._getHeader(response, "content-type"),
-      "Offline capability response",
+      "KAGEMUSHA readiness response",
     );
     const payload = await this._readBoundedLosslessIntegerJson(
       response,
-      KAGEMUSHA_JSON_RESPONSE_MAX_BYTES,
-      "Offline capability response",
+      KAGEMUSHA_READINESS_JSON_MAX_BYTES_V1,
+      "KAGEMUSHA readiness response",
       { signal },
     );
-    return normalizeOfflineStatus(payload);
+    return normalizeKagemushaReadinessV1(payload);
   }
 
-  /** Submit an externally produced manifest-V4 top-up Norito archive. */
-  submitKagemushaTopUpV4(request, options = {}) {
-    return this._submitKagemushaCommandV4(
-      "/v1/offline/top-up",
-      "top_up",
-      request,
-      options,
-      "submitKagemushaTopUpV4",
-    );
-  }
-
-  /** Submit an externally produced manifest-V4 redemption Norito archive. */
-  submitKagemushaRedeemV4(request, options = {}) {
-    return this._submitKagemushaCommandV4(
-      "/v1/offline/redeem",
-      "redeem",
-      request,
-      options,
-      "submitKagemushaRedeemV4",
-    );
-  }
-
-  /** Poll one Kagemusha operation through the unchanged operation route. */
-  async getKagemushaOperationStatus(operationId, options = {}) {
-    const canonicalId = normalizeKagemushaOperationId(operationId);
+  /** Submit one payer-signed canonical KAGEMUSHA V1 top-up transaction. */
+  async submitKagemushaTopUp(signedTransaction, operationId, options = {}) {
     const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(
       options,
-      "getKagemushaOperationStatus",
+      "submitKagemushaTopUp",
     );
-    assertSupportedOptionKeys(rest, new Set([]), "getKagemushaOperationStatus options");
-    const response = await this._request(
-      "GET",
-      `/v1/offline/operations/${canonicalId}`,
-      { headers: JSON_ACCEPT_HEADERS, signal, redirect: "error" },
+    assertSupportedOptionKeys(rest, new Set([]), "submitKagemushaTopUp options");
+    if (typeof operationId === "string") {
+      throw new TypeError(
+        "submitKagemushaTopUp operationId must be exact nonzero 32-byte binary data",
+      );
+    }
+    const optional = await loadToriiOptionalModule();
+    const operationIdHex = optional.kagemushaOperationIdHexV1(operationId);
+    if (
+      !ArrayBuffer.isView(signedTransaction) &&
+      !(signedTransaction instanceof ArrayBuffer)
+    ) {
+      throw new TypeError(
+        "submitKagemushaTopUp signedTransaction must be exact binary data",
+      );
+    }
+    const body = encodeCanonicalVersionedSignedTransactionV1(
+      toBuffer(signedTransaction),
+      this._nativeRuntime,
     );
-    await this._expectStatus(response, [200]);
-    requireKagemushaJsonContentType(
-      this._getHeader(response, "content-type"),
-      "Kagemusha operation status response",
+    return this._submitKagemushaOperationBodyV1(
+      "/v1/kagemusha/top-up",
+      "top_up",
+      body,
+      operationIdHex,
+      signal,
+      optional,
     );
-    const payload = await this._readBoundedLosslessIntegerJson(
-      response,
-      KAGEMUSHA_JSON_RESPONSE_MAX_BYTES,
-      "Kagemusha operation status response",
-      { signal },
-    );
-    return normalizeKagemushaOperationStatus(payload, canonicalId);
   }
 
-  async _submitKagemushaCommandV4(path, kind, request, options, context) {
-    const normalizeRequest = kind === "top_up"
-      ? normalizeKagemushaTopUpRequestV4
-      : normalizeKagemushaRedeemRequestV4;
-    const normalized = normalizeRequest(request, `${context} request`);
-    const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(options, context);
-    assertSupportedOptionKeys(rest, new Set([]), `${context} options`);
-    const response = await this._request("POST", path, {
-      headers: {
-        Accept: APPLICATION_JSON,
-        "Content-Type": "application/x-norito",
-        "Idempotency-Key": normalized.operationId,
-      },
-      body: Buffer.from(normalized.norito),
+  /** Submit one canonical KAGEMUSHA V1 full or partial redemption intent. */
+  async submitKagemushaRedemption(request, options = {}) {
+    const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(
+      options,
+      "submitKagemushaRedemption",
+    );
+    assertSupportedOptionKeys(rest, new Set([]), "submitKagemushaRedemption options");
+    const optional = await loadToriiOptionalModule();
+    return this._submitKagemushaOperationBodyV1(
+      "/v1/kagemusha/redeem",
+      "redemption",
+      optional.Kagemusha.encodeRedemptionRequest(request),
+      optional.kagemushaOperationIdHexV1(request.operationId),
+      signal,
+      optional,
+    );
+  }
+
+  /** Read one KAGEMUSHA V1 operation without exposing an unverified monetary result. */
+  async getKagemushaOperation(operationId, options = {}) {
+    const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(options, "getKagemushaOperation");
+    assertSupportedOptionKeys(rest, new Set([]), "getKagemushaOperation options");
+    const optional = await loadToriiOptionalModule();
+    const operationIdHex = optional.kagemushaOperationIdHexV1(operationId);
+    const response = await this._request("GET", `/v1/kagemusha/operations/${operationIdHex}`, {
+      headers: JSON_ACCEPT_HEADERS,
       signal,
       redirect: "error",
     });
-    await this._expectStatus(response, [202]);
-    requireKagemushaJsonContentType(
-      this._getHeader(response, "content-type"),
-      "Kagemusha operation reference response",
-    );
-    const location = this._getHeader(response, "location");
-    const retryAfter = this._getHeader(response, "retry-after");
+    await this._expectStatus(response, [200]);
+    optional.requireKagemushaJsonContentTypeV1(this._getHeader(response, "content-type"), "KAGEMUSHA operation response");
     const payload = await this._readBoundedLosslessIntegerJson(
       response,
-      KAGEMUSHA_JSON_RESPONSE_MAX_BYTES,
-      "Kagemusha operation reference response",
+      KAGEMUSHA_OPERATION_STATUS_JSON_MAX_BYTES_V1,
+      "KAGEMUSHA operation response",
       { signal },
     );
-    return normalizeKagemushaOperationReference(payload, {
-      expectedOperationId: normalized.operationId,
-      expectedKind: kind,
-      location,
-      retryAfter,
+    const status = optional.normalizeUnverifiedKagemushaOperationStatusV1(payload);
+    if (optional.kagemushaOperationIdHexV1(status.operationId) !== operationIdHex) {
+      throw new TypeError("KAGEMUSHA operation response ID does not match the requested resource");
+    }
+    return status;
+  }
+
+  async _submitKagemushaOperationBodyV1(
+    path,
+    kind,
+    requestBody,
+    operationIdHex,
+    signal,
+    optional,
+  ) {
+    const response = await this._request("POST", path, {
+      headers: {
+        "Content-Type": APPLICATION_NORITO,
+        Accept: APPLICATION_JSON,
+        "Idempotency-Key": operationIdHex,
+      },
+      body: requestBody,
+      signal,
+      redirect: "error",
+      disableRetries: true,
     });
+    await this._expectStatus(response, [200, 202]);
+    optional.requireKagemushaJsonContentTypeV1(this._getHeader(response, "content-type"), "KAGEMUSHA operation response");
+    const payload = await this._readBoundedLosslessIntegerJson(
+      response,
+      KAGEMUSHA_OPERATION_STATUS_JSON_MAX_BYTES_V1,
+      "KAGEMUSHA operation response",
+      { signal },
+    );
+    const status = optional.normalizeUnverifiedKagemushaOperationStatusV1(payload);
+    if (optional.kagemushaOperationIdHexV1(status.operationId) !== operationIdHex || status.kind !== kind) {
+      throw new TypeError("KAGEMUSHA operation response does not match the submitted request");
+    }
+    optional.requireKagemushaSubmissionResponseV1({
+      statusCode: responseStatusWithoutUserGetter(response),
+      location: this._getHeader(response, "location"),
+      retryAfter: this._getHeader(response, "retry-after"),
+      operationIdHex,
+      operationState: status.state,
+    });
+    return status;
   }
   /**
    * List accounts (`GET /v1/accounts`).
@@ -2084,6 +2198,7 @@ export class ToriiClient {
       params,
       headers: JSON_ACCEPT_HEADERS,
       signal: normalized.signal,
+      canonicalAuth: this.#canonicalRequestAuth,
     });
     await this._expectStatus(response, [200]);
     const payload = await this._maybeJson(response);
@@ -2246,6 +2361,7 @@ export class ToriiClient {
       params,
       headers: JSON_ACCEPT_HEADERS,
       signal: normalized.signal,
+      canonicalAuth: this.#canonicalRequestAuth,
     });
     await this._expectStatus(response, [200]);
     const payload = await this._maybeJson(response);
@@ -2270,6 +2386,7 @@ export class ToriiClient {
       {
         headers: JSON_ACCEPT_HEADERS,
         signal,
+        canonicalAuth: this.#canonicalRequestAuth,
       },
     );
     await this._expectStatus(response, [200]);
@@ -2371,7 +2488,9 @@ export class ToriiClient {
       optionContext,
       ASSET_ID_LIST_OPTION_KEYS,
     );
-    const canonicalAuth = ToriiClient._normalizeCanonicalAuth(normalizedOptions.canonicalAuth);
+    const canonicalAuth = normalizedOptions.canonicalAuth === undefined
+      ? this.#canonicalRequestAuth
+      : ToriiClient._normalizeCanonicalAuth(normalizedOptions.canonicalAuth);
     const { signal, canonicalAuth: _ignoredCanonical, ...listOptions } = normalizedOptions;
     const params = ToriiClient._encodeIterableListParams(
       listOptions,
@@ -2461,6 +2580,7 @@ export class ToriiClient {
       options,
       normalizeAccountTransactionListResponse,
       ASSET_ID_LIST_OPTION_KEYS,
+      this.#canonicalRequestAuth,
     );
   }
 
@@ -2576,6 +2696,7 @@ export class ToriiClient {
       options,
       normalizeContractActivityListResponse,
       CONTRACT_ACTIVITY_LIST_OPTION_KEYS,
+      this.#canonicalRequestAuth,
     );
   }
 
@@ -2591,7 +2712,9 @@ export class ToriiClient {
       optionContext,
       CONTRACT_EVENT_LIST_OPTION_KEYS,
     );
-    const canonicalAuth = ToriiClient._normalizeCanonicalAuth(normalizedOptions.canonicalAuth);
+    const canonicalAuth = normalizedOptions.canonicalAuth === undefined
+      ? this.#canonicalRequestAuth
+      : ToriiClient._normalizeCanonicalAuth(normalizedOptions.canonicalAuth);
     const { signal, canonicalAuth: _ignoredCanonical, ...rest } = normalizedOptions;
     const params = {};
     if (rest.limit !== undefined && rest.limit !== null) {
@@ -2722,16 +2845,21 @@ export class ToriiClient {
    * List effective permission tokens for an account, including grants inherited from assigned roles
    * (`GET /v1/accounts/{accountId}/permissions`).
    * @param {string} accountId
-   * @param {{limit?: number, offset?: number, signal?: AbortSignal}} [options]
+   * @param {{limit?: number, offset?: number, signal?: AbortSignal, canonicalAuth?: CanonicalRequestAuth | null}} [options]
    * @returns {Promise<{items: Array<{name: string, payload: unknown}>, total: number}>}
    */
   async listAccountPermissions(accountId, options = {}) {
     const normalizedId = normalizeAccountPathLiteral(accountId, "accountId");
     const encodedId = encodeURIComponent(normalizedId);
-    const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(
+    const normalizedOptions = normalizeIterableListOptions(
       options,
       "listAccountPermissions",
+      ACCOUNT_PERMISSIONS_LIST_OPTION_KEYS,
     );
+    const canonicalAuth = normalizedOptions.canonicalAuth === undefined
+      ? this.#canonicalRequestAuth
+      : ToriiClient._normalizeCanonicalAuth(normalizedOptions.canonicalAuth);
+    const { signal, canonicalAuth: _ignoredCanonical, ...rest } = normalizedOptions;
     const params = ToriiClient._encodePaginationParams(rest);
     const response = await this._request(
       "GET",
@@ -2740,6 +2868,7 @@ export class ToriiClient {
         headers: JSON_ACCEPT_HEADERS,
         params: params ?? undefined,
         signal,
+        canonicalAuth,
       },
     );
     await this._expectStatus(response, [200]);
@@ -2838,7 +2967,7 @@ export class ToriiClient {
   /**
    * List verifying keys stored in the registry (`GET /v1/zk/vk`).
    * @param {ToriiVerifyingKeyListOptions} [options]
-   * @returns {Promise<unknown>}
+   * @returns {Promise<ReadonlyArray<ToriiVerifyingKeyListItem>>}
    */
   async listVerifyingKeys(options = {}) {
     const verifyingKeys = await loadVerifyingKeyClient();
@@ -2849,18 +2978,7 @@ export class ToriiClient {
       signal,
     });
     await this._expectStatus(response, [200]);
-    return this._maybeJson(response);
-  }
-
-  /**
-   * List verifying keys and normalise the payload.
-   * @param {ToriiVerifyingKeyListOptions} [options]
-   * @returns {Promise<ReadonlyArray<ToriiVerifyingKeyListItem>>}
-   */
-  async listVerifyingKeysTyped(options = {}) {
-    const payload = await this.listVerifyingKeys(options);
-    const verifyingKeys = await loadVerifyingKeyClient();
-    return verifyingKeys.list(payload);
+    return verifyingKeys.list(await this._maybeJson(response));
   }
 
   /**
@@ -2870,7 +2988,7 @@ export class ToriiClient {
    */
   iterateVerifyingKeys(options = {}) {
     const fetchPage = async (pageOptions = {}) => {
-      const items = await this.listVerifyingKeysTyped(pageOptions);
+      const items = await this.listVerifyingKeys(pageOptions);
       return { items: items ?? [] };
     };
     return this._iterateOffsetIterable(
@@ -2885,7 +3003,7 @@ export class ToriiClient {
    * @param {string} backend
    * @param {string} name
    * @param {{signal?: AbortSignal, canonicalAuth: CanonicalRequestAuth}} options
-   * @returns {Promise<unknown>}
+   * @returns {Promise<ToriiVerifyingKeyDetail>}
    */
   async getVerifyingKey(backend, name, options = {}) {
     const verifyingKeys = await loadVerifyingKeyClient();
@@ -2908,20 +3026,7 @@ export class ToriiClient {
       },
     );
     await this._expectStatus(response, [200]);
-    return this._maybeJson(response);
-  }
-
-  /**
-   * Fetch a verifying key record and normalise the payload.
-   * @param {string} backend
-   * @param {string} name
-   * @param {{signal?: AbortSignal, canonicalAuth: CanonicalRequestAuth}} options
-   * @returns {Promise<ToriiVerifyingKeyDetail>}
-   */
-  async getVerifyingKeyTyped(backend, name, options = {}) {
-    const payload = await this.getVerifyingKey(backend, name, options);
-    const verifyingKeys = await loadVerifyingKeyClient();
-    return verifyingKeys.detail(payload);
+    return verifyingKeys.detail(await this._maybeJson(response));
   }
 
   /**
@@ -3273,9 +3378,12 @@ export class ToriiClient {
     const {
       VALIDATION_FEE_HIJIRI_QUOTE_MAX_RESPONSE_BYTES,
       VALIDATION_FEE_HIJIRI_QUOTE_PATH,
+      createValidationFeeHijiriQuoteApi,
+    } = await loadToriiOptionalModule();
+    const {
       encodeValidationFeeHijiriQuoteRequestV1,
       verifyValidationFeeHijiriQuoteResponseV1,
-    } = await loadToriiOptionalModule();
+    } = createValidationFeeHijiriQuoteApi(this._nativeRuntime);
     const { signal, canonicalAuth } = normalizeVpnSessionOptions(
       options,
       "quoteValidationFeeHijiri",
@@ -3414,11 +3522,14 @@ export class ToriiClient {
     const {
       VALIDATION_FEE_CURRENT_POLICY_PROOF_PATH,
       VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES,
-      encodeValidationFeeCurrentPolicyProofRequestV1,
+      createValidationFeeConsensusApi,
       normalizeValidationFeeCheckpointV1,
       normalizeValidationFeeLedgerBindingV1,
-      verifyValidationFeeCurrentPolicyProofV1,
     } = await loadToriiOptionalModule();
+    const {
+      encodeValidationFeeCurrentPolicyProofRequestV1,
+      verifyValidationFeeCurrentPolicyProofV1,
+    } = createValidationFeeConsensusApi(this._nativeRuntime);
     const normalizedBinding = normalizeValidationFeeLedgerBindingV1(binding);
     const normalizedCheckpoint =
       checkpoint === null || checkpoint === undefined
@@ -4344,7 +4455,7 @@ export class ToriiClient {
     );
     const auth = buildSorafsReputationRequestAuth(
       rest,
-      this._config.defaultHeaders,
+      this.#config.defaultHeaders,
       "getSorafsReputationLatest",
     );
     const response = await this._request("GET", "/v1/sorafs/reputation/latest", {
@@ -4390,7 +4501,7 @@ export class ToriiClient {
     );
     const auth = buildSorafsReputationRequestAuth(
       rest,
-      this._config.defaultHeaders,
+      this.#config.defaultHeaders,
       "getSorafsReputationProvider",
     );
     const response = await this._request(
@@ -4444,7 +4555,7 @@ export class ToriiClient {
     );
     const auth = buildSorafsReputationRequestAuth(
       rest,
-      this._config.defaultHeaders,
+      this.#config.defaultHeaders,
       "getSorafsReputationSnapshot",
     );
     const response = await this._request(
@@ -4493,7 +4604,7 @@ export class ToriiClient {
     );
     const auth = buildSorafsReputationRequestAuth(
       rest,
-      this._config.defaultHeaders,
+      this.#config.defaultHeaders,
       "getSorafsReputationWeights",
     );
     const response = await this._request("GET", "/v1/sorafs/reputation/weights", {
@@ -4544,7 +4655,7 @@ export class ToriiClient {
     );
     const auth = buildSorafsReputationRequestAuth(
       rest,
-      this._config.defaultHeaders,
+      this.#config.defaultHeaders,
       "listSorafsReputationEvents",
     );
     const response = await this._request("GET", "/v1/sorafs/reputation/events", {
@@ -4603,13 +4714,13 @@ export class ToriiClient {
     );
     const auth = buildSorafsReputationRequestAuth(
       rest,
-      this._config.defaultHeaders,
+      this.#config.defaultHeaders,
       "streamSorafsReputationEvents",
       { accept: "text/event-stream" },
     );
     rejectSorafsReputationResumeHeader(
       auth.headers,
-      this._config.defaultHeaders,
+      this.#config.defaultHeaders,
       "streamSorafsReputationEvents",
     );
     const streamOptions = {
@@ -4656,7 +4767,7 @@ export class ToriiClient {
   ) {
     const auth = buildSorafsReputationRequestAuth(
       { canonicalAuth },
-      this._config.defaultHeaders,
+      this.#config.defaultHeaders,
       context,
     );
     setHeader(auth.headers, "Accept-Encoding", "identity");
@@ -4767,7 +4878,7 @@ export class ToriiClient {
     const context = "SoraFS billing statement endpoint";
     const auth = buildSorafsReputationRequestAuth(
       { canonicalAuth },
-      this._config.defaultHeaders,
+      this.#config.defaultHeaders,
       "getSorafsBillingStatement",
       { accept: APPLICATION_NORITO },
     );
@@ -4838,6 +4949,8 @@ export class ToriiClient {
       expectedCheckpointFingerprintHex,
       "acknowledgeSorafsBillingStatement.expectedCheckpointFingerprintHex",
     );
+    const { noritoEncodeSorafsBillingAcknowledgementProofV1 } =
+      await loadToriiOptionalModule();
     const body = noritoEncodeSorafsBillingAcknowledgementProofV1(proof);
     const { signal, canonicalAuth } = normalizeSorafsHedgingBillingOptions(
       options,
@@ -4847,7 +4960,7 @@ export class ToriiClient {
     const context = "SoraFS billing acknowledgement endpoint";
     const auth = buildSorafsReputationRequestAuth(
       { canonicalAuth },
-      this._config.defaultHeaders,
+      this.#config.defaultHeaders,
       "acknowledgeSorafsBillingStatement",
     );
     setHeader(auth.headers, "Content-Type", APPLICATION_NORITO);
@@ -5029,7 +5142,7 @@ export class ToriiClient {
     throwIfAborted(signal);
     const body = encodeCanonicalVersionedSignedTransactionV1(
       rawTransaction,
-      this._nativeBinding,
+      this._nativeRuntime,
     );
     await waitForPromiseWithSignal(this._ensureDataModelValidation(), signal);
     throwIfAborted(signal);
@@ -5063,77 +5176,6 @@ export class ToriiClient {
       options,
     );
     return normalizeSorafsPinRegisterResponse(payload);
-  }
-
-  /**
-   * Fetch a payload range from SoraFS storage (`POST /v1/sorafs/storage/fetch`).
-   * @param {{
-   *   manifestIdHex: string;
-   *   offset: number | string | bigint;
-   *   length: number | string | bigint;
-   *   providerIdHex?: string | Buffer | ArrayBuffer | ArrayBufferView | null;
-   *   signal?: AbortSignal;
-   * }} input
-   * @returns {Promise<SorafsFetchResponse>}
-   */
-  async fetchSorafsPayloadRange(input) {
-    const record = ensureRecord(input ?? {}, "fetchSorafsPayloadRange input");
-    const operatorSigningContext = resolveOperatorSigningContext(
-      this._operatorSigningContext,
-      "fetchSorafsPayloadRange operatorSigningContext",
-    );
-    if (operatorSigningContext === null) {
-      throw new TypeError(
-        "fetchSorafsPayloadRange requires ToriiClient options.operatorSigningContext",
-      );
-    }
-    const manifestId =
-      record.manifest_id_hex ??
-      record.manifestIdHex ??
-      record.manifestId ??
-      record.manifest;
-    const manifestIdHex = normalizeHex32String(
-      manifestId,
-      "fetchSorafsPayloadRange.manifestIdHex",
-    );
-    const offset = ToriiClient._normalizeUnsignedInteger(
-      record.offset,
-      "fetchSorafsPayloadRange.offset",
-      { allowZero: true },
-    );
-    const length = ToriiClient._normalizeUnsignedInteger(
-      record.length,
-      "fetchSorafsPayloadRange.length",
-      { allowZero: false },
-    );
-    const providerId =
-      record.provider_id_hex ??
-      record.providerIdHex ??
-      record.providerId ??
-      null;
-    const body = {
-      manifest_id_hex: manifestIdHex,
-      offset,
-      length,
-    };
-    if (providerId !== undefined && providerId !== null) {
-      body.provider_id_hex = normalizeHex32String(
-        providerId,
-        "fetchSorafsPayloadRange.providerIdHex",
-      );
-    }
-    const response = await this._request("POST", "/v1/sorafs/storage/fetch", {
-      headers: JSON_REQUEST_HEADERS,
-      body: JSON.stringify(body),
-      signal: record.signal,
-      operatorSigningContext,
-    });
-    await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
-    if (!payload) {
-      throw new Error("sorafs storage fetch endpoint returned no payload");
-    }
-    return normalizeSorafsFetchResponse(payload);
   }
 
   /**
@@ -5390,6 +5432,7 @@ export class ToriiClient {
       record.chunkerHandle,
       manifestBundle,
       "fetchDaPayloadViaGateway",
+      this._deriveDaChunkerHandle,
     );
 
     const proofSummaryOptions = normalizeProofSummaryOption(
@@ -5462,9 +5505,9 @@ export class ToriiClient {
    *   manifestPaths: {manifestPath: string, manifestJsonPath: string, chunkPlanPath: string, label: string};
    *   payloadPath: string;
    *   scoreboardPath: string | null;
-   *   proofSummaryPath: string;
-   *   proofSummaryArtifact: unknown;
-   *   proofSummary: unknown;
+   *   proofSummaryPath: string | null;
+   *   proofSummaryArtifact: unknown | null;
+   *   proofSummary: unknown | null;
    *   gatewayResult: DaGatewayFetchResult;
    *   outputDir: string;
    * }>}
@@ -5519,12 +5562,13 @@ export class ToriiClient {
       scoreboardOutPath: scoreboardPath,
     };
 
+    const proofSummaryRequest = record.proofSummary ?? true;
     const session = await this.fetchDaPayloadViaGateway({
       manifestBundle: manifest,
       chunkerHandle: record.chunkerHandle,
       gatewayProviders: providers,
       fetchOptions: mergedFetchOptions,
-      proofSummary: record.proofSummary ?? true,
+      proofSummary: proofSummaryRequest,
       signal: record.signal,
     });
 
@@ -5542,22 +5586,26 @@ export class ToriiClient {
       );
     }
 
-    const proofSummaryPath = pathModule.join(
-      outputDir,
-      `proof_summary_${manifestPaths.label}.json`,
-    );
-    const proofResult = await emitDaProofSummaryArtifact({
-      summary: session.proofSummary ?? undefined,
-      manifestBytes: manifest.manifest_bytes,
-      payloadBytes: session.gatewayResult.payload,
-      proofOptions:
-        record.proofSummary && typeof record.proofSummary === "object"
-          ? record.proofSummary
-          : undefined,
-      manifestPath: manifestPaths.manifestPath,
-      payloadPath,
-      outputPath: proofSummaryPath,
-    });
+    let proofSummaryPath = null;
+    let proofSummaryArtifact = null;
+    if (proofSummaryRequest !== false) {
+      if (session.proofSummary === null) {
+        throw new Error(
+          "proveDaAvailabilityToDir requested a proof summary but none was generated",
+        );
+      }
+      proofSummaryPath = pathModule.join(
+        outputDir,
+        `proof_summary_${manifestPaths.label}.json`,
+      );
+      const proofResult = await emitDaProofSummaryArtifact({
+        summary: session.proofSummary,
+        manifestPath: manifestPaths.manifestPath,
+        payloadPath,
+        outputPath: proofSummaryPath,
+      });
+      proofSummaryArtifact = proofResult.artifact;
+    }
 
     return {
       manifest,
@@ -5565,8 +5613,8 @@ export class ToriiClient {
       payloadPath,
       scoreboardPath,
       proofSummaryPath,
-      proofSummaryArtifact: proofResult.artifact,
-      proofSummary: proofResult.summary,
+      proofSummaryArtifact,
+      proofSummary: session.proofSummary,
       gatewayResult: session.gatewayResult,
       outputDir,
     };
@@ -5914,7 +5962,7 @@ export class ToriiClient {
     const rawPayload = toBuffer(payload);
     const pipelinePayload = encodeCanonicalVersionedSignedTransactionV1(
       rawPayload,
-      this._nativeBinding,
+      this._nativeRuntime,
     );
     await waitForPromiseWithSignal(this._ensureDataModelValidation(), signal);
     throwIfAborted(signal);
@@ -5970,7 +6018,7 @@ export class ToriiClient {
       if (body.length === 0) {
         return enrichSubmission(null);
       }
-      return enrichSubmission(decodeTransactionReceiptPayload(body));
+      return enrichSubmission(decodeTransactionReceiptPayload(body, this._nativeRuntime));
     }
     return enrichSubmission(
       await this._maybeBoundedJson(
@@ -6000,15 +6048,15 @@ export class ToriiClient {
     const versionedPayloads = payloads.map((payload) =>
       encodeCanonicalVersionedSignedTransactionV1(
         toBuffer(payload),
-        this._nativeBinding,
+        this._nativeRuntime,
       ),
     );
     throwIfAborted(signal);
     await waitForPromiseWithSignal(this._ensureDataModelValidation(), signal);
     throwIfAborted(signal);
-    const batchPayload = encodeTransactionPayloadBatch(
+    const batchPayload = await encodeTransactionPayloadBatch(
       versionedPayloads,
-      this._nativeBinding,
+      this._nativeRuntime,
     );
     let response;
     try {
@@ -6105,7 +6153,12 @@ export class ToriiClient {
   }
 
   async _ensureDataModelValidation(signal) {
-    return ensureNodeDataModelCompatibility(this, () => this.getNodeCapabilities({ canonicalAuth: this._canonicalRequestAuth, signal }));
+    return ensureNodeDataModelCompatibility(this.#dataModelState, () =>
+      this.getNodeCapabilities({
+        canonicalAuth: this.#canonicalRequestAuth,
+        signal,
+      }),
+    );
   }
 
   /**
@@ -6551,7 +6604,7 @@ export class ToriiClient {
     });
     await this._expectStatus(response, [200]);
     const payload = await this._maybeJson(response);
-    return normalizeStatusSnapshot(payload, this._statusState);
+    return normalizeStatusSnapshot(payload, this.#statusState);
   }
 
   /**
@@ -6967,54 +7020,6 @@ export class ToriiClient {
   }
 
   /**
-   * Prepare or submit a bridge proof DTO (`POST /v1/bridge/proofs/submit`). Signed submission
-   * resends the byte-identical prepared transaction payload with its detached signature.
-   * @param {object} payload
-   * @param {{signal?: AbortSignal}} [options]
-   * @returns {Promise<object>}
-   */
-  async submitBridgeProof(payload, options = {}) {
-    const { signal } = normalizeSignalOnlyOption(options, "submitBridgeProof");
-    const { normalizeBridgeProofSubmitPayload } = await loadToriiOptionalModule();
-    const body = normalizeBridgeProofSubmitPayload(payload, "submitBridgeProof.payload");
-    const response = await this._request("POST", "/v1/bridge/proofs/submit", {
-      headers: JSON_REQUEST_HEADERS,
-      body: JSON.stringify(body),
-      signal,
-    });
-    await this._expectStatus(response, [200], {
-      maximumBodyBytes: SCCP_SUBMIT_RESPONSE_MAX_BYTES,
-      responseLabel: "SCCP bridge proof submit",
-      signal,
-    });
-    return readSccpBridgeSubmitResponse(response, body);
-  }
-
-  /**
-   * Prepare or submit an inbound bridge message DTO (`POST /v1/bridge/messages`). Signed
-   * submission resends the byte-identical prepared transaction payload with its detached signature.
-   * @param {object} payload
-   * @param {{signal?: AbortSignal}} [options]
-   * @returns {Promise<object>}
-   */
-  async submitBridgeMessage(payload, options = {}) {
-    const { signal } = normalizeSignalOnlyOption(options, "submitBridgeMessage");
-    const { normalizeBridgeMessageSubmitPayload } = await loadToriiOptionalModule();
-    const body = normalizeBridgeMessageSubmitPayload(payload, "submitBridgeMessage.payload");
-    const response = await this._request("POST", "/v1/bridge/messages", {
-      headers: JSON_REQUEST_HEADERS,
-      body: JSON.stringify(body),
-      signal,
-    });
-    await this._expectStatus(response, [200], {
-      maximumBodyBytes: SCCP_SUBMIT_RESPONSE_MAX_BYTES,
-      responseLabel: "SCCP bridge message submit",
-      signal,
-    });
-    return readSccpBridgeSubmitResponse(response, body);
-  }
-
-  /**
    * Fetch the active ABI version (`GET /v1/runtime/abi/active`).
    * @param {{signal?: AbortSignal}} [options]
    * @returns {Promise<ToriiRuntimeAbiActiveResponse>}
@@ -7213,6 +7218,7 @@ export class ToriiClient {
     const response = await this._request("GET", "/v1/explorer/metrics", {
       headers: JSON_ACCEPT_HEADERS,
       signal,
+      canonicalAuth: this.#canonicalRequestAuth,
     });
     if (response.status === 403 || response.status === 404 || response.status === 503) {
       return null;
@@ -7240,6 +7246,7 @@ export class ToriiClient {
       {
         headers: JSON_ACCEPT_HEADERS,
         signal,
+        canonicalAuth: this.#canonicalRequestAuth,
       },
     );
     await this._expectStatus(response, [200]);
@@ -7680,25 +7687,6 @@ export class ToriiClient {
   }
 
   /**
-   * Fetch the current council roster (`GET /v1/gov/council/current`).
-   * @param {{signal?: AbortSignal}} [options]
-   * @returns {Promise<ToriiGovernanceCouncilCurrentResponse>}
-   */
-  async getGovernanceCouncilCurrent(options) {
-    const { signal, canonicalAuth } = normalizeVpnSessionOptions(
-      options,
-      "getGovernanceCouncilCurrent",
-    );
-    const response = await this._request("GET", "/v1/gov/council/current", {
-      headers: JSON_ACCEPT_HEADERS,
-      signal, canonicalAuth,
-    });
-    await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
-    return normalizeGovernanceCouncilCurrentResponse(payload);
-  }
-
-  /**
    * Build one authenticated Parliament attempt-creation instruction draft.
    * The caller supplies the independently derived IDs that the response must
    * match before any payload is exposed for local signing.
@@ -7806,6 +7794,12 @@ export class ToriiClient {
   ) {
     const context = "getParliamentTimedOvnCastingProofPageV1";
     const { signal, canonicalAuth } = normalizeVpnSessionOptions(options, context);
+    const {
+      PARLIAMENT_TIMED_OVN_CASTING_PROOF_RESPONSE_MAX_BYTES_V1,
+      encodeParliamentTimedOvnCastingProofRequestV1,
+      parliamentTimedOvnCastingProofPathV1,
+      validateParliamentTimedOvnCastingProofResponseFrameV1,
+    } = await loadToriiOptionalModule();
     const path = parliamentTimedOvnCastingProofPathV1(ballotAttemptId);
     const body = encodeParliamentTimedOvnCastingProofRequestV1(trustedCheckpointHeight);
     const response = await this._request("POST", path, {
@@ -8037,8 +8031,14 @@ export class ToriiClient {
       options,
       "governanceProposeDeployContract",
     );
+    const normalized = normalizeGovernanceDeployContractProposalPayload(payload);
+    if (canonicalAuth.accountId !== normalized.proposal_operator) {
+      throw new TypeError(
+        "governanceProposeDeployContract canonicalAuth.accountId must equal the exact proposalOperator",
+      );
+    }
     const body = stringifyStrictLosslessIntegerJson(
-      normalizeGovernanceDeployContractProposalPayload(payload),
+      normalized,
       "governance deploy-contract request",
     );
     const response = await this._request("POST", "/v1/gov/proposals/deploy-contract", {
@@ -8383,7 +8383,7 @@ export class ToriiClient {
   }
 
   /**
-   * List recorded consensus evidence (`GET /v1/sumeragi/evidence`).
+   * List committed consensus evidence (`GET /v1/sumeragi/evidence`).
    * @param {SumeragiEvidenceListOptions} [options]
    * @returns {Promise<SumeragiEvidenceListResponse>}
     */
@@ -8412,14 +8412,15 @@ export class ToriiClient {
       const offset = ToriiClient._normalizeUnsignedInteger(resolvedOptions.offset, "offset", {
         allowZero: true,
       });
+      if (offset > 10000) {
+        throw new RangeError("offset must be <= 10000");
+      }
       params.offset = offset;
     }
     if (resolvedOptions.kind !== undefined && resolvedOptions.kind !== null) {
-      const kind = String(resolvedOptions.kind);
-      if (!EVIDENCE_KIND_VALUES.has(kind)) {
-        throw new RangeError(
-          `kind must be one of ${Array.from(EVIDENCE_KIND_VALUES).join(", ")}`,
-        );
+      const kind = requireExactNonEmptyString(resolvedOptions.kind, "kind");
+      if (kind !== EVIDENCE_KIND) {
+        throw new RangeError(`kind must be ${EVIDENCE_KIND}`);
       }
       params.kind = kind;
     }
@@ -8433,7 +8434,17 @@ export class ToriiClient {
       ),
     });
     await this._expectStatus(response, [200]);
-    return normalizeSumeragiEvidenceListResponse(await this._maybeJson(response));
+    const payload = await this._readBoundedLosslessIntegerJson(
+      response,
+      SUMERAGI_EVIDENCE_LIST_JSON_RESPONSE_MAX_BYTES,
+      "Sumeragi evidence list response",
+      { signal },
+    );
+    return normalizeSumeragiEvidenceListResponse(
+      payload,
+      params.limit ?? 50,
+      params.offset ?? 0,
+    );
   }
 
   /**
@@ -8447,14 +8458,24 @@ export class ToriiClient {
     });
     await this._expectStatus(response, [200]);
     const payload = ensureRecord(
-      await this._maybeJson(response),
+      await this._readBoundedLosslessIntegerJson(
+        response,
+        SUMERAGI_EVIDENCE_COUNT_JSON_RESPONSE_MAX_BYTES,
+        "Sumeragi evidence count response",
+      ),
       "sumeragi evidence count response",
     );
-    const count = Number(payload.count ?? 0);
-    if (!Number.isFinite(count) || count < 0) {
-      throw new TypeError("sumeragi evidence count response.count must be a non-negative number");
-    }
-    return { count };
+    assertExactSumeragiEvidenceFields(
+      payload,
+      "sumeragi evidence count response",
+      ["count"],
+    );
+    return {
+      count: requireSumeragiEvidenceUnsigned(
+        payload.count,
+        "sumeragi evidence count response.count",
+      ),
+    };
   }
 
   /**
@@ -8568,6 +8589,7 @@ export class ToriiClient {
     const response = await this._request("GET", `/v1/explorer/blocks/${encodeURIComponent(normalized)}`, {
       signal,
       headers: JSON_ACCEPT_HEADERS,
+      canonicalAuth: this.#canonicalRequestAuth,
     });
     if (response.status === 404) {
       return null;
@@ -8587,17 +8609,13 @@ export class ToriiClient {
    */
   async listBlocks(options) {
     const normalizedOptions = ToriiClient._normalizeBlockListOptions(options);
-    const params = {};
-    if (normalizedOptions.page !== undefined) {
-      params.page = normalizedOptions.page;
-    }
-    if (normalizedOptions.perPage !== undefined) {
-      params.per_page = normalizedOptions.perPage;
-    }
+    const params = { limit: normalizedOptions.limit };
+    if (normalizedOptions.cursor !== undefined) params.cursor = normalizedOptions.cursor;
     const response = await this._request("GET", "/v1/explorer/blocks", {
-      params: Object.keys(params).length > 0 ? params : undefined,
+      params,
       headers: JSON_ACCEPT_HEADERS,
       signal: normalizedOptions.signal,
+      canonicalAuth: this.#canonicalRequestAuth,
     });
     await this._expectStatus(response, [200]);
     const payload = await this._maybeJson(response);
@@ -8630,6 +8648,7 @@ export class ToriiClient {
     return this._streamSse("/v1/events/sse", {
       params: Object.keys(params).length > 0 ? params : undefined,
       signal,
+      canonicalAuth: this.#canonicalRequestAuth,
     });
   }
 
@@ -8708,6 +8727,7 @@ export class ToriiClient {
     return this._streamSse("/v1/contracts/events/sse", {
       params: Object.keys(params).length > 0 ? params : undefined,
       signal,
+      canonicalAuth: this.#canonicalRequestAuth,
     });
   }
 
@@ -8722,7 +8742,17 @@ export class ToriiClient {
       options,
       "streamSumeragiStatus",
     );
-    return this._streamSse("/v1/sumeragi/status/sse", { lastEventId, signal });
+    const operatorSigningContext = requireOperatorSigningContext(
+      this._operatorSigningContext,
+      "streamSumeragiStatus",
+    );
+    return this._streamSse("/v1/sumeragi/status/sse", {
+      lastEventId,
+      signal,
+      operatorSigningContext,
+      disableRetries: true,
+      redirect: "error",
+    });
   }
 
   /**
@@ -8767,7 +8797,7 @@ export class ToriiClient {
     } = buildKaigiCallSignalsQuery(options);
     const canonicalAuth = ToriiClient._normalizeCanonicalAuth(
       requestedCanonicalAuth === undefined
-        ? this._canonicalRequestAuth
+        ? this.#canonicalRequestAuth
         : requestedCanonicalAuth,
       "listKaigiCallSignals.canonicalAuth",
     );
@@ -9315,9 +9345,9 @@ export class ToriiClient {
       insecureTransportTelemetryHook,
       ...rest
     } = normalizedOptions;
-    const allowInsecure = rest.allowInsecure ?? this._allowInsecure;
+    const allowInsecure = rest.allowInsecure ?? this.#allowInsecure;
     const telemetryHook =
-      insecureTransportTelemetryHook ?? this._config.insecureTransportTelemetryHook;
+      insecureTransportTelemetryHook ?? this.#config.insecureTransportTelemetryHook;
     return openConnectWebSocketInternal(
       {
         ...rest,
@@ -9778,6 +9808,7 @@ export class ToriiClient {
     const payload = normalizeMultisigProposeRequest(request);
     // Complete native request validation before consulting the off-wire trust
     // intent so malformed instruction archives fail before any network I/O.
+    const { noritoEncodeMultisigProposeRequest } = await loadToriiOptionalModule();
     const requestBody = noritoEncodeMultisigProposeRequest(payload);
     const draftIntent = normalizeLocalTransactionDraftIntent(
       request,
@@ -10049,8 +10080,13 @@ export class ToriiClient {
         canonicalAuth,
       },
     );
-    await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
+    await this._expectStatus(response, [200], { signal });
+    const payload = await this._readBoundedLosslessIntegerJson(
+      response,
+      SCCP_JSON_RESPONSE_MAX_BYTES,
+      "governance contract response",
+      { signal },
+    );
     return normalizeGovernanceContractResponse(payload);
   }
 
@@ -10885,8 +10921,11 @@ export class ToriiClient {
     const url = pathIsAbsolute ? new URL(path) : new URL(path, this._baseUrl + "/");
     const protocol = url.protocol.toLowerCase();
     const originMatches =
-      url.host === this._baseHost && protocol === this._baseProtocol;
-    const initHeaders = this._createHeaders(options.headers);
+      url.host === this.#baseHost && protocol === this.#baseProtocol;
+    // Bootstrap discovery must never inherit account, API, operator, or cookie credentials.
+    const initHeaders = options.publicRequest === true
+      ? { ...options.headers }
+      : this._createHeaders(options.headers);
     const operatorSigningContext = options.requireIsoOperatorAuth === true
       ? requireIsoOperatorSigningContext(options.operatorSigningContext, initHeaders)
       : resolveOperatorSigningContext(options.operatorSigningContext);
@@ -10935,17 +10974,17 @@ export class ToriiClient {
     const allowAbsoluteUrl = options.allowAbsoluteUrl === true;
     const methodUpper = String(method).toUpperCase();
     if (hasSensitiveTransport) {
-      if (protocol !== this._baseProtocol) {
+      if (protocol !== this.#baseProtocol) {
         throw new Error(
-          `ToriiClient: refusing to send sensitive request material over mismatched scheme ${url.protocol}; use ${this._baseProtocol.replace(":", "")} URLs derived from the client base URL.`,
+          `ToriiClient: refusing to send sensitive request material over mismatched scheme ${url.protocol}; use ${this.#baseProtocol.replace(":", "")} URLs derived from the client base URL.`,
         );
       }
-      if (pathIsAbsolute && url.host !== this._baseHost) {
+      if (pathIsAbsolute && url.host !== this.#baseHost) {
         throw new Error(
-          `ToriiClient: refusing to send sensitive request material to mismatched host ${url.host} (expected ${this._baseHost}); use relative paths on the configured base URL.`,
+          `ToriiClient: refusing to send sensitive request material to mismatched host ${url.host} (expected ${this.#baseHost}); use relative paths on the configured base URL.`,
         );
       }
-      if (!this._allowInsecure && !isSecureProtocol(protocol)) {
+      if (!this.#allowInsecure && !isSecureProtocol(protocol)) {
         throw new Error(
           `ToriiClient: refusing to send sensitive request material over insecure protocol ${url.protocol}; use https or allowInsecure: true.`,
         );
@@ -10955,7 +10994,7 @@ export class ToriiClient {
         "ToriiClient: absolute URLs are blocked when no credentials are attached; pass allowAbsoluteUrl: true to override.",
       );
     }
-    if (hasSensitiveTransport && this._allowInsecure && !isSecureProtocol(protocol)) {
+    if (hasSensitiveTransport && this.#allowInsecure && !isSecureProtocol(protocol)) {
       this._emitInsecureTransportTelemetry({
         client: "torii",
         method: methodUpper,
@@ -10988,6 +11027,7 @@ export class ToriiClient {
       method: methodUpper,
       headers: initHeaders,
       body: options.body,
+      ...(options.publicRequest === true ? { credentials: "omit" } : {}),
     };
     // Canonical authentication and caller-supplied nonce headers are one-shot.
     // It is unsafe to replay them after dispatch or to let Fetch follow a
@@ -11024,25 +11064,25 @@ export class ToriiClient {
         ? options.retryProfile
         : "default";
     const retryPolicy =
-      (this._config.retryProfiles && this._config.retryProfiles[retryProfileName]) ||
-      this._config.retryProfiles?.default ||
+      (this.#config.retryProfiles && this.#config.retryProfiles[retryProfileName]) ||
+      this.#config.retryProfiles?.default ||
       null;
     const policyMaxRetries =
       retryPolicy && typeof retryPolicy.maxRetries === "number"
         ? retryPolicy.maxRetries
-        : this._config.maxRetries;
+        : this.#config.maxRetries;
     const policyBackoffInitial =
       retryPolicy && typeof retryPolicy.backoffInitialMs === "number"
         ? retryPolicy.backoffInitialMs
-        : this._config.backoffInitialMs;
+        : this.#config.backoffInitialMs;
     const policyBackoffMultiplier =
       retryPolicy && typeof retryPolicy.backoffMultiplier === "number"
         ? retryPolicy.backoffMultiplier
-        : this._config.backoffMultiplier;
+        : this.#config.backoffMultiplier;
     const policyMaxBackoffMs =
       retryPolicy && typeof retryPolicy.maxBackoffMs === "number"
         ? retryPolicy.maxBackoffMs
-        : this._config.maxBackoffMs;
+        : this.#config.maxBackoffMs;
     const maxRetries = options.disableRetries === true || hasOneShotAuth
       ? 0
       : Math.max(0, Number(policyMaxRetries) || 0);
@@ -11055,20 +11095,11 @@ export class ToriiClient {
       attempt += 1;
       const attemptStartedAt = Date.now();
       const callerSignal = options.signal ?? null;
-      const shouldInstallTimeoutController =
-        !callerSignal &&
-        typeof AbortController === "function" &&
-        this._config.timeoutMs > 0;
-      const controller = shouldInstallTimeoutController ? new AbortController() : null;
-      let timeoutId;
-      let timedOut = false;
-      const signal = callerSignal ?? controller?.signal ?? null;
-      if (controller) {
-        timeoutId = setTimeout(() => {
-          timedOut = true;
-          controller.abort();
-        }, this._config.timeoutMs);
-      }
+      const attemptSignal = composeRequestSignal(
+        callerSignal,
+        this.#config.timeoutMs,
+      );
+      const signal = attemptSignal.signal;
       try {
         const response = await this._fetch(url.toString(), {
           ...init,
@@ -11077,9 +11108,7 @@ export class ToriiClient {
           headers: cloneHeadersForFetch(initHeaders),
           signal: signal ?? undefined,
         });
-        if (timeoutId) {
-          clearTimeout(timeoutId);
-        }
+        attemptSignal.cleanup();
         let responseStatus;
         try {
           responseStatus = responseStatusWithoutUserGetter(response);
@@ -11115,14 +11144,17 @@ export class ToriiClient {
           durationMs,
         });
       } catch (error) {
-        if (timeoutId) {
-          clearTimeout(timeoutId);
-        }
+        attemptSignal.cleanup();
         if (options.signal && signalIsAborted(options.signal)) {
           throw error;
         }
         if (
-          !this._shouldRetryError(error, methodUpper, timedOut, retryPolicy) ||
+          !this._shouldRetryError(
+            error,
+            methodUpper,
+            attemptSignal.didTimeout(),
+            retryPolicy,
+          ) ||
           attempt > maxRetries
         ) {
           throw error;
@@ -11130,7 +11162,7 @@ export class ToriiClient {
         const durationMs = Math.max(0, Date.now() - attemptStartedAt);
         lastError = error;
         this._emitRetryTelemetry({
-          phase: timedOut ? "timeout" : "network",
+          phase: attemptSignal.didTimeout() ? "timeout" : "network",
           attempt,
           nextAttempt: attempt + 1,
           maxRetries,
@@ -11138,7 +11170,7 @@ export class ToriiClient {
           url: url.toString(),
           errorName: error?.name ?? null,
           errorMessage: error?.message ?? null,
-          timedOut,
+          timedOut: attemptSignal.didTimeout(),
           backoffMs,
           profile: retryProfileName,
           durationMs,
@@ -11150,7 +11182,7 @@ export class ToriiClient {
       }
 
       if (backoffMs > 0) {
-        await delay(backoffMs);
+        await delay(backoffMs, callerSignal);
         const multiplier = policyBackoffMultiplier || 1;
         backoffMs = Math.min(
           Math.max(backoffMs * multiplier, policyBackoffInitial || 0),
@@ -11161,7 +11193,7 @@ export class ToriiClient {
   }
 
   _emitRetryTelemetry(event) {
-    const hook = this._config.retryTelemetryHook;
+    const hook = this.#config.retryTelemetryHook;
     if (typeof hook !== "function") {
       return;
     }
@@ -11177,7 +11209,7 @@ export class ToriiClient {
   }
 
   _emitInsecureTransportTelemetry(event) {
-    const hook = this._config.insecureTransportTelemetryHook;
+    const hook = this.#config.insecureTransportTelemetryHook;
     if (typeof hook !== "function") {
       return;
     }
@@ -11189,13 +11221,13 @@ export class ToriiClient {
   }
 
   _resolveSorafsPolicy() {
-    if (this._sorafsResolvedPolicy) {
-      return this._sorafsResolvedPolicy;
+    if (this.#sorafsResolvedPolicy) {
+      return this.#sorafsResolvedPolicy;
     }
-    const native = requireSorafsNativeBinding();
+    const native = requireSorafsNativeBinding(this._nativeRuntime);
     const defaults = native.sorafsAliasPolicyDefaults();
     const policy = { ...defaults };
-    const overrides = this._sorafsPolicyOverrides;
+    const overrides = this.#sorafsPolicyOverrides;
     if (overrides && typeof overrides === "object") {
       const positive = pickOverride(overrides, "positive_ttl_secs", "positiveTtlSecs");
       if (positive !== undefined && positive !== null) {
@@ -11258,7 +11290,7 @@ export class ToriiClient {
       );
     }
 
-    this._sorafsResolvedPolicy = policy;
+    this.#sorafsResolvedPolicy = policy;
     return policy;
   }
 
@@ -11270,7 +11302,7 @@ export class ToriiClient {
     if (!proofB64) {
       return;
     }
-    const native = requireSorafsNativeBinding();
+    const native = requireSorafsNativeBinding(this._nativeRuntime);
     const policy = this._resolveSorafsPolicy();
 
     let evaluation;
@@ -11301,9 +11333,9 @@ export class ToriiClient {
 
     if (
       (evaluation.state === "refresh_window" || evaluation.rotation_due === true) &&
-      typeof this._sorafsAliasWarningHook === "function"
+      typeof this.#sorafsAliasWarningHook === "function"
     ) {
-      this._sorafsAliasWarningHook({
+      this.#sorafsAliasWarningHook({
         alias: this._getHeader(response, HEADER_SORA_NAME) ?? null,
         evaluation: formatSorafsEvaluation(evaluation),
       });
@@ -11354,15 +11386,15 @@ export class ToriiClient {
         }
       }
     };
-    applyEntries(this._config.defaultHeaders);
+    applyEntries(this.#config.defaultHeaders);
     applyEntries(provided);
-    if (this._config.apiToken) {
+    if (this.#config.apiToken) {
       if (!hasHeader(headers, "x-api-token")) {
-        headers["X-API-Token"] = this._config.apiToken;
+        headers["X-API-Token"] = this.#config.apiToken;
       }
     }
-    if (this._config.authToken && !hasHeader(headers, "authorization")) {
-      headers.Authorization = `Bearer ${this._config.authToken}`;
+    if (this.#config.authToken && !hasHeader(headers, "authorization")) {
+      headers.Authorization = `Bearer ${this.#config.authToken}`;
     }
     attachHeaderAccessors(headers);
     return headers;
@@ -11370,9 +11402,9 @@ export class ToriiClient {
 
   _hasClientCredentials() {
     return (
-      Boolean(this._config?.authToken) ||
-      Boolean(this._config?.apiToken) ||
-      headersContainCredentials(this._config?.defaultHeaders)
+      Boolean(this.#config?.authToken) ||
+      Boolean(this.#config?.apiToken) ||
+      headersContainCredentials(this.#config?.defaultHeaders)
     );
   }
 
@@ -11393,22 +11425,22 @@ export class ToriiClient {
   _shouldRetryResponse(method, status, policy) {
     const activePolicy =
       policy ||
-      this._config.retryProfiles?.default || {
-        retryMethods: this._config.retryMethods,
-        retryStatuses: this._config.retryStatuses,
+      this.#config.retryProfiles?.default || {
+        retryMethods: this.#config.retryMethods,
+        retryStatuses: this.#config.retryStatuses,
       };
-    const methods = activePolicy.retryMethods ?? this._config.retryMethods;
-    const statuses = activePolicy.retryStatuses ?? this._config.retryStatuses;
+    const methods = activePolicy.retryMethods ?? this.#config.retryMethods;
+    const statuses = activePolicy.retryStatuses ?? this.#config.retryStatuses;
     return methods.has(method.toUpperCase()) && statuses.has(Number(status));
   }
 
   _shouldRetryError(error, method, timedOut, policy) {
     const activePolicy =
       policy ||
-      this._config.retryProfiles?.default || {
-        retryMethods: this._config.retryMethods,
+      this.#config.retryProfiles?.default || {
+        retryMethods: this.#config.retryMethods,
       };
-    const methods = activePolicy.retryMethods ?? this._config.retryMethods;
+    const methods = activePolicy.retryMethods ?? this.#config.retryMethods;
     if (!methods.has(method.toUpperCase())) {
       return false;
     }
@@ -11762,22 +11794,22 @@ export class ToriiClient {
       throw new TypeError(`${context} requires ToriiClient options.localSigningContext`);
     }
     const request = this._request.bind(this); const validateDataModel = this._ensureDataModelValidation.bind(this);
-    validateSorafsOrderbookSubmissionTransport(this._baseUrl, this._allowInsecure, path, (event) => this._emitInsecureTransportTelemetry(event), context);
-    assertSorafsOrderbookFixedHeaders(this._config.defaultHeaders, `${context} defaultHeaders`);
+    validateSorafsOrderbookSubmissionTransport(this._baseUrl, this.#allowInsecure, path, (event) => this._emitInsecureTransportTelemetry(event), context);
+    assertSorafsOrderbookFixedHeaders(this.#config.defaultHeaders, `${context} defaultHeaders`);
     const fixedHeaders = { "Content-Type": APPLICATION_NORITO, Accept: APPLICATION_NORITO, "Accept-Encoding": "identity" }; const requestHeaders = this._createHeaders(fixedHeaders); const headerFingerprint = sorafsOrderbookHeaderFingerprint(requestHeaders);
     const prepared = prepareSorafsOrderbookSubmission({
       route, signedTransaction,
       expectedNetworkIdBytes: networkIdBytes(this._localSigningContext.networkId, `${context}.networkId`),
       expectedChainDiscriminant: this._localSigningContext.chainDiscriminant,
       expectedReceiptSigner: normalized.expectedReceiptSigner,
-      native: resolveOptionalNativeBinding(this._nativeBinding), context,
+      native: resolveOptionalNativeBinding(this._nativeRuntime), context,
     });
-    const operation = createSorafsOrderbookSubmissionDeadline(signal, this._config.timeoutMs, context, { addAbortListener: addSignalAbortListener, removeAbortListener: removeSignalAbortListener, isAborted: signalIsAborted });
+    const operation = createSorafsOrderbookSubmissionDeadline(signal, this.#config.timeoutMs, context, { addAbortListener: addSignalAbortListener, removeAbortListener: removeSignalAbortListener, isAborted: signalIsAborted, abortReason: signalAbortReason });
     try {
       throwIfAborted(operation.signal);
       await waitForPromiseWithSignal(validateDataModel(operation.signal), operation.signal);
       throwIfAborted(operation.signal);
-      assertSorafsOrderbookFixedHeaders(this._config.defaultHeaders, `${context} defaultHeaders`);
+      assertSorafsOrderbookFixedHeaders(this.#config.defaultHeaders, `${context} defaultHeaders`);
       if (sorafsOrderbookHeaderFingerprint(this._createHeaders(fixedHeaders)) !== headerFingerprint) {
         throw new TypeError(`${context} effective request headers changed during preflight`);
       }
@@ -11796,9 +11828,9 @@ export class ToriiClient {
         const { bytes } = await this._readBoundedResponseBytes(response,
           SORAFS_ORDERBOOK_RECEIPT_MAX_BYTES_V1, `${context} receipt`, { signal: operation.signal });
         return verifySorafsOrderbookSubmissionReceipt(Buffer.from(bytes), prepared);
-      } catch {
+      } catch (error) {
         if (response !== undefined) cancelResponseBodyBestEffort(response, `${context} outcome is ambiguous`);
-        throw new SorafsOrderbookSubmissionAmbiguousError(route, prepared.identity);
+        throw new SorafsOrderbookSubmissionAmbiguousError(route, prepared.identity, error);
       }
     } finally {
       operation.dispose();
@@ -11827,6 +11859,7 @@ export class ToriiClient {
       signal,
       retryProfile: "streaming",
       canonicalAuth: options.canonicalAuth,
+      operatorSigningContext: options.operatorSigningContext,
       disableRetries: options.disableRetries === true,
       redirect: options.redirect,
     };
@@ -11960,7 +11993,7 @@ export class ToriiClient {
   }
 
   _acceptHeader() {
-    const headers = this._config?.defaultHeaders ?? {};
+    const headers = this.#config?.defaultHeaders ?? {};
     for (const [key, value] of Object.entries(headers)) {
       if (value !== undefined && value !== null && key.toLowerCase() === "accept") {
         return String(value);
@@ -12000,7 +12033,7 @@ export class ToriiClient {
     response,
     maxBytes,
     context,
-    { signal, plainObjects = false } = {},
+    { signal, plainObjects = false, includeSourceBytes = false } = {},
   ) {
     let contentType;
     try {
@@ -12038,7 +12071,10 @@ export class ToriiClient {
         cancelReadableBodyBestEffort(body, `${context} was aborted`);
         throw bodyReadAbortError(signal, context);
       }
-      return plainObjects ? JSON.parse(text) : parsed;
+      const payload = plainObjects ? JSON.parse(text) : parsed;
+      return includeSourceBytes
+        ? Object.freeze({ payload, sourceBytes: new Uint8Array(bytes) })
+        : payload;
     } catch (error) {
       if (signalIsAborted(signal) || error?.name === "AbortError") {
         cancelReadableBodyBestEffort(body, `${context} was aborted`);
@@ -12118,7 +12154,7 @@ export class ToriiClient {
       );
     }
 
-    const configuredTimeoutMs = Number(this._config?.timeoutMs);
+    const configuredTimeoutMs = Number(this.#config?.timeoutMs);
     const readTimeoutMs =
       Number.isFinite(configuredTimeoutMs) && configuredTimeoutMs > 0
         ? Math.min(configuredTimeoutMs, BOUNDED_JSON_MAX_READ_TIMEOUT_MS)
@@ -12261,6 +12297,7 @@ export class ToriiClient {
     options = {},
     normalizePage,
     allowedKeys = ITERABLE_LIST_OPTION_KEYS,
+    defaultCanonicalAuth = null,
   ) {
     const optionContext = `options for ${path}`;
     const normalizedOptions = normalizeIterableListOptions(
@@ -12268,7 +12305,9 @@ export class ToriiClient {
       optionContext,
       allowedKeys,
     );
-    const canonicalAuth = ToriiClient._normalizeCanonicalAuth(normalizedOptions.canonicalAuth);
+    const canonicalAuth = normalizedOptions.canonicalAuth === undefined
+      ? defaultCanonicalAuth
+      : ToriiClient._normalizeCanonicalAuth(normalizedOptions.canonicalAuth);
     const { signal, canonicalAuth: _ignoredCanonical, ...rest } = normalizedOptions;
     const params = ToriiClient._encodeIterableListParams(rest, optionContext, allowedKeys);
     const response = await this._request("GET", path, {
@@ -12297,7 +12336,7 @@ export class ToriiClient {
       optionContext,
       extraAllowedKeys,
     );
-    const { signal, canonicalAuth, rest } = normalizeCanonicalApplicationPostOptions(normalizedOptions, optionContext, ToriiClient, this._canonicalRequestAuth);
+    const { signal, canonicalAuth, rest } = normalizeCanonicalApplicationPostOptions(normalizedOptions, optionContext, ToriiClient, this.#canonicalRequestAuth);
     const envelope = ToriiClient._buildIterableQueryEnvelope(rest);
     if (typeof envelopeHook === "function") {
       envelopeHook(envelope, rest);
@@ -12873,7 +12912,7 @@ export class ToriiClient {
     }
     let buffer;
     if (Buffer.isBuffer(value)) {
-      buffer = value;
+      buffer = Buffer.from(value);
     } else if (typeof value === "string") {
       const trimmed = value.trim();
       const hex = trimmed.startsWith("0x") || trimmed.startsWith("0X")
@@ -12885,9 +12924,11 @@ export class ToriiClient {
         buffer = Buffer.from(trimmed, "utf8");
       }
     } else if (ArrayBuffer.isView(value)) {
-      buffer = Buffer.from(value.buffer, value.byteOffset, value.byteLength);
+      buffer = Buffer.from(
+        new Uint8Array(value.buffer, value.byteOffset, value.byteLength),
+      );
     } else if (value instanceof ArrayBuffer) {
-      buffer = Buffer.from(value);
+      buffer = Buffer.from(new Uint8Array(value));
     } else if (Array.isArray(value)) {
       buffer = normalizeByteArray(value, path);
     } else {
@@ -12971,27 +13012,26 @@ export class ToriiClient {
 
   static _normalizeBlockListOptions(options) {
     if (options === undefined || options === null) {
-      return { page: 1, perPage: DEFAULT_PAGE_SIZE, signal: undefined };
+      return { limit: EXPLORER_CURSOR_DEFAULT_LIMIT, signal: undefined };
     }
     const record = requirePlainObjectOption(options, "block list options");
     assertSupportedOptionKeys(
       record,
-      new Set(["page", "page_number", "perPage", "per_page", "limit", "signal"]),
+      new Set(["cursor", "limit", "signal"]),
       "block list options",
     );
     const { signal } = normalizeSignalOption(record, "listBlocks");
-    const normalized = {};
-    normalized.page = ToriiClient._normalizeUnsignedInteger(
-      record.page ?? record.page_number ?? 1,
-      "page",
-      { allowZero: false },
-    );
-    normalized.perPage = ToriiClient._normalizeUnsignedInteger(
-      record.perPage ?? record.per_page ?? record.limit ?? DEFAULT_PAGE_SIZE,
-      "perPage",
-      { allowZero: false },
-    );
-    normalized.signal = signal;
+    const normalized = {
+      limit: ToriiClient._normalizeUnsignedInteger(
+        record.limit ?? EXPLORER_CURSOR_DEFAULT_LIMIT,
+        "limit",
+        { allowZero: false, max: EXPLORER_CURSOR_MAX_LIMIT },
+      ),
+      signal,
+    };
+    if (record.cursor !== undefined && record.cursor !== null) {
+      normalized.cursor = normalizeExplorerCursorValue(record.cursor, "cursor");
+    }
     return normalized;
   }
 
@@ -14240,7 +14280,7 @@ function normalizeUint64DecimalString(value, name, options = {}) {
   return integer.toString(10);
 }
 
-function normalizeGovernanceUint64Integer(value, name) {
+function normalizeGovernanceUint64Integer(value, name, options = {}) {
   let integer;
   if (typeof value === "number") {
     if (!Number.isSafeInteger(value) || value < 0) {
@@ -14253,27 +14293,21 @@ function normalizeGovernanceUint64Integer(value, name) {
     integer = BigInt(value);
   } else if (typeof value === "bigint") {
     integer = value;
-  } else if (typeof value === "string") {
-    const canonical = requireExactNonEmptyString(value, name);
-    if (!/^(?:0|[1-9][0-9]*)$/u.test(canonical)) {
-      throw createValidationError(
-        ValidationErrorCode.INVALID_NUMERIC,
-        `${name} must be a canonical unsigned 64-bit integer`,
-        name,
-      );
-    }
-    integer = BigInt(canonical);
   } else {
     throw createValidationError(
       ValidationErrorCode.INVALID_NUMERIC,
-      `${name} must be a lossless unsigned 64-bit integer`,
+      `${name} must be an unsigned 64-bit JSON integer token`,
       name,
     );
   }
-  if (integer < 0n || integer > MAX_UINT64_BIGINT) {
+  if (
+    integer < 0n
+    || (options.allowZero === false && integer === 0n)
+    || integer > MAX_UINT64_BIGINT
+  ) {
     throw createValidationError(
       ValidationErrorCode.VALUE_OUT_OF_RANGE,
-      `${name} must be at most ${MAX_UINT64_BIGINT.toString(10)}`,
+      `${name} must be ${options.allowZero === false ? "positive and " : ""}at most ${MAX_UINT64_BIGINT.toString(10)}`,
       name,
     );
   }
@@ -14322,6 +14356,30 @@ function normalizeIsoSubmissionResponse(payload, context, options = {}) {
             record.embedded_signature_detected,
             `${context}.embedded_signature_detected`,
           ),
+    originator_participant_id: normalizeIsoOptionalString(
+      record.originator_participant_id,
+      `${context}.originator_participant_id`,
+    ),
+    counterparty_participant_id: normalizeIsoOptionalString(
+      record.counterparty_participant_id,
+      `${context}.counterparty_participant_id`,
+    ),
+    admitting_participant_id: normalizeIsoOptionalString(
+      record.admitting_participant_id,
+      `${context}.admitting_participant_id`,
+    ),
+    admitting_operator_key: normalizeIsoOptionalString(
+      record.admitting_operator_key,
+      `${context}.admitting_operator_key`,
+    ),
+    pinned_profile_id: normalizeIsoOptionalString(
+      record.pinned_profile_id,
+      `${context}.pinned_profile_id`,
+    ),
+    pinned_signature_policy: normalizeIsoOptionalString(
+      record.pinned_signature_policy,
+      `${context}.pinned_signature_policy`,
+    ),
     status_history: normalizeIsoStatusHistory(record.status_history, `${context}.status_history`),
     hold_reason_code: normalizeIsoOptionalString(record.hold_reason_code, `${context}.hold_reason_code`),
     change_reason_codes: normalizeIsoStringArray(
@@ -14354,6 +14412,86 @@ function normalizeIsoSubmissionResponse(payload, context, options = {}) {
       `${context}.asset_definition_id`,
     ),
     asset_id: normalizeIsoOptionalString(record.asset_id, `${context}.asset_id`),
+    settlement_amount: normalizeIsoOptionalString(
+      record.settlement_amount,
+      `${context}.settlement_amount`,
+    ),
+    settlement_currency: normalizeIsoOptionalString(
+      record.settlement_currency,
+      `${context}.settlement_currency`,
+    ),
+    settlement_date: normalizeIsoOptionalString(
+      record.settlement_date,
+      `${context}.settlement_date`,
+    ),
+    settlement_quantity: normalizeIsoOptionalString(
+      record.settlement_quantity,
+      `${context}.settlement_quantity`,
+    ),
+    settlement_movement_type: normalizeIsoOptionalString(
+      record.settlement_movement_type,
+      `${context}.settlement_movement_type`,
+    ),
+    settlement_payment_type: normalizeIsoOptionalString(
+      record.settlement_payment_type,
+      `${context}.settlement_payment_type`,
+    ),
+    security_instrument_id: normalizeIsoOptionalString(
+      record.security_instrument_id,
+      `${context}.security_instrument_id`,
+    ),
+    collateral_obligation_id: normalizeIsoOptionalString(
+      record.collateral_obligation_id,
+      `${context}.collateral_obligation_id`,
+    ),
+    collateral_original_amount: normalizeIsoOptionalString(
+      record.collateral_original_amount,
+      `${context}.collateral_original_amount`,
+    ),
+    collateral_original_currency: normalizeIsoOptionalString(
+      record.collateral_original_currency,
+      `${context}.collateral_original_currency`,
+    ),
+    collateral_original_instrument_id: normalizeIsoOptionalString(
+      record.collateral_original_instrument_id,
+      `${context}.collateral_original_instrument_id`,
+    ),
+    collateral_substitute_amount: normalizeIsoOptionalString(
+      record.collateral_substitute_amount,
+      `${context}.collateral_substitute_amount`,
+    ),
+    collateral_substitute_currency: normalizeIsoOptionalString(
+      record.collateral_substitute_currency,
+      `${context}.collateral_substitute_currency`,
+    ),
+    collateral_substitute_instrument_id: normalizeIsoOptionalString(
+      record.collateral_substitute_instrument_id,
+      `${context}.collateral_substitute_instrument_id`,
+    ),
+    collateral_effective_date: normalizeIsoOptionalString(
+      record.collateral_effective_date,
+      `${context}.collateral_effective_date`,
+    ),
+    collateral_substitution_type: normalizeIsoOptionalString(
+      record.collateral_substitution_type,
+      `${context}.collateral_substitution_type`,
+    ),
+    collateral_haircut: normalizeIsoOptionalString(
+      record.collateral_haircut,
+      `${context}.collateral_haircut`,
+    ),
+    collateral_reason_code: normalizeIsoOptionalString(
+      record.collateral_reason_code,
+      `${context}.collateral_reason_code`,
+    ),
+    plan_execution_order: normalizeIsoOptionalString(
+      record.plan_execution_order,
+      `${context}.plan_execution_order`,
+    ),
+    plan_atomicity: normalizeIsoOptionalString(
+      record.plan_atomicity,
+      `${context}.plan_atomicity`,
+    ),
   };
 
   if (options.includeStatusFields) {
@@ -15263,7 +15401,13 @@ async function parseGovernanceProposalRecord(payload) {
     "governance.proposal.kind",
   );
   let proposalOperator = null;
-  if (kind.variant === "ValidationFeePolicy") {
+  if (kind.variant === "DeployContract") {
+    proposalOperator = kind.deploy_contract.proposal_operator;
+  } else if (kind.variant === "RuntimeUpgrade") {
+    proposalOperator = kind.runtime_upgrade.proposal_operator;
+  } else if (kind.variant === "ContractLifecycleGovernance") {
+    proposalOperator = kind.contract_lifecycle_governance.proposal_operator;
+  } else if (kind.variant === "ValidationFeePolicy") {
     proposalOperator = kind.validation_fee_policy.proposal_operator;
   } else if (kind.variant === "ValidationFeePayoutLifecycle") {
     proposalOperator = kind.validation_fee_payout_lifecycle.proposal_operator;
@@ -15341,6 +15485,36 @@ async function parseGovernanceProposalKind(payload, context) {
           `${context}.payload`,
         ),
       };
+    case "ContractLifecycleGovernance": {
+      const { normalizeGovernanceProposalWireV1 } = await loadToriiOptionalModule();
+      return {
+        variant,
+        contract_lifecycle_governance: normalizeGovernanceProposalWireV1(
+          record,
+          context,
+        ).payload,
+      };
+    }
+    case "ContractEmergencyHold": {
+      const { normalizeGovernanceProposalWireV1 } = await loadToriiOptionalModule();
+      return {
+        variant,
+        contract_emergency_hold: normalizeGovernanceProposalWireV1(
+          record,
+          context,
+        ).payload,
+      };
+    }
+    case "GlobalDataTriggerPermissionGovernance": {
+      const { normalizeGovernanceProposalWireV1 } = await loadToriiOptionalModule();
+      return {
+        variant,
+        global_data_trigger_permission_governance: normalizeGovernanceProposalWireV1(
+          record,
+          context,
+        ).payload,
+      };
+    }
     default:
       throw new TypeError(`${context}.kind contains unsupported proposal variant: ${variant}`);
   }
@@ -15350,6 +15524,7 @@ function parseGovernanceDeployContract(payload, context) {
   const record = requireExactGovernanceProposalRecord(
     payload,
     [
+      "proposal_operator",
       "contract_address",
       "code_hash",
       "abi_hash",
@@ -15367,6 +15542,10 @@ function parseGovernanceDeployContract(payload, context) {
   );
   parseCanonicalContractAddress(contractAddress, `${context}.contract_address`);
   return {
+    proposal_operator: requireCanonicalGovernanceAccountId(
+      record.proposal_operator,
+      `${context}.proposal_operator`,
+    ),
     contract_address: contractAddress,
     code_hash: requireExactLowerHex32String(record.code_hash, `${context}.code_hash`),
     abi_hash: requireExactLowerHex32String(record.abi_hash, `${context}.abi_hash`),
@@ -15394,7 +15573,11 @@ function parseGovernanceManifestProvenance(payload, context) {
 }
 
 function parseGovernanceRuntimeUpgrade(payload, context) {
-  const record = requireExactGovernanceProposalRecord(payload, ["manifest"], context);
+  const record = requireExactGovernanceProposalRecord(
+    payload,
+    ["proposal_operator", "manifest"],
+    context,
+  );
   const manifestContext = `${context}.manifest`;
   const manifest = requireExactGovernanceProposalRecord(
     record.manifest,
@@ -15439,6 +15622,10 @@ function parseGovernanceRuntimeUpgrade(payload, context) {
     throw new TypeError(`${manifestContext}.end_height must be greater than start_height`);
   }
   return {
+    proposal_operator: requireCanonicalGovernanceAccountId(
+      record.proposal_operator,
+      `${context}.proposal_operator`,
+    ),
     manifest: {
       name: requireExactNonEmptyString(manifest.name, `${manifestContext}.name`),
       description: requireExactString(manifest.description, `${manifestContext}.description`),
@@ -16459,64 +16646,8 @@ function parseGovernanceUnlockStats(payload) {
   };
 }
 
-function normalizeGovernanceCouncilCurrentResponse(payload) {
-  const record = ensureRecord(payload, "governance council current response");
-  const derivedBy = normalizeCouncilDerivedBy(
-    record.derived_by ?? "Manual",
-    "governance council current response.derived_by",
-  );
-  return {
-    epoch: ToriiClient._normalizeUnsignedInteger(
-      record.epoch,
-      "governance council current response.epoch",
-      { allowZero: true },
-    ),
-    members: normalizeGovernanceCouncilMembers(
-      record.members,
-      "governance council current response.members",
-    ),
-    alternates: normalizeGovernanceCouncilMembers(
-      record.alternates ?? [],
-      "governance council current response.alternates",
-    ),
-    candidate_count: ToriiClient._normalizeUnsignedInteger(
-      record.candidate_count ?? 0,
-      "governance council current response.candidate_count",
-      { allowZero: true },
-    ),
-    derived_by: derivedBy,
-  };
-}
-
 function normalizeErrorPath(context) {
   return typeof context === "string" ? context.replace(/\s+/g, ".") : context;
-}
-
-function normalizeGovernanceCouncilMembers(value, context) {
-  if (!Array.isArray(value)) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${context} must be an array`,
-      normalizeErrorPath(context),
-    );
-  }
-  return value.map((entry, index) => {
-    const record = ensureRecord(entry, `${context}[${index}]`);
-    return {
-      account_id: ToriiClient._normalizeAccountId(
-        record.account_id,
-        `${context}[${index}].account_id`,
-      ),
-    };
-  });
-}
-
-function normalizeCouncilDerivedBy(value, context) {
-  const normalized = requireNonEmptyString(value, context);
-  if (normalized !== "Sortition" && normalized !== "Manual") {
-    throw new TypeError(`${context} must be Sortition or Manual`);
-  }
-  return normalized;
 }
 
 function normalizeProtectedNamespaceList(input) {
@@ -17749,13 +17880,6 @@ function normalizeSnsNameStatus(payload, context) {
   return { status };
 }
 
-function normalizeStringList(value, context) {
-  if (!Array.isArray(value)) {
-    throw new TypeError(`${context} must be an array`);
-  }
-  return value.map((entry, index) => requireNonEmptyString(entry, `${context}[${index}]`));
-}
-
 function normalizeExplorerNftRecord(payload, context) {
   const record = ensureRecord(payload ?? {}, context);
   const id = requireNonEmptyString(record.id ?? "", `${context}.id`);
@@ -17861,15 +17985,24 @@ function normalizeExplorerRwaPage(payload) {
 
 function normalizeExplorerBlocksPage(payload) {
   const record = ensureRecord(payload ?? {}, "explorer blocks response");
+  requireExactExplorerCursorFields(
+    record,
+    ["pagination", "items"],
+    "explorer blocks response",
+  );
   const items = record.items;
   if (!Array.isArray(items)) {
     throw new TypeError("explorer blocks response.items must be an array");
   }
+  const pagination = normalizeExplorerHistoryCursorMeta(
+    record.pagination,
+    "explorer blocks response.pagination",
+  );
+  if (items.length > pagination.limit) {
+    throw new TypeError("explorer blocks response.items must not exceed pagination.limit");
+  }
   return {
-    pagination: normalizeExplorerPaginationMeta(
-      record.pagination ?? {},
-      "explorer blocks response.pagination",
-    ),
+    pagination,
     items: items.map((item, index) =>
       normalizeExplorerBlockRecord(item, `explorer blocks response.items[${index}]`),
     ),
@@ -17911,30 +18044,6 @@ function normalizeExplorerAccountQrResponse(payload, context) {
     modules,
     qrVersion,
     svg,
-  };
-}
-
-function normalizeExplorerPaginationMeta(payload, context) {
-  const record = ensureRecord(payload ?? {}, context);
-  return {
-    page: ToriiClient._normalizeUnsignedInteger(record.page ?? 1, `${context}.page`, {
-      allowZero: false,
-    }),
-    perPage: ToriiClient._normalizeUnsignedInteger(
-      record.per_page ?? 1,
-      `${context}.per_page`,
-      { allowZero: false },
-    ),
-    totalPages: ToriiClient._normalizeUnsignedInteger(
-      record.total_pages ?? 0,
-      `${context}.total_pages`,
-      { allowZero: true },
-    ),
-    totalItems: ToriiClient._normalizeUnsignedInteger(
-      record.total_items ?? 0,
-      `${context}.total_items`,
-      { allowZero: true },
-    ),
   };
 }
 
@@ -18005,6 +18114,52 @@ function normalizeExplorerCursorMeta(payload, context) {
   }
   return {
     limit,
+    nextCursor,
+    hasMore: record.has_more,
+  };
+}
+
+function normalizeExplorerHistoryCursorMeta(payload, context) {
+  const record = ensureRecord(payload ?? {}, context);
+  requireExactExplorerCursorFields(
+    record,
+    ["limit", "snapshot_height", "snapshot_hash", "next_cursor", "has_more"],
+    context,
+  );
+  const limit = requireExactJsonUnsignedInteger(record.limit, `${context}.limit`, {
+    allowZero: false,
+  });
+  if (limit > EXPLORER_CURSOR_MAX_LIMIT) {
+    throw new TypeError(`${context}.limit must be between 1 and ${EXPLORER_CURSOR_MAX_LIMIT}`);
+  }
+  const snapshotHeight = requireExactJsonUnsignedInteger(
+    record.snapshot_height,
+    `${context}.snapshot_height`,
+  );
+  const snapshotHash = requireOptionalExactLowerHex32String(
+    record.snapshot_hash,
+    `${context}.snapshot_hash`,
+  );
+  if ((snapshotHeight === 0) !== (snapshotHash === null)) {
+    throw new TypeError(
+      `${context}.snapshot_hash must be null exactly when snapshot_height is zero`,
+    );
+  }
+  if (typeof record.has_more !== "boolean") {
+    throw new TypeError(`${context}.has_more must be a boolean`);
+  }
+  const nextCursor = normalizeExplorerCursorValue(
+    record.next_cursor,
+    `${context}.next_cursor`,
+    { nullable: true },
+  );
+  if (record.has_more !== (nextCursor !== null)) {
+    throw new TypeError(`${context}.has_more must match next_cursor availability`);
+  }
+  return {
+    limit,
+    snapshotHeight,
+    snapshotHash,
     nextCursor,
     hasMore: record.has_more,
   };
@@ -18350,16 +18505,6 @@ function parseStringArray(value, context) {
   });
 }
 
-function parseRecordArray(value, context) {
-  if (value == null) {
-    return [];
-  }
-  if (!Array.isArray(value)) {
-    throw new TypeError(`${context} must be an array of objects`);
-  }
-  return value.map((entry, index) => ensureRecord(entry, `${context}[${index}]`));
-}
-
 function isPlainObject(value) {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     return false;
@@ -18431,17 +18576,6 @@ function requireStringArray(value, context) {
     }
     return entry;
   });
-}
-
-function requireUnsignedIntegerArray(value, context) {
-  if (!Array.isArray(value)) {
-    throw new TypeError(`${context} must be an array`);
-  }
-  return value.map((entry, index) =>
-    ToriiClient._normalizeUnsignedInteger(entry, `${context}[${index}]`, {
-      allowZero: true,
-    }),
-  );
 }
 
 function normalizeUaidLiteral(value, context = "uaid") {
@@ -19451,6 +19585,54 @@ function bodyContainsSensitiveKeyMaterial(body, headers) {
   );
 }
 
+function composeRequestSignal(callerSignal, timeoutMs) {
+  if (
+    typeof AbortControllerConstructor !== "function" ||
+    typeof abortControllerAbort !== "function" ||
+    typeof abortControllerSignalGetter !== "function" ||
+    !(typeof timeoutMs === "number" && timeoutMs > 0)
+  ) {
+    return {
+      signal: callerSignal,
+      cleanup() {},
+      didTimeout: () => false,
+    };
+  }
+  const controller = new AbortControllerConstructor();
+  const composedSignal = Reflect.apply(abortControllerSignalGetter, controller, []);
+  let timedOut = false;
+  let timeoutId;
+  const onCallerAbort = () => {
+    Reflect.apply(abortControllerAbort, controller, [signalAbortReason(callerSignal)]);
+  };
+  if (callerSignal) {
+    if (signalIsAborted(callerSignal)) {
+      onCallerAbort();
+    } else {
+      addSignalAbortListener(callerSignal, onCallerAbort);
+    }
+  }
+  if (!signalIsAborted(composedSignal)) {
+    timeoutId = scheduleTimeout(() => {
+      timedOut = true;
+      Reflect.apply(abortControllerAbort, controller, [
+        new Error(`Torii request timed out after ${timeoutMs} ms`),
+      ]);
+    }, timeoutMs);
+  }
+  let cleaned = false;
+  return {
+    signal: composedSignal,
+    cleanup() {
+      if (cleaned) return;
+      cleaned = true;
+      if (timeoutId !== undefined) cancelTimeout(timeoutId);
+      if (callerSignal) removeSignalAbortListener(callerSignal, onCallerAbort);
+    },
+    didTimeout: () => timedOut,
+  };
+}
+
 function delay(ms, signal) {
   if (!signal) {
     return new Promise((resolve) => {
@@ -19897,62 +20079,8 @@ function requireNonNegativeIntegerLike(value, context) {
   return numeric;
 }
 
-function requireExactPositiveIntegerLike(value, context) {
-  if (value === undefined || value === null) {
-    throw new TypeError(`${context} is required`);
-  }
-  if (typeof value === "number") {
-    if (!Number.isFinite(value) || !Number.isSafeInteger(value) || value <= 0) {
-      throw new RangeError(`${context} must be a positive integer`);
-    }
-    if (value > MAX_SIGNED_INT32) {
-      throw new RangeError(`${context} must fit in signed 32-bit range`);
-    }
-    return value;
-  }
-  if (typeof value === "bigint") {
-    if (value <= 0n) {
-      throw new RangeError(`${context} must be a positive integer`);
-    }
-    if (value > MAX_SIGNED_INT32_BIGINT) {
-      throw new RangeError(`${context} must fit in signed 32-bit range`);
-    }
-    return Number(value);
-  }
-  if (typeof value === "string") {
-    if (value.trim() !== value || !/^[1-9][0-9]*$/.test(value)) {
-      throw new RangeError(`${context} must be an exact positive integer string`);
-    }
-    const integer = BigInt(value);
-    if (integer > MAX_SIGNED_INT32_BIGINT) {
-      throw new RangeError(`${context} must fit in signed 32-bit range`);
-    }
-    return Number(integer);
-  }
-  throw new TypeError(`${context} must be a positive integer`);
-}
-
-function requireEvidencePhase(value, context) {
-  const phase = requireExactNonEmptyString(value, context);
-  if (!EVIDENCE_PHASE_VALUES.has(phase)) {
-    throw new RangeError(
-      `${context} must be one of ${Array.from(EVIDENCE_PHASE_VALUES).join(", ")}`,
-    );
-  }
-  return phase;
-}
-
-let cachedSorafsNative;
-
-function getSorafsNativeBinding() {
-  if (cachedSorafsNative === undefined) {
-    cachedSorafsNative = getNativeBinding();
-  }
-  return cachedSorafsNative;
-}
-
-function requireSorafsNativeBinding() {
-  const binding = getSorafsNativeBinding();
+function requireSorafsNativeBinding(nativeRuntime) {
+  const binding = resolveNativeBinding(nativeRuntime);
   if (
     !binding ||
     typeof binding.sorafsEvaluateAliasProof !== "function" ||
@@ -21321,13 +21449,6 @@ function normalizeManifestRepeatsPayload(value, context) {
   throw new TypeError(`${context} must be Indefinitely or Exactly`);
 }
 
-function normalizeOptionalBase64Payload(value, name) {
-  if (value === undefined || value === null) {
-    return null;
-  }
-  return normalizeRequiredBase64Payload(value, name);
-}
-
 function normalizeOptionalExactBase64Payload(value, name) {
   return value === undefined || value === null
     ? null
@@ -21401,49 +21522,6 @@ function normalizeRequiredExactBase64Payload(value, name) {
     );
   }
   return Buffer.from(buffer).toString("base64");
-}
-
-function normalizeBase64Token(value, name) {
-  if (typeof value !== "string") {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_STRING,
-      `${name} must be a string`,
-      name,
-    );
-  }
-  const trimmed = value.trim();
-  if (!trimmed) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_STRING,
-      `${name} must be a non-empty base64 string`,
-      name,
-    );
-  }
-  const normalized = tryNormalizeBase64String(trimmed);
-  if (normalized) {
-    return normalized;
-  }
-  const base64UrlCandidate = trimmed.replace(/-/g, "+").replace(/_/g, "/");
-  if (base64UrlCandidate !== trimmed) {
-    const urlNormalized = tryNormalizeBase64String(base64UrlCandidate);
-    if (urlNormalized) {
-      return urlNormalized;
-    }
-  }
-  throw createValidationError(
-    ValidationErrorCode.INVALID_STRING,
-    `${name} must be a valid base64 or base64url string`,
-    name,
-  );
-}
-
-function tryNormalizeBase64String(value) {
-  try {
-    const decoded = strictDecodeBase64(value);
-    return Buffer.from(decoded).toString("base64");
-  } catch {
-    return null;
-  }
 }
 
 function normalizeOptionalHex32(value, name) {
@@ -21551,26 +21629,6 @@ function normalizeHex16String(value, name) {
   return hex.toLowerCase();
 }
 
-function normalizeHex20String(value, name) {
-  const normalized = requireHexString(value, name);
-  const hex =
-    normalized.startsWith("0x") || normalized.startsWith("0X")
-      ? normalized.slice(2)
-      : normalized;
-  if (hex.length !== 40) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_HEX,
-      `${name} must be a 20-byte hex string`,
-      name,
-    );
-  }
-  return hex.toLowerCase();
-}
-
-function normalizeNonZeroHex20String(value, name) {
-  return normalizeNonZeroHexBytesString(value, name, 20);
-}
-
 function normalizeNonZeroHex32String(value, name) {
   return normalizeNonZeroHexBytesString(value, name, 32);
 }
@@ -21603,17 +21661,6 @@ function normalizeHexBytesString(value, name) {
   return hex.toLowerCase();
 }
 
-function normalizeExactHexBytesString(value, name) {
-  if (typeof value === "string" && value.trim() !== value) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_HEX,
-      `${name} must be a canonical hex string`,
-      name,
-    );
-  }
-  return normalizeHexBytesString(value, name);
-}
-
 function normalizeNonZeroHexBytesString(value, name, expectedByteLength) {
   const hex = normalizeHexBytesString(value, name);
   if (hex.length === 0) {
@@ -21640,79 +21687,6 @@ function normalizeNonZeroHexBytesString(value, name, expectedByteLength) {
   return hex;
 }
 
-function normalizeExactNonZeroHexBytesString(value, name, expectedByteLength) {
-  const hex = normalizeExactHexBytesString(value, name);
-  if (hex.length === 0) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_HEX,
-      `${name} must be a non-empty byte-aligned hex string`,
-      name,
-    );
-  }
-  if (/^(?:00)+$/.test(hex)) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_HEX,
-      `${name} must not be all zero`,
-      name,
-    );
-  }
-  if (expectedByteLength !== undefined && hex.length !== expectedByteLength * 2) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_HEX,
-      `${name} must be a ${expectedByteLength}-byte hex string`,
-      name,
-    );
-  }
-  return hex;
-}
-
-function normalizeExactNonZeroHex20String(value, name) {
-  return normalizeExactNonZeroHexBytesString(value, name, 20);
-}
-
-function normalizeExactNonZeroHex32String(value, name) {
-  return normalizeExactNonZeroHexBytesString(value, name, 32);
-}
-
-const TRON_BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
-const TRON_BASE58_INDEX = new Map(
-  Array.from(TRON_BASE58_ALPHABET, (character, index) => [character, index]),
-);
-
-function normalizeTronBase58CheckAddress(value, name) {
-  const normalized = requireNonEmptyString(value, name);
-  if (normalized !== value) {
-    throw invalidTronBase58CheckAddress(name);
-  }
-  decodeTronBase58CheckAddressPayload(normalized, name);
-  return normalized;
-}
-
-function normalizeHashLike32(value, name, options = {}) {
-  if (Buffer.isBuffer(value)) {
-    return normalizeHex32String(value.toString("hex"), name, options);
-  }
-  if (ArrayBuffer.isView(value)) {
-    return normalizeHex32String(
-      Buffer.from(value.buffer, value.byteOffset, value.byteLength).toString("hex"),
-      name,
-      options,
-    );
-  }
-  if (value instanceof ArrayBuffer) {
-    return normalizeHex32String(Buffer.from(value).toString("hex"), name, options);
-  }
-  if (Array.isArray(value)) {
-    return normalizeHex32String(normalizeByteArray(value, name).toString("hex"), name, options);
-  }
-  const normalized = requireNonEmptyString(value, name);
-  const trimmed = normalized.trim();
-  if (/^hash:[0-9a-fA-F]{64}#[0-9a-fA-F]{4}$/.test(trimmed)) {
-    return parseHashLiteralToHex(trimmed, name);
-  }
-  return normalizeHex32String(trimmed, name, options);
-}
-
 function parseHashLiteralToHex(literal, name) {
   const match = /^hash:([0-9A-Fa-f]{64})#([0-9A-Fa-f]{4})$/.exec(literal);
   if (!match) {
@@ -21730,27 +21704,6 @@ function parseHashLiteralToHex(literal, name) {
     throw new TypeError(`${name} must set the Iroha Hash marker bit`);
   }
   return hex;
-}
-
-function formatHashLiteral(bodyHex) {
-  const upper = bodyHex.toUpperCase();
-  const checksum = computeHashLiteralCrc("hash", upper);
-  return `hash:${upper}#${checksum}`;
-}
-
-function normalizeOptionalHashLiteral(value, name) {
-  if (value === undefined || value === null) {
-    return null;
-  }
-  const hex = normalizeHashLike32(value, name);
-  return formatHashLiteral(hex);
-}
-
-function normalizeOptionalHexString(value, name) {
-  if (value === undefined || value === null) {
-    return null;
-  }
-  return requireHexString(value, name);
 }
 
 function cloneJsonValue(value, path, { nullPrototype = false } = {}) {
@@ -21864,15 +21817,6 @@ function cloneJsonValueInternal(value, path, state, depth) {
 function normalizeSpaceDirectoryManifestPayload(input, context) {
   const manifest = cloneJsonValue(input, context);
   return normalizeUaidManifest(manifest, context);
-}
-
-function normalizeOptionalUnsignedInteger(value, context) {
-  if (value === undefined || value === null) {
-    return undefined;
-  }
-  return ToriiClient._normalizeUnsignedInteger(value, context, {
-    allowZero: true,
-  });
 }
 
 function normalizeRegisterContractCodeRequest(input) {
@@ -22137,7 +22081,6 @@ const {
   normalizeQuantityInput,
   normalizeRequiredBase64Payload,
   normalizeUint64DecimalString,
-  requireExactLowerHex32String,
   requireCanonicalTransactionHashString,
   requireExactNonEmptyString,
   requireExactTokenString,
@@ -22526,7 +22469,7 @@ function normalizeContractCallResponse(payload) {
   return normalized;
 }
 
-function normalizeContractCallDraftResponse(
+async function normalizeContractCallDraftResponse(
   payload,
   request,
   draftIntent,
@@ -22636,7 +22579,7 @@ function normalizeContractCallDraftResponse(
       "contractCall operation_receipt payload digest changed the caller-trusted draftIntent",
     );
   }
-  validateUnsignedResponsePayloadBinding(
+  await validateUnsignedResponsePayloadBinding(
     response,
     request.authority,
     receipt.fee_payment,
@@ -23679,7 +23622,7 @@ function exactArchiveEquals(left, right) {
   return left.length === right.length && timingSafeEqual(left, right);
 }
 
-function validateUnsignedResponsePayloadBinding(
+async function validateUnsignedResponsePayloadBinding(
   response,
   authority,
   feePayment,
@@ -23692,6 +23635,10 @@ function validateUnsignedResponsePayloadBinding(
     throw new TypeError(`${context} requires a caller-trusted draftIntent`);
   }
   requireLocalDraftSigningContext(localSigningContext, context);
+  const {
+    inspectCanonicalTransactionPayloadBindings,
+    noritoEncodeFeePaymentIntentArchive,
+  } = await loadToriiOptionalModule();
   let bindings;
   try {
     bindings = inspectCanonicalTransactionPayloadBindings(
@@ -23737,7 +23684,7 @@ function validateUnsignedResponsePayloadBinding(
   }
 }
 
-function validateMultisigResponseRequestBinding(
+async function validateMultisigResponseRequestBinding(
   response,
   request,
   context,
@@ -23758,7 +23705,7 @@ function validateMultisigResponseRequestBinding(
     );
   }
   if (!response.submitted) {
-    validateUnsignedResponsePayloadBinding(
+    await validateUnsignedResponsePayloadBinding(
       response,
       request.signer_account_id,
       response.fee_payment,
@@ -24091,21 +24038,6 @@ function standardBase64Sextet(code) {
   return -1;
 }
 
-function normalizeManifestEntrypointsPayload(value, name) {
-  if (value === undefined || value === null) {
-    return null;
-  }
-  if (!Array.isArray(value)) {
-    throw new TypeError(`${name} must be an array of entrypoints`);
-  }
-  if (value.length === 0) {
-    return [];
-  }
-  return value.map((entry, index) =>
-    normalizeManifestEntrypointPayload(entry, `${name}[${index}]`),
-  );
-}
-
 function normalizeManifestEntrypointKind(value, name) {
   if (value === undefined || value === null) {
     throw new TypeError(`${name} is required`);
@@ -24143,33 +24075,279 @@ function canonicalManifestEntrypointKind(value, name) {
 }
 
 function normalizeGovernanceContractResponse(payload) {
+  const context = "governanceContract";
   const record = ensureRecord(payload ?? {}, "governance contract response");
   assertSupportedOptionKeys(
     record,
-    new Set(["found", "contract_address", "dataspace", "code_hash_hex"]),
+    new Set([
+      "found",
+      "contract_address",
+      "contract_subject_account",
+      "dataspace",
+      "active",
+      "lifecycle",
+      "emergency_hold_active",
+      "code_hash_hex",
+      "abi_hash_hex",
+      "public_entrypoints",
+    ]),
     "governance contract response",
   );
-  return {
-    found: requireExactBoolean(record.found, "governanceContract.found"),
+  const found = requireExactBoolean(record.found, "governanceContract.found");
+  const active = found
+    ? requireExactBoolean(record.active, `${context}.active`)
+    : null;
+  const fields = found
+    ? active
+      ? [
+          "found",
+          "contract_address",
+          "contract_subject_account",
+          "dataspace",
+          "active",
+          "lifecycle",
+          "emergency_hold_active",
+          "code_hash_hex",
+          "abi_hash_hex",
+          "public_entrypoints",
+        ]
+      : [
+          "found",
+          "contract_address",
+          "contract_subject_account",
+          "dataspace",
+          "active",
+          "lifecycle",
+          "emergency_hold_active",
+        ]
+    : ["found", "contract_address", "dataspace"];
+  requireExactGovernanceProposalRecord(record, fields, "governance contract response");
+  const result = {
+    found,
     contract_address: requireExactNonEmptyString(
       record.contract_address,
-      "governanceContract.contract_address",
+      `${context}.contract_address`,
     ),
-    dataspace:
-      record.dataspace == null
+    contract_subject_account: found
+      ? requireCanonicalGovernanceAccountId(
+          record.contract_subject_account,
+          `${context}.contract_subject_account`,
+        )
+      : null,
+    dataspace: requireExactNonEmptyString(record.dataspace, `${context}.dataspace`),
+    active,
+    lifecycle:
+      !found
         ? null
-        : requireExactNonEmptyString(
-            record.dataspace,
-            "governanceContract.dataspace",
+        : normalizeGovernanceContractLifecycle(
+            record.lifecycle,
+            `${context}.lifecycle`,
           ),
+    emergency_hold_active: found
+      ? requireExactBoolean(
+          record.emergency_hold_active,
+          `${context}.emergency_hold_active`,
+        )
+      : null,
     code_hash_hex:
-      record.code_hash_hex == null
+      !active
         ? null
         : requireExactLowerHex32String(
             record.code_hash_hex,
-            "governanceContract.code_hash_hex",
+            `${context}.code_hash_hex`,
+          ),
+    abi_hash_hex:
+      !active
+        ? null
+        : requireExactLowerHex32String(
+            record.abi_hash_hex,
+            `${context}.abi_hash_hex`,
+          ),
+    public_entrypoints:
+      !active
+        ? null
+        : normalizeGovernancePublicEntrypoints(
+            record.public_entrypoints,
+            `${context}.public_entrypoints`,
           ),
   };
+  if (found) {
+    if (result.active) {
+      if (result.lifecycle.active_code_hash_hex !== result.code_hash_hex) {
+        throw new TypeError(
+          `${context}.lifecycle.active_code_hash_hex must match code_hash_hex`,
+        );
+      }
+    } else if (result.lifecycle.active_code_hash_hex !== null) {
+      throw new TypeError(
+        `${context}.lifecycle.active_code_hash_hex must be null for an inactive contract`,
+      );
+    }
+    if (result.emergency_hold_active && result.lifecycle.emergency_hold === null) {
+      throw new TypeError(
+        `${context}.emergency_hold_active requires a retained emergency hold`,
+      );
+    }
+  }
+  return result;
+}
+
+function normalizeGovernanceContractLifecycle(value, context) {
+  const record = requireExactGovernanceProposalRecord(
+    value,
+    [
+      "version",
+      "origin",
+      "origin_account",
+      "origin_proposal_content_id_hex",
+      "origin_governance_attempt_id_hex",
+      "owner",
+      "pending_owner",
+      "parliament_delegated",
+      "active_code_hash_hex",
+      "revision",
+      "emergency_hold",
+    ],
+    context,
+  );
+  if (record.version !== 1) {
+    throw new TypeError(`${context}.version must be the number 1`);
+  }
+  const origin = requireExactNonEmptyString(record.origin, `${context}.origin`);
+  if (origin !== "direct" && origin !== "parliament") {
+    throw new TypeError(`${context}.origin must be direct or parliament`);
+  }
+  const lifecycle = {
+    version: 1,
+    origin,
+    origin_account: requireCanonicalGovernanceAccountId(
+      record.origin_account,
+      `${context}.origin_account`,
+    ),
+    origin_proposal_content_id_hex:
+      record.origin_proposal_content_id_hex == null
+        ? null
+        : requireExactLowerHex32String(
+            record.origin_proposal_content_id_hex,
+            `${context}.origin_proposal_content_id_hex`,
+          ),
+    origin_governance_attempt_id_hex:
+      record.origin_governance_attempt_id_hex == null
+        ? null
+        : requireExactLowerHex32String(
+            record.origin_governance_attempt_id_hex,
+            `${context}.origin_governance_attempt_id_hex`,
+          ),
+    owner: normalizeGovernanceContractOwner(record.owner, `${context}.owner`),
+    pending_owner:
+      record.pending_owner == null
+        ? null
+        : normalizeGovernanceContractOwner(
+            record.pending_owner,
+            `${context}.pending_owner`,
+          ),
+    parliament_delegated: requireExactBoolean(
+      record.parliament_delegated,
+      `${context}.parliament_delegated`,
+    ),
+    active_code_hash_hex:
+      record.active_code_hash_hex == null
+        ? null
+        : requireExactLowerHex32String(
+            record.active_code_hash_hex,
+            `${context}.active_code_hash_hex`,
+          ),
+    revision: normalizeGovernanceUint64Integer(record.revision, `${context}.revision`, {
+      allowZero: false,
+    }),
+    emergency_hold:
+      record.emergency_hold == null
+        ? null
+        : normalizeGovernanceContractEmergencyHold(
+            record.emergency_hold,
+            `${context}.emergency_hold`,
+          ),
+  };
+  const hasProposalContentId = lifecycle.origin_proposal_content_id_hex !== null;
+  const hasAttemptId = lifecycle.origin_governance_attempt_id_hex !== null;
+  if (origin === "direct" && (hasProposalContentId || hasAttemptId)) {
+    throw new TypeError(`${context} direct origin must not carry Parliament identifiers`);
+  }
+  if (origin === "parliament" && (!hasProposalContentId || !hasAttemptId)) {
+    throw new TypeError(`${context} Parliament origin requires both governance identifiers`);
+  }
+  return lifecycle;
+}
+
+function normalizeGovernanceContractEmergencyHold(value, context) {
+  const record = requireExactGovernanceProposalRecord(
+    value,
+    [
+      "incident_digest_hex",
+      "proposal_content_id_hex",
+      "governance_attempt_id_hex",
+      "reason",
+      "imposed_at_height",
+      "expires_at_height",
+    ],
+    context,
+  );
+  const imposedAtHeight = normalizeGovernanceUint64Integer(
+    record.imposed_at_height,
+    `${context}.imposed_at_height`,
+    { allowZero: false },
+  );
+  const expiresAtHeight = normalizeGovernanceUint64Integer(
+    record.expires_at_height,
+    `${context}.expires_at_height`,
+    { allowZero: false },
+  );
+  if (expiresAtHeight <= imposedAtHeight) {
+    throw new TypeError(`${context}.expires_at_height must follow imposed_at_height`);
+  }
+  return {
+    incident_digest_hex: requireExactLowerHex32String(
+      record.incident_digest_hex,
+      `${context}.incident_digest_hex`,
+    ),
+    proposal_content_id_hex: requireExactLowerHex32String(
+      record.proposal_content_id_hex,
+      `${context}.proposal_content_id_hex`,
+    ),
+    governance_attempt_id_hex: requireExactLowerHex32String(
+      record.governance_attempt_id_hex,
+      `${context}.governance_attempt_id_hex`,
+    ),
+    reason: requireExactNonEmptyString(record.reason, `${context}.reason`),
+    imposed_at_height: imposedAtHeight,
+    expires_at_height: expiresAtHeight,
+  };
+}
+
+function normalizeGovernanceContractOwner(value, context) {
+  const literal = requireExactNonEmptyString(value, context);
+  return literal === "parliament"
+    ? literal
+    : requireCanonicalGovernanceAccountId(literal, context);
+}
+
+function normalizeGovernancePublicEntrypoints(value, context) {
+  const entries = requireStringArray(value, context).map((entry, index) => {
+    const literal = requireExactNonEmptyString(entry, `${context}[${index}]`);
+    if (!/^[a-z][a-z0-9_]{0,127}$/u.test(literal)) {
+      throw new TypeError(`${context}[${index}] must be a canonical public entrypoint name`);
+    }
+    return literal;
+  });
+  if (entries.length === 0) {
+    throw new TypeError(`${context} must not be empty`);
+  }
+  for (let index = 1; index < entries.length; index += 1) {
+    if (entries[index - 1] >= entries[index]) {
+      throw new TypeError(`${context} must be sorted and contain no duplicates`);
+    }
+  }
+  return entries;
 }
 
 function normalizeAliasResolutionResponse(
@@ -24983,19 +25161,6 @@ function requireDenseArray(value, context) {
   return value;
 }
 
-function requireCanonicalSortedStringSet(value, context) {
-  const values = requireDenseArray(value, context);
-  let previous = null;
-  values.forEach((entry, index) => {
-    const normalized = requireExactNonEmptyString(entry, `${context}[${index}]`);
-    if (previous !== null && normalized <= previous) {
-      throw new TypeError(`${context} must be sorted and contain unique strings`);
-    }
-    previous = normalized;
-  });
-  return values;
-}
-
 function requireCanonicalIrohaName(value, context) {
   const name = requireExactNonEmptyString(value, context);
   let hasUnpairedSurrogate = false;
@@ -25651,12 +25816,6 @@ function polyAddMod(params, lhs, rhs) {
   );
 }
 
-function polySubMod(params, lhs, rhs) {
-  return lhs.map((value, index) =>
-    subModBigInt(value, rhs[index], params.ciphertextModulus),
-  );
-}
-
 function polyMulMod(params, lhs, rhs) {
   const out = Array.from({ length: params.polynomialDegree }, () => 0n);
   for (let i = 0; i < params.polynomialDegree; i += 1) {
@@ -25774,18 +25933,6 @@ function rustRandomRangeU8Inclusive0To2(rng) {
     }
   }
   return result;
-}
-
-function sampleUniformPoly(params, stream) {
-  const bound = 1n << 64n;
-  const threshold = bound - (bound % params.ciphertextModulus);
-  return Array.from({ length: params.polynomialDegree }, () => {
-    let candidate = stream.nextU64();
-    while (candidate >= threshold) {
-      candidate = stream.nextU64();
-    }
-    return candidate % params.ciphertextModulus;
-  });
 }
 
 function encryptIdentifierScalar(params, scalar, seed) {
@@ -29685,30 +29832,6 @@ function normalizePipelineTxSnapshot(payload, context = "pipeline recovery tx") 
   };
 }
 
-function normalizeSorafsFetchResponse(payload, context = "sorafs fetch response") {
-  const record = ensureRecord(payload ?? {}, context);
-  return {
-    manifest_id_hex: normalizeHex32String(
-      record.manifest_id_hex ?? "",
-      `${context}.manifest_id_hex`,
-    ),
-    offset: ToriiClient._normalizeUnsignedInteger(
-      record.offset,
-      `${context}.offset`,
-      { allowZero: true },
-    ),
-    length: ToriiClient._normalizeUnsignedInteger(
-      record.length,
-      `${context}.length`,
-      { allowZero: true },
-    ),
-    data_b64: normalizeRequiredBase64Payload(
-      record.data_b64,
-      `${context}.data_b64`,
-    ),
-  };
-}
-
 function normalizeSorafsStorageStateResponse(
   payload,
   context = "sorafs storage state response",
@@ -29775,43 +29898,6 @@ function normalizeSorafsManifestResponse(
       { allowZero: true },
     ),
   };
-}
-
-function normalizeSorafsPinAliasRequest(value, context) {
-  const record = ensureRecord(value ?? {}, context);
-  const namespace = requireNonEmptyString(record.namespace, `${context}.namespace`);
-  const name = requireNonEmptyString(record.name, `${context}.name`);
-  const proofValue = pickSorafsRegisterField(
-    record,
-    ["proof", "proof_b64", "proofB64", "proof_base64", "proofBase64"],
-    `${context}.proof`,
-  );
-  if (proofValue === SORAFS_REGISTER_FIELD_MISSING || proofValue === null) {
-    throw new TypeError(`${context}.proof is required`);
-  }
-  return {
-    namespace,
-    name,
-    proof_base64: normalizeRequiredBase64Payload(proofValue, `${context}.proof`),
-  };
-}
-
-const SORAFS_REGISTER_FIELD_MISSING = Symbol("sorafs-register-field-missing");
-
-function pickSorafsRegisterField(record, aliases, context) {
-  const present = aliases.filter(
-    (alias) =>
-      Object.prototype.hasOwnProperty.call(record, alias) &&
-      record[alias] !== undefined,
-  );
-  if (present.length > 1) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${context} has ambiguous aliases: ${present.join(", ")}`,
-      context,
-    );
-  }
-  return present.length === 0 ? SORAFS_REGISTER_FIELD_MISSING : record[present[0]];
 }
 
 function normalizeDaManifestFetchResponse(payload, context = "da manifest response") {
@@ -30119,7 +30205,12 @@ function normaliseChunkPlanPayload(plan, context) {
   throw new TypeError(`${context} must be a canonical chunk fetch plan JSON string or object`);
 }
 
-function normaliseChunkerHandle(explicitHandle, manifestBundle, context) {
+function normaliseChunkerHandle(
+  explicitHandle,
+  manifestBundle,
+  context,
+  deriveChunkerHandle,
+) {
   if (explicitHandle !== undefined && explicitHandle !== null) {
     const handle = requireNonEmptyString(explicitHandle, "fetchDaPayloadViaGateway.chunkerHandle").trim();
     if (!handle) {
@@ -30152,7 +30243,7 @@ function normaliseChunkerHandle(explicitHandle, manifestBundle, context) {
   );
 	  if (manifestBytes) {
 	    try {
-	      return deriveDaChunkerHandle(manifestBytes);
+	      return deriveChunkerHandle(manifestBytes);
 	    } catch (error) {
 	      throw new TypeError(
 	        `${context}.chunkerHandle could not be derived from manifest bytes`,
@@ -31836,39 +31927,6 @@ function normalizeSignalOnlyOption(options, context) {
   return { signal };
 }
 
-async function readSccpBridgeSubmitResponse(response, request) {
-  const contentType = response.headers?.get?.("content-type") ?? "";
-  if (!/^application\/json(?:\s*;|$)/iu.test(contentType)) {
-    const error = new TypeError(
-      "SCCP bridge submit response must use application/json content type",
-    );
-    await cancelSccpResponseBody(response, error);
-    throw error;
-  }
-  const text = decodeSccpUtf8(
-    await readBoundedSccpResponseBytes(
-      response,
-      SCCP_SUBMIT_RESPONSE_MAX_BYTES,
-      "SCCP bridge submit",
-    ),
-    "SCCP bridge submit",
-  );
-  const expectations = { submitted: request.signature_b64 !== undefined };
-  if (request.creation_time_ms !== undefined) {
-    expectations.creation_time_ms = request.creation_time_ms;
-  }
-  if (request.destination_proof_b64 !== undefined) {
-    expectations.proof_b64 = request.destination_proof_b64;
-    expectations.destination = true;
-  } else {
-    expectations.proof_b64 = request.native_proof_b64;
-    expectations.replay_witness_b64 = request.replay_witness_b64;
-    expectations.destination = false;
-  }
-  const { parseSccpBridgeSubmitResponseJson } = await loadToriiOptionalModule();
-  return parseSccpBridgeSubmitResponseJson(text, expectations);
-}
-
 function normalizeSccpMessageIdPath(value, context) {
   if (typeof value !== "string" || !/^[0-9a-f]{64}$/u.test(value) || /^0+$/u.test(value)) {
     throw new TypeError(`${context} must be canonical lowercase nonzero 32-byte hex`);
@@ -31974,6 +32032,7 @@ async function readSccpNoritoResponse(
   if (!Array.isArray(closedTypeNames) || closedTypeNames.length === 0) {
     throw new TypeError(`${label} response must declare a closed Norito type set`);
   }
+  const { validateNoritoFrame } = await loadToriiOptionalModule();
   let matchedClosedType = false;
   for (const typeName of closedTypeNames) {
     try {
@@ -32611,19 +32670,12 @@ function normalizeAttachmentMetadataRecord(value, context) {
 const VERIFYING_KEY_LIST_OPTION_KEYS = new Set([
   "signal",
   "backend",
-  "backend_filter",
   "status",
-  "statusFilter",
-  "verifyingKeyStatus",
   "nameContains",
-  "name_contains",
   "limit",
   "offset",
   "order",
-  "sort",
-  "sortOrder",
   "idsOnly",
-  "ids_only",
 ]);
 const VERIFYING_KEY_ITERATOR_OPTION_KEYS = new Set([
   ...VERIFYING_KEY_LIST_OPTION_KEYS,
@@ -32650,10 +32702,8 @@ function loadVerifyingKeyClient() {
           normalizeSignalOption,
           ToriiClient._normalizeUnsignedInteger,
           rejectVerifyingKeyPrivateKeyFields,
-          requireBooleanLike,
           requireExactBoolean,
           requireExactNonEmptyString,
-          requireHexString,
           requireNonEmptyString,
         );
         if (
@@ -32675,7 +32725,7 @@ const PRODUCTION_VERIFY_BACKEND_LABELS_V1 = new Set([
   "halo2/pasta/kaigi-roster-v1",
   "halo2/pasta/kaigi-usage-v1",
   "halo2/pasta/ivm-execution-v1",
-  "halo2/pasta/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
+  "halo2/pasta/kagemusha-v1-mint-fold-merkle16-axiom-poseidon-v1",
   "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
   "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
   "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
@@ -32888,8 +32938,12 @@ function normalizeProverReportRecord(value, context) {
   };
 }
 
-function normalizeSumeragiEvidenceListResponse(payload) {
+function normalizeSumeragiEvidenceListResponse(payload, limit, offset) {
   const record = ensureRecord(payload, "sumeragi evidence response");
+  assertExactSumeragiEvidenceFields(record, "sumeragi evidence response", [
+    "total",
+    "items",
+  ]);
   const rawItems = record.items;
   if (!Array.isArray(rawItems)) {
     throw new TypeError("sumeragi evidence response.items must be an array");
@@ -32897,29 +32951,38 @@ function normalizeSumeragiEvidenceListResponse(payload) {
   const items = rawItems.map((item, index) =>
     normalizeSumeragiEvidenceRecord(item, `sumeragi evidence response.items[${index}]`),
   );
-  const totalValue = record.total;
-  const total =
-    totalValue === undefined || totalValue === null
-      ? items.length
-      : requireNonNegativeIntegerLike(
-          totalValue,
-          "sumeragi evidence response.total",
-        );
+  if (items.length > limit) {
+    throw new RangeError(
+      `sumeragi evidence response.items must contain at most ${limit} records`,
+    );
+  }
+  const total = requireSumeragiEvidenceUnsigned(
+    record.total,
+    "sumeragi evidence response.total",
+  );
+  const totalInteger = BigInt(total);
+  if (totalInteger < BigInt(items.length)) {
+    throw new RangeError(
+      "sumeragi evidence response.total must cover the returned items",
+    );
+  }
+  if (
+    items.length > 0
+    && totalInteger < BigInt(offset) + BigInt(items.length)
+  ) {
+    throw new RangeError(
+      "sumeragi evidence response.total must cover offset plus returned items",
+    );
+  }
   return { total, items };
 }
 
-function assertExactSumeragiEvidenceFields(
-  record,
-  context,
-  requiredVariantFields,
-  optionalVariantFields = [],
-) {
-  const required = new Set([...EVIDENCE_BASE_FIELDS, ...requiredVariantFields]);
-  const allowed = new Set([...required, ...optionalVariantFields]);
-  const missing = Array.from(required).filter(
+function assertExactSumeragiEvidenceFields(record, context, fields) {
+  const required = new Set(fields);
+  const missing = fields.filter(
     (field) => !Object.prototype.hasOwnProperty.call(record, field),
   );
-  const unexpected = Object.keys(record).filter((field) => !allowed.has(field));
+  const unexpected = Object.keys(record).filter((field) => !required.has(field));
   if (missing.length > 0 || unexpected.length > 0) {
     const details = [];
     if (missing.length > 0) details.push(`missing ${missing.join(", ")}`);
@@ -32928,248 +32991,64 @@ function assertExactSumeragiEvidenceFields(
   }
 }
 
-function requireSumeragiEvidenceUnsigned(value, context, maximum = Number.MAX_SAFE_INTEGER) {
+function requireSumeragiEvidenceUnsigned(value, context, maximum = MAX_UINT64_BIGINT) {
+  let integer;
   if (
-    typeof value !== "number" ||
-    !Number.isSafeInteger(value) ||
-    value < 0 ||
-    value > maximum
+    typeof value === "number"
+    && Number.isSafeInteger(value)
+    && value >= 0
+    && !Object.is(value, -0)
   ) {
-    throw new TypeError(`${context} must be a non-negative JSON safe integer`);
+    integer = BigInt(value);
+  } else if (typeof value === "bigint" && value >= 0n) {
+    integer = value;
+  } else {
+    throw new TypeError(`${context} must be an unsigned JSON integer`);
   }
-  return value;
+  const maximumInteger = typeof maximum === "bigint" ? maximum : BigInt(maximum);
+  if (integer > maximumInteger) {
+    throw new RangeError(`${context} must be at most ${maximumInteger}`);
+  }
+  return integer <= MAX_SAFE_INTEGER_BIGINT ? Number(integer) : integer;
 }
 
 function requireSumeragiEvidenceHash(value, context) {
   return requireExactLowerHex32String(value, context);
 }
 
+function normalizeSumeragiEvidencePenaltyStatus(value, context) {
+  const record = ensureRecord(value, context);
+  assertExactSumeragiEvidenceFields(record, context, ["status", "details"]);
+  const status = requireExactNonEmptyString(record.status, `${context}.status`);
+  if (status === "pending") {
+    if (record.details !== null) {
+      throw new TypeError(`${context}.details must be null when status is pending`);
+    }
+    return { status, details: null };
+  }
+  if (status !== "applied" && status !== "cancelled") {
+    throw new RangeError(`${context}.status must be pending, applied, or cancelled`);
+  }
+  const details = ensureRecord(record.details, `${context}.details`);
+  assertExactSumeragiEvidenceFields(details, `${context}.details`, ["height"]);
+  return {
+    status,
+    details: {
+      height: requireSumeragiEvidenceUnsigned(
+        details.height,
+        `${context}.details.height`,
+      ),
+    },
+  };
+}
+
 function normalizeSumeragiEvidenceRecord(value, context) {
   const record = ensureRecord(value, context);
+  assertExactSumeragiEvidenceFields(record, context, EVIDENCE_RECORD_FIELDS);
   const kind = requireExactNonEmptyString(record.kind, `${context}.kind`);
-  if (!EVIDENCE_KIND_VALUES.has(kind)) {
-    throw new RangeError(
-      `${context}.kind must be one of ${Array.from(EVIDENCE_KIND_VALUES).join(", ")}`,
-    );
+  if (kind !== EVIDENCE_KIND) {
+    throw new RangeError(`${context}.kind must be ${EVIDENCE_KIND}`);
   }
-  const consensusAdmittedHeight = record.consensus_admitted_height;
-  const base = {
-    kind,
-    recorded_height: requireSumeragiEvidenceUnsigned(
-      record.recorded_height,
-      `${context}.recorded_height`,
-    ),
-    recorded_view: requireSumeragiEvidenceUnsigned(
-      record.recorded_view,
-      `${context}.recorded_view`,
-    ),
-    recorded_ms: requireSumeragiEvidenceUnsigned(
-      record.recorded_ms,
-      `${context}.recorded_ms`,
-    ),
-    consensus_admitted_height:
-      consensusAdmittedHeight === null
-        ? null
-        : requireSumeragiEvidenceUnsigned(
-            consensusAdmittedHeight,
-            `${context}.consensus_admitted_height`,
-          ),
-  };
-  if (
-    kind === "DoublePrepare" ||
-    kind === "DoubleCommit"
-  ) {
-    assertExactSumeragiEvidenceFields(record, context, [
-      "phase",
-      "height",
-      "view",
-      "epoch",
-      "signer",
-      "block_hash_1",
-      "block_hash_2",
-    ]);
-    const phase = requireEvidencePhase(
-      record.phase,
-      `${context}.phase`,
-    );
-    const blockHash1 = requireSumeragiEvidenceHash(
-      record.block_hash_1,
-      `${context}.block_hash_1`,
-    );
-    const blockHash2 = requireSumeragiEvidenceHash(
-      record.block_hash_2,
-      `${context}.block_hash_2`,
-    );
-    if (blockHash1 === blockHash2) {
-      throw new RangeError(`${context} block hashes must identify distinct blocks`);
-    }
-    return {
-      ...base,
-      phase,
-      height: requireSumeragiEvidenceUnsigned(
-        record.height,
-        `${context}.height`,
-      ),
-      view: requireSumeragiEvidenceUnsigned(
-        record.view,
-        `${context}.view`,
-      ),
-      epoch: requireSumeragiEvidenceUnsigned(
-        record.epoch,
-        `${context}.epoch`,
-      ),
-      signer: requireSumeragiEvidenceUnsigned(
-        record.signer,
-        `${context}.signer`,
-        0xffffffff,
-      ),
-      block_hash_1: blockHash1,
-      block_hash_2: blockHash2,
-    };
-  }
-  if (kind === "InvalidQc") {
-    assertExactSumeragiEvidenceFields(record, context, [
-      "height",
-      "view",
-      "epoch",
-      "subject_block_hash",
-      "phase",
-      "reason",
-    ]);
-    return {
-      ...base,
-      height: requireSumeragiEvidenceUnsigned(
-        record.height,
-        `${context}.height`,
-      ),
-      view: requireSumeragiEvidenceUnsigned(
-        record.view,
-        `${context}.view`,
-      ),
-      epoch: requireSumeragiEvidenceUnsigned(
-        record.epoch,
-        `${context}.epoch`,
-      ),
-      subject_block_hash: requireSumeragiEvidenceHash(
-        record.subject_block_hash,
-        `${context}.subject_block_hash`,
-      ),
-      phase: requireEvidencePhase(
-        record.phase,
-        `${context}.phase`,
-      ),
-      reason: requireExactNonEmptyString(
-        record.reason,
-        `${context}.reason`,
-      ),
-    };
-  }
-  if (kind === "InvalidProposal") {
-    assertExactSumeragiEvidenceFields(record, context, [
-      "height",
-      "view",
-      "epoch",
-      "subject_block_hash",
-      "payload_hash",
-      "reason",
-    ]);
-    return {
-      ...base,
-      height: requireSumeragiEvidenceUnsigned(
-        record.height,
-        `${context}.height`,
-      ),
-      view: requireSumeragiEvidenceUnsigned(
-        record.view,
-        `${context}.view`,
-      ),
-      epoch: requireSumeragiEvidenceUnsigned(
-        record.epoch,
-        `${context}.epoch`,
-      ),
-      subject_block_hash: requireSumeragiEvidenceHash(
-        record.subject_block_hash,
-        `${context}.subject_block_hash`,
-      ),
-      payload_hash: requireSumeragiEvidenceHash(
-        record.payload_hash,
-        `${context}.payload_hash`,
-      ),
-      reason: requireExactNonEmptyString(
-        record.reason,
-        `${context}.reason`,
-      ),
-    };
-  }
-  if (kind === "Censorship") {
-    assertExactSumeragiEvidenceFields(
-      record,
-      context,
-      ["tx_hash", "receipt_count", "signers"],
-      ["submitted_at_height_min", "submitted_at_height_max"],
-    );
-    const receiptCount = requireSumeragiEvidenceUnsigned(
-      record.receipt_count,
-      `${context}.receipt_count`,
-    );
-    const signers = requireStringArray(record.signers, `${context}.signers`).map(
-      (signer, index) => requireExactNonEmptyString(signer, `${context}.signers[${index}]`),
-    );
-    if (signers.length !== receiptCount) {
-      throw new RangeError(`${context}.receipt_count must equal signers.length`);
-    }
-    const hasMin = Object.prototype.hasOwnProperty.call(
-      record,
-      "submitted_at_height_min",
-    );
-    const hasMax = Object.prototype.hasOwnProperty.call(
-      record,
-      "submitted_at_height_max",
-    );
-    if (hasMin !== hasMax || (receiptCount > 0 && !hasMin) || (receiptCount === 0 && hasMin)) {
-      throw new TypeError(
-        `${context} must include both submitted_at_height bounds exactly when receipts are present`,
-      );
-    }
-    const result = {
-      ...base,
-      tx_hash: requireSumeragiEvidenceHash(
-        record.tx_hash,
-        `${context}.tx_hash`,
-      ),
-      receipt_count: receiptCount,
-      signers,
-    };
-    if (!hasMin) return result;
-    const submittedAtHeightMin = requireSumeragiEvidenceUnsigned(
-      record.submitted_at_height_min,
-      `${context}.submitted_at_height_min`,
-    );
-    const submittedAtHeightMax = requireSumeragiEvidenceUnsigned(
-      record.submitted_at_height_max,
-      `${context}.submitted_at_height_max`,
-    );
-    if (submittedAtHeightMin > submittedAtHeightMax) {
-      throw new RangeError(
-        `${context}.submitted_at_height_min must be <= submitted_at_height_max`,
-      );
-    }
-    return {
-      ...result,
-      submitted_at_height_min: submittedAtHeightMin,
-      submitted_at_height_max: submittedAtHeightMax,
-    };
-  }
-  assertExactSumeragiEvidenceFields(record, context, [
-    "class",
-    "height",
-    "view",
-    "epoch",
-    "signer",
-    "context_id",
-    "artifact_hash_1",
-    "artifact_hash_2",
-  ]);
   const evidenceClass = requireExactNonEmptyString(record.class, `${context}.class`);
   if (!EVIDENCE_EQUIVOCATION_CLASS_VALUES.has(evidenceClass)) {
     throw new RangeError(
@@ -33188,7 +33067,7 @@ function normalizeSumeragiEvidenceRecord(value, context) {
     throw new RangeError(`${context} artifact hashes must identify distinct artifacts`);
   }
   return {
-    ...base,
+    kind,
     class: evidenceClass,
     height: requireSumeragiEvidenceUnsigned(record.height, `${context}.height`),
     view: requireSumeragiEvidenceUnsigned(record.view, `${context}.view`),
@@ -33201,6 +33080,26 @@ function normalizeSumeragiEvidenceRecord(value, context) {
     context_id: requireSumeragiEvidenceHash(record.context_id, `${context}.context_id`),
     artifact_hash_1: artifactHash1,
     artifact_hash_2: artifactHash2,
+    recorded_height: requireSumeragiEvidenceUnsigned(
+      record.recorded_height,
+      `${context}.recorded_height`,
+    ),
+    recorded_view: requireSumeragiEvidenceUnsigned(
+      record.recorded_view,
+      `${context}.recorded_view`,
+    ),
+    recorded_ms: requireSumeragiEvidenceUnsigned(
+      record.recorded_ms,
+      `${context}.recorded_ms`,
+    ),
+    consensus_admitted_height: requireSumeragiEvidenceUnsigned(
+      record.consensus_admitted_height,
+      `${context}.consensus_admitted_height`,
+    ),
+    penalty_status: normalizeSumeragiEvidencePenaltyStatus(
+      record.penalty_status,
+      `${context}.penalty_status`,
+    ),
   };
 }
 
@@ -34754,6 +34653,7 @@ function buildConnectWebSocketDescriptor(baseUrl, options, context) {
       typeof params.config === "object" &&
       params.config.allowInsecure) ??
     false;
+  requireExactBoolean(allowInsecure, `${context}.allowInsecure`);
   if (!allowInsecure && !isSecureProtocol(endpoint.protocol)) {
     throw new Error(
       `${context}: refusing insecure WebSocket protocol ${endpoint.protocol}; pass allowInsecure: true for local/dev use only.`,
@@ -34815,7 +34715,7 @@ function openConnectWebSocketInternal(options, context) {
       protocol: parsedUrl.protocol,
       pathIsAbsolute,
       originMatches,
-      allowInsecure: Boolean(allowInsecure),
+      allowInsecure,
       hasCredentials: Boolean(token),
     },
   );

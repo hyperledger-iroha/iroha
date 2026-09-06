@@ -4969,7 +4969,7 @@ mod tests {
             Err(P256ValueBusErrorV1::Challenge)
         );
         let mut transcript = TransparentTranscriptV1::new(
-            super::stark::ZK_X509_DIGEST_CONTEXT_V1,
+            super::super::stark::ZK_X509_DIGEST_CONTEXT_V1,
             b"p256-value-bus-test",
             &GoldilocksDigest384V1::new([0x51; 6]).expect("profile digest"),
             &GoldilocksDigest384V1::new([0xa7; 6]).expect("public digest"),

@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import subprocess
+import textwrap
 from collections.abc import Callable
 from pathlib import Path
 
@@ -81,6 +84,53 @@ def _replace_once_in_job(
     mutated_job = _replace_once(job, old, new)
     assert workflow.count(job) == 1, f"workflow job block is not unique: {job_name!r}"
     return workflow.replace(job, mutated_job, 1)
+
+
+def _aggregate_results(environment: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    """Execute the actual required-job shell against synthetic GitHub results."""
+
+    job = _job_block(PR_WORKFLOW.read_text(encoding="utf-8"), "rust_required")
+    script = textwrap.dedent(job.split("        run: |\n", 1)[1])
+    return subprocess.run(
+        ["bash", "-c", script], env={**os.environ, **environment},
+        capture_output=True, text=True, check=False,
+    )
+
+
+@pytest.mark.parametrize("selected", (False, True))
+def test_required_aggregate_accepts_only_explicit_success_or_skip(selected: bool) -> None:
+    """A fully selected run and an explicitly empty run both aggregate correctly."""
+
+    environment = {"CLASSIFIER_RESULT": "success"}
+    for name in ("BINARY_FREE", "NETWORK", "BUILD", "CONSISTENCY", "KOTODAMA", "PYTESTS"):
+        environment[f"{name}_SELECTED"] = str(selected).lower()
+        environment[f"{name}_RESULT"] = "success" if selected else "skipped"
+    assert _aggregate_results(environment).returncode == 0
+
+
+@pytest.mark.parametrize("name", ("BINARY_FREE", "NETWORK", "BUILD", "CONSISTENCY", "KOTODAMA", "PYTESTS"))
+@pytest.mark.parametrize("result", ("failure", "cancelled", "skipped"))
+def test_required_aggregate_rejects_every_selected_consumer_failure(name: str, result: str) -> None:
+    """A missing, cancelled, or failed selected consumer cannot produce green CI."""
+
+    environment = {"CLASSIFIER_RESULT": "success"}
+    for consumer in ("BINARY_FREE", "NETWORK", "BUILD", "CONSISTENCY", "KOTODAMA", "PYTESTS"):
+        environment[f"{consumer}_SELECTED"] = "false"
+        environment[f"{consumer}_RESULT"] = "skipped"
+    environment[f"{name}_SELECTED"] = "true"
+    environment[f"{name}_RESULT"] = result
+    assert _aggregate_results(environment).returncode != 0
+
+
+def test_required_aggregate_rejects_classifier_failure_and_absent_decisions() -> None:
+    """Empty classifier outputs cannot masquerade as an intentional skipped run."""
+
+    assert _aggregate_results({"CLASSIFIER_RESULT": "failure"}).returncode != 0
+    environment = {"CLASSIFIER_RESULT": "success"}
+    for name in ("BINARY_FREE", "NETWORK", "BUILD", "CONSISTENCY", "KOTODAMA", "PYTESTS"):
+        environment[f"{name}_SELECTED"] = ""
+        environment[f"{name}_RESULT"] = "skipped"
+    assert _aggregate_results(environment).returncode != 0
 
 
 def _validate_release_workflow(workflow: str) -> list[str]:
@@ -195,8 +245,8 @@ def _validate_pr_parity(workflow: str) -> list[str]:
     """Return errors when affected PR routing can silently weaken validation."""
 
     errors: list[str] = []
-    if "paths-ignore:" not in workflow or "paths_ignore:" in workflow:
-        errors.append("PR workflow must use the valid paths-ignore trigger key")
+    if "paths-ignore:" in workflow or "paths_ignore:" in workflow:
+        errors.append("PR workflow must classify every change before selectively skipping jobs")
     docs_job = _job_block(workflow, "kotodama_docs")
     if (
         "python3 -m pytest -q pytests/scripts/workspace_release_gate_test.py"
@@ -217,12 +267,15 @@ def _validate_pr_parity(workflow: str) -> list[str]:
             "pytests/scripts/check_workspace_target_inventory_test.py",
             BUILD_EFFICIENCY_PROVENANCE_TEST,
             "scripts/tests/check_source_file_budget_test.py",
+            "scripts/tests/sdk_operation_inventory_test.py",
             "scripts/tests/check_compile_unit_budget_test.py",
             "scripts/tests/check_generated_artifacts_test.py",
             "python3 scripts/check_cargo_feature_hygiene.py",
             "python3 scripts/check_workspace_target_inventory.py",
             BUILD_EFFICIENCY_PROVENANCE_COMMAND,
-            "python3 scripts/check_source_file_budget.py --require-objective",
+            "python3 scripts/check_dependency_budget.py --check-boundaries",
+            "python3 scripts/sdk_operation_inventory.py",
+            "python3 scripts/check_source_file_budget.py",
             "python3 scripts/check_generated_artifacts.py",
             'FULL_REQUESTED: ${{ contains(github.event.pull_request.labels.*.name, '
             "'ci/full') }}",
@@ -247,7 +300,8 @@ def _validate_pr_parity(workflow: str) -> list[str]:
             "python3 scripts/check_workspace_target_inventory.py",
             "python3 scripts/check_compile_time_table_assets.py",
             "python3 scripts/check_dependency_budget.py",
-            "python3 scripts/check_source_file_budget.py --require-objective",
+            "python3 scripts/check_dependency_budget.py --check-boundaries",
+            "python3 scripts/check_source_file_budget.py",
         )
         if provenance_position >= 0 and any(
             normalized_classifier.find(command) < provenance_position
@@ -265,7 +319,9 @@ def _validate_pr_parity(workflow: str) -> list[str]:
     else:
         normalized_affected = _normalized(affected_job)
         affected_requirements = (
-            "matrix: ${{ fromJSON(needs.rust_changes.outputs.matrix) }}",
+            "matrix: ${{ fromJSON(needs.rust_changes.outputs.binary_free_matrix) }}",
+            "if: needs.rust_changes.outputs.has_binary_free_rust == 'true'",
+            "needs: rust_changes",
             "uses: actions-rust-lang/setup-rust-toolchain@"
             f"{SETUP_RUST_TOOLCHAIN_COMMIT}",
             'cache: "false"',
@@ -285,6 +341,36 @@ def _validate_pr_parity(workflow: str) -> list[str]:
                 errors.append(
                     f"PR affected Rust job is missing required behavior: {requirement}"
                 )
+        if "pre_build" in affected_job or "TEST_NETWORK_BIN_" in affected_job:
+            errors.append("PR binary-free Rust job must not depend on prebuilt network binaries")
+
+    for job_name, requirements in {
+        "pre_build": (
+            "needs: rust_changes",
+            "if: needs.rust_changes.outputs.has_binaries == 'true'",
+            "REQUIRED_BINARIES: ${{ needs.rust_changes.outputs.binaries }}",
+            'python3 scripts/rust_ci.py build-binaries \\ --binaries "$REQUIRED_BINARIES"',
+        ),
+        "rust_network": (
+            "needs: [rust_changes, pre_build]",
+            "if: needs.rust_changes.outputs.has_binary_rust == 'true'",
+            "matrix: ${{ fromJSON(needs.rust_changes.outputs.binary_matrix) }}",
+            "TEST_NETWORK_BIN_IROHAD: bins/iroha3d",
+            "TEST_NETWORK_BIN_IROHA: bins/iroha",
+            'IROHA_TEST_REQUIRE_NETWORK: "1"',
+            'python3 scripts/rust_ci.py run --packages "${{ matrix.packages }}" --checks clippy,build,test,doc',
+        ),
+        **{
+            name: (
+                "needs: [rust_changes, pre_build]",
+                f"if: needs.rust_changes.outputs.run_{name} == 'true'",
+            ) for name in ("consistency", "kotodama_docs", "pytests")
+        },
+    }.items():
+        normalized_job = _normalized(_job_block(workflow, job_name))
+        for requirement in requirements:
+            if requirement not in normalized_job:
+                errors.append(f"PR {job_name} is missing selected-binary behavior: {requirement}")
 
     required_job = _job_block(workflow, "rust_required")
     if not required_job:
@@ -293,10 +379,13 @@ def _validate_pr_parity(workflow: str) -> list[str]:
         normalized_required = _normalized(required_job)
         for requirement in (
             "if: always()",
-            "needs: [rust_changes, rust_affected]",
+            "needs: [rust_changes, rust_affected, rust_network, pre_build, consistency, kotodama_docs, pytests]",
             'test "$CLASSIFIER_RESULT" = success',
-            'test "$AFFECTED_RESULT" = success',
-            'test "$AFFECTED_RESULT" = skipped',
+            "true:success|false:skipped) return 0",
+            *(
+                f'check_result "${name}_SELECTED" "${name}_RESULT"'
+                for name in ("BINARY_FREE", "NETWORK", "BUILD", "CONSISTENCY", "KOTODAMA", "PYTESTS")
+            ),
         ):
             if requirement not in normalized_required:
                 errors.append(
@@ -510,10 +599,10 @@ def test_release_workflow_guard_rejects_weakening(
         (
             lambda workflow: _replace_once(
                 workflow,
-                "    paths-ignore:\n",
-                "    paths_ignore:\n",
+                "    branches: [main]\n",
+                "    branches: [main]\n    paths-ignore: ['**/*.md']\n",
             ),
-            "PR workflow must use the valid paths-ignore trigger key",
+            "PR workflow must classify every change before selectively skipping jobs",
         ),
         (
             lambda workflow: _replace_once(

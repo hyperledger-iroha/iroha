@@ -10,6 +10,11 @@ lab time for milestones **AND6** (CI & compliance hardening) and **AND7**
 `specs/compliance/android/device_lab_contingency.md` by ensuring capacity
 shortfalls are avoided in the first place.
 
+This playbook applies only when a team explicitly selects a physical-device or
+StrongBox qualification. Hardware availability and reservations do not gate
+ordinary software-backed builds, tests, deployments, governance signing, or
+releases.
+
 ## 1. Goals & Scope
 
 - Keep the StrongBox + general device pools above the roadmap-mandated 80 %

@@ -103,6 +103,8 @@ pub(in crate::sumeragi) struct ProductionLifecycleLaunchInputsV1 {
     effect_queue: EffectQueueConfig,
     local_peer: PeerId,
     local_validator: Option<wire::ValidatorIndex>,
+    kagemusha_mint_finality_authority:
+        Option<Arc<crate::zk::kagemusha_v1_recursion::KagemushaMintFinalityLocalAuthorityV1>>,
     key_pair: KeyPair,
     network: IrohaNetwork,
     state: Arc<State>,
@@ -146,6 +148,7 @@ impl ProductionLifecycleLaunchInputsV1 {
             effect_queue,
             local_peer,
             local_validator,
+            kagemusha_mint_finality_authority: None,
             key_pair,
             network,
             state,
@@ -159,6 +162,18 @@ impl ProductionLifecycleLaunchInputsV1 {
             kura_replica_advert_refresh,
             exact_output_handoff_owner,
         }
+    }
+    /// Attach the separately provisioned Pasta epoch authority used only for
+    /// top-up-bearing Kagemusha V1 Commit votes.
+    #[must_use]
+    pub(in crate::sumeragi) fn with_kagemusha_mint_finality_authority(
+        mut self,
+        authority: Option<
+            Arc<crate::zk::kagemusha_v1_recursion::KagemushaMintFinalityLocalAuthorityV1>,
+        >,
+    ) -> Self {
+        self.kagemusha_mint_finality_authority = authority;
+        self
     }
 }
 /// RAII owner of the exact durable leader-wire ingress gate for this launch.
@@ -2755,7 +2770,7 @@ impl ProductionLifecycleOwnerV1 {
         let recovered_validate_sidecar =
             RegisteredLifecycleValidateSidecarWaitV1::recover_at_launch(
                 &mut self.coordinator,
-                &self.registry,
+                &mut self.registry,
             )
             .map_err(|error| {
                 ProductionLifecycleLaunchErrorV1::ValidateSidecarRegistration(error.to_string())
@@ -2916,9 +2931,9 @@ impl ProductionLifecycleOwnerV1 {
             validator_set_pops,
             inputs.local_peer,
             inputs.local_validator,
+            inputs.kagemusha_mint_finality_authority,
             inputs.key_pair,
             inputs.network,
-            launch_storage.into_chunk_root(),
             body_store,
             payload_store_identity.clone(),
             inputs.state,

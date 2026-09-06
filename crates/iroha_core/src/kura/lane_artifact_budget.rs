@@ -326,11 +326,37 @@ impl Kura {
             )? {
                 let outcome =
                     Self::decode_autonomous_lifecycle_terminal_outcome(&terminal_path, &bytes)?;
-                outcome
-                    .validate_for_payload(&execution.executable_payload)
-                    .map_err(|message| {
-                        Self::invalid_lane_artifact_error(terminal_path.clone(), message)
-                    })?;
+                if matches!(
+                    outcome.basis(),
+                    AutonomousLifecycleTerminalOutcomeBasisV1::CanonicalReplica { .. }
+                ) {
+                    // Strict construction rebuilds these envelopes before the
+                    // immutable transport identity is bound. Authenticate all
+                    // durable source evidence now and defer only the local
+                    // committee-membership predicate to `bind_local_peer_id`.
+                    // Runtime reconciliations must keep using the contextual
+                    // validator so a committee member can never adopt replica
+                    // terminal custody.
+                    let replica_payload = if self.local_peer_id.get().is_some() {
+                        self.validate_canonical_replica_terminal_outcome_locked(&entry, &outcome)?
+                    } else {
+                        self.validate_canonical_replica_terminal_outcome_on_startup_locked(
+                            &entry, &outcome,
+                        )?
+                    };
+                    if replica_payload != execution.executable_payload {
+                        return Err(Self::invalid_lane_artifact_error(
+                            terminal_path,
+                            "post-WSV canonical replica terminal evidence changed its payload",
+                        ));
+                    }
+                } else {
+                    outcome
+                        .validate_for_payload(&execution.executable_payload)
+                        .map_err(|message| {
+                            Self::invalid_lane_artifact_error(terminal_path.clone(), message)
+                        })?;
+                }
                 if outcome.source() != execution.terminal_source {
                     return Err(Self::invalid_lane_artifact_error(
                         terminal_path,
@@ -925,7 +951,12 @@ impl Kura {
                     self.autonomous_lane_attempt_inventory_counts_locked(&lane_entry, 1)?;
                 for identity in inventory
                     .lifecycle_identities
-                    .difference(&inventory.complete_terminal_outcome_identities)
+                    .union(&inventory.terminal_outcome_identities)
+                    .filter(|identity| {
+                        !inventory
+                            .complete_terminal_outcome_identities
+                            .contains(identity)
+                    })
                     .copied()
                 {
                     incomplete_seen = incomplete_seen.checked_add(1).ok_or_else(|| {

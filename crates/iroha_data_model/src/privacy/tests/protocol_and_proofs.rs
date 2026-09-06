@@ -839,13 +839,13 @@ fn assert_capability_snapshot_json_adversaries(
         norito::json::from_json::<PrivacyCapabilitySnapshotV1>(&duplicate).is_err(),
         "duplicate top-level field must fail"
     );
-    let security_model_alias = canonical.replacen("\"classical-rom\"", "\"classical-rom-v1\"", 1);
-    assert_ne!(
-        security_model_alias, canonical,
-        "fixture must carry a security claim"
-    );
+    let security_model = norito::json::to_json(&PrivacySecurityModelV1::ClassicalRom)
+        .expect("canonical security model");
+    let security_model_alias =
+        security_model.replacen("\"classical-rom\"", "\"classical-rom-v1\"", 1);
+    assert_ne!(security_model_alias, security_model);
     assert!(
-        norito::json::from_json::<PrivacyCapabilitySnapshotV1>(&security_model_alias).is_err(),
+        norito::json::from_json::<PrivacySecurityModelV1>(&security_model_alias).is_err(),
         "security-model aliases must fail"
     );
     let pgc_profile = available_pgc_profile(snapshot);
@@ -1218,7 +1218,7 @@ fn canonical_capability_archive_validator_is_bounded_typed_and_fail_closed() {
         norito::encode_canonical(&excessive_rows).expect("canonical excessive-row bytes");
     assert_eq!(
         validate_privacy_capability_archive_v1(&excessive_rows),
-        Status::DecodeResourceLimit
+        Status::InvalidManifest
     );
 }
 #[test]
@@ -1331,6 +1331,11 @@ fn exact12_typed_fixture_bundle_is_byte_complete_bounded_and_mutation_closed() {
             TransactionBuilder::decode_payload(&row.unsigned_transaction_payload_norito)
                 .expect("canonical unsigned transaction payload");
         let unsigned_payload = unsigned_builder.payload().clone();
+        assert_eq!(
+            unsigned_payload.domain,
+            crate::transaction::TransactionDomain::Network(statement.context().network_id),
+            "the signed transaction and every proof must target the same network"
+        );
         assert_eq!(
             unsigned_payload
                 .privacy_transaction_intent_projection_bytes_v1()
@@ -2734,6 +2739,33 @@ fn zk_ace_digest384_wrappers_reject_noncanonical_field_elements() {
     let replay_bytes = replay.encode();
     assert_eq!(identity_bytes.len(), GoldilocksDigest384V1::BYTES);
     assert_eq!(replay_bytes.len(), GoldilocksDigest384V1::BYTES);
+    let identity_archive = norito::encode_canonical(&identity).expect("canonical identity archive");
+    let replay_archive = norito::encode_canonical(&replay).expect("canonical replay archive");
+    assert_eq!(
+        norito::decode_canonical::<PrivacyZkAceIdentityCommitmentV1>(&identity_archive)
+            .expect("decode identity archive"),
+        identity
+    );
+    assert_eq!(
+        norito::decode_canonical::<PrivacyZkAceReplayNullifierV1>(&replay_archive)
+            .expect("decode replay archive"),
+        replay
+    );
+    let mut framed = identity_bytes.clone();
+    framed.push(0xAA);
+    let (decoded, used) =
+        <PrivacyZkAceIdentityCommitmentV1 as norito::core::DecodeFromSlice>::decode_from_slice(
+            &framed,
+        )
+        .expect("decode bounded identity prefix");
+    assert_eq!(decoded, identity);
+    assert_eq!(used, GoldilocksDigest384V1::BYTES);
+    assert!(
+        <PrivacyZkAceReplayNullifierV1 as norito::core::DecodeFromSlice>::decode_from_slice(
+            &replay_bytes[..GoldilocksDigest384V1::BYTES - 1],
+        )
+        .is_err()
+    );
     assert_eq!(
         PrivacyZkAceIdentityCommitmentV1::decode(&mut identity_bytes.as_slice())
             .expect("decode canonical identity commitment"),

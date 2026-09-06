@@ -359,7 +359,6 @@ fn install_live_lifecycle_cursor_for_apply_test(
 include!("tests/v2_apply_unsealed_00.rs");
 include!("tests/v2_apply_unsealed_01.rs");
 include!("tests/v2_apply_unsealed_02.rs");
-include!("tests/v2_apply_kagemusha_runtime_gate.rs");
 
 /// Canonical height-one material for exercising the recovered Decision Apply
 /// worker from another Sumeragi unit-test module.
@@ -380,44 +379,6 @@ pub(in crate::sumeragi) struct ProductionRecoveredDecisionApplyFixtureV1 {
     pub(in crate::sumeragi) validator_keys: Vec<KeyPair>,
     /// Keeps the body-store directory alive through worker settlement.
     pub(in crate::sumeragi) directory: tempfile::TempDir,
-}
-
-/// Production apply/worker material with one active Kagemusha runtime lock.
-pub(in crate::sumeragi) struct ProductionKagemushaRuntimeGateFixtureV1 {
-    /// Exact frozen height context.
-    pub(in crate::sumeragi) context: wire::HeightContext,
-    /// Body store retaining the exact production-validated proposal.
-    pub(in crate::sumeragi) body_store: V2BodyStore,
-    /// Apply service backed by the requested local runtime projection state.
-    pub(in crate::sumeragi) apply_service: V2ApplyService,
-    /// Exact CommitQC whose subject and commitment can produce vote fixtures.
-    pub(in crate::sumeragi) commit_qc: wire::QuorumCertificate,
-    /// Four validator keys matching the frozen roster.
-    pub(in crate::sumeragi) validator_keys: Vec<KeyPair>,
-    /// Keeps the body-store directory alive through worker settlement.
-    pub(in crate::sumeragi) directory: tempfile::TempDir,
-}
-
-/// Build production worker material under a missing, matching, or mismatched local projection.
-pub(in crate::sumeragi) fn production_kagemusha_runtime_gate_fixture_v1(
-    local_runtime_effective_config_sha256: Option<[u8; 32]>,
-) -> ProductionKagemushaRuntimeGateFixtureV1 {
-    let fixture = ApplyFixture::new_for_kagemusha_runtime_projection();
-    let (apply_service, _) = fixture
-        .restart_service_with_kagemusha_runtime_projection(local_runtime_effective_config_sha256);
-    let body_store = fixture.reopen_body_store();
-    let context = fixture.context.clone();
-    let commit_qc = fixture.task.certificate().clone();
-    let validator_keys = fixture.validator_keys.clone();
-    let directory = fixture.body_root;
-    ProductionKagemushaRuntimeGateFixtureV1 {
-        context,
-        body_store,
-        apply_service,
-        commit_qc,
-        validator_keys,
-        directory,
-    }
 }
 
 /// Build one production-valid genesis, validation marker, and CommitQC for a

@@ -3017,7 +3017,6 @@ def _sdk_sources(
         "gradle/gradle-user-home": Path(str(gradle["gradle_user_home"])),
         "gradle/gradle-9.3.0-bin.zip": Path(str(gradle["distribution_archive"])),
         "gradle/kotlin-gradle-wrapper.properties": repository_root / "kotlin/gradle/wrapper/gradle-wrapper.properties",
-        "gradle/java-gradle-wrapper.properties": repository_root / "java/iroha_android/gradle/wrapper/gradle-wrapper.properties",
     }
 
 def _sdk_validate_manifest_source_inventories(

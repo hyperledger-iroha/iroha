@@ -3,6 +3,7 @@
 
 readonly SUMERAGI_V2_TLC_FINISHED_PATTERN='^Finished in (([0-9]+d )?([0-9]+h )?([0-9]+min )?[0-9]+(ms|s)|([0-9]+d )?([0-9]+h )?[0-9]+min|([0-9]+d )?[0-9]+h|[0-9]+d) at \([0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}\)$'
 readonly SUMERAGI_V2_TLC_SUCCESS_MARKER="Model checking completed. No error has been found."
+readonly SUMERAGI_V2_TLC_VIOLATION_BEHAVIOR_MARKER="Error: The behavior up to this point is:"
 readonly SUMERAGI_V2_TLC_STATE_SUMMARY_PATTERN='^[0-9][0-9,]* states generated, [0-9][0-9,]* distinct states found, [0-9][0-9,]* states left on queue[.]$'
 readonly SUMERAGI_V2_TLC_STATE_SUMMARY_PREFIX='^[0-9][0-9,]* states generated, [0-9][0-9,]* distinct states found'
 readonly SUMERAGI_V2_TLC_FAILURE_DIAGNOSTIC_PATTERN='^[[:space:]]*(Error:|Deadlock reached([.]|$)|Temporal properties were violated[.]$)'
@@ -113,6 +114,46 @@ sumeragi_v2_tlc_assert_fixed_success() {
     sumeragi_v2_tlc_contract_fail \
       "$label" "$log" \
       "successful TLC run emitted ${failure_count} error/deadlock diagnostics"
+  }
+  sumeragi_v2_tlc_assert_terminal "$label" "$log"
+}
+
+sumeragi_v2_tlc_assert_action_property_violation() {
+  local label="$1"
+  local log="$2"
+  local actual_status="$3"
+  local expected_marker="$4"
+  local failure_count
+  local primary_diagnostic_count
+  [[ "$expected_marker" =~ ^Error:\ Action\ property\ .+\ is\ violated\.$ ]] || {
+    sumeragi_v2_tlc_contract_fail \
+      "$label" "$log" "action-property marker is not canonical"
+  }
+  [[ "$actual_status" -eq 13 ]] || {
+    sumeragi_v2_tlc_contract_fail \
+      "$label" "$log" \
+      "TLC returned status ${actual_status}, expected action-property status 13"
+  }
+  sumeragi_v2_tlc_assert_nonzero_state_space "$label" "$log"
+  sumeragi_v2_tlc_assert_exact_line \
+    "$label" "$log" "$expected_marker"
+  sumeragi_v2_tlc_assert_exact_line \
+    "$label" "$log" "$SUMERAGI_V2_TLC_VIOLATION_BEHAVIOR_MARKER"
+  primary_diagnostic_count="$(
+    grep -Ec "$SUMERAGI_V2_TLC_PRIMARY_DIAGNOSTIC_PATTERN" "$log" || true
+  )"
+  [[ "$primary_diagnostic_count" == 1 ]] || {
+    sumeragi_v2_tlc_contract_fail \
+      "$label" "$log" \
+      "action-property TLC run emitted ${primary_diagnostic_count} primary diagnostics"
+  }
+  failure_count="$(
+    grep -Ec "$SUMERAGI_V2_TLC_FAILURE_DIAGNOSTIC_PATTERN" "$log" || true
+  )"
+  [[ "$failure_count" == 2 ]] || {
+    sumeragi_v2_tlc_contract_fail \
+      "$label" "$log" \
+      "action-property TLC run must contain exactly its primary and behavior diagnostics; found ${failure_count}"
   }
   sumeragi_v2_tlc_assert_terminal "$label" "$log"
 }

@@ -2332,7 +2332,7 @@ fn rewrite_instr_uses<F: FnMut(&mut Temp)>(instr: &mut ir::Instr, mut f: F) {
         | Entrypoint { .. }
         | NumericStatus { .. }
         | GetTriggerEvent { .. }
-        | ProveExecution { .. }
+        | ExecutionSummary { .. }
         | TransferBatchBegin
         | TransferBatchEnd
         | CommitOutput => {}
@@ -3006,7 +3006,7 @@ fn dest_temp_mut(instr: &mut ir::Instr) -> Option<&mut Temp> {
         | ir::Instr::IrohaHash { dest, .. } => Some(dest),
         ir::Instr::Sm2Verify { dest, .. } => Some(dest),
         ir::Instr::VerifySignature { dest, .. } => Some(dest),
-        ir::Instr::ProveExecution { dest } => Some(dest),
+        ir::Instr::ExecutionSummary { dest } => Some(dest),
         ir::Instr::GrowHeap { dest, .. } => Some(dest),
         ir::Instr::GetMerklePath { dest, .. }
         | ir::Instr::GetMerkleCompact { dest, .. }

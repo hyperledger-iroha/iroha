@@ -1821,7 +1821,7 @@ internal static class SccpExactParser
         }
 
         var epoch = SccpJson.UInt64(item, "epoch", 1);
-        var epochEndHeight = SccpJson.UInt64(item, "epoch_end_height");
+        var epochEndHeight = SccpJson.UInt64(item, "epoch_end_height", 0);
         var rosterCommitment = UpperHex(item, "roster_commitment", 32);
         var checkpointHeight = SccpJson.UInt64(item, "checkpoint_height", 1);
         if (checkpointHeight > epochEndHeight)

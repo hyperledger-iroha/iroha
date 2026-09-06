@@ -18,6 +18,8 @@ mod model {
     #[repr(transparent)]
     #[display("Metadata")]
     #[allow(clippy::multiple_inherent_impl)]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::metadata::model::Metadata")]
     pub struct Metadata(pub(super) BTreeMap<Name, Json>);
 }
 impl ncore::NoritoSerialize for Metadata {

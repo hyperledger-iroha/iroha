@@ -1951,9 +1951,7 @@ impl PreparedLifecycleIngressSelector {
         let ready = self
             .selected_certified_fetch_ready_authority()
             .map_err(CertifiedFetchBodyPersistenceRetryFailure::Selector)?;
-        if !ready
-            .ingress_identity
-            .shares_physical_coordinates(&id.ingress_identity)
+        if ready.ingress_identity != id.ingress_identity
             || self.queue_witness.selected_disposition() != FairV2IngressDequeueDisposition::Admit
         {
             return Err(
@@ -2000,7 +1998,7 @@ impl PreparedLifecycleIngressSelector {
     ) -> Result<&PreparedClaimedResponseFamily, RecoveredDecisionFetchExactDequeueErrorV1> {
         let id = completion.id;
         let selected_identity = *self.selected_identity();
-        if !selected_identity.shares_physical_coordinates(&id.ingress_identity)
+        if selected_identity != id.ingress_identity
             || self.queue_witness.selected_disposition() != FairV2IngressDequeueDisposition::Admit
         {
             return Err(RecoveredDecisionFetchExactDequeueErrorV1::CompletionIdentity);

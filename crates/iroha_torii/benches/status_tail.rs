@@ -1,6 +1,7 @@
 //! Benchmarks extracting tail values from telemetry status.
 use criterion::Criterion;
-use iroha_telemetry::metrics::{Metrics, Status};
+use iroha_telemetry::metrics::Metrics;
+use iroha_torii_shared::status::Status;
 use norito::json::Value;
 fn direct(status: &Status, tail: &str) -> Value {
     let mut segments = tail.split('/').filter(|s| !s.is_empty());
@@ -19,7 +20,7 @@ fn via_norito(status: &Status, tail: &str) -> Value {
 }
 fn bench_status_tail(c: &mut Criterion) {
     let metrics = Metrics::default();
-    let status = Status::from(&metrics);
+    let status = metrics.status_snapshot();
     let tail = "peers";
     c.bench_function("status_peers_direct", |b| {
         b.iter(|| direct(std::hint::black_box(&status), std::hint::black_box(tail)))

@@ -4,7 +4,7 @@
 //! the tests. It supports heap allocation and retrieval of private inputs so
 //! that zero‑knowledge programs can run without a custom environment.
 //!
-//! The host also exposes basic hardware feature discovery and proof generation
+//! The host also exposes basic hardware feature discovery and Merkle-proof
 //! helpers used by some tests.
 use crate::{
     SyscallPolicy,
@@ -1191,7 +1191,7 @@ pub const fn registered_host_syscall_gas_formula(number: u32) -> Option<HostSysc
             | syscalls::SYSCALL_BLAKE2B256_HASH
             | syscalls::SYSCALL_KECCAK256_HASH
             | syscalls::SYSCALL_IROHA_HASH
-            | syscalls::SYSCALL_PROVE_EXECUTION
+            | syscalls::SYSCALL_EXECUTION_SUMMARY
             | syscalls::SYSCALL_GET_MERKLE_PATH
             | syscalls::SYSCALL_GET_MERKLE_COMPACT
             | syscalls::SYSCALL_GET_REGISTER_MERKLE_COMPACT
@@ -2339,9 +2339,8 @@ impl DefaultHost {
         debug_assert_eq!(tlv.payload.len(), payload_len);
         Ok(payload_len)
     }
-    fn resolve_literal_pointer(vm: &IVM, src: usize) -> Option<usize> {
-        let address = u64::try_from(src).ok()?;
-        vm.is_validated_literal_pointer(address).then_some(src)
+    fn resolve_literal_pointer(vm: &IVM, address: u64) -> Option<u64> {
+        vm.is_validated_literal_pointer(address).then_some(address)
     }
     fn resolve_code_tlv_addr(vm: &IVM, addr: u64) -> u64 {
         let input_lo = Memory::INPUT_START;
@@ -2349,11 +2348,7 @@ impl DefaultHost {
         if addr >= input_lo && addr < input_hi {
             return addr;
         }
-        usize::try_from(addr)
-            .ok()
-            .and_then(|address| Self::resolve_literal_pointer(vm, address))
-            .and_then(|resolved| u64::try_from(resolved).ok())
-            .unwrap_or(addr)
+        Self::resolve_literal_pointer(vm, addr).unwrap_or(addr)
     }
     fn decode_any_tlv<'a>(vm: &'a IVM, ptr: u64) -> Result<pointer_abi::Tlv<'a>, VMError> {
         let resolved = Self::resolve_code_tlv_addr(vm, ptr);
@@ -2477,7 +2472,10 @@ impl DefaultHost {
     }
     fn memory_merkle_path_depth(vm: &IVM) -> usize {
         let byte_len = vm.memory.stack_top().saturating_add(Memory::STACK_SLOP);
-        let leaf_count = (usize::try_from(byte_len).unwrap_or(usize::MAX) / 32).max(1);
+        let leaf_count = usize::try_from(byte_len)
+            .unwrap_or(usize::MAX)
+            .div_ceil(32)
+            .max(1);
         Self::complete_tree_depth(leaf_count)
     }
     fn compact_merkle_depth(full_depth: usize, requested: u64) -> usize {
@@ -2487,11 +2485,11 @@ impl DefaultHost {
             full_depth.min(usize::try_from(requested).unwrap_or(usize::MAX).min(32))
         }
     }
-    fn execution_proof_gas_quote(vm: &IVM) -> Result<u64, VMError> {
-        let payload_len = crate::execution_proof::ExecutionProof::encoded_len_v1()
+    fn execution_summary_gas_quote(vm: &IVM) -> Result<u64, VMError> {
+        let payload_len = crate::execution_summary::ExecutionSummary::encoded_len_v1()
             .map_err(|_| VMError::NoritoInvalid)?;
         Ok(128_u64
-            .saturating_add(vm.execution_proof_event_count().saturating_mul(2))
+            .saturating_add(vm.execution_summary_event_count().saturating_mul(2))
             .saturating_add(u64::try_from(payload_len).unwrap_or(u64::MAX)))
     }
     fn signature_verify_gas(
@@ -2987,7 +2985,7 @@ impl IVMHost for DefaultHost {
                 reserve_available_syscall_gas_at_least(vm, PUBLIC_INPUT_GAS_BASE)?
             }
             crate::syscalls::SYSCALL_COMMIT_OUTPUT => gas::commit_output_gas(vm.output_used_len()),
-            crate::syscalls::SYSCALL_PROVE_EXECUTION => Self::execution_proof_gas_quote(vm)?,
+            crate::syscalls::SYSCALL_EXECUTION_SUMMARY => Self::execution_summary_gas_quote(vm)?,
             crate::syscalls::SYSCALL_VERIFY_PROOF => {
                 let payload_len = tlv_len(10)?;
                 if payload_len > gas::HOST_ZK_VERIFY_MAX_PAYLOAD_BYTES {
@@ -4092,20 +4090,20 @@ impl IVMHost for DefaultHost {
                 self.pub_output = vm.read_output_used().to_vec();
                 Ok(gas)
             }
-            crate::syscalls::SYSCALL_PROVE_EXECUTION => {
-                let proof = vm.execution_proof();
-                let payload = encode_canonical_norito(&proof)?;
+            crate::syscalls::SYSCALL_EXECUTION_SUMMARY => {
+                let summary = vm.execution_summary();
+                let payload = encode_canonical_norito(&summary)?;
                 let ptr = Self::alloc_norito_bytes_tlv(vm, &payload)?;
                 vm.set_register(10, ptr);
                 vm.set_register(11, 0);
-                let event_count = proof
+                let event_count = summary
                     .pc_trace_len
-                    .saturating_add(proof.delta_trace_len)
-                    .saturating_add(proof.register_trace_len)
-                    .saturating_add(proof.constraint_len)
-                    .saturating_add(proof.memory_log_len)
-                    .saturating_add(proof.register_log_len)
-                    .saturating_add(proof.step_log_len);
+                    .saturating_add(summary.delta_trace_len)
+                    .saturating_add(summary.register_trace_len)
+                    .saturating_add(summary.constraint_len)
+                    .saturating_add(summary.memory_log_len)
+                    .saturating_add(summary.register_log_len)
+                    .saturating_add(summary.step_log_len);
                 let payload_len = u64::try_from(payload.len()).unwrap_or(u64::MAX);
                 Ok(128_u64
                     .saturating_add(event_count.saturating_mul(2))
@@ -4501,12 +4499,8 @@ impl IVMHost for DefaultHost {
                     let envelope_len = 7usize.saturating_add(tlv.payload.len()).saturating_add(32);
                     return Ok(Self::input_publish_gas(envelope_len));
                 }
-                let resolved = Self::resolve_literal_pointer(
-                    vm,
-                    usize::try_from(src).map_err(|_| VMError::NoritoInvalid)?,
-                )
-                .ok_or(VMError::NoritoInvalid)?;
-                let resolved = u64::try_from(resolved).map_err(|_| VMError::NoritoInvalid)?;
+                let resolved =
+                    Self::resolve_literal_pointer(vm, src).ok_or(VMError::NoritoInvalid)?;
                 let bytes_vec = vm.clone_tlv(resolved)?;
                 let total = bytes_vec.len();
                 let dst = vm.alloc_host_tlv(&bytes_vec)?;
@@ -4524,7 +4518,7 @@ impl IVMHost for DefaultHost {
                 }
                 let dest = vm.register(11);
                 let root_out = vm.register(12);
-                let (root, path) = vm.memory.merkle_root_and_path(addr);
+                let (root, path) = vm.memory.merkle_root_and_path(addr)?;
                 for (i, node) in path.iter().enumerate() {
                     vm.memory.store_bytes(dest + (i as u64) * 32, node)?;
                 }
@@ -4551,7 +4545,7 @@ impl IVMHost for DefaultHost {
                     Some(usize::try_from(depth_cap_raw.min(32)).expect("depth cap fits usize"))
                 };
                 let root_out = vm.register(13);
-                let (proof, root) = vm.memory.merkle_compact(addr, depth_cap);
+                let (proof, root) = vm.memory.merkle_compact(addr, depth_cap)?;
                 let depth = proof.depth() as usize;
                 vm.memory.store_bytes(dest, &[proof.depth()])?;
                 vm.memory
@@ -4584,7 +4578,7 @@ impl IVMHost for DefaultHost {
                     Some(usize::try_from(depth_cap_raw.min(32)).expect("depth cap fits usize"))
                 };
                 let root_out = vm.register(13);
-                let (proof, root) = vm.registers.merkle_compact(idx, depth_cap);
+                let (proof, root) = vm.registers.merkle_compact(idx, depth_cap)?;
                 let depth = proof.depth() as usize;
                 vm.memory.store_bytes(dest, &[proof.depth()])?;
                 vm.memory
@@ -6718,15 +6712,15 @@ mod tests {
         assert_eq!(vm.register(12), public_key);
     }
     #[test]
-    fn execution_proof_and_merkle_quotes_match_actual_costs() {
+    fn execution_summary_and_merkle_quotes_match_actual_costs() {
         crate::set_banner_enabled(false);
         let mut vm = IVM::new(u64::MAX);
         let mut host = DefaultHost::new();
         let proof_quote = host
-            .prepare_syscall(syscalls::SYSCALL_PROVE_EXECUTION, &vm)
+            .prepare_syscall(syscalls::SYSCALL_EXECUTION_SUMMARY, &vm)
             .expect("quote proof");
         assert_eq!(
-            host.syscall(syscalls::SYSCALL_PROVE_EXECUTION, &mut vm)
+            host.syscall(syscalls::SYSCALL_EXECUTION_SUMMARY, &mut vm)
                 .expect("produce proof"),
             proof_quote
         );
@@ -6761,6 +6755,27 @@ mod tests {
             DefaultHost::new().prepare_syscall(syscalls::SYSCALL_GET_REGISTER_MERKLE_COMPACT, &vm),
             Err(VMError::RegisterOutOfBounds)
         );
+    }
+    #[test]
+    fn merkle_path_quote_rounds_partial_leaf_up_at_power_of_two_boundary() {
+        const GAS_LIMIT: u64 = 262_148;
+        let mut vm = IVM::new_with_config(crate::IvmConfig::new(GAS_LIMIT));
+        assert_eq!(vm.memory.stack_limit(), 1_048_592);
+        vm.memory
+            .store_u32(Memory::HEAP_START, 0xfeed_beef)
+            .expect("seed Merkle leaf");
+        vm.set_register(10, Memory::HEAP_START);
+        vm.set_register(11, Memory::OUTPUT_START);
+        vm.set_register(12, 0);
+        let mut host = DefaultHost::new();
+        let quote = host
+            .prepare_syscall(syscalls::SYSCALL_GET_MERKLE_PATH, &vm)
+            .expect("quote full Merkle path");
+        let actual = host
+            .syscall(syscalls::SYSCALL_GET_MERKLE_PATH, &mut vm)
+            .expect("produce full Merkle path");
+        assert_eq!(vm.register(10), 18, "partial leaf increases tree depth");
+        assert_eq!(actual, quote);
     }
     #[test]
     fn disabled_and_unknown_syscall_quotes_fail_closed_without_over_reserving() {
@@ -7023,7 +7038,7 @@ mod tests {
         let addr = crate::Memory::HEAP_START;
         vm.memory.store_u32(addr, 0xABCD).expect("store heap");
         vm.memory.commit();
-        let path_len = vm.memory.merkle_path(addr).len();
+        let path_len = vm.memory.merkle_path(addr).unwrap().len();
         vm.set_register(10, addr);
         vm.set_register(11, crate::Memory::OUTPUT_START);
         vm.set_register(12, 0);

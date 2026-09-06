@@ -366,7 +366,8 @@ fn exact_quotient_batch_and_first_fold_prefix_is_non_authorizing() {
     assert!(!source.contains("readiness = true"));
     let composite = include_str!("rns_native_composite_verifier.rs");
     assert!(composite.contains("authenticate_rns_native_qpcs_fri_complete_v1"));
-    assert!(composite.contains("retained RLWE/source residual"));
+    assert!(composite.contains("no authenticated RLWE/source linkage"));
+    assert!(composite.contains("retained qPCS residual"));
     assert!(composite.contains(
         "StageUnavailable(\n            ZkAmsMkheRnsNativeVerificationStageV1::RnsRelationQpcs"
     ));

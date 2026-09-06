@@ -1,4 +1,5 @@
 //! Bounded startup loader for transaction-history mandatory-alias policy files.
+use crate::secure_file_metadata::{self, SecureMetadata};
 use iroha_data_model::{
     alias_setup::AccountAliasName, name::MAX_NAME_BYTES, nexus::DataSpaceCatalog,
 };
@@ -6,10 +7,12 @@ use norito::{
     DecodeLimits,
     json::{JsonPreflightLimits, JsonPreflightProfile, Parser, preflight_slice},
 };
+#[cfg(unix)]
+use std::fs::OpenOptions;
 use std::{
     alloc::{Layout, alloc},
     fmt,
-    fs::{self, File, Metadata, OpenOptions},
+    fs::{self, File},
     io::{self, Read as _},
     path::Path,
     str::FromStr as _,
@@ -44,7 +47,7 @@ impl MandatoryAliasPolicy {
     }
 }
 #[derive(Debug)]
-enum PolicyLoadError {
+pub(crate) enum PolicyLoadError {
     Io(io::Error),
     Invalid(&'static str),
 }
@@ -61,6 +64,14 @@ impl From<io::Error> for PolicyLoadError {
         Self::Io(error)
     }
 }
+impl std::error::Error for PolicyLoadError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Io(error) => Some(error),
+            Self::Invalid(_) => None,
+        }
+    }
+}
 /// Load the configured mandatory-alias policy under its complete startup envelope.
 ///
 /// The file is opened without following its final path component and must keep the same identity,
@@ -71,13 +82,8 @@ pub(crate) fn load_mandatory_alias_policy(
     path: &Path,
     catalog: &DataSpaceCatalog,
     maximum_file_bytes: usize,
-) -> MandatoryAliasPolicy {
-    try_load_mandatory_alias_policy(path, catalog, maximum_file_bytes).unwrap_or_else(|error| {
-        panic!(
-            "failed to load tx history alias policy `{}`: {error}",
-            path.display()
-        )
-    })
+) -> Result<MandatoryAliasPolicy, PolicyLoadError> {
+    try_load_mandatory_alias_policy(path, catalog, maximum_file_bytes)
 }
 fn try_load_mandatory_alias_policy(
     path: &Path,
@@ -480,7 +486,7 @@ fn read_exact_stable_policy_file(
             "alias-policy file limit must be non-zero",
         ));
     }
-    let named_before = fs::symlink_metadata(path)?;
+    let named_before = secure_file_metadata::from_path(path)?;
     validate_direct_regular_file(&named_before)?;
     if named_before.len() > u64::try_from(maximum).unwrap_or(u64::MAX) {
         return Err(PolicyLoadError::Invalid(
@@ -490,9 +496,9 @@ fn read_exact_stable_policy_file(
     #[cfg(test)]
     replace_policy_file_for_test(path)?;
     let mut file = open_direct_regular_file(path)?;
-    let opened_before = file.metadata()?;
+    let opened_before = secure_file_metadata::from_file(&file)?;
     validate_direct_regular_file(&opened_before)?;
-    if !metadata_unchanged(&named_before, &opened_before) {
+    if !secure_file_metadata::unchanged(&named_before, &opened_before) {
         return Err(PolicyLoadError::Invalid(
             "alias-policy file changed identity while opening",
         ));
@@ -523,12 +529,12 @@ fn read_exact_stable_policy_file(
             "alias-policy file grew while reading or exceeds its configured byte limit",
         ));
     }
-    let opened_after = file.metadata()?;
-    let named_after = fs::symlink_metadata(path)?;
+    let opened_after = secure_file_metadata::from_file(&file)?;
+    let named_after = secure_file_metadata::from_path(path)?;
     validate_direct_regular_file(&opened_after)?;
     validate_direct_regular_file(&named_after)?;
-    if !metadata_unchanged(&opened_before, &opened_after)
-        || !metadata_unchanged(&opened_after, &named_after)
+    if !secure_file_metadata::unchanged(&opened_before, &opened_after)
+        || !secure_file_metadata::unchanged(&opened_after, &named_after)
     {
         return Err(PolicyLoadError::Invalid(
             "alias-policy file changed while reading",
@@ -560,13 +566,12 @@ fn allocate_exact_uninit<T>(
     // alignment match this boxed `MaybeUninit<T>` slice.
     Ok(unsafe { Box::from_raw(slice) })
 }
-fn validate_direct_regular_file(metadata: &Metadata) -> Result<(), PolicyLoadError> {
-    if metadata.file_type().is_symlink()
-        || metadata_is_reparse_point(metadata)
-        || !metadata.file_type().is_file()
+fn validate_direct_regular_file(metadata: &SecureMetadata) -> Result<(), PolicyLoadError> {
+    if !secure_file_metadata::is_direct_file(metadata)
+        || secure_file_metadata::number_of_links(metadata) != Some(1)
     {
         return Err(PolicyLoadError::Invalid(
-            "alias-policy input must be a direct regular file",
+            "alias-policy input must be a direct single-link regular file",
         ));
     }
     Ok(())
@@ -583,13 +588,7 @@ fn open_direct_regular_file(path: &Path) -> io::Result<File> {
 }
 #[cfg(windows)]
 fn open_direct_regular_file(path: &Path) -> io::Result<File> {
-    use std::os::windows::fs::OpenOptionsExt as _;
-    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
-    let mut options = OpenOptions::new();
-    options
-        .read(true)
-        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
-    options.open(path)
+    secure_file_metadata::open_direct_file(path)
 }
 #[cfg(not(any(unix, windows)))]
 fn open_direct_regular_file(_path: &Path) -> io::Result<File> {
@@ -597,44 +596,6 @@ fn open_direct_regular_file(_path: &Path) -> io::Result<File> {
         io::ErrorKind::Unsupported,
         "stable direct-file opens are unavailable on this platform",
     ))
-}
-#[cfg(windows)]
-fn metadata_is_reparse_point(metadata: &Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt as _;
-    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
-    metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
-}
-#[cfg(not(windows))]
-fn metadata_is_reparse_point(_metadata: &Metadata) -> bool {
-    false
-}
-#[cfg(unix)]
-fn metadata_unchanged(left: &Metadata, right: &Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt as _;
-    left.dev() == right.dev()
-        && left.ino() == right.ino()
-        && left.len() == right.len()
-        && left.mtime() == right.mtime()
-        && left.mtime_nsec() == right.mtime_nsec()
-        && left.ctime() == right.ctime()
-        && left.ctime_nsec() == right.ctime_nsec()
-        && left.mode() == right.mode()
-}
-#[cfg(windows)]
-fn metadata_unchanged(left: &Metadata, right: &Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt as _;
-    left.volume_serial_number().is_some()
-        && left.file_index().is_some()
-        && left.volume_serial_number() == right.volume_serial_number()
-        && left.file_index() == right.file_index()
-        && left.file_size() == right.file_size()
-        && left.last_write_time() == right.last_write_time()
-        && left.creation_time() == right.creation_time()
-        && left.file_attributes() == right.file_attributes()
-}
-#[cfg(not(any(unix, windows)))]
-fn metadata_unchanged(_left: &Metadata, _right: &Metadata) -> bool {
-    false
 }
 #[cfg(test)]
 static POLICY_FILE_REPLACEMENT: Mutex<Option<(PathBuf, PathBuf)>> = Mutex::new(None);
@@ -721,6 +682,24 @@ mod tests {
             b"{}"
         );
         assert!(read_exact_stable_policy_file(&path, 1).is_err());
+    }
+    #[test]
+    fn policy_loader_returns_missing_and_malformed_file_errors_without_unwinding() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let missing = directory.path().join("missing.json");
+        let missing_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            load_mandatory_alias_policy(&missing, &catalog(), 1024)
+        }))
+        .expect("missing policy must return an error instead of unwinding");
+        assert!(missing_result.is_err());
+
+        let malformed = directory.path().join("malformed.json");
+        fs::write(&malformed, b"[").expect("write malformed policy");
+        let malformed_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            load_mandatory_alias_policy(&malformed, &catalog(), 1024)
+        }))
+        .expect("malformed policy must return an error instead of unwinding");
+        assert!(malformed_result.is_err());
     }
     #[test]
     fn policy_file_reader_rejects_path_replacement() {

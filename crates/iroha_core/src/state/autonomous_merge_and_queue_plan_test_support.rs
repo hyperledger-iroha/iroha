@@ -340,8 +340,11 @@ fn persist_merge_carrier_finality_chain_for_state_test(
             height,
             "fixture finality must form one contiguous chain",
         );
+        let network_id = *state.network_id_ref();
+        let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
+            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(network_id, 0, &roster);
         let context = HeightContext {
-            network_id: *state.network_id_ref(),
+            network_id,
             protocol_version: PROTOCOL_VERSION,
             height,
             epoch: 0,
@@ -352,6 +355,8 @@ fn persist_merge_carrier_finality_chain_for_state_test(
             snapshot_bootstrap: None,
             quorum: DualQuorum::from_roster(&roster).expect("valid finality quorum"),
             roster,
+            kagemusha_mint_finality_epoch_id,
+            kagemusha_mint_finality_epoch_roster,
             nexus_amx_context_hash: Hash::new(b"state merge finality nexus context"),
             execution_policy_hash: Hash::new(b"state merge finality execution policy"),
             da_layout: DataAvailabilityLayout {
@@ -490,6 +495,7 @@ fn autonomous_merge_commit_authorization_fixture(
         seed_expired_axt_replay,
         seed_due_start_effect,
         None,
+        false,
     )
 }
 fn autonomous_merge_transfer_commit_authorization_fixture() -> (State, MergeLedgerEntry, SignedBlock)
@@ -498,6 +504,7 @@ fn autonomous_merge_transfer_commit_authorization_fixture() -> (State, MergeLedg
         false,
         false,
         Some(QueuePlanTransferFixture::Single),
+        false,
     );
     (state, entry, carrier)
 }
@@ -512,7 +519,13 @@ fn autonomous_merge_batch_transfer_commit_authorization_fixture(
         "batch fixture requires batch settlement semantics"
     );
     let (state, entry, carrier, _) =
-        autonomous_merge_commit_authorization_fixture_inner(false, false, Some(mode));
+        autonomous_merge_commit_authorization_fixture_inner(false, false, Some(mode), false);
+    (state, entry, carrier)
+}
+fn autonomous_sealed_reveal_merge_commit_authorization_fixture()
+-> (State, MergeLedgerEntry, SignedBlock) {
+    let (state, entry, carrier, _) =
+        autonomous_merge_commit_authorization_fixture_inner(false, false, None, true);
     (state, entry, carrier)
 }
 #[derive(Clone, Copy)]
@@ -652,6 +665,7 @@ fn autonomous_merge_commit_authorization_fixture_inner(
     seed_expired_axt_replay: bool,
     seed_due_start_effect: bool,
     transfer_fixture: Option<QueuePlanTransferFixture>,
+    wrap_in_sealed_reveal: bool,
 ) -> (
     State,
     MergeLedgerEntry,
@@ -705,6 +719,27 @@ fn autonomous_merge_commit_authorization_fixture_inner(
     let entrypoint = match transfer_fixture {
         Some(fixture) => queue_plan_transfer_entrypoint_for_state_test(&state, tag, fixture),
         None => queue_plan_entrypoint_for_state_test(&state, tag),
+    };
+    let entrypoint = if wrap_in_sealed_reveal {
+        let TransactionEntrypoint::External(signed) = entrypoint else {
+            panic!("fixture can only seal an external signed transaction")
+        };
+        let salt = [0xD7; 32];
+        let reveal_deadline_height = carrier_height.saturating_add(32);
+        let commitment =
+            iroha_data_model::transaction::signed::compute_sealed_transaction_commitment(
+                state.network_id_ref(),
+                &signed,
+                salt,
+                reveal_deadline_height,
+            );
+        TransactionEntrypoint::SealedReveal(
+            iroha_data_model::transaction::signed::SealedTransactionReveal::new(
+                commitment, signed, salt,
+            ),
+        )
+    } else {
+        entrypoint
     };
     let routing_plan = crate::queue::RoutingPlan::single(crate::queue::RoutingDecision::new(
         LaneId::SINGLE,
@@ -777,6 +812,10 @@ fn autonomous_merge_commit_authorization_fixture_inner(
         view: 0,
         carrier_height,
         carrier_parent_hash: parent.hash(),
+        lane_authority_catalog: state
+            .merge_active_lane_authority_snapshot(carrier_height)
+            .expect("fixture exact lane authority")
+            .2,
         lane_catalog_hash: merge_lane_catalog_hash(&lifecycle.nexus.lane_catalog),
         incarnation_root: LaneLifecycleParameterV1::incarnation_root(&incarnation_entries),
         activation_root: crate::merge::merge_activation_root(&active_lanes),

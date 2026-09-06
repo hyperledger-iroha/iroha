@@ -37,6 +37,19 @@ canonical authenticated `POST /v1/sorafs/proof/stream` request to Torii after
 reading the approved native pin record and its finalized cursor from
 `GET /v1/sorafs/pin/{digest_hex}`.
 
+The public local-content gateway is a separate surface:
+`GET /v1/sorafs/cid/{cid}`, `GET /.well-known/sorafs/manifest`, and
+`GET /sorafs/cid/{cid}[/{path}]`. These routes are available on every
+SoraFS-enabled Torii node even when the optional application API is omitted.
+They are anonymous and never consume a client storage token or a
+client-supplied manifest envelope. Instead, the canonical manifest in the
+node's authoritative local store is the envelope. Before any payload read,
+Torii validates that manifest and its indexed identity, binds the configured
+local provider, applies governed compliance/takedown policy, applies the
+trusted-proxy-aware rate/ban policy, retains a bounded concurrency permit, and
+enforces the response/range byte ceiling. The token-bearing `/car` and
+`/chunk` transport below remains a distinct provider protocol.
+
 ### 2.1. Required Request Headers
 
 * `X-SoraFS-Version`: `sf1` for the initial rollout, bump on future profiles.

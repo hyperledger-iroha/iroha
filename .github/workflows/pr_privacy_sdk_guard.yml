@@ -239,7 +239,6 @@ on:
       - "csharp/tests/Hyperledger.Iroha.Sdk.Tests/PrivacyNativeTests.cs"
       - "csharp/tests/Hyperledger.Iroha.Sdk.Tests/PrivacyExact12FixtureCodecV1Tests.cs"
       - "csharp/tests/Hyperledger.Iroha.Sdk.Tests/VerifyingKeyBackendTagTests.cs"
-      - "specs/offline_kagemusha.md"
       - "roadmap.md"
       - "status.md"
   workflow_dispatch:

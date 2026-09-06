@@ -479,7 +479,12 @@ public sealed partial class ToriiClient
         HttpClient httpClient,
         ToriiClientOptions? options,
         ValidationFeeHijiriQuoteTransportAssurance transportAssurance)
-        : this(baseUri, httpClient, options)
+        : this(
+            baseUri,
+            httpClient,
+            options,
+            ownsHttpClient: false,
+            injectedTransportIsOneShot: true)
     {
         if (transportAssurance
             != ValidationFeeHijiriQuoteTransportAssurance.OneShotWithoutRedirectsRetriesOrDecompression)
@@ -615,7 +620,7 @@ public sealed partial class ToriiClient
             throw new InvalidDataException(
                 $"{context} declares more than the {maximumBytes}-byte limit.");
         }
-        var body = await ReadBoundedExactJsonResponseBodyAsync(
+        var body = await ReadBoundedResponseBodyAsync(
             content,
             maximumBytes,
             context,

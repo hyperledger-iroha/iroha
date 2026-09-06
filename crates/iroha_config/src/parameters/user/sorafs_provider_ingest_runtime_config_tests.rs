@@ -44,7 +44,7 @@ fn enable_attestation_journal(config: &mut SorafsProviderAttestationJournalConfi
     config.clock_seal_revision = Some(11);
     config.clock_seal_policy_digest_hex = Some("c1".repeat(32));
     config.approval_signer_handle =
-        Some("hsm://sorafs/provider-attestation/approval-primary".to_owned());
+        Some("signer://sorafs/provider-attestation/approval-primary".to_owned());
     config.approval_signer_revision = Some(12);
     config.approval_signer_policy_digest_hex = Some("c2".repeat(32));
     config.inventory_handle =
@@ -160,7 +160,7 @@ fn enabled_attestation_journal_projects_exact_policy_and_bindings() {
                 policy_digest: [0xC1; 32],
             },
             approval_signer: actual::SorafsProviderAttestationRuntimeBinding {
-                handle: "hsm://sorafs/provider-attestation/approval-primary".to_owned(),
+                handle: "signer://sorafs/provider-attestation/approval-primary".to_owned(),
                 revision: 12,
                 policy_digest: [0xC2; 32],
             },
@@ -187,7 +187,7 @@ fn disabled_attestation_journal_rejects_every_binding_field() {
         |config| config.clock_seal_handle = Some("sealed://clock/primary".to_owned()),
         |config| config.clock_seal_revision = Some(1),
         |config| config.clock_seal_policy_digest_hex = Some("c1".repeat(32)),
-        |config| config.approval_signer_handle = Some("hsm://approval/primary".to_owned()),
+        |config| config.approval_signer_handle = Some("signer://approval/primary".to_owned()),
         |config| config.approval_signer_revision = Some(1),
         |config| config.approval_signer_policy_digest_hex = Some("c2".repeat(32)),
         |config| config.inventory_handle = Some("coordinator://inventory/primary".to_owned()),
@@ -264,7 +264,7 @@ fn enabled_attestation_journal_rejects_partial_binding_triplets() {
 fn enabled_attestation_journal_rejects_unqualified_bindings() {
     let mutations: [fn(&mut SorafsProviderAttestationJournalConfig); 12] = [
         |config| config.clock_seal_handle = Some("sealed://clock/test".to_owned()),
-        |config| config.approval_signer_handle = Some("hsm://approval/dev".to_owned()),
+        |config| config.approval_signer_handle = Some("signer://approval/dev".to_owned()),
         |config| config.inventory_handle = Some("coordinator://inventory/mock".to_owned()),
         |config| config.clock_seal_revision = Some(0),
         |config| config.approval_signer_revision = Some(0),

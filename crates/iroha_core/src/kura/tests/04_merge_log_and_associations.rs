@@ -493,7 +493,8 @@ fn durable_block_payload_len_requires_committed_marker() {
         .push((block_hash, Some(Arc::clone(&block))));
     kura.set_block_height_index_entry(1, block_hash);
     assert_eq!(
-        kura.durable_block_payload_len_by_hash(block_hash),
+        kura.durable_block_payload_len_by_hash(block_hash)
+            .expect("read durable payload bound"),
         None,
         "replica metadata must not be advertised before the block is durable"
     );
@@ -505,6 +506,7 @@ fn durable_block_payload_len_requires_committed_marker() {
     }
     let (height, payload_len) = kura
         .durable_block_payload_len_by_hash(block_hash)
+        .expect("read durable payload bound")
         .expect("durable payload metadata after marker advances");
     let index_len = {
         let mut store = kura.block_store.lock();

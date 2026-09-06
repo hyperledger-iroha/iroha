@@ -388,8 +388,8 @@ def _production_liveness_release_inventory_errors(
         ("python", 129),
         ("javascript", 88),
         ("swift", 34),
-        ("kotlin", 44),
-        ("java", 43),
+        ("kotlin", 50),
+        ("java", 48),
     )
     runner_sdk_diagnostics_surfaces = indented_shell_array(
         "sumeragi_v2_sdk_diagnostics_surfaces"
@@ -845,8 +845,8 @@ def _production_liveness_release_inventory_errors(
             f"{_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT} G-UNIT"
         )
 
-    if len(_PRODUCTION_LIVENESS_NEW_REGRESSIONS) != 448:
-        errors.append("internal release-regression seal must contain exactly 448 names")
+    if len(_PRODUCTION_LIVENESS_NEW_REGRESSIONS) != 453:
+        errors.append("internal release-regression seal must contain exactly 453 names")
     for test_name in _PRODUCTION_LIVENESS_NEW_REGRESSIONS:
         occurrences = inventory.count(test_name)
         if occurrences != 1:
@@ -1429,7 +1429,7 @@ def _production_liveness_release_inventory_errors(
     if modules != list(_PRODUCTION_LIVENESS_RELEASE_MODULES):
         errors.append(
             f"{release_path}: production liveness modules must equal the reviewed "
-            f"ordered 44-module inventory; found {modules}"
+            f"ordered 42-module inventory; found {modules}"
         )
     inventory_rows = ["module\ttest"]
     inventory_has_exact_modules = True
@@ -1461,7 +1461,7 @@ def _production_liveness_release_inventory_errors(
     if leg_ids != expected_leg_ids or len(set(leg_ids)) != len(leg_ids):
         errors.append(
             f"{release_path}: production module leg IDs must equal the reviewed "
-            f"44-entry inventory; found {leg_ids}"
+            f"42-entry inventory; found {leg_ids}"
         )
     for _, module, expected_count in _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS:
         observed_count = sum(
@@ -1554,13 +1554,12 @@ def _production_liveness_release_inventory_errors(
 
     expected_data_model_modules = [
         "block::consensus_v2::finality::tests",
-        "offline::kagemusha_v4_topup_provenance_tests",
         "block::consensus_v2::tests",
     ]
     if shell_array("production_data_model_modules") != expected_data_model_modules:
         errors.append(
             f"{release_path}: production data-model routing must name the exact "
-            "finality, offline compact-QC, and context-identity modules"
+            "finality and context-identity modules"
         )
     expected_data_model_list = (
         'production_data_model_unit_list="$(run_cargo test --locked --offline '
@@ -2418,21 +2417,21 @@ def _production_liveness_release_inventory_errors(
 
     documentation_claims = {
         repo_root / "formal" / "sumeragi_v2" / "README.md": (
-            "current inventory to 864 tests across 44 modules.\n"
+            "current inventory to 866 tests across 42 modules.\n"
             "Together with the source-sealed command and tooling legs, the pre-network\n"
             f"corridor contains {_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT} legs.",
             "canonical module/test TSV inventory SHA-256 is\n"
             f"`{_PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256}`",
         ),
         repo_root / "formal" / "sumeragi_v2" / "PROOF.md": (
-            "current 864-test,\n44-module inventory. The complete source-sealed\n"
+            "current 866-test,\n42-module inventory. The complete source-sealed\n"
             "pre-network corridor\ncontains "
             f"{_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT} legs.",
             "canonical module/test TSV inventory SHA-256 is\n"
             f"`{_PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256}`",
         ),
         repo_root / "specs" / "sumeragi_v2_liveness.md": (
-            "current inventory to 864\nexact tests across 44 modules and "
+            "current inventory to 866\nexact tests across 42 modules and "
             f"{_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT} pre-network legs.",
             "Its canonical module/test TSV inventory SHA-256 is\n"
             f"`{_PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256}`",

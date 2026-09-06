@@ -1,5 +1,6 @@
 import XCTest
 import CryptoKit
+import Foundation
 #if canImport(Combine)
 import Combine
 #endif
@@ -24,28 +25,6 @@ private func encodeTestCanonicalOnboardingBody(
     return try encoder.encode(body)
 }
 
-private func kagemushaOperationRequestArchive(
-    schema: String,
-    fieldCount: Int,
-    operationIdFieldIndex: Int
-) -> Data {
-    var payload = CompactNoritoWriter()
-    for index in 0..<fieldCount {
-        let field: Data
-        if index == 0 {
-            field = CompactNorito.encodeUInt16(KagemushaRecursiveSpend.wireVersionV4)
-        } else if index == operationIdFieldIndex {
-            field = Data(repeating: 0x11, count: 32)
-        } else {
-            field = Data([UInt8(index + 1)])
-        }
-        payload.writeField(field)
-    }
-    return KagemushaRecursiveSpend.frameArchive(
-        schema: schema,
-        payload: payload.data
-    )
-}
 
 final class StubURLProtocol: URLProtocol {
     static var handler: ((URLRequest) throws -> (HTTPURLResponse, Data?))?
@@ -484,6 +463,98 @@ final class ToriiClientTests: XCTestCase {
         )
     }
 
+    private func assertCanonicalEventRequest(
+        _ request: URLRequest,
+        queryItems: [URLQueryItem],
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) throws {
+        var expectedComponents = try XCTUnwrap(
+            URLComponents(string: "https://example.test/v1/events/sse"),
+            file: file,
+            line: line
+        )
+        expectedComponents.queryItems = queryItems
+        let expectedURL = try XCTUnwrap(expectedComponents.url, file: file, line: line)
+        XCTAssertEqual(request.httpMethod, "GET", file: file, line: line)
+        XCTAssertEqual(request.url, expectedURL, file: file, line: line)
+        XCTAssertEqual(
+            request.value(forHTTPHeaderField: "Accept"),
+            "text/event-stream",
+            file: file,
+            line: line
+        )
+
+        let expectedHeaders = try ToriiCanonicalRequest.buildHeaders(
+            method: "GET",
+            url: expectedURL,
+            accountId: authority,
+            privateKey: canonicalSigningSeed,
+            networkId: TestNetworkIds.canonical,
+            timestampMs: 4_102_444_801_000,
+            nonce: "canonical-read-test"
+        )
+        for header in [
+            ToriiCanonicalRequest.headerAccount,
+            ToriiCanonicalRequest.headerSignature,
+            ToriiCanonicalRequest.headerTimestampMs,
+            ToriiCanonicalRequest.headerNonce,
+        ] {
+            XCTAssertEqual(
+                request.value(forHTTPHeaderField: header),
+                expectedHeaders[header],
+                "canonical header \(header) must bind the final event URL",
+                file: file,
+                line: line
+            )
+        }
+    }
+
+    private func assertCanonicalDataspaceReadRequest(
+        _ request: URLRequest,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) throws {
+        let url = try XCTUnwrap(request.url, file: file, line: line)
+        XCTAssertEqual(request.httpMethod, "GET", file: file, line: line)
+        let expectedHeaders = try ToriiCanonicalRequest.buildHeaders(
+            method: "GET",
+            url: url,
+            accountId: authority,
+            privateKey: canonicalSigningSeed,
+            networkId: TestNetworkIds.canonical,
+            timestampMs: 4_102_444_801_000,
+            nonce: "canonical-read-test"
+        )
+        for header in [
+            ToriiCanonicalRequest.headerAccount,
+            ToriiCanonicalRequest.headerSignature,
+            ToriiCanonicalRequest.headerTimestampMs,
+            ToriiCanonicalRequest.headerNonce,
+        ] {
+            XCTAssertEqual(
+                request.value(forHTTPHeaderField: header),
+                expectedHeaders[header],
+                "canonical header \(header) must bind the final account-read URL",
+                file: file,
+                line: line
+            )
+        }
+    }
+
+    private func expectCanonicalEventRequest(queryItems: [URLQueryItem]) {
+        StubURLProtocol.handler = { request in
+            try self.assertCanonicalEventRequest(request, queryItems: queryItems)
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "text/event-stream"]
+            )!
+            return (response, Data())
+        }
+    }
+
     private func irohaSwiftPackageRootURL() -> URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent() // ToriiClientTests.swift
@@ -498,7 +569,8 @@ final class ToriiClientTests: XCTestCase {
     private func makeClient(
         baseURL: URL = URL(string: "https://example.test")!,
         defaultHeaders: [String: String] = [:],
-        operatorSigningContext: ToriiOperatorSigningContext? = ToriiClientTests.operatorSigningContext
+        operatorSigningContext: ToriiOperatorSigningContext? = ToriiClientTests.operatorSigningContext,
+        includeCanonicalReadAuth: Bool = true
     ) -> ToriiClient {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [StubURLProtocol.self]
@@ -508,7 +580,7 @@ final class ToriiClientTests: XCTestCase {
             session: session,
             defaultHeaders: defaultHeaders,
             localSigningContext: ToriiLocalSigningContext(networkId: TestNetworkIds.canonical),
-            canonicalRequestAuth: canonicalReadAuth,
+            canonicalRequestAuth: includeCanonicalReadAuth ? canonicalReadAuth : nil,
             operatorSigningContext: operatorSigningContext
         )
     }
@@ -1045,6 +1117,7 @@ final class ToriiClientTests: XCTestCase {
     @available(iOS 15.0, macOS 12.0, *)
     func testGetAssetsAsync() async throws {
         StubURLProtocol.handler = { request in
+            try self.assertCanonicalDataspaceReadRequest(request)
             self.assertDecodedPath(request, contains: "/v1/accounts/sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV/assets")
             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
             let body = """
@@ -7829,6 +7902,7 @@ final class ToriiClientTests: XCTestCase {
     @available(iOS 15.0, macOS 12.0, *)
     func testGetTransactionsEncodesAccountLiteral() async throws {
         StubURLProtocol.handler = { request in
+            try self.assertCanonicalDataspaceReadRequest(request)
             self.assertDecodedPath(request, contains: "/v1/accounts/sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV/transactions")
             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
             let body = """
@@ -7839,6 +7913,41 @@ final class ToriiClientTests: XCTestCase {
 
         let transactions = try await makeClient().getTransactions(accountId: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV")
         XCTAssertEqual(transactions.total, 1)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testAccountDataspaceReadsRemainAnonymousWithoutCanonicalSigner() async throws {
+        let accountId = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
+        var paths: [String] = []
+        StubURLProtocol.handler = { request in
+            paths.append(try XCTUnwrap(request.url?.path))
+            for header in [
+                ToriiCanonicalRequest.headerAccount,
+                ToriiCanonicalRequest.headerSignature,
+                ToriiCanonicalRequest.headerTimestampMs,
+                ToriiCanonicalRequest.headerNonce,
+            ] {
+                XCTAssertNil(request.value(forHTTPHeaderField: header))
+            }
+            let body = request.url?.path.hasSuffix("/assets") == true
+                ? "[]"
+                : #"{"items":[],"total":0}"#
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (response, Data(body.utf8))
+        }
+
+        let client = makeClient(includeCanonicalReadAuth: false)
+        _ = try await client.getAssets(accountId: accountId)
+        _ = try await client.getTransactions(accountId: accountId)
+
+        XCTAssertEqual(paths.count, 2)
+        XCTAssertTrue(paths[0].hasSuffix("/assets"))
+        XCTAssertTrue(paths[1].hasSuffix("/transactions"))
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -7947,11 +8056,18 @@ final class ToriiClientTests: XCTestCase {
     func testGetExplorerInstructionsEncodesQueryAndDecodesResponse() async throws {
         StubURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/v1/explorer/instructions")
+            XCTAssertEqual(
+                request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerAccount),
+                self.authority
+            )
+            XCTAssertNotNil(
+                request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerSignature)
+            )
             let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
             let queryItems = components?.queryItems ?? []
             let query = Dictionary(uniqueKeysWithValues: queryItems.map { ($0.name, $0.value ?? "") })
-            XCTAssertEqual(query["page"], "2")
-            XCTAssertEqual(query["per_page"], "25")
+            XCTAssertEqual(query["cursor"], "Y3Vyc29y")
+            XCTAssertEqual(query["limit"], "25")
             XCTAssertEqual(query["account"], "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D")
             XCTAssertEqual(query["authority"], "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV")
             XCTAssertEqual(query["transaction_hash"], "deadbeef")
@@ -7965,14 +8081,15 @@ final class ToriiClientTests: XCTestCase {
                                            headerFields: ["Content-Type": "application/json"])!
             let body = """
             {
-                "pagination": {"page":2,"per_page":25,"total_pages":1,"total_items":1},
+                "pagination": {"limit":25,"snapshot_height":5,"snapshot_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","next_cursor":null,"has_more":false},
                 "items": [
                     {
                         "authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                         "created_at":"2025-01-01T00:00:00Z",
                         "kind":"Transfer",
-                        "r#box":{
-                            "scale":"0xdead",
+                        "box":{
+                            "encoded":"0xbeef",
+                            "framed_sha256":"0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
                             "json":{
                                 "kind":"Transfer",
                                 "payload":{
@@ -7998,8 +8115,8 @@ final class ToriiClientTests: XCTestCase {
             return (response, body)
         }
 
-        let params = ToriiExplorerInstructionsParams(page: 2,
-                                                     perPage: 25,
+        let params = ToriiExplorerInstructionsParams(cursor: "Y3Vyc29y",
+                                                     limit: 25,
                                                      account: "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
                                                      authority: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                                                      transactionHash: "deadbeef",
@@ -8008,14 +8125,17 @@ final class ToriiClientTests: XCTestCase {
                                                      kind: "Transfer",
                                                      assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM")
         let page = try await makeClient().getExplorerInstructions(params: params)
-        XCTAssertEqual(page.pagination.page, 2)
-        XCTAssertEqual(page.pagination.perPage, 25)
-        XCTAssertEqual(page.pagination.totalItems, 1)
+        XCTAssertEqual(page.pagination.limit, 25)
+        XCTAssertEqual(page.pagination.snapshotHeight, 5)
+        XCTAssertEqual(page.pagination.snapshotHash, String(repeating: "a", count: 64))
+        XCTAssertFalse(page.pagination.hasMore)
         XCTAssertEqual(page.items.count, 1)
         let item = page.items[0]
         XCTAssertEqual(item.kind, "Transfer")
         XCTAssertEqual(item.transactionHash, "hash")
-        XCTAssertEqual(item.box.scale, "0xdead")
+        XCTAssertEqual(item.box.encoded, "0xbeef")
+        XCTAssertEqual(item.box.framedSha256, "0x" + String(repeating: "b", count: 64))
+        XCTAssertNil(item.box.scale)
         guard case let .object(payload) = item.box.json else {
             return XCTFail("Expected instruction box json payload to be an object.")
         }
@@ -8023,6 +8143,157 @@ final class ToriiClientTests: XCTestCase {
             return XCTFail("Expected instruction box json to contain a kind string.")
         }
         XCTAssertEqual(kind, "Transfer")
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testDataspaceVisibleExplorerRequestRemainsAnonymousWithoutDefaultSigner() async throws {
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/explorer/instructions")
+            XCTAssertNil(
+                request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerAccount)
+            )
+            XCTAssertNil(
+                request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerSignature)
+            )
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            let body = """
+            {"pagination":{"limit":10,"snapshot_height":0,"snapshot_hash":null,"next_cursor":null,"has_more":false},"items":[]}
+            """.data(using: .utf8)!
+            return (response, body)
+        }
+
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [StubURLProtocol.self]
+        let client = ToriiClient(
+            baseURL: URL(string: "https://example.test")!,
+            session: URLSession(configuration: configuration),
+            localSigningContext: ToriiLocalSigningContext(networkId: TestNetworkIds.canonical)
+        )
+        let page = try await client.getExplorerInstructions()
+        XCTAssertTrue(page.items.isEmpty)
+    }
+
+    func testExplorerHistoryParamsRejectInvalidCursorAndLimit() {
+        let invalidCursors = [
+            "",
+            "padded=",
+            "a",
+            "contains space",
+            String(repeating: "A", count: 1_425),
+        ]
+        for cursor in invalidCursors {
+            XCTAssertThrowsError(
+                try ToriiExplorerInstructionsParams(cursor: cursor).queryItems(),
+                "instructions cursor \(cursor.prefix(16)) should be rejected"
+            )
+            XCTAssertThrowsError(
+                try ToriiExplorerTransactionsParams(cursor: cursor).queryItems(),
+                "transactions cursor \(cursor.prefix(16)) should be rejected"
+            )
+        }
+        for limit: UInt32 in [0, 101] {
+            XCTAssertThrowsError(try ToriiExplorerInstructionsParams(limit: limit).queryItems())
+            XCTAssertThrowsError(try ToriiExplorerTransactionsParams(limit: limit).queryItems())
+        }
+    }
+
+    func testExplorerHistoryCursorMetaDecodesSnapshotContract() throws {
+        let populated = """
+        {
+          "limit":25,
+          "snapshot_height":5,
+          "snapshot_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "next_cursor":"Y3Vyc29y",
+          "has_more":true
+        }
+        """
+        let page = try JSONDecoder().decode(
+            ToriiExplorerHistoryCursorMeta.self,
+            from: Data(populated.utf8)
+        )
+        XCTAssertEqual(page.limit, 25)
+        XCTAssertEqual(page.snapshotHeight, 5)
+        XCTAssertEqual(page.snapshotHash, String(repeating: "a", count: 64))
+        XCTAssertEqual(page.nextCursor, "Y3Vyc29y")
+        XCTAssertTrue(page.hasMore)
+
+        let empty = """
+        {"limit":10,"snapshot_height":0,"snapshot_hash":null,"next_cursor":null,"has_more":false}
+        """
+        let emptyPage = try JSONDecoder().decode(
+            ToriiExplorerHistoryCursorMeta.self,
+            from: Data(empty.utf8)
+        )
+        XCTAssertEqual(emptyPage.snapshotHeight, 0)
+        XCTAssertNil(emptyPage.snapshotHash)
+        XCTAssertNil(emptyPage.nextCursor)
+        XCTAssertFalse(emptyPage.hasMore)
+    }
+
+    func testExplorerHistoryCursorMetaRejectsRetiredUnknownAndInconsistentFields() {
+        let invalidPayloads = [
+            #"{"page":1,"per_page":25,"total_pages":1,"total_items":0}"#,
+            #"{"limit":25,"snapshot_height":5,"next_cursor":null,"has_more":false}"#,
+            #"{"limit":25,"snapshot_height":5,"snapshot_hash":null,"next_cursor":null,"has_more":false}"#,
+            #"{"limit":25,"snapshot_height":0,"snapshot_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","next_cursor":null,"has_more":false}"#,
+            #"{"limit":25,"snapshot_height":5,"snapshot_hash":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","next_cursor":null,"has_more":false}"#,
+            #"{"limit":25,"snapshot_height":5,"snapshot_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","has_more":false}"#,
+            #"{"limit":25,"snapshot_height":5,"snapshot_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","next_cursor":"padded=","has_more":true}"#,
+            #"{"limit":25,"snapshot_height":5,"snapshot_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","next_cursor":null,"has_more":true}"#,
+            #"{"limit":25,"snapshot_height":5,"snapshot_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","next_cursor":null,"has_more":false,"total_items":0}"#,
+        ]
+        for payload in invalidPayloads {
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(
+                    ToriiExplorerHistoryCursorMeta.self,
+                    from: Data(payload.utf8)
+                ),
+                "history pagination should reject \(payload)"
+            )
+        }
+    }
+
+    func testExplorerHistoryPagesRejectUnknownFieldsAndOversizedItems() {
+        let unknownOuter = """
+        {
+          "pagination":{"limit":1,"snapshot_height":0,"snapshot_hash":null,"next_cursor":null,"has_more":false},
+          "items":[],
+          "total_items":0
+        }
+        """
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                ToriiExplorerInstructionsPage.self,
+                from: Data(unknownOuter.utf8)
+            )
+        )
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                ToriiExplorerTransactionsPage.self,
+                from: Data(unknownOuter.utf8)
+            )
+        )
+
+        let oversized = """
+        {
+          "pagination":{"limit":1,"snapshot_height":5,"snapshot_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","next_cursor":null,"has_more":false},
+          "items":[
+            {"authority":"alice","hash":"one","block":5,"created_at":"2025-01-01T00:00:00Z","executable":"Instructions","status":"Committed"},
+            {"authority":"alice","hash":"two","block":5,"created_at":"2025-01-01T00:00:01Z","executable":"Instructions","status":"Committed"}
+          ]
+        }
+        """
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                ToriiExplorerTransactionsPage.self,
+                from: Data(oversized.utf8)
+            )
+        )
     }
 
     func testCanonicalQuerySelectorsRejectSurroundingWhitespace() {
@@ -8114,8 +8385,8 @@ final class ToriiClientTests: XCTestCase {
             "authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
             "created_at":"2025-01-01T00:00:00Z",
             "kind":"Transfer",
-            "r#box":{
-                "scale":"0x00",
+            "box":{
+                "encoded":"0x00","framed_sha256":"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                 "json":{
                     "kind":"Transfer",
                     "payload":{
@@ -8163,8 +8434,8 @@ final class ToriiClientTests: XCTestCase {
             "authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
             "created_at":"2025-01-01T00:00:00Z",
             "kind":"Transfer",
-            "r#box":{
-                "scale":"0x00",
+            "box":{
+                "encoded":"0x00","framed_sha256":"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                 "json":{
                     "kind":"Transfer",
                     "payload":{
@@ -8225,14 +8496,14 @@ final class ToriiClientTests: XCTestCase {
     func testExplorerTransferRecordsFiltersByAccountAndAssetDefinition() throws {
         let json = """
         {
-            "pagination": {"page":1,"per_page":10,"total_pages":1,"total_items":2},
+            "pagination": {"limit":10,"snapshot_height":10,"snapshot_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","next_cursor":null,"has_more":false},
             "items": [
                 {
                     "authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                     "created_at":"2025-01-01T00:00:00Z",
                     "kind":"Transfer",
-                    "r#box":{
-                        "scale":"0x00",
+                    "box":{
+                        "encoded":"0x00","framed_sha256":"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                         "json":{
                             "kind":"Transfer",
                             "payload":{
@@ -8256,8 +8527,8 @@ final class ToriiClientTests: XCTestCase {
                     "authority":"sorauﾛ1Pﾀﾚｿ1ﾍｶsFｲAfｾeB3ｽヱヱｳcyﾊyｹ1ﾂﾈヰヰ6ﾛヰEAﾃｱｳﾖLPN4XM",
                     "created_at":"2025-01-01T00:00:00Z",
                     "kind":"Transfer",
-                    "r#box":{
-                        "scale":"0x00",
+                    "box":{
+                        "encoded":"0x00","framed_sha256":"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                         "json":{
                             "kind":"Transfer",
                             "payload":{
@@ -8298,14 +8569,14 @@ final class ToriiClientTests: XCTestCase {
     func testExplorerTransferSummariesDeriveDirection() throws {
         let json = """
         {
-            "pagination": {"page":1,"per_page":10,"total_pages":1,"total_items":1},
+            "pagination": {"limit":10,"snapshot_height":10,"snapshot_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","next_cursor":null,"has_more":false},
             "items": [
                 {
                     "authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                     "created_at":"2025-01-01T00:00:00Z",
                     "kind":"Transfer",
-                    "r#box":{
-                        "scale":"0x00",
+                    "box":{
+                        "encoded":"0x00","framed_sha256":"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                         "json":{
                             "kind":"Transfer",
                             "payload":{
@@ -8354,14 +8625,14 @@ final class ToriiClientTests: XCTestCase {
     func testExplorerTransferSummariesDeriveSelfTransfer() throws {
         let json = """
         {
-            "pagination": {"page":1,"per_page":10,"total_pages":1,"total_items":1},
+            "pagination": {"limit":10,"snapshot_height":10,"snapshot_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","next_cursor":null,"has_more":false},
             "items": [
                 {
                     "authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                     "created_at":"2025-01-01T00:00:00Z",
                     "kind":"Transfer",
-                    "r#box":{
-                        "scale":"0x00",
+                    "box":{
+                        "encoded":"0x00","framed_sha256":"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                         "json":{
                             "kind":"Transfer",
                             "payload":{
@@ -8436,14 +8707,14 @@ final class ToriiClientTests: XCTestCase {
     func testExplorerTransferSummariesAssignBatchIndices() throws {
         let json = """
         {
-            "pagination": {"page":1,"per_page":10,"total_pages":1,"total_items":1},
+            "pagination": {"limit":10,"snapshot_height":10,"snapshot_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","next_cursor":null,"has_more":false},
             "items": [
                 {
                     "authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                     "created_at":"2025-01-01T00:00:00Z",
                     "kind":"Transfer",
-                    "r#box":{
-                        "scale":"0x00",
+                    "box":{
+                        "encoded":"0x00","framed_sha256":"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                         "json":{
                             "kind":"Transfer",
                             "payload":{
@@ -8492,12 +8763,12 @@ final class ToriiClientTests: XCTestCase {
         // Real Mint response from Iroha explorer API
         let json = """
         {
-            "pagination":{"page":1,"per_page":20,"total_pages":1,"total_items":1},
+            "pagination":{"limit":20,"snapshot_height":10,"snapshot_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","next_cursor":null,"has_more":false},
             "items":[{
                 "authority":"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
                 "created_at":"2026-03-17T14:07:35.576Z",
                 "kind":"Mint",
-                "r#box":{
+                "box":{
                     "json":{
                         "encoded":"deadbeef",
                         "kind":"Mint",
@@ -8579,12 +8850,12 @@ final class ToriiClientTests: XCTestCase {
     func testExplorerBurnInstructionParsedAsSummary() throws {
         let json = """
         {
-            "pagination":{"page":1,"per_page":10,"total_pages":1,"total_items":1},
+            "pagination":{"limit":10,"snapshot_height":10,"snapshot_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","next_cursor":null,"has_more":false},
             "items":[{
                 "authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                 "created_at":"2025-06-01T10:00:00Z",
                 "kind":"Burn",
-                "r#box":{
+                "box":{
                     "json":{
                         "encoded":"00",
                         "kind":"Burn",
@@ -8627,13 +8898,13 @@ final class ToriiClientTests: XCTestCase {
         // Page with Transfer + Mint + unknown kind — all parseable ones should be included
         let json = """
         {
-            "pagination":{"page":1,"per_page":10,"total_pages":1,"total_items":3},
+            "pagination":{"limit":10,"snapshot_height":10,"snapshot_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","next_cursor":null,"has_more":false},
             "items":[
                 {
                     "authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                     "created_at":"2025-01-01T00:00:00Z",
                     "kind":"Transfer",
-                    "r#box":{
+                    "box":{
                         "json":{
                             "kind":"Transfer",
                             "payload":{
@@ -8657,7 +8928,7 @@ final class ToriiClientTests: XCTestCase {
                     "authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                     "created_at":"2025-01-02T00:00:00Z",
                     "kind":"Mint",
-                    "r#box":{
+                    "box":{
                         "json":{
                             "encoded":"00",
                             "kind":"Mint",
@@ -8680,7 +8951,7 @@ final class ToriiClientTests: XCTestCase {
                     "authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                     "created_at":"2025-01-03T00:00:00Z",
                     "kind":"SetKeyValue",
-                    "r#box":{
+                    "box":{
                         "json":{
                             "encoded":"00",
                             "kind":"SetKeyValue",
@@ -8721,7 +8992,7 @@ final class ToriiClientTests: XCTestCase {
                                            httpVersion: nil,
                                            headerFields: ["Content-Type": "application/json"])!
             let body = """
-            {"pagination":{"page":1,"per_page":10,"total_pages":0,"total_items":0},"items":[]}
+            {"pagination":{"limit":10,"snapshot_height":0,"snapshot_hash":null,"next_cursor":null,"has_more":false},"items":[]}
             """.data(using: .utf8)!
             return (response, body)
         }
@@ -8730,7 +9001,9 @@ final class ToriiClientTests: XCTestCase {
             switch result {
             case .success(let page):
                 XCTAssertEqual(page.items.count, 0)
-                XCTAssertEqual(page.pagination.totalItems, 0)
+                XCTAssertEqual(page.pagination.snapshotHeight, 0)
+                XCTAssertNil(page.pagination.snapshotHash)
+                XCTAssertFalse(page.pagination.hasMore)
             case .failure(let error):
                 XCTFail("Unexpected error: \(error)")
             }
@@ -8756,14 +9029,14 @@ final class ToriiClientTests: XCTestCase {
                                            headerFields: ["Content-Type": "application/json"])!
             let body = """
             {
-                "pagination": {"page":1,"per_page":10,"total_pages":1,"total_items":2},
+                "pagination": {"limit":10,"snapshot_height":10,"snapshot_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","next_cursor":null,"has_more":false},
                 "items": [
                     {
                         "authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                         "created_at":"2025-01-01T00:00:00Z",
                         "kind":"Transfer",
-                        "r#box":{
-                            "scale":"0x00",
+                        "box":{
+                            "encoded":"0x00","framed_sha256":"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                             "json":{
                                 "kind":"Transfer",
                                 "payload":{
@@ -8787,8 +9060,8 @@ final class ToriiClientTests: XCTestCase {
                         "authority":"sorauﾛ1Pﾀﾚｿ1ﾍｶsFｲAfｾeB3ｽヱヱｳcyﾊyｹ1ﾂﾈヰヰ6ﾛヰEAﾃｱｳﾖLPN4XM",
                         "created_at":"2025-01-01T00:00:00Z",
                         "kind":"Transfer",
-                        "r#box":{
-                            "scale":"0x00",
+                        "box":{
+                            "encoded":"0x00","framed_sha256":"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                             "json":{
                                 "kind":"Transfer",
                                 "payload":{
@@ -8832,8 +9105,8 @@ final class ToriiClientTests: XCTestCase {
             let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
             let queryItems = components?.queryItems ?? []
             let query = Dictionary(uniqueKeysWithValues: queryItems.map { ($0.name, $0.value ?? "") })
-            XCTAssertEqual(query["page"], "2")
-            XCTAssertEqual(query["per_page"], "25")
+            XCTAssertEqual(query["cursor"], "Y3Vyc29y")
+            XCTAssertEqual(query["limit"], "25")
             XCTAssertEqual(query["authority"], "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV")
             XCTAssertEqual(query["block"], "5")
             XCTAssertEqual(query["status"], "Committed")
@@ -8844,7 +9117,7 @@ final class ToriiClientTests: XCTestCase {
                                            headerFields: ["Content-Type": "application/json"])!
             let body = """
             {
-                "pagination": {"page":2,"per_page":25,"total_pages":1,"total_items":1},
+                "pagination": {"limit":25,"snapshot_height":5,"snapshot_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","next_cursor":null,"has_more":false},
                 "items": [
                     {
                         "authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
@@ -8860,15 +9133,15 @@ final class ToriiClientTests: XCTestCase {
             return (response, body)
         }
 
-        let params = ToriiExplorerTransactionsParams(page: 2,
-                                                     perPage: 25,
+        let params = ToriiExplorerTransactionsParams(cursor: "Y3Vyc29y",
+                                                     limit: 25,
                                                      authority: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                                                      block: 5,
                                                      status: "Committed",
                                                      assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM")
         let page = try await makeClient().getExplorerTransactions(params: params)
-        XCTAssertEqual(page.pagination.page, 2)
-        XCTAssertEqual(page.pagination.perPage, 25)
+        XCTAssertEqual(page.pagination.limit, 25)
+        XCTAssertEqual(page.pagination.snapshotHeight, 5)
         XCTAssertEqual(page.items.count, 1)
         XCTAssertEqual(page.items.first?.hash, "deadbeef")
     }
@@ -8883,7 +9156,7 @@ final class ToriiClientTests: XCTestCase {
                                            httpVersion: nil,
                                            headerFields: ["Content-Type": "application/json"])!
             let body = """
-            {"pagination":{"page":1,"per_page":10,"total_pages":1,"total_items":0},"items":[]}
+            {"pagination":{"limit":10,"snapshot_height":0,"snapshot_hash":null,"next_cursor":null,"has_more":false},"items":[]}
             """.data(using: .utf8)!
             return (response, body)
         }
@@ -8892,7 +9165,7 @@ final class ToriiClientTests: XCTestCase {
             switch result {
             case .success(let page):
                 XCTAssertEqual(page.items.count, 0)
-                XCTAssertEqual(page.pagination.totalItems, 0)
+                XCTAssertFalse(page.pagination.hasMore)
             case .failure(let error):
                 XCTFail("Unexpected error: \(error)")
             }
@@ -9125,8 +9398,8 @@ final class ToriiClientTests: XCTestCase {
                 "authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                 "created_at":"2025-01-01T00:00:00Z",
                 "kind":"Transfer",
-                "r#box":{
-                    "scale":"0x00",
+                "box":{
+                    "encoded":"0x00","framed_sha256":"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                     "json":{
                         "kind":"Transfer",
                         "payload":{
@@ -9596,18 +9869,18 @@ final class ToriiClientTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func testGetExplorerTransactionTransfersAggregatesPages() async throws {
+    func testGetExplorerTransactionTransfersAggregatesCursors() async throws {
         let assetIdFilter = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
         let pageOne = """
         {
-            "pagination": {"page":1,"per_page":1,"total_pages":2,"total_items":2},
+            "pagination": {"limit":1,"snapshot_height":10,"snapshot_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","next_cursor":"Y3Vyc29yMg","has_more":true},
             "items": [
                 {
                     "authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                     "created_at":"2025-01-01T00:00:00Z",
                     "kind":"Transfer",
-                    "r#box":{
-                        "scale":"0x00",
+                    "box":{
+                        "encoded":"0x00","framed_sha256":"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                         "json":{
                             "kind":"Transfer",
                             "payload":{
@@ -9631,14 +9904,14 @@ final class ToriiClientTests: XCTestCase {
 
         let pageTwo = """
         {
-            "pagination": {"page":2,"per_page":1,"total_pages":2,"total_items":2},
+            "pagination": {"limit":1,"snapshot_height":10,"snapshot_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","next_cursor":null,"has_more":false},
             "items": [
                 {
                     "authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                     "created_at":"2025-01-01T00:00:01Z",
                     "kind":"Transfer",
-                    "r#box":{
-                        "scale":"0x00",
+                    "box":{
+                        "encoded":"0x00","framed_sha256":"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                         "json":{
                             "kind":"Transfer",
                             "payload":{
@@ -9668,14 +9941,18 @@ final class ToriiClientTests: XCTestCase {
             XCTAssertEqual(query["transaction_hash"], "deadbeef")
             XCTAssertEqual(query["kind"], "Transfer")
             XCTAssertEqual(query["asset_id"], assetIdFilter)
+            XCTAssertNil(query["page"])
+            XCTAssertNil(query["per_page"])
             let response = HTTPURLResponse(url: request.url!,
                                            statusCode: 200,
                                            httpVersion: nil,
                                            headerFields: ["Content-Type": "application/json"])!
-            switch query["page"] {
-            case "1":
+            switch query["cursor"] {
+            case nil:
+                XCTAssertNil(query["limit"])
                 return (response, pageOne)
-            case "2":
+            case "Y3Vyc29yMg":
+                XCTAssertEqual(query["limit"], "1")
                 return (response, pageTwo)
             default:
                 return (response, Data())
@@ -9700,14 +9977,14 @@ final class ToriiClientTests: XCTestCase {
                                            headerFields: ["Content-Type": "application/json"])!
             let body = """
             {
-                "pagination": {"page":1,"per_page":50,"total_pages":1,"total_items":1},
+                "pagination": {"limit":50,"snapshot_height":10,"snapshot_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","next_cursor":null,"has_more":false},
                 "items": [
                     {
                         "authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                         "created_at":"2025-01-01T00:00:00Z",
                         "kind":"Transfer",
-                        "r#box":{
-                            "scale":"0x00",
+                        "box":{
+                            "encoded":"0x00","framed_sha256":"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                             "json":{
                                 "kind":"Transfer",
                                 "payload":{
@@ -9750,14 +10027,14 @@ final class ToriiClientTests: XCTestCase {
     func testGetExplorerTransactionTransferSummariesFiltersByAssetId() async throws {
         let body = """
         {
-            "pagination": {"page":1,"per_page":50,"total_pages":1,"total_items":2},
+            "pagination": {"limit":50,"snapshot_height":10,"snapshot_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","next_cursor":null,"has_more":false},
             "items": [
                 {
                     "authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                     "created_at":"2025-01-01T00:00:00Z",
                     "kind":"Transfer",
-                    "r#box":{
-                        "scale":"0x00",
+                    "box":{
+                        "encoded":"0x00","framed_sha256":"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                         "json":{
                             "kind":"Transfer",
                             "payload":{
@@ -9779,8 +10056,8 @@ final class ToriiClientTests: XCTestCase {
                     "authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                     "created_at":"2025-01-01T00:00:01Z",
                     "kind":"Transfer",
-                    "r#box":{
-                        "scale":"0x00",
+                    "box":{
+                        "encoded":"0x00","framed_sha256":"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                         "json":{
                             "kind":"Transfer",
                             "payload":{
@@ -9838,8 +10115,8 @@ final class ToriiClientTests: XCTestCase {
                 "authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                 "created_at":"2025-01-01T00:00:00Z",
                 "kind":"Transfer",
-                "r#box":{
-                    "scale":"0x00",
+                "box":{
+                    "encoded":"0x00","framed_sha256":"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                     "json":{
                         "kind":"Transfer",
                         "payload":{
@@ -9890,14 +10167,14 @@ final class ToriiClientTests: XCTestCase {
                                            headerFields: ["Content-Type": "application/json"])!
             let body = """
             {
-                "pagination": {"page":1,"per_page":10,"total_pages":1,"total_items":1},
+                "pagination": {"limit":10,"snapshot_height":10,"snapshot_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","next_cursor":null,"has_more":false},
                 "items": [
                     {
                         "authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                         "created_at":"2025-01-01T00:00:00Z",
                         "kind":"Transfer",
-                        "r#box":{
-                            "scale":"0x00",
+                        "box":{
+                            "encoded":"0x00","framed_sha256":"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                             "json":{
                                 "kind":"Transfer",
                                 "payload":{
@@ -9943,7 +10220,7 @@ final class ToriiClientTests: XCTestCase {
                                            httpVersion: nil,
                                            headerFields: ["Content-Type": "application/json"])!
             let body = """
-            {"pagination":{"page":1,"per_page":10,"total_pages":1,"total_items":0},"items":[]}
+            {"pagination":{"limit":10,"snapshot_height":0,"snapshot_hash":null,"next_cursor":null,"has_more":false},"items":[]}
             """.data(using: .utf8)!
             return (response, body)
         }
@@ -9968,8 +10245,10 @@ final class ToriiClientTests: XCTestCase {
             let queryItems = components?.queryItems ?? []
             let query = Dictionary(uniqueKeysWithValues: queryItems.map { ($0.name, $0.value ?? "") })
             XCTAssertEqual(query["kind"], "Transfer")
-            XCTAssertEqual(query["page"], "3")
-            XCTAssertEqual(query["per_page"], "20")
+            XCTAssertEqual(query["cursor"], "Y3Vyc29y")
+            XCTAssertEqual(query["limit"], "20")
+            XCTAssertNil(query["page"])
+            XCTAssertNil(query["per_page"])
             XCTAssertEqual(query["asset_id"], "62Fk4FPcMuLvW5QjDGNF2a4jAmjM")
             let response = HTTPURLResponse(url: request.url!,
                                            statusCode: 200,
@@ -9977,7 +10256,7 @@ final class ToriiClientTests: XCTestCase {
                                            headerFields: ["Content-Type": "application/json"])!
             let body = """
             {
-                "pagination": {"page":3,"per_page":20,"total_pages":1,"total_items":0},
+                "pagination": {"limit":20,"snapshot_height":10,"snapshot_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","next_cursor":null,"has_more":false},
                 "items": []
             }
             """.data(using: .utf8)!
@@ -9985,8 +10264,8 @@ final class ToriiClientTests: XCTestCase {
         }
 
         let summaries = try await makeClient().getAccountTransferHistory(accountId: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-                                                                          page: 3,
-                                                                          perPage: 20,
+                                                                          cursor: "Y3Vyc29y",
+                                                                          limit: 20,
                                                                           assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM")
         XCTAssertEqual(summaries.count, 0)
     }
@@ -10001,7 +10280,7 @@ final class ToriiClientTests: XCTestCase {
                                            httpVersion: nil,
                                            headerFields: ["Content-Type": "application/json"])!
             let body = """
-            {"pagination":{"page":1,"per_page":10,"total_pages":1,"total_items":0},"items":[]}
+            {"pagination":{"limit":10,"snapshot_height":0,"snapshot_hash":null,"next_cursor":null,"has_more":false},"items":[]}
             """.data(using: .utf8)!
             return (response, body)
         }
@@ -10026,15 +10305,17 @@ final class ToriiClientTests: XCTestCase {
             let queryItems = components?.queryItems ?? []
             let query = Dictionary(uniqueKeysWithValues: queryItems.map { ($0.name, $0.value ?? "") })
             XCTAssertEqual(query["kind"], "Transfer")
-            XCTAssertEqual(query["page"], "2")
-            XCTAssertEqual(query["per_page"], "5")
+            XCTAssertEqual(query["cursor"], "Y3Vyc29y")
+            XCTAssertEqual(query["limit"], "5")
+            XCTAssertNil(query["page"])
+            XCTAssertNil(query["per_page"])
             let response = HTTPURLResponse(url: request.url!,
                                            statusCode: 200,
                                            httpVersion: nil,
                                            headerFields: ["Content-Type": "application/json"])!
             let body = """
             {
-                "pagination": {"page":2,"per_page":5,"total_pages":1,"total_items":0},
+                "pagination": {"limit":5,"snapshot_height":10,"snapshot_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","next_cursor":null,"has_more":false},
                 "items": []
             }
             """.data(using: .utf8)!
@@ -10042,8 +10323,8 @@ final class ToriiClientTests: XCTestCase {
         }
 
         let summaries = try await makeClient().getTransactionHistory(accountId: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-                                                                     page: 2,
-                                                                     perPage: 5)
+                                                                     cursor: "Y3Vyc29y",
+                                                                     limit: 5)
         XCTAssertEqual(summaries.count, 0)
     }
 
@@ -10057,7 +10338,7 @@ final class ToriiClientTests: XCTestCase {
                                            httpVersion: nil,
                                            headerFields: ["Content-Type": "application/json"])!
             let body = """
-            {"pagination":{"page":1,"per_page":10,"total_pages":1,"total_items":0},"items":[]}
+            {"pagination":{"limit":10,"snapshot_height":0,"snapshot_hash":null,"next_cursor":null,"has_more":false},"items":[]}
             """.data(using: .utf8)!
             return (response, body)
         }
@@ -10075,7 +10356,7 @@ final class ToriiClientTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func testIterateAccountTransferHistoryAcrossPages() async throws {
+    func testIterateAccountTransferHistoryAcrossCursors() async throws {
         var callCount = 0
         StubURLProtocol.handler = { request in
             callCount += 1
@@ -10084,9 +10365,14 @@ final class ToriiClientTests: XCTestCase {
             let queryItems = components?.queryItems ?? []
             let query = Dictionary(uniqueKeysWithValues: queryItems.map { ($0.name, $0.value ?? "") })
             XCTAssertEqual(query["kind"], "Transfer")
-            let expectedPage = callCount == 1 ? "1" : "2"
-            XCTAssertEqual(query["page"], expectedPage)
-            XCTAssertEqual(query["per_page"], "1")
+            if callCount == 1 {
+                XCTAssertNil(query["cursor"])
+            } else {
+                XCTAssertEqual(query["cursor"], "Y3Vyc29yMg")
+            }
+            XCTAssertEqual(query["limit"], "1")
+            XCTAssertNil(query["page"])
+            XCTAssertNil(query["per_page"])
             let response = HTTPURLResponse(url: request.url!,
                                            statusCode: 200,
                                            httpVersion: nil,
@@ -10095,14 +10381,14 @@ final class ToriiClientTests: XCTestCase {
             if callCount == 1 {
                 body = """
                 {
-                    "pagination": {"page":1,"per_page":1,"total_pages":2,"total_items":2},
+                    "pagination": {"limit":1,"snapshot_height":10,"snapshot_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","next_cursor":"Y3Vyc29yMg","has_more":true},
                     "items": [
                         {
                             "authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                             "created_at":"2025-01-01T00:00:00Z",
                             "kind":"Transfer",
-                            "r#box":{
-                                "scale":"0x00",
+                            "box":{
+                                "encoded":"0x00","framed_sha256":"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                                 "json":{
                                     "kind":"Transfer",
                                     "payload":{
@@ -10128,14 +10414,14 @@ final class ToriiClientTests: XCTestCase {
             } else {
                 body = """
                 {
-                    "pagination": {"page":2,"per_page":1,"total_pages":2,"total_items":2},
+                    "pagination": {"limit":1,"snapshot_height":10,"snapshot_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","next_cursor":null,"has_more":false},
                     "items": [
                         {
                             "authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                             "created_at":"2025-01-01T00:00:01Z",
                             "kind":"Transfer",
-                            "r#box":{
-                                "scale":"0x00",
+                            "box":{
+                                "encoded":"0x00","framed_sha256":"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                                 "json":{
                                     "kind":"Transfer",
                                     "payload":{
@@ -10164,12 +10450,56 @@ final class ToriiClientTests: XCTestCase {
 
         var summaries: [ToriiExplorerTransferSummary] = []
         for try await summary in makeClient().iterateAccountTransferHistory(accountId: "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
-                                                                            perPage: 1) {
+                                                                            limit: 1) {
             summaries.append(summary)
         }
         XCTAssertEqual(summaries.count, 2)
         XCTAssertEqual(summaries.first?.transactionHash, "hash1")
         XCTAssertEqual(summaries.last?.transactionHash, "hash2")
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testIterateAccountTransferHistoryRejectsRepeatedCursor() async throws {
+        var callCount = 0
+        StubURLProtocol.handler = { request in
+            callCount += 1
+            let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
+            let query = Dictionary(
+                uniqueKeysWithValues: (components?.queryItems ?? []).map { ($0.name, $0.value ?? "") }
+            )
+            if callCount == 1 {
+                XCTAssertNil(query["cursor"])
+            } else {
+                XCTAssertEqual(query["cursor"], "Y3Vyc29y")
+            }
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            let body = """
+            {
+              "pagination":{"limit":1,"snapshot_height":10,"snapshot_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","next_cursor":"Y3Vyc29y","has_more":true},
+              "items":[]
+            }
+            """.data(using: .utf8)!
+            return (response, body)
+        }
+
+        let stream = makeClient().iterateAccountTransferHistory(
+            accountId: "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"
+        )
+        do {
+            for try await _ in stream {
+                XCTFail("empty pages should not yield transfer summaries")
+            }
+            XCTFail("expected repeated cursor failure")
+        } catch {
+            guard case let ToriiClientError.invalidPayload(message) = error else {
+                return XCTFail("expected invalidPayload, got \(error)")
+            }
+            XCTAssertTrue(message.contains("repeated a cursor"))
+        }
+        XCTAssertEqual(callCount, 2)
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -12653,18 +12983,18 @@ final class ToriiClientTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func testGetOfflineCapabilityParsesExactUniversalContractOnExactRoute() async throws {
+    func testGetKagemushaCapabilityParsesExactUniversalContractOnExactRoute() async throws {
         let payload = """
         {
-          "cash_handoff_capability": "cash_handoff_v1",
-          "required_bridge_abi_version": 23,
-          "max_hops": 8,
-          "ready": true
+          "kagemusha_handoff_capability": "kagemusha_handoff_v1",
+          "wire_version": 1,
+          "device_lifecycle_version": 1,
+          "ready": false
         }
         """.data(using: .utf8)!
 
         StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/offline/readiness")
+            XCTAssertEqual(request.url?.path, "/v1/kagemusha/readiness")
             XCTAssertNil(request.url?.query)
             XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/json")
             let response = HTTPURLResponse(
@@ -12676,24 +13006,24 @@ final class ToriiClientTests: XCTestCase {
             return (response, payload)
         }
 
-        let status = try await makeClient().getOfflineCapability()
-        XCTAssertEqual(status.cashHandoffCapability, "cash_handoff_v1")
-        XCTAssertEqual(status.requiredBridgeAbiVersion, 23)
-        XCTAssertEqual(status.maxHops, 8)
-        XCTAssertTrue(status.ready)
+        let status = try await makeClient().getKagemushaCapability()
+        XCTAssertEqual(status.kagemushaHandoffCapability, "kagemusha_handoff_v1")
+        XCTAssertEqual(status.wireVersion, 1)
+        XCTAssertEqual(status.deviceLifecycleVersion, 1)
+        XCTAssertFalse(status.ready)
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func testGetOfflineCapabilityRejectsNonUniversalClaims() async throws {
+    func testGetKagemushaCapabilityRejectsNonUniversalClaims() async throws {
         let invalidPayloads = [
-            #"{"mandatory":true,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":23,"max_hops":8,"ready":true}"#,
-            #"{"cash_handoff_capability":"cash_handoff_v2","required_bridge_abi_version":23,"max_hops":8,"ready":true}"#,
-            #"{"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":8,"ready":true}"#,
-            #"{"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":23,"max_hops":9,"ready":true}"#,
-            #"{"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":23,"max_hops":8,"ready":false}"#,
-            #"{"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":23,"max_hops":8,"ready":true,"assets":[]}"#,
-            #"{"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":23,"max_hops":8,"ready":true,"blockers":[]}"#,
-            #"{"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":23,"max_hops":8,"ready":true,"future":true}"#,
+            #"{"mandatory":true,"kagemusha_handoff_capability":"kagemusha_handoff_v1","wire_version":1,"device_lifecycle_version":1,"ready":true}"#,
+            #"{"kagemusha_handoff_capability":"kagemusha_handoff_v"# + "2"
+                + #"","wire_version":1,"device_lifecycle_version":1,"ready":true}"#,
+            #"{"kagemusha_handoff_capability":"kagemusha_handoff_v1","wire_version":2,"device_lifecycle_version":1,"ready":true}"#,
+            #"{"kagemusha_handoff_capability":"kagemusha_handoff_v1","wire_version":1,"device_lifecycle_version":2,"ready":true}"#,
+            #"{"kagemusha_handoff_capability":"kagemusha_handoff_v1","wire_version":1,"device_lifecycle_version":1,"ready":true,"assets":[]}"#,
+            #"{"kagemusha_handoff_capability":"kagemusha_handoff_v1","wire_version":1,"device_lifecycle_version":1,"ready":true,"blockers":[]}"#,
+            #"{"kagemusha_handoff_capability":"kagemusha_handoff_v1","wire_version":1,"device_lifecycle_version":1,"ready":true,"future":true}"#,
         ]
 
         for payload in invalidPayloads {
@@ -12707,8 +13037,8 @@ final class ToriiClientTests: XCTestCase {
                 return (response, Data(payload.utf8))
             }
             do {
-                _ = try await makeClient().getOfflineCapability()
-                XCTFail("expected non-universal offline capability to fail")
+                _ = try await makeClient().getKagemushaCapability()
+                XCTFail("expected non-universal KAGEMUSHA capability to fail")
             } catch {
                 // Exact universal discovery is fail-closed.
             }
@@ -12716,9 +13046,9 @@ final class ToriiClientTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func testGetOfflineCapabilityRejectsDuplicateKeysInvalidUtf8AndOversizedBodies() async throws {
+    func testGetKagemushaCapabilityRejectsDuplicateKeysInvalidUtf8AndOversizedBodies() async throws {
         let payloads = [
-            Data(#"{"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":23,"max_hops":8,"ready":true,"ready":true}"#.utf8),
+            Data(#"{"kagemusha_handoff_capability":"kagemusha_handoff_v1","wire_version":1,"device_lifecycle_version":1,"ready":true,"ready":true}"#.utf8),
             Data([0xff, 0xfe, 0xfd]),
             Data(repeating: UInt8(ascii: "x"), count: 256 * 1024 + 1),
         ]
@@ -12733,8 +13063,8 @@ final class ToriiClientTests: XCTestCase {
                 return (response, payload)
             }
             do {
-                _ = try await makeClient().getOfflineCapability()
-                XCTFail("expected malformed offline capability to fail")
+                _ = try await makeClient().getKagemushaCapability()
+                XCTFail("expected malformed KAGEMUSHA capability to fail")
             } catch {
                 // Duplicate and non-UTF-8 JSON must never be accepted.
             }
@@ -12742,639 +13072,12 @@ final class ToriiClientTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func testOfflineOperationsUseCanonicalPathsAndDirectNoritoBodies() async throws {
-        let operationId = String(repeating: "11", count: 32)
-        func reference(_ kind: KagemushaOperationKind) throws -> KagemushaOperationReference {
-            try KagemushaOperationReference(
-                operationId: operationId,
-                kind: kind,
-                state: .pending,
-                transactionHash: String(repeating: "22", count: 32),
-                statusUri: "/v1/offline/operations/\(operationId)",
-                submittedAtMs: 1_700_000_000_000
-            )
-        }
-        let topUpResponseArchive = KagemushaOperationCodec.encodeReference(try reference(.topUp))
-        let redeemResponseArchive = KagemushaOperationCodec.encodeReference(try reference(.redeem))
-        let topUpRequestArchive = kagemushaOperationRequestArchive(
-            schema: KagemushaRecursiveSpend.topUpRequestWireName,
-            fieldCount: 8,
-            operationIdFieldIndex: 6
-        )
-        let redeemRequestArchive = kagemushaOperationRequestArchive(
-            schema: KagemushaRecursiveSpend.redeemRequestWireName,
-            fieldCount: 10,
-            operationIdFieldIndex: 8
-        )
-        let pendingStatusArchive = try XCTUnwrap(Data(hexString:
-            "4e5254300000fb04214104df1bdcd39249bddd4db23a009600000000000000bdfee2508f80055702000000000000000000000000414031313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131040000000041403232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323208ffffffffffffffff"
-        ))
-
-        StubURLProtocol.handler = { request in
-            let path = request.url?.path
-            let responseBody: Data
-            let status: Int
-            switch path {
-            case "/v1/offline/top-up":
-                status = 202
-                responseBody = topUpResponseArchive
-                XCTAssertEqual(request.httpMethod, "POST")
-                XCTAssertEqual(self.bodyData(from: request), topUpRequestArchive)
-                XCTAssertEqual(request.value(forHTTPHeaderField: "Idempotency-Key"), operationId)
-                XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/x-norito")
-            case "/v1/offline/redeem":
-                status = 202
-                responseBody = redeemResponseArchive
-                XCTAssertEqual(request.httpMethod, "POST")
-                XCTAssertEqual(self.bodyData(from: request), redeemRequestArchive)
-                XCTAssertEqual(request.value(forHTTPHeaderField: "Idempotency-Key"), operationId)
-                XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/x-norito")
-            case "/v1/offline/operations/\(operationId)":
-                status = 200
-                responseBody = pendingStatusArchive
-                XCTAssertEqual(request.httpMethod, "GET")
-            default:
-                throw ToriiClientError.invalidURL(path ?? "")
-            }
-            XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/x-norito")
-            let response = HTTPURLResponse(
-                url: request.url!,
-                statusCode: status,
-                httpVersion: nil,
-                headerFields: [
-                    "Content-Type": "application/x-norito",
-                    "Location": "/v1/offline/operations/\(operationId)",
-                    "Retry-After": "1",
-                ]
-            )!
-            return (response, responseBody)
-        }
-
-        let client = makeClient()
-        let acceptedTopUp = try await client.submitKagemushaTopUp(
-            KagemushaTopUpRequest(noritoArchive: topUpRequestArchive)
-        )
-        XCTAssertEqual(acceptedTopUp, try reference(.topUp))
-        let acceptedRedeem = try await client.submitKagemushaRedeem(
-            KagemushaRedeemRequest(noritoArchive: redeemRequestArchive)
-        )
-        XCTAssertEqual(acceptedRedeem, try reference(.redeem))
-        let operationStatus = try await client.getKagemushaOperationStatus(
-            operationId: operationId,
-            chainDiscriminant: SccpV1.tairaI105DiscriminantV1
-        )
-        XCTAssertEqual(
-            operationStatus,
-            .pending(try .init(
-                operationId: operationId,
-                kind: .topUp,
-                transactionHash: String(repeating: "22", count: 32),
-                submittedAtMs: UInt64.max
-            ))
-        )
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    func testOfflineStatus404PreservesCanonicalRejectCodeFromToriiResponse() async throws {
-        let operationId = String(repeating: "11", count: 32)
-        StubURLProtocol.handler = { request in
-            XCTAssertEqual(
-                request.url?.path,
-                "/v1/offline/operations/\(operationId)"
-            )
-            let response = HTTPURLResponse(
-                url: request.url!,
-                statusCode: 404,
-                httpVersion: nil,
-                headerFields: [
-                    "Content-Type": "application/x-norito",
-                    "x-iroha-reject-code": "offline_operation_not_found",
-                ]
-            )!
-            return (response, Data([0xff, 0xfe, 0xfd]))
-        }
-
-        do {
-            _ = try await makeClient().getKagemushaOperationStatus(
-                operationId: operationId,
-                chainDiscriminant: SccpV1.tairaI105DiscriminantV1
-            )
-            XCTFail("missing operation status must return typed HTTP failure")
-        } catch let error as ToriiClientError {
-            guard case let .httpStatus(code, _, rejectCode) = error else {
-                return XCTFail("unexpected Torii failure: \(error)")
-            }
-            XCTAssertEqual(code, 404)
-            XCTAssertEqual(rejectCode, "offline_operation_not_found")
-            XCTAssertTrue(
-                KagemushaOperationFinalityCoordinator
-                    .statusResourceIsMissing(after: error)
-            )
-        }
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    func testBodyOnlyOfflineStatus404CannotAuthorizeSubmission() async throws {
-        let operationId = String(repeating: "11", count: 32)
-        let request = try KagemushaTopUpRequest(
-            noritoArchive: kagemushaOperationRequestArchive(
-                schema: KagemushaRecursiveSpend.topUpRequestWireName,
-                fieldCount: 8,
-                operationIdFieldIndex: 6
-            )
-        )
-        var methods: [String] = []
-        StubURLProtocol.handler = { urlRequest in
-            methods.append(urlRequest.httpMethod ?? "")
-            XCTAssertEqual(
-                urlRequest.url?.path,
-                "/v1/offline/operations/\(operationId)"
-            )
-            let response = HTTPURLResponse(
-                url: urlRequest.url!,
-                statusCode: 404,
-                httpVersion: nil,
-                headerFields: ["Content-Type": "application/json"]
-            )!
-            return (
-                response,
-                Data(#"{"code":"offline_operation_not_found"}"#.utf8)
-            )
-        }
-
-        do {
-            _ = try await KagemushaOperationFinalityCoordinator.resolve(
-                operation: .topUp(request),
-                transport: makeClient(),
-                chainDiscriminant: SccpV1.tairaI105DiscriminantV1,
-                initialState: 0,
-                continuity: .unaccepted,
-                existingDefinitiveSubmissionFailure: { _ in nil },
-                revalidateBeforeSubmission: { _ in
-                    XCTFail("body-only 404 must not reach revalidation")
-                },
-                markSubmissionAttempt: { state in
-                    XCTFail("body-only 404 must not persist an attempt")
-                    return state
-                },
-                recordAcceptance: { _, state in state },
-                recordObservation: { _, _, state in state },
-                recordRejection: { _, _, state in state },
-                recordDefinitiveSubmissionFailure: { _, state in state }
-            )
-            XCTFail("body-only 404 must remain an ordinary HTTP failure")
-        } catch let error as ToriiClientError {
-            guard case let .httpStatus(code, _, rejectCode) = error else {
-                return XCTFail("unexpected Torii failure: \(error)")
-            }
-            XCTAssertEqual(code, 404)
-            XCTAssertNil(rejectCode)
-            XCTAssertFalse(
-                KagemushaOperationFinalityCoordinator
-                    .statusResourceIsMissing(after: error)
-            )
-        }
-        XCTAssertEqual(methods, ["GET"])
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    func testBodyOnlyOfflineSubmissionCodesCannotBecomeDefinitive() async throws {
-        let request = try KagemushaTopUpRequest(
-            noritoArchive: kagemushaOperationRequestArchive(
-                schema: KagemushaRecursiveSpend.topUpRequestWireName,
-                fieldCount: 8,
-                operationIdFieldIndex: 6
-            )
-        )
-
-        for (statusCode, bodyCode) in [
-            (400, "offline_top_up_invalid"),
-            (413, "request_payload_too_large"),
-        ] {
-            StubURLProtocol.handler = { urlRequest in
-                XCTAssertEqual(urlRequest.url?.path, "/v1/offline/top-up")
-                let response = HTTPURLResponse(
-                    url: urlRequest.url!,
-                    statusCode: statusCode,
-                    httpVersion: nil,
-                    headerFields: ["Content-Type": "application/json"]
-                )!
-                return (
-                    response,
-                    Data("{\"code\":\"\(bodyCode)\"}".utf8)
-                )
-            }
-
-            do {
-                _ = try await makeClient().submitKagemushaTopUp(request)
-                XCTFail("rejected submission must fail")
-            } catch let error as ToriiClientError {
-                guard case let .httpStatus(
-                    actualStatus,
-                    _,
-                    rejectCode
-                ) = error else {
-                    return XCTFail("unexpected Torii failure: \(error)")
-                }
-                XCTAssertEqual(actualStatus, statusCode)
-                XCTAssertNil(rejectCode)
-                XCTAssertEqual(
-                    KagemushaSubmissionFailureClassifier.classify(
-                        error,
-                        target: .offlineTopUp
-                    ),
-                    .ambiguous
-                )
-            }
-        }
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    func testOfflineSubmissionClassifierRequiresExactEndpointPairs() async throws {
-        let operationId = String(repeating: "11", count: 32)
-        let request = try KagemushaTopUpRequest(
-            noritoArchive: kagemushaOperationRequestArchive(
-                schema: KagemushaRecursiveSpend.topUpRequestWireName,
-                fieldCount: 8,
-                operationIdFieldIndex: 6
-            )
-        )
-
-        let cases: [(Int, String, Bool)] = [
-            (400, "offline_top_up_invalid", true),
-            (400, "PRTRY:TX_SIGNATURE_INVALID", true),
-            (409, "operation_id_conflict", true),
-            (400, "request_norito_invalid", false),
-            (409, "PRTRY:ALREADY_ENQUEUED", false),
-            (413, "request_payload_too_large", false),
-        ]
-        for (statusCode, rejectCode, isDefinitive) in cases {
-            StubURLProtocol.handler = { urlRequest in
-                XCTAssertEqual(urlRequest.url?.path, "/v1/offline/top-up")
-                XCTAssertEqual(
-                    urlRequest.value(forHTTPHeaderField: "Idempotency-Key"),
-                    operationId
-                )
-                let response = HTTPURLResponse(
-                    url: urlRequest.url!,
-                    statusCode: statusCode,
-                    httpVersion: nil,
-                    headerFields: [
-                        "Content-Type": "application/x-norito",
-                        "x-iroha-reject-code": rejectCode,
-                    ]
-                )!
-                return (response, Data([0xff, 0xfe, 0xfd]))
-            }
-
-            do {
-                _ = try await makeClient().submitKagemushaTopUp(request)
-                XCTFail("rejected submission must fail")
-            } catch let error as ToriiClientError {
-                guard case let .httpStatus(
-                    actualStatus,
-                    _,
-                    actualRejectCode
-                ) = error else {
-                    return XCTFail("unexpected Torii failure: \(error)")
-                }
-                XCTAssertEqual(actualStatus, statusCode)
-                XCTAssertEqual(actualRejectCode, rejectCode)
-                let disposition = KagemushaSubmissionFailureClassifier.classify(
-                    error,
-                    target: .offlineTopUp
-                )
-                if isDefinitive {
-                    guard case let .definitivePreAdmission(failure) = disposition else {
-                        return XCTFail("exact endpoint pair must be definitive")
-                    }
-                    XCTAssertEqual(failure.target, .offlineTopUp)
-                    XCTAssertEqual(failure.statusCode, statusCode)
-                    XCTAssertEqual(failure.rejectCode, rejectCode)
-                    XCTAssertNil(failure.message)
-                } else {
-                    XCTAssertEqual(disposition, .ambiguous)
-                }
-            }
-        }
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    func testOfflineOperationResponsesAreStreamingBoundedBeforeCodecParsing() async throws {
-        let operationId = String(repeating: "11", count: 32)
-
-        func install(
-            status: Int,
-            headers: [String: String],
-            body: Data
-        ) {
-            StubURLProtocol.handler = { request in
-                let response = HTTPURLResponse(
-                    url: request.url!,
-                    statusCode: status,
-                    httpVersion: nil,
-                    headerFields: headers
-                )!
-                return (response, body)
-            }
-        }
-
-        install(
-            status: 200,
-            headers: [
-                "Content-Type": "application/x-norito",
-                "Content-Length": String(
-                    KagemushaOperationCodec.statusMaximumArchiveBytes + 1
-                ),
-            ],
-            body: Data([0x00])
-        )
-        await assertToriiInvalidPayload(contains: "declares more than") {
-            _ = try await self.makeClient().getKagemushaOperationStatus(
-                operationId: operationId,
-                chainDiscriminant: SccpV1.tairaI105DiscriminantV1
-            )
-        }
-
-        install(
-            status: 200,
-            headers: ["Content-Type": "application/x-norito"],
-            body: Data(
-                repeating: 0xa5,
-                count: KagemushaOperationCodec.statusMaximumArchiveBytes + 1
-            )
-        )
-        await assertToriiInvalidPayload(contains: "response exceeded") {
-            _ = try await self.makeClient().getKagemushaOperationStatus(
-                operationId: operationId,
-                chainDiscriminant: SccpV1.tairaI105DiscriminantV1
-            )
-        }
-
-        install(
-            status: 200,
-            headers: ["Content-Type": "application/x-norito"],
-            body: Data(
-                repeating: 0xa5,
-                count: KagemushaOperationCodec.statusMaximumArchiveBytes
-            )
-        )
-        do {
-            _ = try await makeClient().getKagemushaOperationStatus(
-                operationId: operationId,
-                chainDiscriminant: SccpV1.tairaI105DiscriminantV1
-            )
-            XCTFail("exact-limit non-Norito bytes must reach the codec")
-        } catch let error as KagemushaOperationError {
-            XCTAssertEqual(error, .invalidNoritoArchive)
-        }
-
-        install(
-            status: 404,
-            headers: [
-                "Content-Type": "application/x-norito",
-                "x-iroha-reject-code": "offline_operation_not_found",
-            ],
-            body: Data(
-                repeating: 0xa5,
-                count: KagemushaOperationCodec.statusMaximumArchiveBytes + 1
-            )
-        )
-        do {
-            _ = try await makeClient().getKagemushaOperationStatus(
-                operationId: operationId,
-                chainDiscriminant: SccpV1.tairaI105DiscriminantV1
-            )
-            XCTFail("oversized 404 must fail before absence classification")
-        } catch let error as ToriiClientError {
-            guard case .invalidPayload = error else {
-                return XCTFail("unexpected oversized 404 error: \(error)")
-            }
-            XCTAssertFalse(
-                KagemushaOperationFinalityCoordinator
-                    .statusResourceIsMissing(after: error)
-            )
-        }
-
-        let request = try KagemushaTopUpRequest(
-            noritoArchive: kagemushaOperationRequestArchive(
-                schema: KagemushaRecursiveSpend.topUpRequestWireName,
-                fieldCount: 8,
-                operationIdFieldIndex: 6
-            )
-        )
-
-        install(
-            status: 202,
-            headers: [
-                "Content-Type": "application/x-norito",
-                "Location": "/v1/offline/operations/\(operationId)",
-                "Content-Length": String(
-                    KagemushaOperationCodec.referenceMaximumArchiveBytes + 1
-                ),
-            ],
-            body: Data([0x00])
-        )
-        await assertToriiInvalidPayload(contains: "declares more than") {
-            _ = try await self.makeClient().submitKagemushaTopUp(request)
-        }
-
-        install(
-            status: 202,
-            headers: [
-                "Content-Type": "application/x-norito",
-                "Location": "/v1/offline/operations/\(operationId)",
-            ],
-            body: Data(
-                repeating: 0xa5,
-                count: KagemushaOperationCodec.referenceMaximumArchiveBytes + 1
-            )
-        )
-        await assertToriiInvalidPayload(contains: "response exceeded") {
-            _ = try await self.makeClient().submitKagemushaTopUp(request)
-        }
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    func testOfflineSubmissionRejectsUnboundReferencesMediaTypesAndLocations() async throws {
-        let submittedOperationId = String(repeating: "11", count: 32)
-        let otherOperationId = String(repeating: "33", count: 32)
-        let transactionHash = String(repeating: "22", count: 32)
-        let request = try KagemushaTopUpRequest(
-            noritoArchive: kagemushaOperationRequestArchive(
-                schema: KagemushaRecursiveSpend.topUpRequestWireName,
-                fieldCount: 8,
-                operationIdFieldIndex: 6
-            )
-        )
-
-        func reference(operationId: String, kind: KagemushaOperationKind) throws -> Data {
-            KagemushaOperationCodec.encodeReference(try KagemushaOperationReference(
-                operationId: operationId,
-                kind: kind,
-                state: .pending,
-                transactionHash: transactionHash,
-                statusUri: "/v1/offline/operations/\(operationId)",
-                submittedAtMs: 1
-            ))
-        }
-
-        let cases: [(Data, [String: String], String)] = [
-            (
-                try reference(operationId: otherOperationId, kind: .topUp),
-                [
-                    "Content-Type": "application/x-norito",
-                    "Location": "/v1/offline/operations/\(submittedOperationId)",
-                ],
-                "does not match the submitted command"
-            ),
-            (
-                try reference(operationId: submittedOperationId, kind: .redeem),
-                [
-                    "Content-Type": "application/x-norito",
-                    "Location": "/v1/offline/operations/\(submittedOperationId)",
-                ],
-                "does not match the submitted command"
-            ),
-            (
-                try reference(operationId: submittedOperationId, kind: .topUp),
-                ["Content-Type": "application/x-norito"],
-                "Location must match"
-            ),
-            (
-                try reference(operationId: submittedOperationId, kind: .topUp),
-                [
-                    "Content-Type": "application/x-norito",
-                    "Location": "/v1/offline/operations/\(otherOperationId)",
-                ],
-                "Location must match"
-            ),
-            (
-                try reference(operationId: submittedOperationId, kind: .topUp),
-                [
-                    "Content-Type": "application/json",
-                    "Location": "/v1/offline/operations/\(submittedOperationId)",
-                ],
-                "Content-Type must be application/x-norito"
-            ),
-            (
-                try reference(operationId: submittedOperationId, kind: .topUp),
-                ["Location": "/v1/offline/operations/\(submittedOperationId)"],
-                "Content-Type must be application/x-norito"
-            ),
-            (
-                try reference(operationId: submittedOperationId, kind: .topUp),
-                [
-                    "Content-Type": "application/x-norito",
-                    "Location": "/v1/offline/operations/\(submittedOperationId)",
-                ],
-                "Retry-After"
-            ),
-            (
-                try reference(operationId: submittedOperationId, kind: .topUp),
-                [
-                    "Content-Type": "application/x-norito",
-                    "Location": "/v1/offline/operations/\(submittedOperationId)",
-                    "Retry-After": "0",
-                ],
-                "Retry-After"
-            ),
-            (
-                try reference(operationId: submittedOperationId, kind: .topUp),
-                [
-                    "Content-Type": "application/x-norito",
-                    "Location": "/v1/offline/operations/\(submittedOperationId)",
-                    "Retry-After": String(repeating: "9", count: 10_000),
-                ],
-                "Retry-After"
-            ),
-        ]
-
-        for (body, headers, expectedMessage) in cases {
-            StubURLProtocol.handler = { urlRequest in
-                let response = HTTPURLResponse(
-                    url: urlRequest.url!,
-                    statusCode: 202,
-                    httpVersion: nil,
-                    headerFields: headers
-                )!
-                return (response, body)
-            }
-            do {
-                _ = try await makeClient().submitKagemushaTopUp(request)
-                XCTFail("expected unbound Offline operation response to fail")
-            } catch {
-                XCTAssertTrue(
-                    String(describing: error).contains(expectedMessage),
-                    "expected \(expectedMessage), got \(error)"
-                )
-            }
-        }
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    func testOfflineStatusRejectsWrongResourceIdentityAndMediaType() async throws {
-        let operationId = String(repeating: "11", count: 32)
-        let otherOperationId = String(repeating: "33", count: 32)
-        let pendingStatus = try XCTUnwrap(Data(hexString:
-            "4e5254300000fb04214104df1bdcd39249bddd4db23a009600000000000000bdfee2508f80055702000000000000000000000000414031313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131040000000041403232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323208ffffffffffffffff"
-        ))
-
-        StubURLProtocol.handler = { request in
-            let response = HTTPURLResponse(
-                url: request.url!,
-                statusCode: 200,
-                httpVersion: nil,
-                headerFields: ["Content-Type": "application/x-norito"]
-            )!
-            return (response, pendingStatus)
-        }
-        do {
-            _ = try await makeClient().getKagemushaOperationStatus(
-                operationId: otherOperationId,
-                chainDiscriminant: SccpV1.tairaI105DiscriminantV1
-            )
-            XCTFail("expected operation identity mismatch to fail")
-        } catch {
-            XCTAssertTrue(String(describing: error).contains("operation_id does not match"))
-        }
-
-        for headers in [
-            ["Content-Type": "application/json"],
-            [:],
-        ] {
-            StubURLProtocol.handler = { request in
-                let response = HTTPURLResponse(
-                    url: request.url!,
-                    statusCode: 200,
-                    httpVersion: nil,
-                    headerFields: headers
-                )!
-                return (response, pendingStatus)
-            }
-            do {
-                _ = try await makeClient().getKagemushaOperationStatus(
-                    operationId: operationId,
-                    chainDiscriminant: SccpV1.tairaI105DiscriminantV1
-                )
-                XCTFail("expected invalid operation media type to fail")
-            } catch {
-                XCTAssertTrue(
-                    String(describing: error).contains(
-                        "Content-Type must be application/x-norito"
-                    )
-                )
-            }
-        }
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    func testOfflineCapabilityRequiresJsonResponseMediaType() async throws {
+    func testKagemushaCapabilityRequiresJsonResponseMediaType() async throws {
         let payload = """
         {
-          "cash_handoff_capability": "cash_handoff_v1",
-          "required_bridge_abi_version": 23,
-          "max_hops": 8,
+          "kagemusha_handoff_capability": "kagemusha_handoff_v1",
+          "wire_version": 1,
+          "device_lifecycle_version": 1,
           "ready": true,
           "assets": [],
           "blockers": []
@@ -13395,7 +13098,7 @@ final class ToriiClientTests: XCTestCase {
                 return (response, payload)
             }
             do {
-                _ = try await makeClient().getOfflineCapability()
+                _ = try await makeClient().getKagemushaCapability()
                 XCTFail("expected invalid capability media type to fail")
             } catch {
                 XCTAssertTrue(
@@ -13403,6 +13106,359 @@ final class ToriiClientTests: XCTestCase {
                 )
             }
         }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testKagemushaReserveRoutesUseCanonicalNoritoAndIdempotency() async throws {
+        let topUp = try kagemushaTopUpRequest()
+        XCTAssertEqual(KagemushaNoritoV1.maximumTopUpRequestBytes, 16 * 1024)
+        let topUpInstruction = try KagemushaNoritoV1.topUpInstructionFrame(topUp)
+        XCTAssertEqual(
+            topUpInstruction.wireName,
+            KagemushaNoritoV1.topUpInstructionWireName
+        )
+        let topUpInstructionArchive = try XCTUnwrap(
+            noritoDecodeFrame(topUpInstruction.framedPayload)
+        )
+        XCTAssertEqual(
+            topUpInstructionArchive.header.schema,
+            noritoSchemaHash(
+                forTypeName: "iroha_data_model::isi::kagemusha_v1::TopUpKagemushaV1"
+            )
+        )
+        XCTAssertEqual(topUpInstructionArchive.header.flags, NoritoHeader.compactLen)
+        XCTAssertEqual(topUpInstructionArchive.paddingLength, 8)
+        var topUpInstructionReader = CanonicalNoritoReader(
+            data: topUpInstructionArchive.payload
+        )
+        let embeddedTopUpRequest = try topUpInstructionReader.readCompactField()
+        XCTAssertEqual(topUpInstructionReader.remaining(), 0)
+        XCTAssertEqual(
+            embeddedTopUpRequest,
+            try XCTUnwrap(
+                noritoDecodeFrame(KagemushaNoritoV1.encodeTopUpRequestShape(topUp))
+            ).payload
+        )
+        let topUpBody = Data([1, 0x51, 0x52, 0x53])
+        let topUpTransaction = SignedTransactionEnvelope(
+            norito: topUpBody,
+            signedTransaction: Data(topUpBody.dropFirst()),
+            payload: nil,
+            transactionHash: Data(repeating: 0x54, count: 32)
+        )
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(request.url?.path, "/v1/kagemusha/top-up")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/json")
+            XCTAssertEqual(
+                request.value(forHTTPHeaderField: "Content-Type"), "application/x-norito")
+            XCTAssertEqual(
+                request.value(forHTTPHeaderField: "Idempotency-Key"),
+                topUp.operationID.hexEncodedString())
+            XCTAssertEqual(self.bodyData(from: request), topUpBody)
+            let response = HTTPURLResponse(
+                url: request.url!, statusCode: 202, httpVersion: nil,
+                headerFields: [
+                    "Content-Type": "application/json",
+                    "Location": "/v1/kagemusha/operations/\(topUp.operationID.hexEncodedString())",
+                    "Retry-After": "1",
+                ]
+            )!
+            return (
+                response,
+                try self.kagemushaStatusJSON(
+                    operationID: topUp.operationID, kind: "top_up", state: "pending")
+            )
+        }
+        let topUpStatus = try await makeClient().submitKagemushaTopUp(
+            topUpTransaction,
+            operationID: topUp.operationID
+        )
+        XCTAssertEqual(topUpStatus.kind, .topUp)
+        XCTAssertEqual(topUpStatus.state, .pending)
+
+        let redemption = try kagemushaRedemptionRequest()
+        let redemptionBody = try KagemushaNoritoV1.encodeRedemptionRequestShape(redemption)
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(request.url?.path, "/v1/kagemusha/redeem")
+            XCTAssertEqual(
+                request.value(forHTTPHeaderField: "Idempotency-Key"),
+                redemption.operationID.hexEncodedString())
+            XCTAssertEqual(self.bodyData(from: request), redemptionBody)
+            let response = HTTPURLResponse(
+                url: request.url!, statusCode: 200, httpVersion: nil,
+                headerFields: [
+                    "Content-Type": "application/json",
+                    "Location": "/v1/kagemusha/operations/\(redemption.operationID.hexEncodedString())",
+                ]
+            )!
+            return (
+                response,
+                try self.kagemushaStatusJSON(
+                    operationID: redemption.operationID,
+                    kind: "redemption", state: "applied",
+                    result: ["unverified_result": "opaque"])
+            )
+        }
+        let redemptionStatus = try await makeClient().submitKagemushaRedemption(redemption)
+        XCTAssertEqual(redemptionStatus.kind, .redemption)
+        XCTAssertEqual(redemptionStatus.state, .applied)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testKagemushaOperationWithholdsAppliedResultUntilPinnedVerification() async throws {
+        let operationID = Data(repeating: 0xd1, count: 32)
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(
+                request.url?.path,
+                "/v1/kagemusha/operations/\(operationID.hexEncodedString())")
+            let response = HTTPURLResponse(
+                url: request.url!, statusCode: 200, httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (
+                response,
+                try self.kagemushaStatusJSON(
+                    operationID: operationID, kind: "redemption", state: "applied",
+                    result: ["untrusted_finality": "opaque"])
+            )
+        }
+
+        let status = try await makeClient().getKagemushaOperation(operationID: operationID)
+        XCTAssertEqual(status.state, .applied)
+        XCTAssertTrue(status.description.contains("[WITHHELD]"))
+        XCTAssertFalse(status.description.contains("opaque"))
+        let released = try status.verifyAgainst("pinned-anchor") { data, anchor in
+            XCTAssertEqual(anchor, "pinned-anchor")
+            return try XCTUnwrap(String(data: data, encoding: .utf8))
+        }
+        XCTAssertTrue(released.contains("untrusted_finality"))
+    }
+
+    private func kagemushaStatusJSON(
+        operationID: Data,
+        kind: String,
+        state: String,
+        result: [String: Any]? = nil
+    ) throws -> Data {
+        let object: [String: Any] = [
+            "version": 1,
+            "operation_id": operationID.map(Int.init),
+            "kind": ["kind": kind, "value": NSNull()],
+            "state": ["state": state, "value": NSNull()],
+            "result": result.map { $0 as Any } ?? NSNull(),
+            "rejection": NSNull(),
+        ]
+        return try JSONSerialization.data(withJSONObject: object)
+    }
+
+    private func kagemushaTopUpRequest() throws -> KagemushaTopUpRequestV1 {
+        let (request, payment) = try kagemushaPeerFixture()
+        let operationID = kagemushaBytes(0x77)
+        let issuanceCommitment = kagemushaBytes(0x7d)
+        let creditID = kagemushaBytes(0x7e)
+        let artifactManifestDigest = kagemushaBytes(0x79)
+        let recipientCredentialCommitment = kagemushaBytes(0x7a)
+        let creditCommitment = kagemushaBytes(0x7b)
+        let encryptedCredit = payment.encryptedCredit
+        let context = try KagemushaMintAuthorizationContextV1(
+            operationID: operationID,
+            releaseID: request.releaseID,
+            suiteID: request.hardwareCredential.suiteID,
+            vkDigest: kagemushaBytes(0x78),
+            artifactManifestDigest: artifactManifestDigest,
+            networkID: request.networkID,
+            asset: request.asset,
+            assetIncarnation: request.assetIncarnation,
+            scale: request.scale,
+            liabilityPoolID: request.liabilityPoolID,
+            amount: KagemushaUInt128V1(40),
+            payer: request.recipient,
+            recipient: request.recipient,
+            hardwareCredentialID: request.hardwareCredential.credentialID,
+            hardwareProfileID: request.hardwareCredential.hardwareProfileID,
+            policyEpoch: request.hardwareCredential.policyEpoch,
+            recipientCredentialCommitment: recipientCredentialCommitment,
+            creditCommitment: creditCommitment,
+            recipientOneTimeKey: KagemushaX25519PublicKeyV1(rawBytes: kagemushaBytes(0x7c))
+        )
+        let statement = try KagemushaMintAuthorizationStatementV1(
+            context: context,
+            issuanceCommitment: issuanceCommitment,
+            creditID: creditID,
+            ciphertextDigest: KagemushaNoritoV1.ciphertextDigestShape(encryptedCredit)
+        )
+        let authorization = try KagemushaMintAuthorizationV1(
+            statement: statement,
+            proof: try kagemushaProof(
+                semanticDigest: KagemushaNoritoV1.mintAuthorizationStatementDigestShape(
+                    statement),
+                tag: 0x80)
+        )
+        return try KagemushaTopUpRequestV1(
+            operationID: operationID,
+            issuanceCommitment: issuanceCommitment,
+            creditID: creditID,
+            releaseID: context.releaseID,
+            suiteID: context.suiteID,
+            vkDigest: context.vkDigest,
+            networkID: context.networkID,
+            asset: context.asset,
+            assetIncarnation: context.assetIncarnation,
+            scale: context.scale,
+            amount: context.amount,
+            liabilityPoolID: context.liabilityPoolID,
+            payer: context.payer,
+            recipient: context.recipient,
+            hardwareCredential: request.hardwareCredential,
+            recipientCredentialCommitment: context.recipientCredentialCommitment,
+            creditCommitment: context.creditCommitment,
+            recipientOneTimeKey: context.recipientOneTimeKey,
+            encryptedCredit: encryptedCredit,
+            artifactManifestDigest: context.artifactManifestDigest,
+            mintAuthorization: authorization
+        )
+    }
+
+    private func kagemushaRedemptionRequest() throws -> KagemushaRedemptionRequestV1 {
+        let (request, _) = try kagemushaPeerFixture()
+        let lifecycle = try KagemushaLifecycleBindingV1(
+            networkID: request.networkID,
+            suiteID: request.hardwareCredential.suiteID,
+            vkDigest: kagemushaBytes(0xa3),
+            releaseID: request.releaseID,
+            asset: request.asset,
+            assetIncarnation: request.assetIncarnation,
+            scale: request.scale,
+            liabilityPoolID: request.liabilityPoolID,
+            hardwareProfileID: request.hardwareCredential.hardwareProfileID,
+            policyEpoch: request.hardwareCredential.policyEpoch,
+            operationKind: .redeemSplit,
+            requestID: Data(repeating: 0, count: 32),
+            receiverLaneCommitment: Data(repeating: 0, count: 32),
+            creditID: Data(repeating: 0, count: 32),
+            ciphertextDigest: Data(repeating: 0, count: 32)
+        )
+        let commitEvidence = KagemushaCommitEvidenceV1.trustedTime(
+            try KagemushaTrustedCommitTimeV1(
+                timeEvidenceCommitment: kagemushaBytes(0xa9)))
+        func statement(_ redemptionID: Data) throws -> KagemushaRedemptionStatementV1 {
+            try KagemushaRedemptionStatementV1(
+                lifecycle: lifecycle,
+                amount: KagemushaUInt128V1(12),
+                beneficiary: request.recipient,
+                terminalNullifier: kagemushaBytes(0xa2),
+                redemptionCommitment: kagemushaBytes(0xa8),
+                redemptionID: redemptionID,
+                commitEvidence: commitEvidence
+            )
+        }
+        let provisional = try statement(kagemushaBytes(0xaa))
+        let finalStatement = try statement(KagemushaNoritoV1.redemptionIDShape(provisional))
+        func certificate(_ certificateID: Data) throws -> KagemushaCommitCertificateV1 {
+            try KagemushaCommitCertificateV1(
+                certificateID: certificateID,
+                candidateEnvelopeDigest: kagemushaBytes(0xab),
+                lifecycleBindingDigest: KagemushaNoritoV1.lifecycleBindingDigestShape(lifecycle),
+                transitionNullifier: finalStatement.terminalNullifier,
+                outboxReservationCommitment: kagemushaBytes(0xac),
+                commitEvidence: commitEvidence,
+                hardwareProfileID: lifecycle.hardwareProfileID,
+                policyEpoch: lifecycle.policyEpoch,
+                hardwareTerminalCommitment: kagemushaBytes(0xad))
+        }
+        let provisionalCertificate = try certificate(kagemushaBytes(0xae))
+        let commitCertificate = try certificate(
+            KagemushaNoritoV1.commitCertificateIDShape(provisionalCertificate))
+        let wrapper = try KagemushaRedemptionProofV1(
+            eqProtocolDigest: kagemushaBytes(0xb0),
+            epProtocolDigest: kagemushaBytes(0xb1),
+            semanticDigest: KagemushaNoritoV1.redemptionStatementDigestShape(finalStatement),
+            candidateEnvelopeDigest: commitCertificate.candidateEnvelopeDigest,
+            commitCertificateDigest: KagemushaNoritoV1.commitCertificateDigestShape(
+                commitCertificate),
+            eqDeferredAudit: kagemushaBytes(0xb2),
+            epDeferredAudit: kagemushaBytes(0xb3),
+            eqProof: Data([0xb4]),
+            epProof: Data([0xb5]),
+            eqHistory: Data(repeating: 0xb6, count: KagemushaWireV1.historyAccumulatorBytes),
+            epHistory: Data(repeating: 0xb7, count: KagemushaWireV1.historyAccumulatorBytes))
+        let voucher = try KagemushaRedemptionVoucherV1(
+            statement: finalStatement,
+            commitCertificate: commitCertificate,
+            proof: wrapper,
+            artifactManifestDigest: kagemushaBytes(0xb8)
+        )
+        return try KagemushaRedemptionRequestV1(
+            operationID: kagemushaBytes(0xc1), voucher: voucher)
+    }
+
+    private func kagemushaProof(
+        semanticDigest: Data,
+        tag: UInt8
+    ) throws -> KagemushaPairedProofV1 {
+        try KagemushaPairedProofV1(
+            eqProtocolDigest: kagemushaBytes(tag),
+            epProtocolDigest: kagemushaBytes(tag &+ 1),
+            semanticDigest: semanticDigest,
+            guardEqCredentialAudit: kagemushaBytes(tag &+ 2),
+            guardEpCredentialAudit: kagemushaBytes(tag &+ 3),
+            eqDeferredAudit: kagemushaBytes(tag &+ 4),
+            epDeferredAudit: kagemushaBytes(tag &+ 5),
+            eqProof: Data([tag]),
+            epProof: Data([tag &+ 1]),
+            eqHistory: Data(repeating: tag, count: KagemushaWireV1.historyAccumulatorBytes),
+            epHistory: Data(
+                repeating: tag &+ 1, count: KagemushaWireV1.historyAccumulatorBytes)
+        )
+    }
+
+    private func kagemushaPeerFixture() throws
+        -> (KagemushaPaymentRequestV1, KagemushaPaymentV1)
+    {
+        var current = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        while current.path != "/" {
+            let candidate = current.appendingPathComponent("fixtures/offline/kagemusha_v1.json")
+            if FileManager.default.fileExists(atPath: candidate.path) {
+                let root = try XCTUnwrap(
+                    JSONSerialization.jsonObject(with: Data(contentsOf: candidate))
+                        as? [String: Any])
+                let requestSection = try XCTUnwrap(root["payment_request"] as? [String: Any])
+                let paymentSection = try XCTUnwrap(root["payment"] as? [String: Any])
+                let request = try KagemushaNoritoV1.decodePaymentRequestShapeExact(
+                    try kagemushaFixtureHex(requestSection))
+                let payment = try KagemushaNoritoV1.decodePaymentShapeExact(
+                    try kagemushaFixtureHex(paymentSection), against: request)
+                return (request, payment)
+            }
+            current.deleteLastPathComponent()
+        }
+        throw NSError(
+            domain: "ToriiClientTests", code: -1,
+            userInfo: [NSLocalizedDescriptionKey: "KAGEMUSHA fixture was not found"])
+    }
+
+    private func kagemushaFixtureHex(_ section: [String: Any]) throws -> Data {
+        let hex = try XCTUnwrap(section["norito_hex"] as? String)
+        guard hex.count.isMultiple(of: 2) else {
+            throw NSError(domain: "ToriiClientTests", code: -1)
+        }
+        var result = Data()
+        var index = hex.startIndex
+        while index != hex.endIndex {
+            let next = hex.index(index, offsetBy: 2)
+            guard let byte = UInt8(hex[index..<next], radix: 16) else {
+                throw NSError(domain: "ToriiClientTests", code: -1)
+            }
+            result.append(byte)
+            index = next
+        }
+        return result
+    }
+
+    private func kagemushaBytes(_ tag: UInt8) -> Data {
+        Data(repeating: tag, count: 32)
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -14041,7 +14097,7 @@ final class ToriiClientHeaderTests: XCTestCase {
             "version": 2,
             "circuit_id": "halo2/ipa::transfer_v2",
             "owner_manifest_id": "manifest-v2",
-            "namespace": "offline_kagemusha",
+            "namespace": "kagemusha_v1",
             "backend": "halo2/ipa",
             "curve": "pallas",
             "public_inputs_schema_hash": "fae4cbe786f280b4e2184dbb06305fe46b7aee20464c0be96023ffd8eac064d3",
@@ -14075,7 +14131,7 @@ final class ToriiClientHeaderTests: XCTestCase {
         XCTAssertEqual(detail.id.name, "vk main")
         XCTAssertEqual(detail.record.version, 2)
         XCTAssertEqual(detail.record.ownerManifestId, "manifest-v2")
-        XCTAssertEqual(detail.record.namespace, "offline_kagemusha")
+        XCTAssertEqual(detail.record.namespace, "kagemusha_v1")
         XCTAssertEqual(detail.record.publicInputsSchemaHashHex,
                        "fae4cbe786f280b4e2184dbb06305fe46b7aee20464c0be96023ffd8eac064d3")
         XCTAssertEqual(detail.record.inlineKey?.backend, "halo2/ipa")
@@ -14094,7 +14150,7 @@ final class ToriiClientHeaderTests: XCTestCase {
             "version": 3,
             "circuit_id": "halo2/pasta/ipa/confidential-unshield-change-merkle16-axiom-poseidon-v4",
             "owner_manifest_id": "confidential-v3",
-            "namespace": "offline_kagemusha",
+            "namespace": "kagemusha_v1",
             "backend": "halo2/ipa",
             "curve": "pallas",
             "public_inputs_schema_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -14144,7 +14200,7 @@ final class ToriiClientHeaderTests: XCTestCase {
             "version": 3,
             "circuit_id": "halo2/pasta/ipa/confidential-unshield-change-merkle16-axiom-poseidon-v4",
             "owner_manifest_id": "confidential-v3",
-            "namespace": "offline_kagemusha",
+            "namespace": "kagemusha_v1",
             "backend": "halo2/ipa",
             "curve": "pallas",
             "public_inputs_schema_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -15789,6 +15845,114 @@ final class ToriiClientHeaderTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
+    func testGenericEventStreamsSignExactFinalQueriesWithDefaultCanonicalAuth() async throws {
+        let verifyingKeyFilter = ToriiVerifyingKeyEventFilter(
+            backend: "halo2/ipa",
+            name: "vk_main",
+            includeRegistered: true,
+            includeUpdated: false
+        )
+        expectCanonicalEventRequest(queryItems: try XCTUnwrap(verifyingKeyFilter.queryItems()))
+        var verifyingKeyIterator = makeClient()
+            .streamVerifyingKeyEvents(filter: verifyingKeyFilter)
+            .makeAsyncIterator()
+        let verifyingKeyEvent = try await verifyingKeyIterator.next()
+        XCTAssertNil(verifyingKeyEvent)
+
+        let triggerFilter = ToriiTriggerEventFilter(
+            triggerId: "nightly-tick",
+            includeCreated: true,
+            includeDeleted: false,
+            includeExtended: false,
+            includeShortened: false,
+            includeMetadataInserted: false,
+            includeMetadataRemoved: false
+        )
+        expectCanonicalEventRequest(queryItems: try XCTUnwrap(triggerFilter.queryItems()))
+        var triggerIterator = makeClient()
+            .streamTriggerEvents(filter: triggerFilter)
+            .makeAsyncIterator()
+        let triggerEvent = try await triggerIterator.next()
+        XCTAssertNil(triggerEvent)
+
+        let proofFilter = ToriiProofEventFilter(
+            backend: "halo2/ipa",
+            proofHashHex: String(repeating: "a", count: 64),
+            includeVerified: false,
+            includeRejected: true
+        )
+        expectCanonicalEventRequest(queryItems: try XCTUnwrap(proofFilter.queryItems()))
+        var proofIterator = makeClient()
+            .streamProofEvents(filter: proofFilter)
+            .makeAsyncIterator()
+        let proofEvent = try await proofIterator.next()
+        XCTAssertNil(proofEvent)
+
+        let statusFilter = ToriiJSONValue.object([
+            "op": .string("eq"),
+            "args": .array([.string("tx_hash"), .string(Self.pipelineHash)]),
+        ])
+        let statusFilterValue = String(
+            decoding: try statusFilter.encodedData(),
+            as: UTF8.self
+        )
+        expectCanonicalEventRequest(
+            queryItems: [URLQueryItem(name: "filter", value: statusFilterValue)]
+        )
+        var statusIterator = makeClient()
+            .streamTransactionStatusEvents(hashHex: Self.pipelineHash)
+            .makeAsyncIterator()
+        let statusEvent = try await statusIterator.next()
+        XCTAssertNil(statusEvent)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testGenericEventStreamRemainsAnonymousWithoutDefaultCanonicalAuth() async throws {
+        let filter = ToriiProofEventFilter(
+            backend: "halo2/ipa",
+            proofHashHex: String(repeating: "b", count: 64),
+            includeVerified: true,
+            includeRejected: false
+        )
+        let queryItems = try XCTUnwrap(filter.queryItems())
+        var expectedComponents = try XCTUnwrap(
+            URLComponents(string: "https://example.test/v1/events/sse")
+        )
+        expectedComponents.queryItems = queryItems
+        let expectedURL = try XCTUnwrap(expectedComponents.url)
+
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url, expectedURL)
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "text/event-stream")
+            for header in [
+                ToriiCanonicalRequest.headerAccount,
+                ToriiCanonicalRequest.headerSignature,
+                ToriiCanonicalRequest.headerTimestampMs,
+                ToriiCanonicalRequest.headerNonce,
+            ] {
+                XCTAssertNil(request.value(forHTTPHeaderField: header))
+            }
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "text/event-stream"]
+            )!
+            return (response, Data())
+        }
+
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [StubURLProtocol.self]
+        let client = ToriiClient(
+            baseURL: URL(string: "https://example.test")!,
+            session: URLSession(configuration: configuration)
+        )
+        var iterator = client.streamProofEvents(filter: filter).makeAsyncIterator()
+        let event = try await iterator.next()
+        XCTAssertNil(event)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
     func testStreamVerifyingKeyEventsAsync() async throws {
         let ssePayload = """
 id: 15
@@ -16103,6 +16267,13 @@ data: {"authority":"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼ�
 
         StubURLProtocol.handler = { request in
             XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "text/event-stream")
+            XCTAssertEqual(
+                request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerAccount),
+                self.authority
+            )
+            XCTAssertNotNil(
+                request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerSignature)
+            )
             let response = HTTPURLResponse(
                 url: request.url!,
                 statusCode: 200,
@@ -16134,7 +16305,7 @@ data: {"authority":"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼ�
     @available(iOS 15.0, macOS 12.0, *)
     func testStreamExplorerInstructionsAsync() async throws {
         let ssePayload = """
-data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","created_at":"2025-01-01T00:00:00Z","kind":"Transfer","r#box":{"scale":"0x00","json":{"kind":"Transfer","payload":{"variant":"Asset","value":{"source":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM#sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","object":"5","destination":"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"}}}},"transaction_hash":"hash1","transaction_status":"Committed","block":10,"index":0}
+data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","created_at":"2025-01-01T00:00:00Z","kind":"Transfer","box":{"encoded":"0x00","framed_sha256":"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","json":{"kind":"Transfer","payload":{"variant":"Asset","value":{"source":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM#sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","object":"5","destination":"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"}}}},"transaction_hash":"hash1","transaction_status":"Committed","block":10,"index":0}
 
 """
             .data(using: .utf8)!
@@ -16160,7 +16331,9 @@ data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽ
         XCTAssertEqual(first?.transactionStatus, "Committed")
         XCTAssertEqual(first?.block, 10)
         XCTAssertEqual(first?.index, 0)
-        XCTAssertEqual(first?.box.scale, "0x00")
+        XCTAssertEqual(first?.box.encoded, "0x00")
+        XCTAssertEqual(first?.box.framedSha256, "0x" + String(repeating: "a", count: 64))
+        XCTAssertNil(first?.box.scale)
 
         let second = try await iterator.next()
         XCTAssertNil(second)
@@ -16169,11 +16342,11 @@ data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽ
     @available(iOS 15.0, macOS 12.0, *)
     func testStreamExplorerTransfersAsync() async throws {
         let ssePayload = """
-data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","created_at":"2025-01-01T00:00:00Z","kind":"Transfer","r#box":{"scale":"0x00","json":{"kind":"Transfer","payload":{"variant":"Asset","value":{"source":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM#sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","object":"5","destination":"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"}}}},"transaction_hash":"hash1","transaction_status":"Committed","block":10,"index":0}
+data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","created_at":"2025-01-01T00:00:00Z","kind":"Transfer","box":{"encoded":"0x00","framed_sha256":"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","json":{"kind":"Transfer","payload":{"variant":"Asset","value":{"source":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM#sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","object":"5","destination":"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"}}}},"transaction_hash":"hash1","transaction_status":"Committed","block":10,"index":0}
 
-data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","created_at":"2025-01-01T00:00:00Z","kind":"Transfer","r#box":{"scale":"0x00","json":{"kind":"Transfer","payload":{"variant":"Asset","value":{"source":"61CtjvNd9T3THAR65GsMVHr82Bjc#sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","object":"6","destination":"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"}}}},"transaction_hash":"hash1","transaction_status":"Committed","block":10,"index":2}
+data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","created_at":"2025-01-01T00:00:00Z","kind":"Transfer","box":{"encoded":"0x00","framed_sha256":"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","json":{"kind":"Transfer","payload":{"variant":"Asset","value":{"source":"61CtjvNd9T3THAR65GsMVHr82Bjc#sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","object":"6","destination":"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"}}}},"transaction_hash":"hash1","transaction_status":"Committed","block":10,"index":2}
 
-data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","created_at":"2025-01-01T00:00:01Z","kind":"Mint","r#box":{"scale":"0x01","json":{"kind":"Mint","payload":{"variant":"Asset","value":{"destination":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM","object":"1"}}}},"transaction_hash":"hash2","transaction_status":"Committed","block":10,"index":1}
+data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","created_at":"2025-01-01T00:00:01Z","kind":"Mint","box":{"encoded":"0x01","framed_sha256":"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","json":{"kind":"Mint","payload":{"variant":"Asset","value":{"destination":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM","object":"1"}}}},"transaction_hash":"hash2","transaction_status":"Committed","block":10,"index":1}
 
 """
             .data(using: .utf8)!
@@ -16212,9 +16385,9 @@ data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽ
     @available(iOS 15.0, macOS 12.0, *)
     func testStreamExplorerTransferSummariesAsync() async throws {
         let ssePayload = """
-data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","created_at":"2025-01-01T00:00:00Z","kind":"Transfer","r#box":{"scale":"0x00","json":{"kind":"Transfer","payload":{"variant":"Asset","value":{"source":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM#sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","object":"5","destination":"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"}}}},"transaction_hash":"hash1","transaction_status":"Committed","block":10,"index":0}
+data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","created_at":"2025-01-01T00:00:00Z","kind":"Transfer","box":{"encoded":"0x00","framed_sha256":"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","json":{"kind":"Transfer","payload":{"variant":"Asset","value":{"source":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM#sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","object":"5","destination":"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"}}}},"transaction_hash":"hash1","transaction_status":"Committed","block":10,"index":0}
 
-data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","created_at":"2025-01-01T00:00:00Z","kind":"Transfer","r#box":{"scale":"0x00","json":{"kind":"Transfer","payload":{"variant":"Asset","value":{"source":"61CtjvNd9T3THAR65GsMVHr82Bjc#sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","object":"6","destination":"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"}}}},"transaction_hash":"hash1","transaction_status":"Committed","block":10,"index":1}
+data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","created_at":"2025-01-01T00:00:00Z","kind":"Transfer","box":{"encoded":"0x00","framed_sha256":"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","json":{"kind":"Transfer","payload":{"variant":"Asset","value":{"source":"61CtjvNd9T3THAR65GsMVHr82Bjc#sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","object":"6","destination":"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"}}}},"transaction_hash":"hash1","transaction_status":"Committed","block":10,"index":1}
 
 """
             .data(using: .utf8)!
@@ -16251,18 +16424,20 @@ data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽ
         let historyPayload = """
         {
             "pagination": {
-                "page": 1,
-                "per_page": 2,
-                "total_pages": 1,
-                "total_items": 2
+                "limit": 2,
+                "snapshot_height": 10,
+                "snapshot_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "next_cursor": null,
+                "has_more": false
             },
             "items": [
                 {
                     "authority": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                     "created_at": "2025-01-01T00:00:00Z",
                     "kind": "Transfer",
-                    "r#box": {
-                        "scale": "0x00",
+                    "box": {
+                        "encoded": "0x00",
+                        "framed_sha256": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                         "json": {
                             "kind": "Transfer",
                             "payload": {
@@ -16284,8 +16459,9 @@ data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽ
                     "authority": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                     "created_at": "2025-01-01T00:00:00Z",
                     "kind": "Transfer",
-                    "r#box": {
-                        "scale": "0x00",
+                    "box": {
+                        "encoded": "0x00",
+                        "framed_sha256": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                         "json": {
                             "kind": "Transfer",
                             "payload": {
@@ -16309,11 +16485,11 @@ data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽ
             .data(using: .utf8)!
 
         let ssePayload = """
-data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","created_at":"2025-01-01T00:00:00Z","kind":"Transfer","r#box":{"scale":"0x00","json":{"kind":"Transfer","payload":{"variant":"Asset","value":{"source":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM#sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","object":"5","destination":"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"}}}},"transaction_hash":"hash1","transaction_status":"Committed","block":10,"index":0}
+data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","created_at":"2025-01-01T00:00:00Z","kind":"Transfer","box":{"encoded":"0x00","framed_sha256":"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","json":{"kind":"Transfer","payload":{"variant":"Asset","value":{"source":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM#sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","object":"5","destination":"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"}}}},"transaction_hash":"hash1","transaction_status":"Committed","block":10,"index":0}
 
-data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","created_at":"2025-01-01T00:00:01Z","kind":"Transfer","r#box":{"scale":"0x00","json":{"kind":"Transfer","payload":{"variant":"Asset","value":{"source":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM#sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","object":"7","destination":"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"}}}},"transaction_hash":"hash2","transaction_status":"Committed","block":11,"index":0}
+data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","created_at":"2025-01-01T00:00:01Z","kind":"Transfer","box":{"encoded":"0x00","framed_sha256":"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","json":{"kind":"Transfer","payload":{"variant":"Asset","value":{"source":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM#sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","object":"7","destination":"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"}}}},"transaction_hash":"hash2","transaction_status":"Committed","block":11,"index":0}
 
-data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","created_at":"2025-01-01T00:00:01Z","kind":"Transfer","r#box":{"scale":"0x00","json":{"kind":"Transfer","payload":{"variant":"Asset","value":{"source":"61CtjvNd9T3THAR65GsMVHr82Bjc#sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","object":"8","destination":"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"}}}},"transaction_hash":"hash4","transaction_status":"Committed","block":11,"index":1}
+data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","created_at":"2025-01-01T00:00:01Z","kind":"Transfer","box":{"encoded":"0x00","framed_sha256":"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","json":{"kind":"Transfer","payload":{"variant":"Asset","value":{"source":"61CtjvNd9T3THAR65GsMVHr82Bjc#sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","object":"8","destination":"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"}}}},"transaction_hash":"hash4","transaction_status":"Committed","block":11,"index":1}
 
 """
             .data(using: .utf8)!
@@ -16327,8 +16503,10 @@ data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽ
                 let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
                 let queryItems = components?.queryItems ?? []
                 let query = Dictionary(uniqueKeysWithValues: queryItems.map { ($0.name, $0.value ?? "") })
-                XCTAssertEqual(query["page"], "1")
-                XCTAssertEqual(query["per_page"], "1")
+                XCTAssertNil(query["cursor"])
+                XCTAssertEqual(query["limit"], "2")
+                XCTAssertNil(query["page"])
+                XCTAssertNil(query["per_page"])
                 XCTAssertEqual(query["kind"], "Transfer")
                 XCTAssertEqual(query["asset_id"], "62Fk4FPcMuLvW5QjDGNF2a4jAmjM")
                 let response = HTTPURLResponse(url: url,
@@ -16349,7 +16527,7 @@ data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽ
         }
 
         let stream = makeClient().streamAccountTransferHistory(accountId: "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
-                                                               perPage: 1,
+                                                               limit: 2,
                                                                assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
                                                                lastEventId: "5")
         var iterator = stream.makeAsyncIterator()
@@ -16370,18 +16548,20 @@ data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽ
         let historyPayload = """
         {
             "pagination": {
-                "page": 1,
-                "per_page": 1,
-                "total_pages": 1,
-                "total_items": 1
+                "limit": 1,
+                "snapshot_height": 10,
+                "snapshot_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "next_cursor": null,
+                "has_more": false
             },
             "items": [
                 {
                     "authority": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                     "created_at": "2025-01-01T00:00:00Z",
                     "kind": "Transfer",
-                    "r#box": {
-                        "scale": "0x00",
+                    "box": {
+                        "encoded": "0x00",
+                        "framed_sha256": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                         "json": {
                             "kind": "Transfer",
                             "payload": {
@@ -16430,7 +16610,7 @@ data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽ
         }
 
         let stream = makeClient().streamAccountTransferHistory(accountId: "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
-                                                               perPage: 1,
+                                                               limit: 1,
                                                                maxItems: 2)
         var iterator = stream.makeAsyncIterator()
 
@@ -16645,7 +16825,7 @@ data: {"authority":"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼ�
     @available(iOS 15.0, macOS 12.0, *)
     func testExplorerInstructionsPublisherDeliversItems() throws {
         let ssePayload = """
-data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","created_at":"2025-01-01T00:00:00Z","kind":"Transfer","r#box":{"scale":"0x00","json":{"kind":"Transfer","payload":{"variant":"Asset","value":{"source":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM#sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","object":"5","destination":"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"}}}},"transaction_hash":"hash1","transaction_status":"Committed","block":10,"index":0}
+data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","created_at":"2025-01-01T00:00:00Z","kind":"Transfer","box":{"encoded":"0x00","framed_sha256":"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","json":{"kind":"Transfer","payload":{"variant":"Asset","value":{"source":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM#sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","object":"5","destination":"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"}}}},"transaction_hash":"hash1","transaction_status":"Committed","block":10,"index":0}
 
 """
             .data(using: .utf8)!
@@ -16687,11 +16867,11 @@ data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽ
     @available(iOS 15.0, macOS 12.0, *)
     func testExplorerTransfersPublisherDeliversRecords() throws {
         let ssePayload = """
-data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","created_at":"2025-01-01T00:00:00Z","kind":"Transfer","r#box":{"scale":"0x00","json":{"kind":"Transfer","payload":{"variant":"Asset","value":{"source":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM#sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","object":"5","destination":"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"}}}},"transaction_hash":"hash1","transaction_status":"Committed","block":10,"index":0}
+data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","created_at":"2025-01-01T00:00:00Z","kind":"Transfer","box":{"encoded":"0x00","framed_sha256":"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","json":{"kind":"Transfer","payload":{"variant":"Asset","value":{"source":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM#sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","object":"5","destination":"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"}}}},"transaction_hash":"hash1","transaction_status":"Committed","block":10,"index":0}
 
-data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","created_at":"2025-01-01T00:00:00Z","kind":"Transfer","r#box":{"scale":"0x00","json":{"kind":"Transfer","payload":{"variant":"Asset","value":{"source":"61CtjvNd9T3THAR65GsMVHr82Bjc#sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","object":"6","destination":"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"}}}},"transaction_hash":"hash1","transaction_status":"Committed","block":10,"index":1}
+data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","created_at":"2025-01-01T00:00:00Z","kind":"Transfer","box":{"encoded":"0x00","framed_sha256":"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","json":{"kind":"Transfer","payload":{"variant":"Asset","value":{"source":"61CtjvNd9T3THAR65GsMVHr82Bjc#sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","object":"6","destination":"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"}}}},"transaction_hash":"hash1","transaction_status":"Committed","block":10,"index":1}
 
-data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","created_at":"2025-01-01T00:00:01Z","kind":"Mint","r#box":{"scale":"0x01","json":{"kind":"Mint","payload":{"variant":"Asset","value":{"destination":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM","object":"1"}}}},"transaction_hash":"hash2","transaction_status":"Committed","block":10,"index":1}
+data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","created_at":"2025-01-01T00:00:01Z","kind":"Mint","box":{"encoded":"0x01","framed_sha256":"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","json":{"kind":"Mint","payload":{"variant":"Asset","value":{"destination":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM","object":"1"}}}},"transaction_hash":"hash2","transaction_status":"Committed","block":10,"index":1}
 
 """
             .data(using: .utf8)!
@@ -16733,9 +16913,9 @@ data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽ
     @available(iOS 15.0, macOS 12.0, *)
     func testExplorerTransferSummariesPublisherDeliversItems() throws {
         let ssePayload = """
-data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","created_at":"2025-01-01T00:00:00Z","kind":"Transfer","r#box":{"scale":"0x00","json":{"kind":"Transfer","payload":{"variant":"Asset","value":{"source":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM#sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","object":"5","destination":"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"}}}},"transaction_hash":"hash1","transaction_status":"Committed","block":10,"index":0}
+data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","created_at":"2025-01-01T00:00:00Z","kind":"Transfer","box":{"encoded":"0x00","framed_sha256":"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","json":{"kind":"Transfer","payload":{"variant":"Asset","value":{"source":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM#sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","object":"5","destination":"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"}}}},"transaction_hash":"hash1","transaction_status":"Committed","block":10,"index":0}
 
-data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","created_at":"2025-01-01T00:00:00Z","kind":"Transfer","r#box":{"scale":"0x00","json":{"kind":"Transfer","payload":{"variant":"Asset","value":{"source":"61CtjvNd9T3THAR65GsMVHr82Bjc#sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","object":"6","destination":"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"}}}},"transaction_hash":"hash1","transaction_status":"Committed","block":10,"index":1}
+data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","created_at":"2025-01-01T00:00:00Z","kind":"Transfer","box":{"encoded":"0x00","framed_sha256":"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","json":{"kind":"Transfer","payload":{"variant":"Asset","value":{"source":"61CtjvNd9T3THAR65GsMVHr82Bjc#sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","object":"6","destination":"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"}}}},"transaction_hash":"hash1","transaction_status":"Committed","block":10,"index":1}
 
 """
             .data(using: .utf8)!
@@ -16783,18 +16963,20 @@ data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽ
         let historyPayload = """
         {
             "pagination": {
-                "page": 1,
-                "per_page": 2,
-                "total_pages": 1,
-                "total_items": 2
+                "limit": 2,
+                "snapshot_height": 10,
+                "snapshot_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "next_cursor": null,
+                "has_more": false
             },
             "items": [
                 {
                     "authority": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                     "created_at": "2025-01-01T00:00:00Z",
                     "kind": "Transfer",
-                    "r#box": {
-                        "scale": "0x00",
+                    "box": {
+                        "encoded": "0x00",
+                        "framed_sha256": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                         "json": {
                             "kind": "Transfer",
                             "payload": {
@@ -16816,8 +16998,9 @@ data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽ
                     "authority": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                     "created_at": "2025-01-01T00:00:00Z",
                     "kind": "Transfer",
-                    "r#box": {
-                        "scale": "0x00",
+                    "box": {
+                        "encoded": "0x00",
+                        "framed_sha256": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                         "json": {
                             "kind": "Transfer",
                             "payload": {
@@ -16841,11 +17024,11 @@ data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽ
             .data(using: .utf8)!
 
         let ssePayload = """
-data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","created_at":"2025-01-01T00:00:00Z","kind":"Transfer","r#box":{"scale":"0x00","json":{"kind":"Transfer","payload":{"variant":"Asset","value":{"source":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM#sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","object":"5","destination":"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"}}}},"transaction_hash":"hash1","transaction_status":"Committed","block":10,"index":0}
+data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","created_at":"2025-01-01T00:00:00Z","kind":"Transfer","box":{"encoded":"0x00","framed_sha256":"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","json":{"kind":"Transfer","payload":{"variant":"Asset","value":{"source":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM#sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","object":"5","destination":"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"}}}},"transaction_hash":"hash1","transaction_status":"Committed","block":10,"index":0}
 
-data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","created_at":"2025-01-01T00:00:01Z","kind":"Transfer","r#box":{"scale":"0x00","json":{"kind":"Transfer","payload":{"variant":"Asset","value":{"source":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM#sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","object":"7","destination":"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"}}}},"transaction_hash":"hash2","transaction_status":"Committed","block":11,"index":0}
+data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","created_at":"2025-01-01T00:00:01Z","kind":"Transfer","box":{"encoded":"0x00","framed_sha256":"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","json":{"kind":"Transfer","payload":{"variant":"Asset","value":{"source":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM#sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","object":"7","destination":"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"}}}},"transaction_hash":"hash2","transaction_status":"Committed","block":11,"index":0}
 
-data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","created_at":"2025-01-01T00:00:01Z","kind":"Transfer","r#box":{"scale":"0x00","json":{"kind":"Transfer","payload":{"variant":"Asset","value":{"source":"61CtjvNd9T3THAR65GsMVHr82Bjc#sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","object":"8","destination":"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"}}}},"transaction_hash":"hash4","transaction_status":"Committed","block":11,"index":1}
+data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","created_at":"2025-01-01T00:00:01Z","kind":"Transfer","box":{"encoded":"0x00","framed_sha256":"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","json":{"kind":"Transfer","payload":{"variant":"Asset","value":{"source":"61CtjvNd9T3THAR65GsMVHr82Bjc#sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","object":"8","destination":"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"}}}},"transaction_hash":"hash4","transaction_status":"Committed","block":11,"index":1}
 
 """
             .data(using: .utf8)!
@@ -16859,6 +17042,10 @@ data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽ
                 let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
                 let queryItems = components?.queryItems ?? []
                 let query = Dictionary(uniqueKeysWithValues: queryItems.map { ($0.name, $0.value ?? "") })
+                XCTAssertEqual(query["cursor"], "Y3Vyc29y")
+                XCTAssertEqual(query["limit"], "2")
+                XCTAssertNil(query["page"])
+                XCTAssertNil(query["per_page"])
                 XCTAssertEqual(query["asset_id"], "62Fk4FPcMuLvW5QjDGNF2a4jAmjM")
                 let response = HTTPURLResponse(url: url,
                                                statusCode: 200,
@@ -16885,7 +17072,8 @@ data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽ
 
         var hashes: [String] = []
         client.accountTransferHistoryPublisher(accountId: "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
-                                               perPage: 1,
+                                               cursor: "Y3Vyc29y",
+                                               limit: 2,
                                                assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
                                                lastEventId: "9",
                                                scheduler: nil)
@@ -16910,18 +17098,20 @@ data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽ
         let historyPayload = """
         {
             "pagination": {
-                "page": 1,
-                "per_page": 1,
-                "total_pages": 1,
-                "total_items": 1
+                "limit": 2,
+                "snapshot_height": 10,
+                "snapshot_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "next_cursor": null,
+                "has_more": false
             },
             "items": [
                 {
                     "authority": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                     "created_at": "2025-01-01T00:00:00Z",
                     "kind": "Transfer",
-                    "r#box": {
-                        "scale": "0x00",
+                    "box": {
+                        "encoded": "0x00",
+                        "framed_sha256": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                         "json": {
                             "kind": "Transfer",
                             "payload": {
@@ -16943,8 +17133,9 @@ data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽ
                     "authority": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                     "created_at": "2025-01-01T00:00:00Z",
                     "kind": "Transfer",
-                    "r#box": {
-                        "scale": "0x00",
+                    "box": {
+                        "encoded": "0x00",
+                        "framed_sha256": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                         "json": {
                             "kind": "Transfer",
                             "payload": {
@@ -16968,11 +17159,11 @@ data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽ
             .data(using: .utf8)!
 
         let ssePayload = """
-data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","created_at":"2025-01-01T00:00:01Z","kind":"Transfer","r#box":{"scale":"0x00","json":{"kind":"Transfer","payload":{"variant":"Asset","value":{"source":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM#sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","object":"7","destination":"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"}}}},"transaction_hash":"deadbeef","transaction_status":"Committed","block":11,"index":0}
+data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","created_at":"2025-01-01T00:00:01Z","kind":"Transfer","box":{"encoded":"0x00","framed_sha256":"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","json":{"kind":"Transfer","payload":{"variant":"Asset","value":{"source":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM#sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","object":"7","destination":"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"}}}},"transaction_hash":"deadbeef","transaction_status":"Committed","block":11,"index":0}
 
-data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","created_at":"2025-01-01T00:00:01Z","kind":"Transfer","r#box":{"scale":"0x00","json":{"kind":"Transfer","payload":{"variant":"Asset","value":{"source":"61CtjvNd9T3THAR65GsMVHr82Bjc#sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","object":"8","destination":"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"}}}},"transaction_hash":"deadbeef","transaction_status":"Committed","block":11,"index":2}
+data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","created_at":"2025-01-01T00:00:01Z","kind":"Transfer","box":{"encoded":"0x00","framed_sha256":"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","json":{"kind":"Transfer","payload":{"variant":"Asset","value":{"source":"61CtjvNd9T3THAR65GsMVHr82Bjc#sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","object":"8","destination":"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"}}}},"transaction_hash":"deadbeef","transaction_status":"Committed","block":11,"index":2}
 
-data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","created_at":"2025-01-01T00:00:02Z","kind":"Transfer","r#box":{"scale":"0x00","json":{"kind":"Transfer","payload":{"variant":"Asset","value":{"source":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM#sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","object":"9","destination":"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"}}}},"transaction_hash":"otherhash","transaction_status":"Committed","block":11,"index":1}
+data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","created_at":"2025-01-01T00:00:02Z","kind":"Transfer","box":{"encoded":"0x00","framed_sha256":"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","json":{"kind":"Transfer","payload":{"variant":"Asset","value":{"source":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM#sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","object":"9","destination":"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"}}}},"transaction_hash":"otherhash","transaction_status":"Committed","block":11,"index":1}
 
 """
             .data(using: .utf8)!
@@ -17024,18 +17215,20 @@ data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽ
         let historyPayload = """
         {
             "pagination": {
-                "page": 1,
-                "per_page": 1,
-                "total_pages": 1,
-                "total_items": 1
+                "limit": 2,
+                "snapshot_height": 10,
+                "snapshot_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "next_cursor": null,
+                "has_more": false
             },
             "items": [
                 {
                     "authority": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                     "created_at": "2025-01-01T00:00:00Z",
                     "kind": "Transfer",
-                    "r#box": {
-                        "scale": "0x00",
+                    "box": {
+                        "encoded": "0x00",
+                        "framed_sha256": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                         "json": {
                             "kind": "Transfer",
                             "payload": {
@@ -17057,8 +17250,9 @@ data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽ
                     "authority": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                     "created_at": "2025-01-01T00:00:00Z",
                     "kind": "Transfer",
-                    "r#box": {
-                        "scale": "0x00",
+                    "box": {
+                        "encoded": "0x00",
+                        "framed_sha256": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                         "json": {
                             "kind": "Transfer",
                             "payload": {
@@ -17082,9 +17276,9 @@ data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽ
             .data(using: .utf8)!
 
         let ssePayload = """
-data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","created_at":"2025-01-01T00:00:01Z","kind":"Transfer","r#box":{"scale":"0x00","json":{"kind":"Transfer","payload":{"variant":"Asset","value":{"source":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM#sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","object":"7","destination":"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"}}}},"transaction_hash":"deadbeef","transaction_status":"Committed","block":11,"index":0}
+data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","created_at":"2025-01-01T00:00:01Z","kind":"Transfer","box":{"encoded":"0x00","framed_sha256":"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","json":{"kind":"Transfer","payload":{"variant":"Asset","value":{"source":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM#sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","object":"7","destination":"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"}}}},"transaction_hash":"deadbeef","transaction_status":"Committed","block":11,"index":0}
 
-data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","created_at":"2025-01-01T00:00:01Z","kind":"Transfer","r#box":{"scale":"0x00","json":{"kind":"Transfer","payload":{"variant":"Asset","value":{"source":"61CtjvNd9T3THAR65GsMVHr82Bjc#sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","object":"8","destination":"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"}}}},"transaction_hash":"deadbeef","transaction_status":"Committed","block":11,"index":2}
+data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","created_at":"2025-01-01T00:00:01Z","kind":"Transfer","box":{"encoded":"0x00","framed_sha256":"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","json":{"kind":"Transfer","payload":{"variant":"Asset","value":{"source":"61CtjvNd9T3THAR65GsMVHr82Bjc#sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","object":"8","destination":"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"}}}},"transaction_hash":"deadbeef","transaction_status":"Committed","block":11,"index":2}
 
 """
             .data(using: .utf8)!
@@ -17890,7 +18084,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             "parent_state_root": nativeAmxTestHash(0xC1),
             "post_state_root": nativeAmxTestHash(0xC3),
             "ordinary_writes_root": nativeAmxTestHash(0xC5),
-            "topup_anchor_count": 0,
+            "kagemusha_top_up_count": 0,
             "native_amx_application_manifest_version":
                 ToriiSumeragiV2ExecutionCommitment.canonicalNativeAmxApplicationManifestVersion,
             "native_amx_application_manifest_root":
@@ -18058,7 +18252,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             "parent_state_root": nativeAmxTestHash(0xC1),
             "post_state_root": nativeAmxTestHash(0xC3),
             "ordinary_writes_root": nativeAmxTestHash(0xC5),
-            "topup_anchor_count": 0,
+            "kagemusha_top_up_count": 0,
             "native_amx_application_manifest_version":
                 ToriiSumeragiV2ExecutionCommitment.canonicalNativeAmxApplicationManifestVersion,
             "native_amx_application_manifest_root": emptyRoot,
@@ -18097,6 +18291,47 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         XCTAssertThrowsError(try decode(missingRoot))
     }
 
+    func testSumeragiExecutionCommitmentAcceptsThousandKagemushaTopUpsAndRejectsLegacyNames()
+        throws
+    {
+        let base: [String: Any] = [
+            "parent_state_root": nativeAmxTestHash(0xC1),
+            "post_state_root": nativeAmxTestHash(0xC3),
+            "ordinary_writes_root": nativeAmxTestHash(0xC5),
+            "kagemusha_top_up_root": nativeAmxTestHash(0xC9),
+            "kagemusha_top_up_count": 1_000,
+            "native_amx_application_manifest_version":
+                ToriiSumeragiV2ExecutionCommitment.canonicalNativeAmxApplicationManifestVersion,
+            "native_amx_application_manifest_root":
+                ToriiSumeragiV2ExecutionCommitment.nativeAmxApplicationManifestEmptyRoot,
+            "native_amx_application_manifest_count": 0,
+            "lane_finality_manifest": NSNull(),
+            "merge_carrier": NSNull(),
+            "executed_block_wire_len": 123,
+            "executed_block_wire_hash": nativeAmxTestHash(0xC7),
+        ]
+        func decode(_ value: [String: Any]) throws -> ToriiSumeragiV2ExecutionCommitment {
+            try JSONDecoder().decode(
+                ToriiSumeragiV2ExecutionCommitment.self,
+                from: JSONSerialization.data(withJSONObject: value)
+            )
+        }
+
+        let decoded = try decode(base)
+        XCTAssertEqual(decoded.kagemushaTopUpCount, 1_000)
+        XCTAssertEqual(decoded.kagemushaTopUpRoot, nativeAmxTestHash(0xC9))
+
+        for legacyField in ["topup_anchor_root", "topup_anchor_count"] {
+            var legacy = base
+            if legacyField.hasSuffix("root") {
+                legacy[legacyField] = nativeAmxTestHash(0xD1)
+            } else {
+                legacy[legacyField] = 1_000
+            }
+            XCTAssertThrowsError(try decode(legacy), legacyField)
+        }
+    }
+
     func testSumeragiExecutionCommitmentRequiresExactMergeCarrierProjection() throws {
         let emptyRoot =
             ToriiSumeragiV2ExecutionCommitment.nativeAmxApplicationManifestEmptyRoot
@@ -18104,7 +18339,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             "parent_state_root": nativeAmxTestHash(0xC1),
             "post_state_root": nativeAmxTestHash(0xC3),
             "ordinary_writes_root": nativeAmxTestHash(0xC5),
-            "topup_anchor_count": 0,
+            "kagemusha_top_up_count": 0,
             "native_amx_application_manifest_version": 1,
             "native_amx_application_manifest_root": emptyRoot,
             "native_amx_application_manifest_count": 0,
@@ -21510,6 +21745,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             XCTAssertEqual(request.httpMethod, "POST")
             XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
             let body = self.bodyJSON(from: request)
+            XCTAssertEqual(body["proposal_operator"] as? String, self.authority)
             XCTAssertEqual(body["contract_alias"] as? String, "demo::universal")
             XCTAssertEqual(body["code_hash"] as? String, codeHash.hexLowercased())
             XCTAssertEqual(body["abi_hash"] as? String, abiHash.hexLowercased())
@@ -21529,7 +21765,8 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             return (response, payload)
         }
 
-        let request = ToriiGovernanceDeployContractProposalRequest(contractAlias: "demo::universal",
+        let request = ToriiGovernanceDeployContractProposalRequest(proposalOperator: authority,
+                                                                   contractAlias: "demo::universal",
                                                                    codeHash: codeHash,
                                                                    abiHash: abiHash,
                                                                    manifestProvenance: .init(
@@ -21552,8 +21789,47 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         waitForExpectations(timeout: 1)
     }
 
+    func testGovernanceDeployContractProposalRejectsMismatchedOperatorBeforeTransport() throws {
+        let expectation = expectation(description: "operator mismatch")
+        var transportCalled = false
+        StubURLProtocol.handler = { request in
+            transportCalled = true
+            throw NSError(
+                domain: "unexpected governance transport",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: request.url?.absoluteString ?? ""]
+            )
+        }
+        let otherOperator = try Keypair(privateKeyBytes: Data(repeating: 0x42, count: 32))
+            .accountId(networkPrefix: AccountId.defaultNetworkPrefix)
+        let request = ToriiGovernanceDeployContractProposalRequest(
+            proposalOperator: otherOperator,
+            contractAlias: "demo::universal",
+            codeHash: Data(repeating: 0x44, count: 32),
+            abiHash: Data(repeating: 0x55, count: 32)
+        )
+
+        makeClient().submitGovernanceDeployContractProposal(
+            request,
+            canonicalAuth: canonicalReadAuth
+        ) { result in
+            guard case .failure(let error) = result,
+                  let clientError = error as? ToriiClientError,
+                  case .invalidPayload(let message) = clientError else {
+                XCTFail("expected operator mismatch, got \(result)")
+                expectation.fulfill()
+                return
+            }
+            XCTAssertTrue(message.contains("proposal_operator must equal"))
+            expectation.fulfill()
+        }
+        waitForExpectations(timeout: 1)
+        XCTAssertFalse(transportCalled)
+    }
+
     func testGovernanceDeployContractProposalRejectsAmbiguousTarget() throws {
         let request = ToriiGovernanceDeployContractProposalRequest(
+            proposalOperator: authority,
             contractAddress: "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh",
             contractAlias: "demo::universal",
             codeHash: Data(repeating: 0x44, count: 32),
@@ -21570,6 +21846,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
     func testGovernanceDeployContractProposalRejectsNonV1AbiVersion() {
         for abiVersion: UInt16 in [0, 2, .max] {
             let request = ToriiGovernanceDeployContractProposalRequest(
+                proposalOperator: authority,
                 contractAlias: "demo::universal",
                 codeHash: Data(repeating: 0x44, count: 32),
                 abiHash: Data(repeating: 0x55, count: 32),
@@ -21587,6 +21864,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
     func testGovernanceDeployContractProposalRejectsWrongHashLengths() {
         for length in [0, 31, 33] {
             let request = ToriiGovernanceDeployContractProposalRequest(
+                proposalOperator: authority,
                 contractAlias: "demo::universal",
                 codeHash: Data(repeating: 0x44, count: length),
                 abiHash: Data(repeating: 0x55, count: 32)
@@ -21643,7 +21921,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
                                            httpVersion: nil,
                                            headerFields: ["Content-Type": "application/json"])!
             let payload = """
-            {"found":true,"proposal":{"proposer":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","kind":{"kind":"DeployContract","payload":{"contract_address":"\(contractAddress)","code_hash":"\(codeHash.hexLowercased())","abi_hash":"\(abiHash.hexLowercased())","abi_version":1,"manifest_provenance":{"signer":"ed25519:public","signature":"ed25519:signature"}}},"created_height":42,"status":"Enacted"}}
+            {"found":true,"proposal":{"proposer":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","kind":{"kind":"DeployContract","payload":{"proposal_operator":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","contract_address":"\(contractAddress)","code_hash":"\(codeHash.hexLowercased())","abi_hash":"\(abiHash.hexLowercased())","abi_version":1,"manifest_provenance":{"signer":"ed25519:public","signature":"ed25519:signature"}}},"created_height":42,"status":"Enacted"}}
             """.data(using: .utf8)!
             return (response, payload)
         }
@@ -21657,6 +21935,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
                     return XCTFail("expected deploy contract kind")
                 }
                 XCTAssertEqual(payload.contractAddress, contractAddress)
+                XCTAssertEqual(payload.proposalOperator, response.proposal?.proposer)
                 XCTAssertEqual(payload.codeHash, codeHash)
                 XCTAssertEqual(payload.abiHash, abiHash)
                 XCTAssertEqual(payload.abiVersion, 1)
@@ -22015,7 +22294,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             )!
             let body = """
             {
-              "code": "offline_topup_finality_proof_unavailable",
+              "code": "kagemusha_topup_finality_proof_unavailable",
               "message": "The finalized proof is not available yet.",
               "details": {"retry_after_ms": 250}
             }

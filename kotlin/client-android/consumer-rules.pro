@@ -7,3 +7,8 @@
 # algorithm implementations dynamically, so retain the provider entry point.
 -dontwarn org.bouncycastle.**
 -keep class org.bouncycastle.jce.provider.BouncyCastleProvider { *; }
+
+# These exact owner/method names bind the coordinator's exported JNI symbols.
+-keep class org.hyperledger.iroha.sdk.offline.KagemushaCoreCoordinatorJniV1 {
+    native <methods>;
+}

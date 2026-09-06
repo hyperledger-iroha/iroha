@@ -394,10 +394,10 @@ async fn all_sccp_and_bridge_read_routes_fail_closed_on_empty_or_duplicate_token
         let mut app = mk_app_state_for_tests();
         let app_mut = Arc::get_mut(&mut app).expect("unique Torii app fixture");
         app_mut.require_api_token = true;
-        app_mut.api_tokens_set = if duplicate {
-            Arc::new(HashSet::from(["valid-token".to_owned()]))
+        app_mut.api_token_digests = if duplicate {
+            Arc::new(limits::ApiTokenDigestSet::from_tokens(["valid-token"]))
         } else {
-            Arc::new(HashSet::new())
+            Arc::new(limits::ApiTokenDigestSet::default())
         };
         app_mut.rate_limiter = limits::RateLimiter::new(Some(1), Some(8));
         app_mut.query_inflight = Arc::new(tokio::sync::Semaphore::new(0));
@@ -407,9 +407,9 @@ async fn all_sccp_and_bridge_read_routes_fail_closed_on_empty_or_duplicate_token
         let rate_key = if duplicate {
             headers.append(HEADER_API_TOKEN, HeaderValue::from_static("valid-token"));
             headers.append(HEADER_API_TOKEN, HeaderValue::from_static("valid-token"));
-            "valid-token"
+            limits::ApiTokenPrincipal::from_token("valid-token").rate_limit_key()
         } else {
-            "127.0.0.1"
+            "127.0.0.1".to_owned()
         };
         let heavy_errors =
             heavy_route_auth_errors_for_test(Arc::clone(&app), headers.clone()).await;
@@ -421,7 +421,7 @@ async fn all_sccp_and_bridge_read_routes_fail_closed_on_empty_or_duplicate_token
             );
         }
         assert!(
-            app.rate_limiter.allow_cost(rate_key, 8).await,
+            app.rate_limiter.allow_cost(&rate_key, 8).await,
             "authentication failures must not consume rate capacity"
         );
     }
@@ -512,13 +512,21 @@ fn signed_query_preauth_key_ignores_unauthenticated_api_token_text() {
         HeaderValue::from_static("attacker-token-2"),
     );
     assert_eq!(
-        signed_query_preauth_rate_limit_key(&first, remote, false),
-        signed_query_preauth_rate_limit_key(&second, remote, false),
+        signed_query_preauth_rate_limit_key(&first, remote, None),
+        signed_query_preauth_rate_limit_key(&second, remote, None),
         "raw API-token text must not choose a pre-verification rate bucket"
     );
     assert_ne!(
-        signed_query_preauth_rate_limit_key(&first, remote, true),
-        signed_query_preauth_rate_limit_key(&second, remote, true),
+        signed_query_preauth_rate_limit_key(
+            &first,
+            remote,
+            Some(limits::ApiTokenPrincipal::from_token("attacker-token-1")),
+        ),
+        signed_query_preauth_rate_limit_key(
+            &second,
+            remote,
+            Some(limits::ApiTokenPrincipal::from_token("attacker-token-2")),
+        ),
         "an already-validated API credential may identify its own caller budget"
     );
 }
@@ -777,6 +785,114 @@ async fn cancelled_query_cannot_release_admission_before_blocking_worker_finishe
         .expect("body permit is released after physical completion")
         .expect("body semaphore remains open");
     drop((query_permit, heavy_permit, body_permit));
+}
+#[test]
+fn explorer_heavy_history_routes_are_bound_to_cancellation_safe_worker() {
+    fn exact_function_source<'a>(source: &'a str, marker: &str) -> &'a str {
+        let start = source
+            .find(marker)
+            .unwrap_or_else(|| panic!("missing exact function marker `{marker}`"));
+        let open = source[start..]
+            .find('{')
+            .map(|offset| start + offset)
+            .unwrap_or_else(|| panic!("function `{marker}` has no body"));
+        let mut depth = 0_usize;
+        for (offset, byte) in source.as_bytes()[open..].iter().enumerate() {
+            match byte {
+                b'{' => depth += 1,
+                b'}' => {
+                    depth = depth
+                        .checked_sub(1)
+                        .unwrap_or_else(|| panic!("function `{marker}` has unbalanced braces"));
+                    if depth == 0 {
+                        return &source[start..=open + offset];
+                    }
+                }
+                _ => {}
+            }
+        }
+        panic!("function `{marker}` has an unterminated body")
+    }
+
+    fn compact(source: &str) -> String {
+        source
+            .chars()
+            .filter(|character| !character.is_whitespace())
+            .collect()
+    }
+
+    let lib_source = include_str!("../../lib.rs");
+    let routing_source = include_str!("../../routing.rs");
+    let routes = [
+        (
+            "handler_explorer_blocks_list",
+            "handle_v1_explorer_blocks_admitted",
+            "handle_v1_explorer_blocks_sync",
+        ),
+        (
+            "handler_explorer_transactions_list",
+            "handle_v1_explorer_transactions_admitted",
+            "handle_v1_explorer_transactions_sync",
+        ),
+        (
+            "handler_explorer_transactions_latest",
+            "handle_v1_explorer_transactions_latest_admitted",
+            "handle_v1_explorer_transactions_latest_sync",
+        ),
+        (
+            "handler_explorer_instructions_list",
+            "handle_v1_explorer_instructions_admitted",
+            "handle_v1_explorer_instructions_sync",
+        ),
+        (
+            "handler_explorer_instructions_latest",
+            "handle_v1_explorer_instructions_latest_admitted",
+            "handle_v1_explorer_instructions_latest_sync",
+        ),
+    ];
+
+    let admitted_definition_count = routing_source
+        .lines()
+        .filter(|line| {
+            let line = line.trim_start();
+            line.starts_with("pub(crate) async fn handle_v1_explorer_")
+                && line.contains("_admitted(")
+        })
+        .count();
+    assert_eq!(
+        admitted_definition_count,
+        routes.len(),
+        "every Explorer admitted history wrapper must be inventoried here"
+    );
+
+    for (http_handler, admitted_handler, sync_handler) in routes {
+        let http = compact(exact_function_source(
+            lib_source,
+            &format!("async fn {http_handler}("),
+        ));
+        assert!(
+            http.contains("letadmission=acquire_query_admission(app.as_ref(),true).await?;"),
+            "Explorer handler `{http_handler}` must acquire heavy admission"
+        );
+        assert!(
+            http.contains(&format!("{admitted_handler}(")) && http.contains("admission,"),
+            "Explorer handler `{http_handler}` must pass admission to `{admitted_handler}`"
+        );
+
+        let admitted = compact(exact_function_source(
+            routing_source,
+            &format!("async fn {admitted_handler}("),
+        ));
+        assert!(
+            admitted.contains("admission:crate::QueryAdmissionPermit"),
+            "Explorer wrapper `{admitted_handler}` must own its admission permit"
+        );
+        assert!(
+            admitted.contains("run_admitted_blocking(admission,")
+                && admitted.contains(&format!("{sync_handler}(")),
+            "Explorer wrapper `{admitted_handler}` must retain admission in the blocking worker around `{sync_handler}`"
+        );
+    }
 }
 #[tokio::test]
 async fn finality_rate_weight_caps_to_burst_without_disabling_the_route() {
@@ -1651,8 +1767,8 @@ fn seed_authoritative_hosted_http_revision(
                 self_stake: iroha_primitives::numeric::Quantity::from(1_u64),
                 metadata: iroha_data_model::metadata::Metadata::default(),
                 status: iroha_data_model::nexus::staking::PublicLaneValidatorStatus::Active,
-                activation_epoch: Some(0),
-                activation_height: Some(0),
+                activation_height: 1,
+                deactivation_height: None,
                 last_reward_epoch: None,
             },
         );
@@ -1904,8 +2020,8 @@ fn seed_hosted_http_public_lane_validator(
                 self_stake: Quantity::from(1_u64),
                 metadata: iroha_data_model::metadata::Metadata::default(),
                 status: iroha_data_model::nexus::PublicLaneValidatorStatus::Active,
-                activation_epoch: None,
-                activation_height: None,
+                activation_height: 1,
+                deactivation_height: None,
                 last_reward_epoch: None,
             },
         );

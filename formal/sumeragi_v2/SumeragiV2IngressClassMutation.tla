@@ -10,7 +10,7 @@ Commit-certificate request/response as Progress.  At the serialized runtime
 boundary only QCs, TCs, TimeoutVote, and an authenticated exact historical
 locked Commit use Progress, together with an authenticated exact current
 Prepare for a locally bound unchanged-lock reproposal.  Ordinary proposal/vote
-traffic is Normal, while manifest, chunk, and recovery transport payloads bypass
+traffic is Normal, while chunk and recovery transport payloads bypass
 that runtime queue.
 The repaired mode checks both exact partitions.  Each mutant removes or
 promotes one source-exact case while preserving the outer/runtime distinction.
@@ -20,7 +20,7 @@ CONSTANT Mode
 
 OuterKinds ==
   {"Proposal", "PrepareVote", "CommitVote", "PrepareQC", "CommitQC",
-   "TimeoutVote", "TimeoutCertificate", "PayloadManifest", "Chunk",
+   "TimeoutVote", "TimeoutCertificate", "Chunk",
    "CertifiedRequest", "CertifiedResponse", "CommitCertificateRequest",
    "CommitCertificateResponse"}
 
@@ -30,7 +30,7 @@ RequiredOuterProgressKinds ==
    "CommitCertificateRequest", "CommitCertificateResponse"}
 
 RequiredOuterAuxiliaryKinds ==
-  {"Proposal", "PrepareVote", "PayloadManifest"}
+  {"Proposal", "PrepareVote"}
 
 DroppedOuterKind ==
   CASE Mode = "DropOuterCommitVote" -> "CommitVote"
@@ -52,7 +52,7 @@ RuntimeKinds ==
   {"Proposal", "PrepareVote", "CommitVote", "HistoricalLockedCommitVote",
    "CurrentLockedReproposalPrepareVote", "PrepareQC", "CommitQC",
    "TimeoutVote", "TimeoutCertificate",
-   "PayloadManifest", "Chunk", "CertifiedRequest", "CertifiedResponse",
+   "Chunk", "CertifiedRequest", "CertifiedResponse",
    "CommitCertificateRequest", "CommitCertificateResponse"}
 
 RequiredRuntimeProgressKinds ==
@@ -63,7 +63,7 @@ RequiredRuntimeNormalKinds ==
   {"Proposal", "PrepareVote", "CommitVote"}
 
 RequiredRuntimeBypassKinds ==
-  {"PayloadManifest", "Chunk", "CertifiedRequest", "CertifiedResponse",
+  {"Chunk", "CertifiedRequest", "CertifiedResponse",
    "CommitCertificateRequest", "CommitCertificateResponse"}
 
 DroppedRuntimeProgressKind ==
@@ -80,7 +80,6 @@ PromotedRuntimeKind ==
   CASE Mode = "PromoteRuntimeProposal" -> "Proposal"
     [] Mode = "PromoteRuntimePrepareVote" -> "PrepareVote"
     [] Mode = "PromoteRuntimeCommitVote" -> "CommitVote"
-    [] Mode = "PromoteRuntimeManifest" -> "PayloadManifest"
     [] Mode = "PromoteRuntimeChunk" -> "Chunk"
     [] Mode = "PromoteRuntimeCertified" -> "CertifiedRequest"
     [] Mode = "PromoteRuntimeCertifiedResponse" -> "CertifiedResponse"

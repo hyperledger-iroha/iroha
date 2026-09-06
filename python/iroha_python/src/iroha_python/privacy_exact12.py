@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from typing import Final, Sequence, cast
 
 from blake3 import blake3
+from norito.crc64 import crc64 as _crc64_ecma_v1
 
 from .privacy_catalog import PRIVACY_PROTOCOL_IDS_V1, PrivacyProtocolIdV1
 
@@ -49,6 +50,11 @@ _TRANSACTION_PAYLOAD_SCHEMA_NAME_V1: Final = (
 )
 _STATEMENT_DIGEST_DOMAIN_V1: Final = b"iroha:privacy:statement:v1"
 _INTENT_DIGEST_DOMAIN_V1: Final = b"iroha.privacy.transaction-intent-digest.v1"
+_PROOF_WIRE_MAGIC_V1: Final = b"IRHZK1\xa5\x5a"
+_CATALOG_COMMITMENT_V1: Final = bytes.fromhex(
+    "e037f13904a0307c00db15d85cfb406bd79772d20144a949def0f3fda78e342e"
+    "747f65787cbfbffac94f11c369e2bbff"
+)
 _BASE64_RE_V1: Final = re.compile(r"(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?")
 
 # Proof-system and engine enums intentionally share these closed V1 ordinals.
@@ -353,30 +359,6 @@ def _schema_hash_v1(type_name: str) -> bytes:
     return hashlib.sha256(_SCHEMA_HASH_DOMAIN_V1 + type_name.encode("utf-8")).digest()[:16]
 
 
-_CRC64_POLYNOMIAL_V1: Final = 0xC96C_5795_D787_0F42
-_CRC64_MASK_V1: Final = 0xFFFF_FFFF_FFFF_FFFF
-
-
-def _crc64_table_v1() -> tuple[int, ...]:
-    table = []
-    for index in range(256):
-        value = index
-        for _ in range(8):
-            value = value >> 1 if value & 1 == 0 else (value >> 1) ^ _CRC64_POLYNOMIAL_V1
-        table.append(value)
-    return tuple(table)
-
-
-_CRC64_TABLE_V1: Final = _crc64_table_v1()
-
-
-def _crc64_ecma_v1(payload: bytes) -> int:
-    value = _CRC64_MASK_V1
-    for byte in payload:
-        value = _CRC64_TABLE_V1[(value ^ byte) & 0xFF] ^ (value >> 8)
-    return (value ^ _CRC64_MASK_V1) & _CRC64_MASK_V1
-
-
 def _encode_frame_v1(payload: bytes, schema_name: str, padding: int) -> bytes:
     header = b"".join(
         (
@@ -460,6 +442,18 @@ def _decode_digest_wrapper_v1(payload: bytes, context: str, *, allow_zero: bool)
     return digest
 
 
+def _decode_goldilocks_digest384_v1(payload: bytes, context: str, *, allow_zero: bool) -> bytes:
+    """Require six raw canonical little-endian Goldilocks limbs without a wrapper."""
+
+    if len(payload) != 48 or any(
+        lane >= 0xFFFF_FFFF_0000_0001 for lane in struct.unpack("<6Q", payload)
+    ):
+        raise PrivacyExact12FixtureErrorV1(f"{context} is not a canonical six-lane Goldilocks digest")
+    if not allow_zero and not any(payload):
+        raise PrivacyExact12FixtureErrorV1(f"{context} must be non-zero")
+    return payload
+
+
 def _validate_public_balance_scope_v1(payload: bytes, context: str) -> None:
     """Require the sole canonical Norito shape of a usable balance scope."""
 
@@ -489,6 +483,13 @@ def _decode_statement_context_v1(
         f"{context}.variant",
         PRIVACY_EXACT12_MAX_STATEMENT_BYTES_V1,
     )
+    if expected_tag == 0:
+        _decode_goldilocks_digest384_v1(
+            statement_fields[1], f"{context}.identity_commitment", allow_zero=False
+        )
+        _decode_goldilocks_digest384_v1(
+            statement_fields[10], f"{context}.replay_nullifier", allow_zero=normalized
+        )
     scope_index = _PUBLIC_BALANCE_SCOPE_STATEMENT_FIELD_V1.get(expected_tag)
     if scope_index is not None:
         _validate_public_balance_scope_v1(
@@ -581,23 +582,27 @@ def _validate_envelope_payload_v1(
     expected_statement_archive: bytes | None,
     context: str,
 ) -> tuple[tuple[bytes, ...], tuple[bytes, ...], tuple[bytes, ...]]:
-    fields = _decode_fields_v1(payload, 11, context, PRIVACY_EXACT12_MAX_ENVELOPE_BYTES_V1)
-    if len(fields[0]) != 4 or struct.unpack("<I", fields[0])[0] != expected_tag:
+    fields = _decode_fields_v1(payload, 13, context, PRIVACY_EXACT12_MAX_ENVELOPE_BYTES_V1)
+    if fields[0] != _PROOF_WIRE_MAGIC_V1:
+        raise PrivacyExact12FixtureErrorV1(f"{context} has an invalid final V1 wire marker")
+    if fields[1] != _CATALOG_COMMITMENT_V1:
+        raise PrivacyExact12FixtureErrorV1(f"{context} has a substituted Exact12 catalog commitment")
+    if len(fields[2]) != 4 or struct.unpack("<I", fields[2])[0] != expected_tag:
         raise PrivacyExact12FixtureErrorV1(f"{context} carries a substituted protocol")
     expected_engine = _PROOF_SYSTEM_AND_ENGINE_TAGS_V1[expected_tag]
-    for index, label in ((1, "proof-system"), (2, "engine")):
+    for index, label in ((3, "proof-system"), (4, "engine")):
         if len(fields[index]) != 4 or struct.unpack("<I", fields[index])[0] != expected_engine:
             raise PrivacyExact12FixtureErrorV1(
                 f"{context} carries the wrong {label} tag for its protocol"
             )
     statement_fields, statement_context = _decode_statement_context_v1(
-        fields[9],
+        fields[11],
         expected_tag,
         row_intent_digest,
         normalized=normalized,
         context=f"{context}.statement",
     )
-    for envelope_index, statement_index in zip(range(3, 8), range(3, 8), strict=True):
+    for envelope_index, statement_index in zip(range(5, 10), range(3, 8), strict=True):
         _decode_digest_wrapper_v1(
             fields[envelope_index],
             f"{context}.binding_digest[{envelope_index}]",
@@ -608,7 +613,7 @@ def _validate_envelope_payload_v1(
                 f"{context} governed digest does not match its statement context"
             )
     statement_digest = _decode_digest_wrapper_v1(
-        fields[8], f"{context}.statement_digest", allow_zero=normalized
+        fields[10], f"{context}.statement_digest", allow_zero=normalized
     )
     if normalized:
         if any(statement_digest):
@@ -627,7 +632,7 @@ def _validate_envelope_payload_v1(
             raise PrivacyExact12FixtureErrorV1(
                 f"{context} statement digest does not match statement_norito"
             )
-    if expected_statement_payload is not None and fields[9] != expected_statement_payload:
+    if expected_statement_payload is not None and fields[11] != expected_statement_payload:
         raise PrivacyExact12FixtureErrorV1(
             f"{context} does not contain the byte-complete statement payload"
         )
@@ -646,7 +651,7 @@ def _validate_envelope_payload_v1(
         if zk_ams_action_tag not in (0, 1) or not zk_ams_action:
             raise PrivacyExact12FixtureErrorV1(f"{context} carries an unsupported ZK-AMS action")
     _decode_proof_bytes_v1(
-        fields[10],
+        fields[12],
         expected_tag,
         normalized=normalized,
         expected_zk_ams_action_tag=zk_ams_action_tag,
@@ -777,7 +782,7 @@ def _decode_transaction_payload_v1(
     tuple[bytes, ...],
 ]:
     fields = _decode_fields_v1(
-        payload, 9, context, PRIVACY_EXACT12_MAX_UNSIGNED_TRANSACTION_BYTES_V1
+        payload, 10, context, PRIVACY_EXACT12_MAX_UNSIGNED_TRANSACTION_BYTES_V1
     )
     envelope_fields, statement_fields, statement_context = _decode_single_submit_instruction_v1(
         fields[3],
@@ -801,7 +806,9 @@ def _decode_transaction_payload_v1(
         raise PrivacyExact12FixtureErrorV1(f"{context} must use the fixture TTL")
     if _decode_option_v1(fields[5], 4, f"{context}.nonce") != row_index + 1:
         raise PrivacyExact12FixtureErrorV1(f"{context} carries a substituted nonce")
-    if fields[8] != b"\x00":
+    if fields[7] != struct.pack("<I", 0):
+        raise PrivacyExact12FixtureErrorV1(f"{context} must use ordinary transaction admission")
+    if fields[9] != b"\x00":
         raise PrivacyExact12FixtureErrorV1(f"{context} must not carry attachments")
     return fields, envelope_fields, statement_fields, statement_context
 
@@ -948,12 +955,15 @@ def _validate_row_bindings_v1(row: PrivacyExact12TypedFixtureRowV1, row_index: i
             continue
         derived_index = _PROJECTION_DERIVED_STATEMENT_FIELD_V1.get(row_index)
         if index == derived_index:
-            final_digest = _decode_digest_wrapper_v1(
+            decode_digest = (
+                _decode_goldilocks_digest384_v1 if row_index == 0 else _decode_digest_wrapper_v1
+            )
+            final_digest = decode_digest(
                 final_field,
                 f"{context}.statement_norito.derived_field[{index}]",
                 allow_zero=False,
             )
-            projected_digest = _decode_digest_wrapper_v1(
+            projected_digest = decode_digest(
                 projected_field,
                 f"{context}.transaction_intent_projection_norito.derived_field[{index}]",
                 allow_zero=True,
@@ -966,7 +976,7 @@ def _validate_row_bindings_v1(row: PrivacyExact12TypedFixtureRowV1, row_index: i
             raise PrivacyExact12FixtureErrorV1(
                 f"{context} transaction-intent projection changed independent statement field {index}"
             )
-    for index in range(8):
+    for index in range(10):
         if projection_envelope_fields[index] != envelope_fields[index]:
             raise PrivacyExact12FixtureErrorV1(
                 f"{context} transaction-intent projection changed envelope field {index}"

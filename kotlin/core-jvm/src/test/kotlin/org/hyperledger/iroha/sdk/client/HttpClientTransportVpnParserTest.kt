@@ -56,7 +56,7 @@ class HttpClientTransportVpnParserTest {
             statusCode = 200,
             body = responseJson.toByteArray(StandardCharsets.UTF_8),
         )
-        val transport = HttpClientTransport.withExecutor(
+        val transport = HttpClientTransport(
             executor = executor,
             config = ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build(),
         )
@@ -353,7 +353,7 @@ class HttpClientTransportVpnParserTest {
         val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
         val auth = ToriiCanonicalRequestAuth(
             "alice@universal",
-            keyPair.private,
+            RequestSigner.ed25519(keyPair.private),
             1_700_000_000_050L,
             "vpn-status-nonce",
         )
@@ -363,7 +363,7 @@ class HttpClientTransportVpnParserTest {
             .build()
 
         fun assertRejected(status: Int, body: String, call: (HttpClientTransport) -> Unit) {
-            val transport = HttpClientTransport.withExecutor(
+            val transport = HttpClientTransport(
                 executor = StubResponseExecutor(status, body.toByteArray(StandardCharsets.UTF_8)),
                 config = config,
             )

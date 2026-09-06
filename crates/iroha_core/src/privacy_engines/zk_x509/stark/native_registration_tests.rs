@@ -11,6 +11,7 @@ fn der_reduced_retained_commitment_openings_and_deep_are_byte_exact() {
     let initial_indices = [1, 9, 31];
     let mut replayable_rng = StdRng::from_seed([0xE1; 32]);
     let (replayable_commitment, masks) = aggregate::commit_masked_trace_columns_v1(
+        ZK_X509_DIGEST_CONTEXT_V1,
         b"zk-x509-der-reduced-retained-leaf",
         b"zk-x509-der-reduced-retained-node",
         0,
@@ -25,6 +26,7 @@ fn der_reduced_retained_commitment_openings_and_deep_are_byte_exact() {
     .expect("replayable reduced commitment");
     let mut retained_rng = StdRng::from_seed([0xE1; 32]);
     let (retained_commitment, polynomials) = aggregate::commit_masked_trace_polynomial_columns_v1(
+        ZK_X509_DIGEST_CONTEXT_V1,
         b"zk-x509-der-reduced-retained-leaf",
         b"zk-x509-der-reduced-retained-node",
         0,
@@ -40,6 +42,7 @@ fn der_reduced_retained_commitment_openings_and_deep_are_byte_exact() {
     assert_eq!(retained_commitment, replayable_commitment);
     let replay_indices = [0, 7, 17, 63];
     let replayable_openings = aggregate::replay_masked_trace_columns_v1(
+        ZK_X509_DIGEST_CONTEXT_V1,
         b"zk-x509-der-reduced-retained-leaf",
         b"zk-x509-der-reduced-retained-node",
         0,
@@ -49,6 +52,7 @@ fn der_reduced_retained_commitment_openings_and_deep_are_byte_exact() {
     )
     .expect("replayable reduced openings");
     let retained_openings = aggregate::replay_masked_trace_polynomial_columns_v1(
+        ZK_X509_DIGEST_CONTEXT_V1,
         b"zk-x509-der-reduced-retained-leaf",
         b"zk-x509-der-reduced-retained-node",
         0,
@@ -71,6 +75,7 @@ fn der_reduced_retained_commitment_openings_and_deep_are_byte_exact() {
     mutated_columns[0][0] = mutated_columns[0][0].add(F::ONE);
     let mut mutation_rng = StdRng::from_seed([0xE1; 32]);
     let (mutated_commitment, _) = aggregate::commit_masked_trace_polynomial_columns_v1(
+        ZK_X509_DIGEST_CONTEXT_V1,
         b"zk-x509-der-reduced-retained-leaf",
         b"zk-x509-der-reduced-retained-node",
         0,

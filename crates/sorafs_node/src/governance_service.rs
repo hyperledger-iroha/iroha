@@ -216,7 +216,7 @@ pub enum GovernanceDagServiceError {
 ///
 /// An empty container is intentionally constructible for assembly and negative tests, but startup
 /// rejects it before service state is opened. Production registries attach opaque
-/// HSM/credential/checkpoint implementations through the builder methods below.
+/// credential, authentication, and checkpoint implementations through the builder methods below.
 pub struct GovernanceDagServiceRuntimeProviders {
     ipfs_authenticator: Option<Arc<dyn GovernanceDagRequestAuthenticator>>,
     head_authenticator: Option<Arc<dyn GovernanceDagRequestAuthenticator>>,
@@ -265,7 +265,7 @@ impl GovernanceDagServiceRuntimeProviders {
 ///
 /// This value contains no credentials, private keys, provider diagnostics, or
 /// endpoint secrets. A deployment registry uses it only to select already
-/// provisioned HSM/authentication/sealed-CAS adapters.
+/// provisioned signing/authentication/sealed-CAS adapters.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GovernanceDagServiceRuntimeProviderBindingsV1 {
     ipfs_authenticator_handle: String,
@@ -329,7 +329,7 @@ impl GovernanceDagServiceRuntimeProviderBindingsV1 {
 }
 /// Redacted deployment-registry resolution failure.
 ///
-/// Variants deliberately carry no provider diagnostics because HSM, KMS, and
+/// Variants deliberately carry no provider diagnostics because signing, key-management, and
 /// credential-control-plane errors can contain secrets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum GovernanceDagServiceRuntimeProviderRegistryErrorV1 {

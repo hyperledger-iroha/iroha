@@ -7,11 +7,12 @@ import argparse
 import ctypes
 import errno
 import hashlib
+import importlib.util
 import json
 import os
 import platform
-import resource
 import secrets
+import shlex
 import shutil
 import stat
 import subprocess
@@ -20,10 +21,25 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Sequence
+from urllib.parse import unquote, urlsplit
 
 
-SCHEMA_VERSION = 3
+_HELPER_PATH = Path(__file__).with_name("profile_rustc.py")
+_HELPER_SPEC = importlib.util.spec_from_file_location("iroha_profile_rustc", _HELPER_PATH)
+if _HELPER_SPEC is None or _HELPER_SPEC.loader is None:
+    raise RuntimeError("compiler profiling helper is unavailable")
+RUSTC_PROFILE = importlib.util.module_from_spec(_HELPER_SPEC)
+_previous_bytecode = sys.dont_write_bytecode
+try:
+    sys.dont_write_bytecode = True
+    _HELPER_SPEC.loader.exec_module(RUSTC_PROFILE)
+finally:
+    sys.dont_write_bytecode = _previous_bytecode
+
+
+SCHEMA_VERSION = 4
 INPUT_DRIFT_EXIT_CODE = 3
+MEASUREMENT_EXIT_CODE = 4
 PROFILE_ENV_KEYS = (
     "CARGO_INCREMENTAL",
     "CARGO_PROFILE_DEV_CODEGEN_UNITS",
@@ -442,17 +458,41 @@ def _verify_symlink_target_fd(
     relative: str,
     target: str,
     display: Path | str,
+    *,
+    allow_missing: bool = False,
 ) -> None:
-    """Resolve a symlink below a held root without following pathname ancestors."""
+    """Resolve each link before ``..``; source links may name absent artifacts."""
 
-    pending = list(_relative_target_components(relative, target, display))
-    descriptor = os.dup(root_fd)
+    _internal_symlink_target(relative, target, display)
+    pending = list(Path(relative).parent.parts) + list(Path(target).parts)
+    descriptors = [os.dup(root_fd)]
     resolved: list[str] = []
     symlinks = 0
     try:
         while pending:
             component = pending.pop(0)
-            metadata = _lstat_at(descriptor, component)
+            if component in ("", "."):
+                continue
+            if component == "..":
+                if not resolved:
+                    raise ValueError(f"snapshot symlink escapes its input root: {display}")
+                resolved.pop()
+                os.close(descriptors.pop())
+                continue
+            descriptor = descriptors[-1]
+            try:
+                metadata = _lstat_at(descriptor, component)
+            except FileNotFoundError:
+                if not allow_missing:
+                    raise
+                # The private source stays read-only. Preserve the missing input,
+                # but reject any remaining traversal that would escape its root.
+                _relative_target_components(
+                    "/".join((*resolved, component)),
+                    "/".join((component, *pending)),
+                    display,
+                )
+                return
             if stat.S_ISLNK(metadata.st_mode):
                 symlinks += 1
                 if symlinks > 40:
@@ -463,14 +503,8 @@ def _verify_symlink_target_fd(
                     descriptor, component, metadata, display
                 )
                 nested_relative = "/".join((*resolved, component))
-                pending = list(
-                    _relative_target_components(
-                        nested_relative, nested_target, display
-                    )
-                ) + pending
-                os.close(descriptor)
-                descriptor = os.dup(root_fd)
-                resolved.clear()
+                _internal_symlink_target(nested_relative, nested_target, display)
+                pending = list(Path(nested_target).parts) + pending
                 continue
             if pending:
                 if not stat.S_ISDIR(metadata.st_mode):
@@ -480,8 +514,7 @@ def _verify_symlink_target_fd(
                 child = _open_child_directory_at(
                     descriptor, component, metadata, display=display
                 )
-                os.close(descriptor)
-                descriptor = child
+                descriptors.append(child)
                 resolved.append(component)
             elif not (
                 stat.S_ISDIR(metadata.st_mode) or stat.S_ISREG(metadata.st_mode)
@@ -494,7 +527,8 @@ def _verify_symlink_target_fd(
             f"snapshot symlink target is unavailable: {display}"
         ) from error
     finally:
-        os.close(descriptor)
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)
 
 
 def _safe_symlink_target_at(
@@ -504,10 +538,14 @@ def _safe_symlink_target_at(
     before: os.stat_result,
     relative: str,
     display: Path | str,
+    *,
+    allow_missing: bool = False,
 ) -> str:
     target = _read_symlink_stable_at(parent_fd, name, before, display)
     _internal_symlink_target(relative, target, display)
-    _verify_symlink_target_fd(root_fd, relative, target, display)
+    _verify_symlink_target_fd(
+        root_fd, relative, target, display, allow_missing=allow_missing
+    )
     return target
 
 
@@ -803,6 +841,7 @@ def _bounded_tree_fingerprint_fd(
     roots: Sequence[str] | None = None,
     *,
     reject_hardlinks: bool = False,
+    allow_missing_symlink_targets: bool = False,
 ) -> TreeFingerprint:
     digest = hashlib.sha256()
     budget = {"records": 0, "files": 0, "bytes": 0}
@@ -863,7 +902,8 @@ def _bounded_tree_fingerprint_fd(
                     "kind": "symlink",
                     "path": relative,
                     "target": _safe_symlink_target_at(
-                        root_fd, parent_fd, name, before, relative, display
+                        root_fd, parent_fd, name, before, relative, display,
+                        allow_missing=allow_missing_symlink_targets,
                     ),
                 }
             )
@@ -897,6 +937,7 @@ def bounded_tree_fingerprint(
     *,
     expected_identity: tuple[int, int] | None = None,
     reject_hardlinks: bool = False,
+    allow_missing_symlink_targets: bool = False,
 ) -> TreeFingerprint:
     """Hash a bounded tree without following symlinks or accepting special files."""
 
@@ -911,6 +952,7 @@ def bounded_tree_fingerprint(
             root,
             roots,
             reject_hardlinks=reject_hardlinks,
+            allow_missing_symlink_targets=allow_missing_symlink_targets,
         )
         if not _path_still_names(root, identity):
             raise ValueError(f"snapshot input root was replaced: {root}")
@@ -2065,6 +2107,7 @@ def capture_source_snapshot(
                             metadata,
                             relative,
                             root / relative,
+                            allow_missing=True,
                         ),
                         target_name,
                         dir_fd=target_parent,
@@ -2337,38 +2380,55 @@ def cargo_execution_args(
 
 
 def normalized_package_id(package_id: str) -> str:
-    """Remove checkout-specific prefixes from path package identifiers."""
+    """Remove checkout roots while retaining Cargo's full package identity."""
     if package_id.startswith("path+file://"):
-        _, separator, fragment = package_id.rpartition("#")
-        return f"workspace#{fragment}" if separator else "workspace"
+        parsed = urlsplit(package_id[len("path+"):])
+        fragment = unquote(parsed.fragment)
+        if not fragment:
+            raise ValueError("Cargo path package identifier lacks a version")
+        if "@" not in fragment:
+            # Cargo omits the package name when it equals the final directory
+            # component. Dropping that component merges unrelated packages
+            # which share a version (in particular their build-script targets).
+            name = Path(unquote(parsed.path)).name
+            if not name:
+                raise ValueError("Cargo path package identifier lacks a name")
+            fragment = f"{name}@{fragment}"
+        return f"workspace#{fragment}"
     return package_id
 
 
 def artifact_unit(message: dict[str, Any]) -> dict[str, Any] | None:
-    """Project one Cargo compiler-artifact message into a stable unit identity."""
+    """Project Cargo's complete package/target/source/features/profile identity."""
     if message.get("reason") != "compiler-artifact":
         return None
     target = message.get("target")
     profile = message.get("profile")
     package_id = message.get("package_id")
-    if (
-        not isinstance(target, dict)
-        or not isinstance(profile, dict)
-        or not isinstance(package_id, str)
-    ):
+    manifest = message.get("manifest_path")
+    if (not isinstance(target, dict) or not isinstance(profile, dict)
+            or not isinstance(package_id, str) or not package_id
+            or not isinstance(manifest, str) or not Path(manifest).is_absolute()
+            or not isinstance(target.get("src_path"), str)
+            or not Path(target["src_path"]).is_absolute()
+            or not isinstance(target.get("name"), str) or not target["name"]):
+        return None
+    for values in (target.get("crate_types"), target.get("kind"), message.get("features")):
+        if not isinstance(values, list) or not all(isinstance(value, str) for value in values):
+            return None
+    if (not target["crate_types"] or not target["kind"]
+            or not {"opt_level", "debuginfo", "debug_assertions", "overflow_checks", "test"} <= set(profile)
+            or not isinstance(profile["opt_level"], str)
+            or any(type(profile[key]) is not bool for key in ("test", "debug_assertions", "overflow_checks"))):
         return None
     return {
-        "crate_types": sorted(str(item) for item in target.get("crate_types", [])),
-        "features": sorted(str(item) for item in message.get("features", [])),
-        "kind": sorted(str(item) for item in target.get("kind", [])),
-        "name": str(target.get("name", "")),
+        "crate_types": sorted(target["crate_types"]),
+        "features": sorted(message["features"]),
+        "kind": sorted(target["kind"]),
+        "name": target["name"],
         "package_id": normalized_package_id(package_id),
-        "profile": {
-            "debug_assertions": bool(profile.get("debug_assertions", False)),
-            "debuginfo": profile.get("debuginfo"),
-            "opt_level": str(profile.get("opt_level", "")),
-            "test": bool(profile.get("test", False)),
-        },
+        "source_path": Path(os.path.relpath(target["src_path"], Path(manifest).parent)).as_posix(),
+        "profile": dict(profile),
     }
 
 
@@ -2619,6 +2679,79 @@ def changed_input_fields(
     )
 
 
+def prepare_compiler_measurement(
+    state: PrivateState, compiler: str, environment: dict[str, str],
+    forbidden_roots: Sequence[Path] = (),
+) -> dict[str, Any]:
+    """Install a pinned RUSTC/PATH entry point covering direct build-script probes."""
+    if not hasattr(os, "wait4") or sys.platform not in ("darwin", "linux"):
+        raise ValueError("compiler RSS profiling requires Darwin or Linux wait4")
+    python = Path(sys.executable).resolve(strict=True)
+    shell = Path("/bin/sh").resolve(strict=True)
+    for executable in (python, shell):
+        if any(resolve_inside(executable, root) for root in (state.source, *forbidden_roots)):
+            raise ValueError("measurement interpreter must be outside the source snapshot")
+    helper_payload = _read_regular_stable(_HELPER_PATH, _HELPER_PATH.lstat())
+    record_dir = state.root / "compiler-records"
+    os.mkdir("compiler-records", 0o700, dir_fd=state.root_fd)
+    helper = state.tools / "profile_rustc.py"
+    wrapper = state.tools / "rustc"
+    command = [str(python), "-I", "-S", str(helper), "--record-dir", str(record_dir),
+               "--expected-compiler", compiler, compiler]
+    launcher = ("#!/bin/sh\nexec " + shlex.join(command) + ' "$@"\n').encode()
+    tools_fd = _open_child_directory_at(state.root_fd, "tools", display=state.tools)
+    try:
+        for path, payload, mode in ((helper, helper_payload, 0o400), (wrapper, launcher, 0o500)):
+            descriptor = os.open(
+                path.name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                mode, dir_fd=tools_fd,
+            )
+            with os.fdopen(descriptor, "wb") as output:
+                output.write(payload)
+                output.flush()
+                os.fsync(output.fileno())
+    finally:
+        os.close(tools_fd)
+    environment["RUSTC"] = str(wrapper)
+    environment.pop("RUSTC_WRAPPER", None)
+    return {
+        "helper_sha256": sha256_bytes(helper_payload),
+        "profiler": RUSTC_PROFILE.stable_file_identity(Path(__file__).resolve()),
+        "python": {"path": str(python), **RUSTC_PROFILE.stable_file_identity(python)},
+        "shell": {"path": str(shell), **RUSTC_PROFILE.stable_file_identity(shell)},
+        "method": "wait4-per-compiler",
+        "compiler_entrypoint": "RUSTC-and-PATH",
+        "rss_unit": "bytes",
+        "record_schema": RUSTC_PROFILE.RECORD_SCHEMA,
+    }
+
+
+def verify_compiler_measurement(
+    state: PrivateState, expected: dict[str, Any], compiler: str,
+) -> dict[str, Any]:
+    """Recheck helper and runtime bytes before accepting any measurements."""
+    if RUSTC_PROFILE.stable_file_identity(Path(__file__).resolve()) != expected["profiler"]:
+        raise ValueError("build profiler entry point changed")
+    helper = state.tools / "profile_rustc.py"
+    helper_bytes = _read_regular_stable(helper, helper.lstat())
+    if (sha256_bytes(helper_bytes) != expected["helper_sha256"]
+            or sha256_bytes(_read_regular_stable(_HELPER_PATH, _HELPER_PATH.lstat())) != expected["helper_sha256"]):
+        raise ValueError("compiler measurement helper changed")
+    for tool in ("python", "shell"):
+        identity = expected[tool]
+        if RUSTC_PROFILE.stable_file_identity(Path(identity["path"])) != {
+                "bytes": identity["bytes"], "sha256": identity["sha256"]}:
+            raise ValueError(f"compiler measurement {tool} changed")
+    command = [expected["python"]["path"], "-I", "-S", str(helper),
+               "--record-dir", str(state.root / "compiler-records"),
+               "--expected-compiler", compiler, compiler]
+    launcher = ("#!/bin/sh\nexec " + shlex.join(command) + ' "$@"\n').encode()
+    wrapper = state.tools / "rustc"
+    if _read_regular_stable(wrapper, wrapper.lstat()) != launcher:
+        raise ValueError("compiler measurement launcher changed")
+    return expected
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the requested Cargo profile and write its report."""
     args = parse_args(argv)
@@ -2757,8 +2890,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         environment["VERGEN_GIT_SHA"] = git_revision
         expose_private_tools(
             state,
-            {"cargo": cargo_tool, "git": git_tool, "rustc": rustc_tool},
+            {"cargo": cargo_tool, "git": git_tool},
             environment,
+        )
+        measurement_identity = prepare_compiler_measurement(
+            state, tool_invocation_path(rustc_tool), environment, (root, cargo_home, rustup_home)
         )
         target_initial = validate_writable_tree(
             target_dir, label="--target-dir"
@@ -2770,7 +2906,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             state.rustup_home, label="private Rustup tree"
         )
         source_execution_input = bounded_tree_fingerprint(
-            state.source, reject_hardlinks=True
+            state.source, reject_hardlinks=True, allow_missing_symlink_targets=True
         )
         snapshot_lock = state.source / "Cargo.lock"
         snapshot_lock_sha256 = sha256_bytes(
@@ -2808,6 +2944,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         input_manifest["private_rustup_input"] = tree_fingerprint_json(
             private_rustup_input
         )
+        input_manifest["compiler_measurement"] = measurement_identity
         reserved_descriptors = reserve_report_paths(out)
         reserved_identities = reserved_report_identities(reserved_descriptors)
         execution_args = cargo_execution_args(cargo_args, root, state.source)
@@ -2861,9 +2998,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         file=sys.stderr,
     )
 
-    usage_before = resource.getrusage(resource.RUSAGE_CHILDREN)
     started_ns = time.monotonic_ns()
     units: list[dict[str, Any]] = []
+    artifact_messages: list[dict[str, Any]] = []
+    build_script_messages: list[dict[str, Any]] = []
+    build_finished: list[dict[str, Any]] = []
     fresh_units = 0
     compiled_units = 0
     messages = None
@@ -2921,6 +3060,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                     continue
                 if not isinstance(message, dict):
                     continue
+                if message.get("reason") == "build-finished":
+                    build_finished.append(message)
+                if message.get("reason") == "compiler-artifact":
+                    artifact_messages.append(message)
+                if message.get("reason") == "build-script-executed":
+                    build_script_messages.append(message)
                 unit = artifact_unit(message)
                 if unit is None:
                     continue
@@ -2929,7 +3074,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                     fresh_units += 1
                 else:
                     compiled_units += 1
-            returncode = process.wait()
+            waited_pid, wait_status, cargo_usage = os.wait4(process.pid, 0)
+            process.returncode = os.waitstatus_to_exitcode(wait_status)
+            if waited_pid != process.pid:
+                raise ValueError("wait4 returned a different Cargo process")
+            returncode = process.returncode
     except (OSError, ValueError, subprocess.SubprocessError) as error:
         os.close(report_descriptor)
         try:
@@ -2949,7 +3098,25 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"profile_cargo_build: {error}", file=sys.stderr)
         return 2
     elapsed_ns = time.monotonic_ns() - started_ns
-    usage_after = resource.getrusage(resource.RUSAGE_CHILDREN)
+    measurement_error: str | None = None
+    compiler_measurements: dict[str, Any] | None = None
+    compiler_records: list[dict[str, Any]] | None = None
+    try:
+        if (len(build_finished) != 1 or type(build_finished[0].get("success")) is not bool
+                or build_finished[0]["success"] != (returncode == 0)):
+            raise ValueError("Cargo completion evidence is missing or mismatched")
+        verify_compiler_measurement(state, measurement_identity, tool_invocation_path(rustc_tool))
+        compiler_records = RUSTC_PROFILE.read_records(state.root / "compiler-records")
+        compiler_measurements = RUSTC_PROFILE.reconcile_measurements(
+            artifact_messages, compiler_records,
+            {"source": state.source, "target": target_dir, "cargo-home": state.cargo_home,
+             "rustup-home": state.rustup_home}, artifact_unit,
+            build_script_messages=build_script_messages,
+        )
+        if returncode == 0 and compiler_measurements["failed"]:
+            raise ValueError("successful Cargo build contains failed compiler measurements")
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        measurement_error = f"{type(error).__name__}: {error}"
 
     post_input_manifest: dict[str, Any] | None = None
     input_capture_error: str | None = None
@@ -3020,8 +3187,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             cargo_version=post_cargo_version,
             rustc_version=post_rustc_version,
         )
+        post_input_manifest["compiler_measurement"] = verify_compiler_measurement(
+            state, measurement_identity, tool_invocation_path(rustc_tool)
+        )
         post_input_manifest["execution_source"] = tree_fingerprint_json(
-            bounded_tree_fingerprint(state.source, reject_hardlinks=True)
+            bounded_tree_fingerprint(
+                state.source, reject_hardlinks=True, allow_missing_symlink_targets=True
+            )
         )
         post_input_manifest["private_cargo_input"] = tree_fingerprint_json(
             private_cargo_input
@@ -3058,7 +3230,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         validate_reserved_report_paths(out, reserved_identities)
         report = {
             "schema_version": SCHEMA_VERSION,
-            "valid": returncode == 0 and input_stable,
+            "valid": returncode == 0 and input_stable and measurement_error is None,
             "input": input_manifest,
             "input_sha256": input_sha256,
             "input_validation": {
@@ -3073,17 +3245,29 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "compiled_units": compiled_units,
                 "elapsed_ns": elapsed_ns,
                 "fresh_units": fresh_units,
-                "max_rss_raw": usage_after.ru_maxrss,
-                "max_rss_unit": "bytes" if sys.platform == "darwin" else "KiB",
+                "cargo_process_peak_rss_bytes": RUSTC_PROFILE.peak_rss_bytes(cargo_usage.ru_maxrss, sys.platform),
+                "compiler_measurements": compiler_measurements,
+                "compiler_measurement_error": measurement_error,
+                # Retain raw invocation evidence even when reconciliation fails.
+                # Only compiler_measurements contains qualified per-unit results.
+                "compiler_records": compiler_records,
+                "compiler_records_sha256": (
+                    sha256_bytes(canonical_json_bytes(compiler_records))
+                    if compiler_records is not None else None
+                ),
+                "compiler_measurements_sha256": (
+                    sha256_bytes(canonical_json_bytes(compiler_measurements))
+                    if compiler_measurements is not None else None
+                ),
                 "message_log": message_log.name,
                 "platform": platform.platform(),
                 "returncode": returncode,
                 "stderr_log": stderr_log.name,
-                "system_cpu_seconds": usage_after.ru_stime - usage_before.ru_stime,
+                "system_cpu_seconds": cargo_usage.ru_stime,
                 "timings_html": timing_html(target_dir),
                 "unit_inventory": units,
                 "unit_inventory_sha256": unit_inventory_sha256,
-                "user_cpu_seconds": usage_after.ru_utime - usage_before.ru_utime,
+                "user_cpu_seconds": cargo_usage.ru_utime,
             },
         }
         with os.fdopen(report_descriptor, "w", encoding="utf-8") as report_output:
@@ -3104,6 +3288,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
     if cleanup_error is not None:
         profiler_returncode = 2
+    elif measurement_error is not None:
+        profiler_returncode = MEASUREMENT_EXIT_CODE
     else:
         profiler_returncode = (
             INPUT_DRIFT_EXIT_CODE
@@ -3117,6 +3303,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         f"units={unit_inventory_sha256} input_stable={input_stable} report={out}",
         file=sys.stderr,
     )
+    if measurement_error is not None:
+        print(f"profile_cargo_build: invalid compiler measurements: {measurement_error}", file=sys.stderr)
     if not input_stable:
         print(
             "profile_cargo_build: report invalidated by input drift: "

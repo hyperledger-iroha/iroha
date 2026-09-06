@@ -3815,7 +3815,7 @@ mod tests {
         let sample = |root: GoldilocksDigest384V1| {
             let root = root.to_le_bytes();
             let mut transcript = TransparentTranscriptV1::new(
-                super::stark::ZK_X509_DIGEST_CONTEXT_V1,
+                super::super::stark::ZK_X509_DIGEST_CONTEXT_V1,
                 b"zk-x509-sha-word-test",
                 &profile,
                 &public,

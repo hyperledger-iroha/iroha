@@ -33,10 +33,11 @@ public enum AtomicPrivateSettlementOperationV1: String, Sendable, CaseIterable {
     case commitVote = "COMMIT_VOTE"
     case phaseCertificate = "PHASE_CERTIFICATE"
     case legUpload = "LEG_UPLOAD"
+    case auditorCapsule = "AUDITOR_CAPSULE"
     case auditApproval = "AUDIT_APPROVAL"
     case bundleSubmit = "BUNDLE_SUBMIT"
 
-    /// Exact Torii path, with a payload placeholder only for auditor approval.
+    /// Exact Torii path, with a payload placeholder for governed-auditor operations.
     public var path: String {
         switch self {
         case .availabilityShare:
@@ -49,6 +50,8 @@ public enum AtomicPrivateSettlementOperationV1: String, Sendable, CaseIterable {
             return "/v1/nexus/private-settlements/phases/certificates"
         case .legUpload:
             return "/v1/nexus/private-settlements/legs"
+        case .auditorCapsule:
+            return "/v1/nexus/private-settlements/legs/{payload_digest}/audit-capsule"
         case .auditApproval:
             return "/v1/nexus/private-settlements/legs/{payload_digest}/audit-approvals"
         case .bundleSubmit:
@@ -58,7 +61,10 @@ public enum AtomicPrivateSettlementOperationV1: String, Sendable, CaseIterable {
 
     /// Exact identity class required by this operation.
     public var auth: AtomicPrivateSettlementAuthV1 {
-        self == .auditApproval ? .roleIdentity : .sponsor
+        switch self {
+        case .auditorCapsule, .auditApproval: return .roleIdentity
+        default: return .sponsor
+        }
     }
 
     fileprivate var topLevelFields: Set<String> {
@@ -69,7 +75,8 @@ public enum AtomicPrivateSettlementOperationV1: String, Sendable, CaseIterable {
         case .phaseCertificate: return ["manifest", "payload_digest", "certificate"]
         case .legUpload:
             return ["manifest", "audit_policy", "committee_authority", "payload"]
-        case .auditApproval: return ["approval"]
+        case .auditorCapsule: return ["audit_policy"]
+        case .auditApproval: return ["audit_policy", "approval"]
         case .bundleSubmit: return ["transaction"]
         }
     }
@@ -79,6 +86,7 @@ public enum AtomicPrivateSettlementOperationV1: String, Sendable, CaseIterable {
         case .availabilityShare, .legUpload: return 32 * 1024 * 1024
         case .prepareVote, .commitVote, .phaseCertificate, .bundleSubmit:
             return 8 * 1024 * 1024
+        case .auditorCapsule: return 1024 * 1024
         case .auditApproval: return 2 * 1024 * 1024
         }
     }
@@ -215,7 +223,10 @@ public final class AtomicPrivateSettlementPreparedRequestV1: @unchecked Sendable
             throw AtomicPrivateSettlementClientErrorV1.invalidPreparedRequest
         }
         do {
-            try StrictJSONDuplicateKeyRejector.rejectDuplicateObjectKeys(in: nativePreparedJSON)
+            try StrictJSONDuplicateKeyRejector.rejectDuplicateObjectKeys(
+                in: nativePreparedJSON,
+                requireAllNumbersInteger: true
+            )
         } catch {
             throw AtomicPrivateSettlementClientErrorV1.invalidPreparedRequest
         }
@@ -250,7 +261,8 @@ public final class AtomicPrivateSettlementPreparedRequestV1: @unchecked Sendable
     public func close() {
         lock.lock()
         defer { lock.unlock() }
-        storage?.resetBytes(in: 0..<(storage?.count ?? 0))
+        let byteCount = storage?.count ?? 0
+        storage?.resetBytes(in: 0..<byteCount)
         storage = nil
     }
 
@@ -288,7 +300,8 @@ public final class AtomicPrivateSettlementJSONResponseV1: @unchecked Sendable,
     public func close() {
         lock.lock()
         defer { lock.unlock() }
-        storage?.resetBytes(in: 0..<(storage?.count ?? 0))
+        let byteCount = storage?.count ?? 0
+        storage?.resetBytes(in: 0..<byteCount)
         storage = nil
     }
 
@@ -301,22 +314,56 @@ public final class AtomicPrivateSettlementJSONResponseV1: @unchecked Sendable,
 
 /// Exact-route V1 client for prepared-leg, audit, coordination, and redacted query workflows.
 public final class AtomicPrivateSettlementToriiClientV1: @unchecked Sendable {
+    private enum NativeResponseVerificationV1 {
+        case committeeProof(AtomicPrivateSettlementIdentifierV1)
+        case auditorCapsule(
+            AtomicPrivateSettlementIdentifierV1,
+            requestJSON: Data,
+            auditorSigningKey: String
+        )
+        case auditApproval(
+            AtomicPrivateSettlementIdentifierV1,
+            requestJSON: Data,
+            auditorSigningKey: String
+        )
+    }
+
     private static let smallResponseMaximumBytes = 1024 * 1024
     private static let bundleResponseMaximumBytes = 8 * 1024 * 1024
     private static let restrictedResponseMaximumBytes = 32 * 1024 * 1024
+
+    private static func sanitizedRejectCode(_ value: String?) -> String? {
+        guard let value,
+              (1 ... 128).contains(value.utf8.count),
+              value.utf8.allSatisfy({ byte in
+                  (48 ... 57).contains(byte)
+                      || (65 ... 90).contains(byte)
+                      || (97 ... 122).contains(byte)
+                      || byte == 45
+                      || byte == 46
+                      || byte == 58
+                      || byte == 95
+              }) else {
+            return nil
+        }
+        return value
+    }
 
     public let baseURL: URL
     public let localSigningContext: ToriiLocalSigningContext
     public let defaultHeaders: [String: String]
     public let timeout: TimeInterval
     private let session: URLSession
+    private let responseVerifier: any AtomicPrivateSettlementResponseVerifyingV1
 
     public init(
         baseURL: URL,
         localSigningContext: ToriiLocalSigningContext,
         session: URLSession = .shared,
         timeout: TimeInterval = 30,
-        defaultHeaders: [String: String] = [:]
+        defaultHeaders: [String: String] = [:],
+        responseVerifier: any AtomicPrivateSettlementResponseVerifyingV1 =
+            AtomicPrivateSettlementNativeResponseVerifierV1()
     ) throws {
         guard let scheme = baseURL.scheme?.lowercased(),
               scheme == "http" || scheme == "https",
@@ -336,6 +383,7 @@ public final class AtomicPrivateSettlementToriiClientV1: @unchecked Sendable {
         self.session = session
         self.timeout = timeout
         self.defaultHeaders = defaultHeaders
+        self.responseVerifier = responseVerifier
     }
 
     public func requestAvailabilityShare(
@@ -373,6 +421,7 @@ public final class AtomicPrivateSettlementToriiClientV1: @unchecked Sendable {
         try await sponsorMutation(.legUpload, request: request, auth: sponsorAuth)
     }
 
+    /// Submit one exact sponsor-signed Prepare-lock registration, finalization, or abort carrier.
     public func submitBundle(
         _ request: AtomicPrivateSettlementPreparedRequestV1,
         sponsorAuth: ToriiCanonicalRequestAuth
@@ -385,6 +434,9 @@ public final class AtomicPrivateSettlementToriiClientV1: @unchecked Sendable {
         request: AtomicPrivateSettlementPreparedRequestV1,
         auditorSigningContext: ToriiOperatorSigningContext
     ) async throws -> AtomicPrivateSettlementJSONResponseV1 {
+        guard auditorSigningContext.networkId == localSigningContext.networkId else {
+            throw AtomicPrivateSettlementClientErrorV1.invalidPreparedRequest
+        }
         guard request.operation == .auditApproval else {
             throw AtomicPrivateSettlementClientErrorV1.operationSubstitution
         }
@@ -393,11 +445,21 @@ public final class AtomicPrivateSettlementToriiClientV1: @unchecked Sendable {
             with: payloadDigest.pathComponent
         )
         let body = try request.bytes()
+        let approvalContext = try Self.auditApprovalRequestContext(body)
+        guard approvalContext.networkId == localSigningContext.networkId else {
+            throw AtomicPrivateSettlementClientErrorV1.invalidPreparedRequest
+        }
         return try await mutation(
             path: path,
             body: body,
             expectedIdentifier: payloadDigest,
-            expectedIdentifierField: "payload_digest"
+            expectedIdentifierField: "payload_digest",
+            approvalContext: approvalContext,
+            nativeVerification: .auditApproval(
+                payloadDigest,
+                requestJSON: body,
+                auditorSigningKey: auditorSigningContext.publicKey
+            )
         ) { target in
             try auditorSigningContext.buildHeaders(method: "POST", url: target, body: body)
         }
@@ -418,17 +480,38 @@ public final class AtomicPrivateSettlementToriiClientV1: @unchecked Sendable {
         }
     }
 
+    /// Recover the persisted Prepare and Commit certificates for one local leg.
+    public func getPhaseCertificates(
+        payloadDigest: AtomicPrivateSettlementIdentifierV1,
+        sponsorAuth: ToriiCanonicalRequestAuth
+    ) async throws -> AtomicPrivateSettlementJSONResponseV1 {
+        let path =
+            "/v1/nexus/private-settlements/legs/\(payloadDigest.pathComponent)/phase-certificates"
+        return try await get(
+            path: path,
+            maximumBytes: Self.smallResponseMaximumBytes,
+            expectedIdentifier: payloadDigest,
+            expectedIdentifierField: "payload_digest"
+        ) { target in
+            try self.sponsorHeaders(method: "GET", target: target, body: Data(), auth: sponsorAuth)
+        }
+    }
+
     public func getCommitteeProof(
         payloadDigest: AtomicPrivateSettlementIdentifierV1,
         validatorSigningContext: ToriiOperatorSigningContext
     ) async throws -> AtomicPrivateSettlementJSONResponseV1 {
+        guard validatorSigningContext.networkId == localSigningContext.networkId else {
+            throw AtomicPrivateSettlementClientErrorV1.invalidPreparedRequest
+        }
         let path =
             "/v1/nexus/private-settlements/legs/\(payloadDigest.pathComponent)/committee-proof"
         return try await get(
             path: path,
             maximumBytes: Self.restrictedResponseMaximumBytes,
-            expectedIdentifier: nil,
-            expectedIdentifierField: nil
+            expectedIdentifier: payloadDigest,
+            expectedIdentifierField: nil,
+            nativeVerification: .committeeProof(payloadDigest)
         ) { target in
             try validatorSigningContext.buildHeaders(method: "GET", url: target)
         }
@@ -436,17 +519,32 @@ public final class AtomicPrivateSettlementToriiClientV1: @unchecked Sendable {
 
     public func getAuditorCapsule(
         payloadDigest: AtomicPrivateSettlementIdentifierV1,
+        request: AtomicPrivateSettlementPreparedRequestV1,
         auditorSigningContext: ToriiOperatorSigningContext
     ) async throws -> AtomicPrivateSettlementJSONResponseV1 {
-        let path =
-            "/v1/nexus/private-settlements/legs/\(payloadDigest.pathComponent)/audit-capsule"
-        return try await get(
+        guard auditorSigningContext.networkId == localSigningContext.networkId else {
+            throw AtomicPrivateSettlementClientErrorV1.invalidPreparedRequest
+        }
+        guard request.operation == .auditorCapsule else {
+            throw AtomicPrivateSettlementClientErrorV1.operationSubstitution
+        }
+        let path = request.operation.path.replacingOccurrences(
+            of: "{payload_digest}",
+            with: payloadDigest.pathComponent
+        )
+        let body = try request.bytes()
+        return try await mutation(
             path: path,
-            maximumBytes: Self.restrictedResponseMaximumBytes,
-            expectedIdentifier: nil,
-            expectedIdentifierField: nil
+            body: body,
+            expectedIdentifier: payloadDigest,
+            expectedIdentifierField: nil,
+            nativeVerification: .auditorCapsule(
+                payloadDigest,
+                requestJSON: body,
+                auditorSigningKey: auditorSigningContext.publicKey
+            )
         ) { target in
-            try auditorSigningContext.buildHeaders(method: "GET", url: target)
+            try auditorSigningContext.buildHeaders(method: "POST", url: target, body: body)
         }
     }
 
@@ -498,6 +596,8 @@ public final class AtomicPrivateSettlementToriiClientV1: @unchecked Sendable {
         body: Data,
         expectedIdentifier: AtomicPrivateSettlementIdentifierV1?,
         expectedIdentifierField: String?,
+        approvalContext: AuditApprovalRequestContextV1? = nil,
+        nativeVerification: NativeResponseVerificationV1? = nil,
         headers: (URL) throws -> [String: String]
     ) async throws -> AtomicPrivateSettlementJSONResponseV1 {
         let target = try targetURL(path)
@@ -511,7 +611,9 @@ public final class AtomicPrivateSettlementToriiClientV1: @unchecked Sendable {
             route: path,
             maximumBytes: Self.restrictedResponseMaximumBytes,
             expectedIdentifier: expectedIdentifier,
-            expectedIdentifierField: expectedIdentifierField
+            expectedIdentifierField: expectedIdentifierField,
+            approvalContext: approvalContext,
+            nativeVerification: nativeVerification
         )
     }
 
@@ -520,6 +622,7 @@ public final class AtomicPrivateSettlementToriiClientV1: @unchecked Sendable {
         maximumBytes: Int,
         expectedIdentifier: AtomicPrivateSettlementIdentifierV1?,
         expectedIdentifierField: String?,
+        nativeVerification: NativeResponseVerificationV1? = nil,
         headers: ((URL) throws -> [String: String])?
     ) async throws -> AtomicPrivateSettlementJSONResponseV1 {
         let target = try targetURL(path)
@@ -534,7 +637,8 @@ public final class AtomicPrivateSettlementToriiClientV1: @unchecked Sendable {
             route: path,
             maximumBytes: maximumBytes,
             expectedIdentifier: expectedIdentifier,
-            expectedIdentifierField: expectedIdentifierField
+            expectedIdentifierField: expectedIdentifierField,
+            nativeVerification: nativeVerification
         )
     }
 
@@ -543,7 +647,9 @@ public final class AtomicPrivateSettlementToriiClientV1: @unchecked Sendable {
         route: String,
         maximumBytes: Int,
         expectedIdentifier: AtomicPrivateSettlementIdentifierV1?,
-        expectedIdentifierField: String?
+        expectedIdentifierField: String?,
+        approvalContext: AuditApprovalRequestContextV1? = nil,
+        nativeVerification: NativeResponseVerificationV1? = nil
     ) async throws -> AtomicPrivateSettlementJSONResponseV1 {
         if let violation = IrohaTransportSecurity.httpViolation(
             context: "AtomicPrivateSettlementToriiClientV1",
@@ -553,6 +659,13 @@ public final class AtomicPrivateSettlementToriiClientV1: @unchecked Sendable {
             body: request.httpBody
         ) {
             throw ToriiClientError.invalidPayload(violation)
+        }
+        if nativeVerification != nil {
+            do {
+                try responseVerifier.requireAvailable()
+            } catch {
+                throw AtomicPrivateSettlementClientErrorV1.invalidResponse
+            }
         }
         let bytes: URLSession.AsyncBytes
         let response: URLResponse
@@ -578,10 +691,23 @@ public final class AtomicPrivateSettlementToriiClientV1: @unchecked Sendable {
             bytes.task.cancel()
             throw AtomicPrivateSettlementClientErrorV1.httpStatus(
                 http.statusCode,
-                http.value(forHTTPHeaderField: "x-iroha-reject-code")
+                Self.sanitizedRejectCode(
+                    http.value(forHTTPHeaderField: "x-iroha-reject-code")
+                )
             )
         }
+        let expectedStatus = route.hasSuffix("/bundles") ? 202 : 200
+        guard http.statusCode == expectedStatus else {
+            bytes.task.cancel()
+            throw AtomicPrivateSettlementClientErrorV1.invalidResponse
+        }
         guard http.value(forHTTPHeaderField: "Content-Type") == "application/json" else {
+            bytes.task.cancel()
+            throw AtomicPrivateSettlementClientErrorV1.invalidResponse
+        }
+        if let contentEncoding = http.value(forHTTPHeaderField: "Content-Encoding"),
+           contentEncoding.trimmingCharacters(in: .whitespacesAndNewlines)
+               .caseInsensitiveCompare("identity") != .orderedSame {
             bytes.task.cancel()
             throw AtomicPrivateSettlementClientErrorV1.invalidResponse
         }
@@ -603,8 +729,40 @@ public final class AtomicPrivateSettlementToriiClientV1: @unchecked Sendable {
             route: route,
             object: object,
             expectedIdentifier: expectedIdentifier,
-            expectedIdentifierField: expectedIdentifierField
+            expectedIdentifierField: expectedIdentifierField,
+            expectedNetworkId: localSigningContext.networkId.literal,
+            approvalContext: approvalContext
         )
+        do {
+            switch nativeVerification {
+            case let .committeeProof(payloadDigest):
+                try responseVerifier.verifyCommitteeProof(
+                    responseJSON: data,
+                    expectedNetworkID: localSigningContext.networkId.bytes,
+                    requestedPayloadDigest: payloadDigest.bytes
+                )
+            case let .auditorCapsule(payloadDigest, requestJSON, auditorSigningKey):
+                try responseVerifier.verifyAuditorCapsule(
+                    responseJSON: data,
+                    requestJSON: requestJSON,
+                    expectedNetworkID: localSigningContext.networkId.bytes,
+                    requestedPayloadDigest: payloadDigest.bytes,
+                    auditorSigningKey: auditorSigningKey
+                )
+            case let .auditApproval(payloadDigest, requestJSON, auditorSigningKey):
+                try responseVerifier.verifyAuditApproval(
+                    responseJSON: data,
+                    requestJSON: requestJSON,
+                    expectedNetworkID: localSigningContext.networkId.bytes,
+                    requestedPayloadDigest: payloadDigest.bytes,
+                    auditorSigningKey: auditorSigningKey
+                )
+            case nil:
+                break
+            }
+        } catch {
+            throw AtomicPrivateSettlementClientErrorV1.invalidResponse
+        }
         return AtomicPrivateSettlementJSONResponseV1(route: route, bytes: data)
     }
 
@@ -656,7 +814,13 @@ public final class AtomicPrivateSettlementToriiClientV1: @unchecked Sendable {
     private static func strictObject(_ data: Data) throws -> [String: Any] {
         guard !data.isEmpty else { throw AtomicPrivateSettlementClientErrorV1.invalidResponse }
         do {
-            try StrictJSONDuplicateKeyRejector.rejectDuplicateObjectKeys(in: data)
+            try StrictJSONDuplicateKeyRejector.rejectDuplicateObjectKeys(
+                in: data,
+                integerKeys: [
+                    "accepted_at_height", "authoritative_height", "version", "lifecycle_code",
+                ],
+                requireAllNumbersInteger: true
+            )
             let object = try JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed])
             guard let fields = object as? [String: Any] else {
                 throw AtomicPrivateSettlementClientErrorV1.invalidResponse
@@ -673,7 +837,9 @@ public final class AtomicPrivateSettlementToriiClientV1: @unchecked Sendable {
         route: String,
         object: [String: Any],
         expectedIdentifier: AtomicPrivateSettlementIdentifierV1?,
-        expectedIdentifierField: String?
+        expectedIdentifierField: String?,
+        expectedNetworkId: String,
+        approvalContext: AuditApprovalRequestContextV1?
     ) throws {
         guard Set(object.keys) == responseFields(route) else {
             throw AtomicPrivateSettlementClientErrorV1.invalidResponse
@@ -681,6 +847,153 @@ public final class AtomicPrivateSettlementToriiClientV1: @unchecked Sendable {
         if let expectedIdentifier, let expectedIdentifierField,
            object[expectedIdentifierField] as? String != expectedIdentifier.jsonLiteral {
             throw AtomicPrivateSettlementClientErrorV1.responseSubstitution
+        }
+        if route.hasSuffix("/bundles") {
+            for field in ["bundle_id", "carrier_id"] {
+                guard let literal = object[field] as? String,
+                      let identifier = try? AtomicPrivateSettlementIdentifierV1(literal),
+                      identifier.jsonLiteral == literal else {
+                    throw AtomicPrivateSettlementClientErrorV1.invalidResponse
+                }
+            }
+            guard let height = object["accepted_at_height"] as? NSNumber,
+                  CFGetTypeID(height) != CFBooleanGetTypeID(),
+                  !CFNumberIsFloatType(height),
+                  StrictJSONNumber.uint64(from: height) != nil else {
+                throw AtomicPrivateSettlementClientErrorV1.invalidResponse
+            }
+        }
+        if route.hasSuffix("/audit-capsule") {
+            guard let expectedIdentifier,
+                  let height = object["authoritative_height"] as? NSNumber,
+                  CFGetTypeID(height) != CFBooleanGetTypeID(),
+                  !CFNumberIsFloatType(height),
+                  let exact = StrictJSONNumber.uint64(from: height),
+                  exact > 0 else {
+                throw AtomicPrivateSettlementClientErrorV1.invalidResponse
+            }
+            guard let attestation = object["responder_attestation"] as? [String: Any],
+                  Set(attestation.keys) == ["body", "signature"],
+                  let body = attestation["body"] as? [String: Any],
+                  Set(body.keys) == [
+                      "version", "network_id", "payload_digest", "view_digest",
+                      "authority_digest", "lifecycle_code", "authoritative_height", "responder",
+                  ],
+                  let version = body["version"] as? NSNumber,
+                  StrictJSONNumber.uint64(from: version) == 1,
+                  let bodyHeight = body["authoritative_height"] as? NSNumber,
+                  StrictJSONNumber.uint64(from: bodyHeight) == exact,
+                  let lifecycleCode = body["lifecycle_code"] as? NSNumber,
+                  let exactLifecycleCode = StrictJSONNumber.uint64(from: lifecycleCode),
+                  let lifecycle = object["lifecycle"] as? [String: Any],
+                  let lifecycleStatus = lifecycle["status"] as? String,
+                  let expectedLifecycleCode = [
+                      "collecting": UInt64(0), "audited": 1, "prepared": 2,
+                      "commit_certified": 3, "finalized": 4, "aborted": 5, "expired": 6,
+                  ][lifecycleStatus],
+                  exactLifecycleCode == expectedLifecycleCode,
+                  body["network_id"] as? String == expectedNetworkId,
+                  body["payload_digest"] as? String == expectedIdentifier.jsonLiteral,
+                  let responder = body["responder"] as? String,
+                  ToriiNativeAmxWire.isCanonicalBlsNormalPeerId(responder),
+                  let signature = attestation["signature"] as? String,
+                  Self.isCanonicalBLSNormalSignature(signature) else {
+                throw AtomicPrivateSettlementClientErrorV1.invalidResponse
+            }
+            for field in ["network_id", "payload_digest", "view_digest", "authority_digest"] {
+                guard let literal = body[field] as? String,
+                      let identifier = try? AtomicPrivateSettlementIdentifierV1(literal),
+                      identifier.jsonLiteral == literal else {
+                    throw AtomicPrivateSettlementClientErrorV1.invalidResponse
+                }
+            }
+        }
+        if route.hasSuffix("/audit-approvals") {
+            guard let expectedIdentifier, let approvalContext,
+                  let height = object["authoritative_height"] as? NSNumber,
+                  CFGetTypeID(height) != CFBooleanGetTypeID(),
+                  !CFNumberIsFloatType(height),
+                  let exact = StrictJSONNumber.uint64(from: height),
+                  exact > 0, exact <= approvalContext.expiryHeight,
+                  let collectedNumber = object["collected"] as? NSNumber,
+                  CFGetTypeID(collectedNumber) != CFBooleanGetTypeID(),
+                  !CFNumberIsFloatType(collectedNumber),
+                  let collected = StrictJSONNumber.uint64(from: collectedNumber),
+                  collected >= 1, collected <= 255,
+                  let requiredNumber = object["required"] as? NSNumber,
+                  CFGetTypeID(requiredNumber) != CFBooleanGetTypeID(),
+                  !CFNumberIsFloatType(requiredNumber),
+                  let required = StrictJSONNumber.uint64(from: requiredNumber),
+                  required >= 1, required <= 255,
+                  collected <= required,
+                  let legOrdinalNumber = object["leg_ordinal"] as? NSNumber,
+                  CFGetTypeID(legOrdinalNumber) != CFBooleanGetTypeID(),
+                  !CFNumberIsFloatType(legOrdinalNumber),
+                  let legOrdinal = StrictJSONNumber.uint64(from: legOrdinalNumber),
+                  legOrdinal < 255,
+                  legOrdinal == approvalContext.legOrdinal,
+                  let committeeAuthority = object["committee_authority"] as? [String: Any],
+                  let authorityRoute = committeeAuthority["route"] as? [String: Any],
+                  let authorityDataspaceNumber = authorityRoute["dataspace_id"] as? NSNumber,
+                  let authorityDataspace = StrictJSONNumber.uint64(from: authorityDataspaceNumber),
+                  authorityDataspace == approvalContext.dataspaceId,
+                  let newlyRecorded = object["newly_recorded"] as? NSNumber,
+                  CFGetTypeID(newlyRecorded) == CFBooleanGetTypeID(),
+                  let attestation = object["responder_attestation"] as? [String: Any],
+                  Set(attestation.keys) == ["body", "signature"],
+                  let body = attestation["body"] as? [String: Any],
+                  Set(body.keys) == [
+                      "version", "network_id", "payload_digest", "approval_digest",
+                      "acknowledgement_digest", "authority_digest", "lifecycle_code",
+                      "authoritative_height", "responder",
+                  ],
+                  let version = body["version"] as? NSNumber,
+                  StrictJSONNumber.uint64(from: version) == 1,
+                  let bodyHeight = body["authoritative_height"] as? NSNumber,
+                  StrictJSONNumber.uint64(from: bodyHeight) == exact,
+                  body["network_id"] as? String == expectedNetworkId,
+                  body["network_id"] as? String == approvalContext.networkId.literal,
+                  body["payload_digest"] as? String == expectedIdentifier.jsonLiteral,
+                  object["payload_digest"] as? String == expectedIdentifier.jsonLiteral,
+                  let lifecycleCode = body["lifecycle_code"] as? NSNumber,
+                  let exactLifecycleCode = StrictJSONNumber.uint64(from: lifecycleCode),
+                  let lifecycle = object["lifecycle"] as? [String: Any],
+                  let lifecycleStatus = lifecycle["status"] as? String,
+                  let expectedLifecycleCode = [
+                      "collecting": UInt64(0), "audited": 1,
+                  ][lifecycleStatus],
+                  exactLifecycleCode == expectedLifecycleCode,
+                  (collected < required ? lifecycleStatus == "collecting" : lifecycleStatus == "audited"),
+                  let responder = body["responder"] as? String,
+                  ToriiNativeAmxWire.isCanonicalBlsNormalPeerId(responder),
+                  let signature = attestation["signature"] as? String,
+                  Self.isCanonicalBLSNormalSignature(signature) else {
+                throw AtomicPrivateSettlementClientErrorV1.invalidResponse
+            }
+            for field in [
+                "network_id", "payload_digest", "approval_digest",
+                "acknowledgement_digest", "authority_digest",
+            ] {
+                guard let literal = body[field] as? String,
+                      let identifier = try? AtomicPrivateSettlementIdentifierV1(literal),
+                      identifier.jsonLiteral == literal else {
+                    throw AtomicPrivateSettlementClientErrorV1.invalidResponse
+                }
+            }
+            guard let bundleLiteral = object["bundle_id"] as? String,
+                  let bundleIdentifier = try? AtomicPrivateSettlementIdentifierV1(bundleLiteral),
+                  bundleIdentifier.jsonLiteral == bundleLiteral,
+                  bundleIdentifier == approvalContext.bundleId else {
+                throw AtomicPrivateSettlementClientErrorV1.invalidResponse
+            }
+        }
+        if route.hasSuffix("/phase-certificates") {
+            for field in ["prepare_certificate", "commit_certificate"] {
+                let value = object[field]
+                guard value is NSNull || value is [String: Any] else {
+                    throw AtomicPrivateSettlementClientErrorV1.invalidResponse
+                }
+            }
         }
         if route.hasSuffix("/receipt") {
             guard let expectedIdentifier,
@@ -701,12 +1014,86 @@ public final class AtomicPrivateSettlementToriiClientV1: @unchecked Sendable {
         }
     }
 
+    private static func isCanonicalBLSNormalSignature(_ value: String) -> Bool {
+        guard value == value.trimmingCharacters(in: .whitespacesAndNewlines),
+              let decoded = Data(base64Encoded: value),
+              decoded.count == 96 else {
+            return false
+        }
+        return decoded.base64EncodedString() == value
+    }
+
+    private struct AuditApprovalRequestContextV1 {
+        let networkId: NetworkId
+        let bundleId: AtomicPrivateSettlementIdentifierV1
+        let legOrdinal: UInt64
+        let dataspaceId: UInt64
+        let expiryHeight: UInt64
+    }
+
+    private static func auditApprovalRequestContext(
+        _ data: Data
+    ) throws -> AuditApprovalRequestContextV1 {
+        let request = try strictObject(data)
+        guard Set(request.keys) == ["audit_policy", "approval"],
+              request["audit_policy"] is [String: Any],
+              let approval = request["approval"] as? [String: Any],
+              Set(approval.keys) == ["body", "signature"],
+              !(approval["signature"] is NSNull),
+              let body = approval["body"] as? [String: Any],
+              Set(body.keys) == [
+                  "version", "network_id", "bundle_id", "leg_ordinal", "dataspace_id",
+                  "auditor_id", "audit_policy_digest", "audit_key_epoch", "proof_digest",
+                  "capsule_digest", "delta_digest", "old_root", "new_root", "expiry_height",
+              ],
+              let version = body["version"] as? NSNumber,
+              StrictJSONNumber.uint64(from: version) == 1,
+              let networkLiteral = body["network_id"] as? String,
+              let networkId = try? NetworkId(literal: networkLiteral),
+              networkId.literal == networkLiteral,
+              let bundleLiteral = body["bundle_id"] as? String,
+              let bundleId = try? AtomicPrivateSettlementIdentifierV1(bundleLiteral),
+              bundleId.jsonLiteral == bundleLiteral,
+              let legOrdinalNumber = body["leg_ordinal"] as? NSNumber,
+              let legOrdinal = StrictJSONNumber.uint64(from: legOrdinalNumber),
+              legOrdinal < 255,
+              let dataspaceNumber = body["dataspace_id"] as? NSNumber,
+              let dataspaceId = StrictJSONNumber.uint64(from: dataspaceNumber),
+              let expiryNumber = body["expiry_height"] as? NSNumber,
+              let expiryHeight = StrictJSONNumber.uint64(from: expiryNumber),
+              expiryHeight > 0 else {
+            throw AtomicPrivateSettlementClientErrorV1.invalidPreparedRequest
+        }
+        for field in [
+            "audit_policy_digest", "proof_digest", "capsule_digest", "delta_digest",
+        ] {
+            guard let literal = body[field] as? String,
+                  let digest = try? AtomicPrivateSettlementIdentifierV1(literal),
+                  digest.jsonLiteral == literal else {
+                throw AtomicPrivateSettlementClientErrorV1.invalidPreparedRequest
+            }
+        }
+        return AuditApprovalRequestContextV1(
+            networkId: networkId,
+            bundleId: bundleId,
+            legOrdinal: legOrdinal,
+            dataspaceId: dataspaceId,
+            expiryHeight: expiryHeight
+        )
+    }
+
     private static func responseFields(_ route: String) -> Set<String> {
         if route.hasSuffix("/availability-shares") {
             return ["bundle_id", "payload_digest", "leg_ordinal", "disposition", "share"]
         }
         if route.hasSuffix("/prepare-votes") || route.hasSuffix("/commit-votes") {
             return ["bundle_id", "payload_digest", "leg_ordinal", "vote"]
+        }
+        if route.hasSuffix("/phase-certificates") {
+            return [
+                "bundle_id", "payload_digest", "leg_ordinal", "lifecycle",
+                "prepare_certificate", "commit_certificate",
+            ]
         }
         if route.hasSuffix("/certificates") {
             return ["bundle_id", "payload_digest", "leg_ordinal", "phase", "lifecycle"]
@@ -716,18 +1103,18 @@ public final class AtomicPrivateSettlementToriiClientV1: @unchecked Sendable {
         }
         if route.hasSuffix("/audit-approvals") {
             return [
-                "bundle_id", "payload_digest", "leg_ordinal", "collected", "required",
-                "newly_recorded", "lifecycle",
+                "authoritative_height", "bundle_id", "payload_digest", "leg_ordinal",
+                "committee_authority", "collected", "required", "newly_recorded",
+                "lifecycle", "responder_attestation",
             ]
         }
         if route.hasSuffix("/bundles") {
-            return ["bundle_id", "accepted_at_height", "carrier_id", "lifecycle"]
+            return ["bundle_id", "accepted_at_height", "carrier_id"]
         }
         if route.hasSuffix("/status") {
             return [
                 "bundle_id", "payload_digest", "leg_ordinal", "route", "stored_at_height",
-                "lifecycle_height", "expiry_height", "lifecycle", "audit_approvals",
-                "required_audit_approvals",
+                "lifecycle_height", "expiry_height", "lifecycle",
             ]
         }
         if route.hasSuffix("/committee-proof") {
@@ -738,8 +1125,9 @@ public final class AtomicPrivateSettlementToriiClientV1: @unchecked Sendable {
         }
         if route.hasSuffix("/audit-capsule") {
             return [
-                "manifest", "audit_policy", "committee_authority", "statement", "delta",
-                "audit_capsule", "availability", "lifecycle",
+                "authoritative_height",
+                "manifest", "audit_policy", "access_audit_policy", "committee_authority", "statement", "delta",
+                "audit_capsule", "availability", "lifecycle", "responder_attestation",
             ]
         }
         if route.hasSuffix("/receipt") { return ["status", "value"] }

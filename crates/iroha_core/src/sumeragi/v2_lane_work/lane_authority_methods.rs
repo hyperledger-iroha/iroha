@@ -73,8 +73,12 @@ impl V2LaneWorkAdapter {
             validators
                 .iter()
                 .map(|peer| {
-                    let pop =
-                        self.consensus_pop_for_peer_at_height(&world, peer, authority_height)?;
+                    let pop = self.consensus_pop_for_peer_at_height(
+                        &world,
+                        participant_lane,
+                        peer,
+                        authority_height,
+                    )?;
                     iroha_crypto::bls_normal_pop_verify(peer.public_key(), &pop).ok()?;
                     Some(pop)
                 })

@@ -52,14 +52,6 @@ function writeUint64LE(buffer, offset, value) {
   }
 }
 
-function writeUint64BE(buffer, offset, value) {
-  let remaining = BigInt(value);
-  for (let index = 7; index >= 0; index -= 1) {
-    buffer[offset + index] = Number(remaining & 0xffn);
-    remaining >>= 8n;
-  }
-}
-
 function writeUint32LE(buffer, offset, value) {
   let remaining = Number(value >>> 0);
   for (let index = 0; index < 4; index += 1) {

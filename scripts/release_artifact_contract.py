@@ -374,6 +374,11 @@ def _open_anchored_regular(root: Path, relative_path: str) -> tuple[int, os.stat
         current_fd, _, _ = _open_absolute_directory(
             root, "release artifact root"
         )
+        root_info = os.fstat(current_fd)
+        if root_info.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+            _fail(
+                "release artifact root must not be group- or world-writable"
+            )
         parts = PurePosixPath(canonical_relative_path(relative_path)).parts
         for component in parts[:-1]:
             before = os.stat(component, dir_fd=current_fd, follow_symlinks=False)
@@ -388,6 +393,12 @@ def _open_anchored_regular(root: Path, relative_path: str) -> tuple[int, os.stat
                 _fail(
                     f"release artifact parent changed while opening "
                     f"{relative_path!r}"
+                )
+            if opened.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+                os.close(next_fd)
+                _fail(
+                    "release artifact parent must not be group- or "
+                    f"world-writable: {relative_path!r}"
                 )
             os.close(current_fd)
             current_fd = next_fd

@@ -387,10 +387,8 @@ fn exact_locked_body_is_reencoded_at_the_reproposal_round_without_byte_drift() {
     );
     assert_eq!(encoded.manifest().subject, locked_subject);
     let (manifest, chunks) = encoded.into_parts();
-    let acquisition_root = tempfile::tempdir().expect("chunk reconstruction directory");
-    let mut session =
-        super::super::v2_chunks::V2ChunkSession::open(acquisition_root.path(), &context, manifest)
-            .expect("open exact reproposal chunk session");
+    let mut session = super::super::v2_chunks::V2ChunkSession::open(&context, manifest)
+        .expect("open exact reproposal chunk session");
     for (index, chunk) in chunks.iter().enumerate() {
         session
             .admit_bytes(
@@ -533,7 +531,7 @@ fn terminal_ingress_discards_commit_discovery_and_losing_current_body_requests()
         proposal_round: round,
         phase: wire::GlobalPhase::Commit,
         subject,
-        execution_commitment: wire::ExecutionCommitment::without_topups_or_merge_carrier(
+        execution_commitment: wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
             Hash::new(b"terminal ingress parent state"),
             Hash::new(b"terminal ingress post state"),
             Hash::new(b"terminal ingress writes"),
@@ -554,12 +552,16 @@ fn terminal_ingress_discards_commit_discovery_and_losing_current_body_requests()
         },
     );
     assert!(v2_payload_is_terminal_reducer_control(&response));
-    let manifest = encode_payload(&context, round, subject, &body)
-        .expect("encode terminal body fixture payload")
-        .manifest()
-        .clone();
     assert!(!v2_payload_is_terminal_reducer_control(
-        &wire::ConsensusMessageV2Payload::PayloadManifest(manifest)
+        &wire::ConsensusMessageV2Payload::PayloadChunk(wire::PayloadChunk {
+            manifest_hash: HashOf::from_untyped_unchecked(Hash::new(
+                b"terminal ingress orphan chunk",
+            )),
+            index: 0,
+            bytes: Vec::new(),
+            sender: 0,
+            signature: vec![1],
+        })
     ));
     let exact_request = wire::CertifiedBodyRequest {
         round,
@@ -1010,6 +1012,7 @@ fn complete_tip_recovery_requires_authenticated_predecessor_retirement() {
         .configure_roster(std::iter::empty())
         .expect("configure untrusted test lane");
     let directory = TempDir::new().expect("temporary unretired CompleteTip lifecycle root");
+    let kura = Kura::blank_kura_for_testing();
     let mut successor_context = parent_context.clone();
     successor_context.height += 1;
     let error = PendingSuccessorActivation::recovered(
@@ -1019,6 +1022,7 @@ fn complete_tip_recovery_requires_authenticated_predecessor_retirement() {
             b"exact recovered successor context",
             directory.path(),
         )),
+        kura.as_ref(),
         &keys[0],
     )
     .expect_err("CompleteTip cannot form activation before exact predecessor retirement");

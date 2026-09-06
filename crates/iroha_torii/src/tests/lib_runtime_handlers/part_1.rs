@@ -10,12 +10,9 @@ use axum::{
 };
 use base64::Engine as _;
 use futures::executor;
-use iroha_config::{
-    client_api::ConfigGetDTO,
-    parameters::{
-        actual::{NoritoRpcStage, NoritoRpcTransport, TelemetryProfile},
-        defaults,
-    },
+use iroha_config::parameters::{
+    actual::{NoritoRpcStage, NoritoRpcTransport, TelemetryProfile},
+    defaults,
 };
 use iroha_core::{
     kiso::KisoHandle,
@@ -34,8 +31,8 @@ use iroha_data_model::{
     block::{
         BlockHeader, BlockSignature, SignedBlock,
         consensus_v2::{
-            BlockSubject, ConsensusMode, ConsensusRound, DataAvailabilityLayout, DualQuorum,
-            ExecutionCommitment, GlobalPhase, HeightContext, PROTOCOL_VERSION, PayloadEncoding,
+            BlockSubject, ConsensusMode, ConsensusRound, DualQuorum,
+            ExecutionCommitment, GlobalPhase, HeightContext, PROTOCOL_VERSION,
             QuorumCertificate, ValidatorPower, finality::V2FinalityArtifact,
         },
     },
@@ -75,6 +72,7 @@ use iroha_executor_data_model::permission::account::{
 use iroha_executor_data_model::permission::governance::CanManageConsensusKeys;
 use iroha_primitives::{const_vec::ConstVec, json::Json, numeric::Quantity};
 use iroha_test_samples::ALICE_ID;
+use iroha_torii_shared::configuration::Configuration;
 use norito::codec::Encode;
 use std::{
     collections::HashSet,
@@ -767,7 +765,6 @@ fn ensure_runtime_peer_binding_for_test(
         pop: Some(consensus_pop),
         activation_height: next_height,
         expiry_height: None,
-        hsm: None,
         replaces: None,
         status: ConsensusKeyStatus::Active,
     };
@@ -1606,7 +1603,6 @@ fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
     };
     #[cfg(feature = "app_api")]
     let sorafs_cache: Option<Arc<RwLock<sorafs::ProviderAdvertCache>>> = None;
-    #[cfg(feature = "app_api")]
     // Test fixtures opt into an isolated storage directory explicitly. Never
     // let a unit-test helper inherit the production data path.
     let sorafs_node = {
@@ -1636,9 +1632,7 @@ fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
     #[cfg(feature = "app_api")]
     let sorafs_publish_discovery =
         iroha_config::parameters::actual::SorafsPublishDiscovery::default();
-    #[cfg(feature = "app_api")]
     let sorafs_gateway_config = iroha_config::parameters::actual::SorafsGateway::default();
-    #[cfg(feature = "app_api")]
     let sorafs_site_bindings = None;
     let telemetry = routing::MaybeTelemetry::for_tests().with_profile(TelemetryProfile::Full);
     let telemetry_profile = telemetry.profile();
@@ -1690,11 +1684,10 @@ fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
             .map(std::num::NonZeroU32::get),
         soranet_privacy_ingest.burst.map(std::num::NonZeroU32::get),
     );
-    let api_tokens_set: Arc<HashSet<String>> = Arc::new(Default::default());
+    let api_token_digests = Arc::new(limits::ApiTokenDigestSet::default());
     let operator_auth = Arc::new(
         operator_auth::OperatorAuth::new(
             iroha_config::parameters::actual::ToriiOperatorAuth::default(),
-            api_tokens_set.clone(),
             defaults::torii::data_dir(),
             telemetry.clone(),
         )
@@ -1760,8 +1753,17 @@ fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
     let torii_proxy_http_ingress_envelope =
         ToriiProxyHttpIngressEnvelope::from_max_content_bytes(proxy_frame_bytes)
             .expect("default proxy HTTP memory envelope fits");
-    let query_fanout_inflight = QueryWeightedMemoryPool::new(query_memory.fanout_pool_bytes)
+    let query_fanout_inflight = ByteWeightedMemoryPool::new(query_memory.fanout_pool_bytes)
         .expect("default query memory pool fits weighted semaphore geometry");
+    #[cfg(feature = "app_api")]
+    let kagemusha_command_memory_inflight = ByteWeightedMemoryPool::new(
+        kagemusha_command_memory_pool_bytes(
+            usize::try_from(defaults::torii::MAX_CONTENT_LEN.get())
+                .expect("default content limit fits usize"),
+        )
+        .expect("default offline command memory pool fits usize"),
+    )
+    .expect("default offline command memory pool fits weighted semaphore geometry");
     let query_fanout_working_set_bytes = query_memory.fanout_working_set_bytes.min(
         usize::try_from(query_fanout_inflight.capacity_bytes())
             .expect("default weighted query pool capacity fits usize"),
@@ -1778,6 +1780,7 @@ fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
         "default query memory pool admits one stored ordinary query"
     );
     Arc::new(AppState {
+        shutdown_signal: ShutdownSignal::new(),
         events,
         kura,
         chain_id: Arc::new(chain_id),
@@ -1837,11 +1840,14 @@ fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
         query_preauth_rate_limiter: limits::RateLimiter::new(None, None),
         query_authority_rate_limiter: limits::RateLimiter::new(None, None),
         pipeline_status_rate_limiter: limits::RateLimiter::new(None, None),
+        tx_preauth_rate_limiter: limits::RateLimiter::new(None, None),
         tx_rate_limiter: limits::RateLimiter::new(None, None),
         deploy_rate_limiter,
         proof_rate_limiter: limits::RateLimiter::new(None, None),
         proof_egress_limiter: limits::RateLimiter::new_u64(None, None),
         proof_body_inflight,
+        #[cfg(feature = "app_api")]
+        kagemusha_command_memory_inflight,
         soracloud_public_rate_limiter: limits::RateLimiter::new(None, None),
         soracloud_mutation_rate_limiter: limits::RateLimiter::new(None, None),
         soracloud_mutation_inflight,
@@ -1859,7 +1865,7 @@ fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
         content_config: content_config_snapshot,
         ws_message_timeout: Duration::from_millis(defaults::torii::WS_MESSAGE_TIMEOUT_MS),
         require_api_token: false,
-        api_tokens_set: api_tokens_set.clone(),
+        api_token_digests: api_token_digests.clone(),
         webhooks_enabled: defaults::torii::WEBHOOKS_ENABLED,
         zk_attachments_enabled: defaults::torii::ZK_ATTACHMENTS_ENABLED,
         operator_auth,
@@ -1885,8 +1891,11 @@ fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
         mcp_long_poll_inflight,
         mcp_inflight_requests: Arc::new(mcp::McpInflightRegistry::default()),
         mcp_allowed_origins: Arc::new(Vec::new()),
-        mcp_dispatch_router: std::sync::RwLock::new(None),
+        mcp_dispatch_router: McpDispatchRouterSlot::default(),
         fee_policy: FeePolicy::Disabled,
+        norito_rpc_allowed_client_digests: Arc::new(limits::ApiTokenDigestSet::from_tokens(
+            norito_rpc_cfg.allowed_clients.iter().map(String::as_str),
+        )),
         norito_rpc: norito_rpc_cfg,
         high_load_tx_threshold: usize::MAX,
         high_load_stream_tx_threshold: usize::MAX,
@@ -1949,7 +1958,6 @@ fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
         sorafs_routing_authority_cache: Arc::new(
             sorafs::delegated_routing::RoutingAuthorityCache::default(),
         ),
-        #[cfg(feature = "app_api")]
         sorafs_node,
         #[cfg(feature = "app_api")]
         sorafs_proof_outcome_signer: None,
@@ -1991,21 +1999,17 @@ fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
         sorafs_pop_credentials: None,
         #[cfg(feature = "app_api")]
         sorafs_publish_discovery,
-        #[cfg(feature = "app_api")]
         sorafs_gateway_config,
-        #[cfg(feature = "app_api")]
         sorafs_site_bindings,
-        #[cfg(feature = "app_api")]
         sorafs_gateway_policy: None,
         #[cfg(feature = "app_api")]
         sorafs_gateway_tls_state: None,
-        #[cfg(feature = "app_api")]
         sorafs_gateway_compliance_controller: Some(
             sorafs::gateway::allow_all_gateway_compliance_controller_for_tests(),
         ),
         #[cfg(feature = "app_api")]
         sorafs_gateway_compliance_feed_transport: None,
-        #[cfg(all(test, feature = "app_api"))]
+        #[cfg(test)]
         sorafs_gateway_test_provider_id: Some([0x45; 32]),
         #[cfg(feature = "app_api")]
         sorafs_blinded_resolver: None,
@@ -2031,7 +2035,7 @@ fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
         #[cfg(feature = "app_api")]
         sorafs_appeal_settlement_submitter: None,
         #[cfg(feature = "app_api")]
-        offline_commands: None,
+        kagemusha_commands: None,
         #[cfg(feature = "app_api")]
         account_onboarding: None,
         vpn_relay_trust: None,
@@ -2117,9 +2121,14 @@ async fn explorer_transaction_detail_not_found_returns_json_response() {
     let app = mk_app_state_for_tests();
     let headers = HeaderMap::new();
     let missing_hash = "00".repeat(32);
+    let uri: axum::http::Uri = format!("/v1/explorer/transactions/{missing_hash}")
+        .parse()
+        .expect("valid Explorer transaction URI");
     let response = super::handler_explorer_transaction_detail(
         State(app),
         headers,
+        axum::http::Method::GET,
+        uri,
         crate::loopback_connect_info(),
         axum::extract::Path(missing_hash),
     )
@@ -2138,9 +2147,14 @@ async fn explorer_instruction_detail_not_found_returns_json_response() {
     let app = mk_app_state_for_tests();
     let headers = HeaderMap::new();
     let missing_hash = "00".repeat(32);
+    let uri: axum::http::Uri = format!("/v1/explorer/instructions/{missing_hash}/0")
+        .parse()
+        .expect("valid Explorer instruction URI");
     let response = super::handler_explorer_instruction_detail(
         State(app),
         headers,
+        axum::http::Method::GET,
+        uri,
         crate::loopback_connect_info(),
         axum::extract::Path((missing_hash, 0)),
     )
@@ -2173,6 +2187,140 @@ async fn debug_witness_returns_json_body() {
     assert_eq!(content_type, "application/json");
     let _parsed = decode_torii_json(resp, "response body", "valid json").await;
 }
+
+#[cfg(feature = "telemetry")]
+#[tokio::test]
+async fn debug_witness_requires_a_developer_telemetry_profile() {
+    for (profile, expected_status) in [
+        (TelemetryProfile::Disabled, StatusCode::SERVICE_UNAVAILABLE),
+        (TelemetryProfile::Operator, StatusCode::SERVICE_UNAVAILABLE),
+        (TelemetryProfile::Extended, StatusCode::SERVICE_UNAVAILABLE),
+        (TelemetryProfile::Developer, StatusCode::OK),
+        (TelemetryProfile::Full, StatusCode::OK),
+    ] {
+        let app = mk_app_state_for_tests();
+        let mut inner = Arc::try_unwrap(app)
+            .unwrap_or_else(|_| panic!("debug-witness fixture must have one app-state owner"));
+        inner.telemetry = inner.telemetry.with_profile(profile);
+        let app = Arc::new(inner);
+        let response = super::handler_debug_witness(
+            State(app),
+            HeaderMap::new(),
+            crate::loopback_connect_info(),
+            Some(crate::utils::extractors::ExtractAccept(
+                HeaderValue::from_static("application/json"),
+            )),
+        )
+        .await
+        .expect("profile gate returns an HTTP response");
+        assert_eq!(response.status(), expected_status, "profile {profile:?}");
+    }
+}
+
+#[cfg(feature = "telemetry")]
+#[tokio::test]
+async fn debug_witness_operator_and_telemetry_profile_matrix() {
+    const ROUTES: &[iroha_torii_shared::route_catalog::RouteDescriptor] =
+        &[route_catalog::telemetry::DEBUG_WITNESS];
+    let descriptor = &ROUTES[0];
+    let uri = descriptor
+        .path()
+        .parse::<crate::Uri>()
+        .expect("debug witness URI");
+    let rogue_signer = checked_torii_test_keypair_from_seed_byte(
+        0xd1,
+        Algorithm::Secp256k1,
+        "derive untrusted debug-witness operator fixture key",
+    );
+
+    for (profile, expected_signed_status) in [
+        (TelemetryProfile::Disabled, StatusCode::SERVICE_UNAVAILABLE),
+        (TelemetryProfile::Operator, StatusCode::SERVICE_UNAVAILABLE),
+        (TelemetryProfile::Extended, StatusCode::SERVICE_UNAVAILABLE),
+        (TelemetryProfile::Developer, StatusCode::OK),
+        (TelemetryProfile::Full, StatusCode::OK),
+    ] {
+        let app = mk_app_state_for_tests();
+        let mut inner = Arc::try_unwrap(app)
+            .unwrap_or_else(|_| panic!("debug-witness fixture must have one app-state owner"));
+        inner.telemetry = inner.telemetry.with_profile(profile);
+        let app = Arc::new(inner);
+        let mut builder = RouterBuilder::new(
+            app.clone(),
+            RouteCatalog::new(ROUTES),
+            compiled_route_features(),
+        )
+        .expect("debug witness route catalog is valid");
+        builder.route(
+            descriptor,
+            catalog_get(super::handler_debug_witness).authenticated_operator(app.clone()),
+        );
+        let (router, _) = builder
+            .finish()
+            .expect("debug witness route mounts exactly once");
+        let router = router.with_state(app.clone());
+        let make_request = |headers: HeaderMap| {
+            let mut request = axum::http::Request::builder()
+                .method(axum::http::Method::GET)
+                .uri(uri.clone())
+                .header(axum::http::header::ACCEPT, "application/json")
+                .extension(crate::loopback_connect_info())
+                .body(axum::body::Body::empty())
+                .expect("debug witness request");
+            request.headers_mut().extend(headers);
+            request
+        };
+
+        let unsigned = router
+            .clone()
+            .oneshot(make_request(HeaderMap::new()))
+            .await
+            .expect("unsigned debug witness response");
+        assert_eq!(
+            unsigned.status(),
+            StatusCode::UNAUTHORIZED,
+            "unsigned profile {profile:?}"
+        );
+
+        let rogue_headers = operator_signatures::signed_request_headers(
+            &rogue_signer,
+            app.state.network_id_ref(),
+            &crate::Method::GET,
+            &uri,
+            &[],
+        )
+        .expect("untrusted operator request signature");
+        let untrusted = router
+            .clone()
+            .oneshot(make_request(rogue_headers))
+            .await
+            .expect("untrusted debug witness response");
+        assert_eq!(
+            untrusted.status(),
+            StatusCode::UNAUTHORIZED,
+            "untrusted profile {profile:?}"
+        );
+
+        let operator_headers = operator_signatures::signed_request_headers(
+            &app.da_receipt_signer,
+            app.state.network_id_ref(),
+            &crate::Method::GET,
+            &uri,
+            &[],
+        )
+        .expect("trusted operator request signature");
+        let signed = router
+            .oneshot(make_request(operator_headers))
+            .await
+            .expect("signed debug witness response");
+        assert_eq!(
+            signed.status(),
+            expected_signed_status,
+            "signed profile {profile:?}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn torii_tx_rate_uses_config_and_queue_default() {
     let mut cfg = crate::test_utils::mk_minimal_root_cfg();
@@ -2211,7 +2359,8 @@ async fn torii_tx_rate_uses_config_and_queue_default() {
         OnlinePeersProvider::new(peers_rx),
         None,
         routing::MaybeTelemetry::disabled(),
-    );
+    )
+    .expect("valid Torii test fixture");
     assert!(
         torii
             .tx_rate_limiter
@@ -2276,7 +2425,8 @@ async fn torii_ram_lfe_uses_config_runtime() {
         OnlinePeersProvider::new(peers_rx),
         None,
         routing::MaybeTelemetry::disabled(),
-    );
+    )
+    .expect("valid Torii test fixture");
     assert!(
         torii.identifier_resolver.is_some(),
         "Torii should build an in-process identifier resolver from config"
@@ -2489,6 +2639,42 @@ async fn handler_post_transaction_uses_tx_rate_limiter() {
     };
     assert_eq!(err.into_response().status(), StatusCode::TOO_MANY_REQUESTS);
 }
+
+#[tokio::test]
+async fn invalid_transaction_signature_does_not_charge_claimed_authority_bucket() {
+    let mut app = mk_app_state_for_tests();
+    {
+        let app_mut = Arc::get_mut(&mut app).expect("unique app state");
+        app_mut.high_load_tx_threshold = usize::MAX;
+        app_mut.tx_rate_limiter = limits::RateLimiter::new(Some(1), Some(1));
+        app_mut.fee_policy = FeePolicy::Disabled;
+    }
+    let keypair = checked_torii_test_ed25519_keypair(
+        0xc0,
+        "derive invalid-signature authority-limiter fixture key",
+    );
+    let authority = AccountId::new(keypair.public_key().clone());
+    let signed = signed_log_transaction_for_test(
+        *app.state.network_id_ref(),
+        authority.clone(),
+        "invalid-signature-must-not-charge-authority",
+        &keypair,
+    );
+    let invalid = transaction_with_invalid_signature_for_test(signed);
+    let error = post_signed_transaction_for_test(app.clone(), HeaderMap::new(), &invalid)
+        .await
+        .expect_err("invalid signature must be rejected");
+    assert_eq!(
+        torii_response_header(&error.into_response(), "x-iroha-reject-code"),
+        Some(SignatureRejectionCode::InvalidSignature.as_str())
+    );
+    assert!(
+        app.tx_rate_limiter
+            .allow(&transaction_verified_authority_key(&authority))
+            .await,
+        "an unverified claimed authority must not select or consume the authority limiter"
+    );
+}
 #[tokio::test]
 async fn handler_post_transaction_reports_full_queue_before_rate_limit() {
     let mut app = mk_app_state_for_tests();
@@ -2533,10 +2719,11 @@ async fn handler_post_transaction_uses_authenticated_api_token_rate_limit_key() 
     {
         let app_mut = Arc::get_mut(&mut app).expect("unique app state");
         app_mut.high_load_tx_threshold = usize::MAX;
-        app_mut.tx_rate_limiter = limits::RateLimiter::new(Some(1), Some(1));
+        app_mut.tx_preauth_rate_limiter = limits::RateLimiter::new(Some(1), Some(1));
         app_mut.fee_policy = FeePolicy::Disabled;
         app_mut.require_api_token = true;
-        app_mut.api_tokens_set = Arc::new(HashSet::from(["shared-token".to_owned()]));
+        app_mut.api_token_digests =
+            Arc::new(limits::ApiTokenDigestSet::from_tokens(["shared-token"]));
     }
     let first_keypair = checked_torii_test_ed25519_keypair(
         0xc2,

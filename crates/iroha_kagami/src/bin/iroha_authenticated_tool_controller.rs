@@ -23,12 +23,6 @@ use std::{
     time::Duration,
 };
 
-#[cfg(feature = "dev-tools")]
-#[path = "iroha_authenticated_tool_controller/kagemusha_promotion_publisher.rs"]
-mod kagemusha_promotion_publisher;
-#[path = "iroha_authenticated_tool_controller/kagemusha_python_launcher.rs"]
-mod kagemusha_python_launcher;
-
 #[cfg(target_os = "macos")]
 use std::{
     fs::File,
@@ -155,16 +149,6 @@ fn entrypoint(arguments: Vec<OsString>) -> Result<u8> {
         Some("run-v1") => run(parse_request(&arguments[2..])?),
         Some("qualify-host-v1") => qualify_host(&arguments[2..]),
         Some("qualification-probe-v1") => qualification_probe(&arguments[2..]),
-        Some("launch-kagemusha-readiness-v1") => {
-            kagemusha_python_launcher::launch_readiness(&arguments[2..])
-        }
-        Some("launch-kagemusha-sealed-builder-v1") => {
-            kagemusha_python_launcher::launch_sealed_builder(&arguments[2..])
-        }
-        #[cfg(feature = "dev-tools")]
-        Some("promote-kagemusha-release-v4") => {
-            kagemusha_promotion_publisher::promote(&arguments[2..])
-        }
         _ => Err(ControllerError::policy("unsupported subcommand")),
     }
 }

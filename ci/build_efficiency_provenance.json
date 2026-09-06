@@ -21,6 +21,20 @@
       "descendant": "HEAD"
     }
   ],
+  "historical_source_budget": {
+    "baseline": 5067263,
+    "ceiling": 4540000,
+    "commit_role": "source_budget_baseline",
+    "excluded_prefixes": [
+      "docs/portal/node_modules/",
+      "target/",
+      "vendor/"
+    ],
+    "path": "ci/source_file_budget.json",
+    "ratchet_ceiling": 5014603,
+    "schema_version": 1,
+    "working_target": 4500000
+  },
   "lineage": {
     "donor": {
       "commit": "d130c985b46ff8beb99c20b25b36bbdeb506e4c9",
@@ -81,7 +95,7 @@
     }
   },
   "object_format": "sha1",
-  "schema_version": 1,
+  "schema_version": 2,
   "selected_paths": [
     {
       "donor": {
@@ -257,15 +271,14 @@
     }
   },
   "source_budget": {
-    "baseline": 5067263,
-    "ceiling": 4540000,
-    "commit_role": "source_budget_baseline",
     "excluded_prefixes": [
       "docs/portal/node_modules/",
       "target/",
       "vendor/"
     ],
     "path": "ci/source_file_budget.json",
-    "schema_version": 1
+    "production_limit": 5000,
+    "schema_version": 2,
+    "test_limit": 3000
   }
 }

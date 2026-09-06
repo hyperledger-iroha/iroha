@@ -41,9 +41,11 @@ Torii runtime accepts only a deployment-owned
 `PopCredentialRuntimeProviderRegistryV1`: it qualifies that registry before
 opening issuer or wallet state, resolves one coherent runtime-only provider
 set, and rejects missing, substituted, stale/revoked, test-marked, or drifting
-registries. Qualified external software signer, KMS, authentication, private issuance/witness,
-ledger, and finalized-time wrappers recheck the pinned registry before and
-after provider operations and discard provider results on qualification drift.
+registries. Qualified signer, wallet key-wrapper, authentication, private
+issuance/witness, ledger, and finalized-time providers recheck the pinned
+registry before and after provider operations and discard provider results on
+qualification drift. Signer and key-wrapper implementations are deployment-owned
+and must satisfy the same provider contract.
 Every public read and caller-driven transition now authenticates the exact
 request before advancing the durable registry projection to the exact
 independently sampled finalized block height and hash; reader failure, a
@@ -64,11 +66,13 @@ the platform-fixed authenticated broker client; the public broker launcher
 serves the exact PoP resolve, external software signing, authentication, registry
 submit/read, issuance-draft, wallet wrap/unwrap/witness, and finalized-time
 operations. A deployment must still supply and supervise a broker executable
-whose backend registry is backed by a genuine external software signer, KMS, authentication, private
-issuance/witness, committed-ledger, and finalized-time providers. Enabling
+whose backend registry is backed by qualified deployment-selected signer,
+wallet key-wrapper, authentication, private issuance/witness, committed-ledger,
+and finalized-time providers. Every implementation must satisfy the same
+provider contract. Enabling
 `sorafs.storage.pop_credentials` without that qualified broker fails startup;
-no file-key, environment-key, software-signing, or process-clock fallback is
-permitted. The native registry remains available through signed transactions
+no plaintext/manual, configuration-key, environment-key, unqualified in-process
+signing, or process-clock fallback is permitted. The native registry remains available through signed transactions
 and typed queries. The authoritative moderation intake now pins
 its active root, revocation list, issuer-policy digest, and audit head; juror
 enrollment verifies exact-canonical Halo2 membership proofs against that
@@ -94,8 +98,8 @@ revocation-list digests, so rollout packets cannot mix evidence from different
 credential publication runs. Root or revocation-list disagreements mark the
 offending anchor and downstream artifacts invalid in the emitted summary, not
 only the top-level promotion status. This checker is a rollout gate; it does
-not replace the deployment-owned broker executable, genuine external software signer/KMS and
-authentication backends, or deployed verifier evidence.
+not replace the deployment-owned broker executable, qualified signer,
+key-wrapper, and authentication backends, or deployed verifier evidence.
 Verifier-service artifacts also publish `policy_digest_hex`; governance
 approval artifacts must bind `policy_digest_hex` to that valid verifier policy
 digest, and the checker emits those valid verifier policy digests as
@@ -358,7 +362,7 @@ all accept/reject results are deterministic across supported hardware.
 | Enrollment portal | Captures encrypted candidate enrollment and governed approvals. | The authenticated submit/status/approval API, durable encrypted workflow, and broker authentication operation are shipped; operator UI, WebAuthn enrollment ceremony, and a genuine deployment-owned authenticator backend remain open. |
 | Credential issuer | Signs credentials, updates commitment roots, and publishes rollups. | The bounded durable service, external software-signer interface, strict policy binding, issuance/revocation APIs, retry-safe outbox, and standard-daemon broker wiring are shipped; a genuine independently administered software-signing backend and deployment evidence remain open. |
 | Credential registry | Stores commitment roots, revocation updates, and event digests. | Consensus-owned state, typed queries, authenticated submit/reconcile/projection APIs, cursor rollback rejection, durable reconciliation, and broker transaction/read operations are shipped; a deployment-owned committed-state backend and multi-peer evidence remain open. |
-| Juror client | Stores credentials, syncs revocations, and generates proofs. | Encrypted KMS-wrapped wallet custody, delivery/import/acknowledgement, witness synchronization, local proof APIs, and broker wallet operations are shipped; a genuine deployment-owned KMS/witness backend and operator client remain open. |
+| Juror client | Stores credentials, syncs revocations, and generates proofs. | Encrypted provider-wrapped wallet custody, delivery/import/acknowledgement, witness synchronization, local proof APIs, and broker wallet operations are shipped; a qualified deployment-owned key-wrapper/witness backend and operator client remain open. |
 | Verification service | Validates juror proofs for sortition, voting, and appeal panels. | The Halo2/IPA verifier, atomic nullifier replay defense, native moderation integration, authenticated verification API, `sorafs-validate pop`, SDK/bridge reference gate, and standard broker adapter are shipped; a genuine runtime backend and reviewed deployment evidence remain open. |
 
 Do not document `sorafs pop sync`, `sorafs pop status`,
@@ -380,7 +384,7 @@ package must implement
 `RuntimeProviderBrokerBackendsV1`, and resolve:
 
 - the runtime-only enrollment and wallet hybrid recipient secrets;
-- the governed external software issuer signer and KMS/PKCS#11 wallet-key wrapper;
+- the governed issuer signer and deployment-selected wallet-key wrapper;
 - the action/request-bound API authenticator;
 - the ledger transaction submitter and finalized registry reader;
 - private issuance-draft and wallet-witness providers; and
@@ -398,7 +402,7 @@ credentials, witnesses, attestations, and PII must not come from
 
 Closure requires the stock `irohad` plus a supervised deployment-broker
 executable to pass startup with PoP enabled, provider-unavailable and
-config/runtime-mismatch negatives, signer/KMS/authenticator and finalized-time
+config/runtime-mismatch negatives, signer/key-wrapper/authenticator and finalized-time
 rotation/rollback tests, restart reconciliation, and a four-validator reference
 deployment run. Operators without that qualified deployment backend must leave
 `sorafs.storage.pop_credentials.enabled = false`; the intentional
@@ -408,7 +412,8 @@ enabled-without-runtime startup failure must not be bypassed.
 
 - Resolve `V1-BLOCK-POP-RUNTIME-01` by packaging and supervising the genuine
   deployment-owned backend through the shipped broker launcher; do not add a
-  software-key, file-key, environment, or process-clock fallback.
+  plaintext/manual, configuration-key, environment, unqualified in-process, or
+  process-clock fallback. A qualified deployment-owned provider is not a fallback.
 - Deploy the native registry on a reviewed multi-validator environment and
   collect restart, reconciliation, rollback-rejection, key/time rotation, and
   audit-head evidence through the shipped Torii facade.

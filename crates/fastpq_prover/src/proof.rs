@@ -447,7 +447,28 @@ fn verify_prechecked_with_semantics(
 /// Returns the same cryptographic, encoding, or verifier-limit errors as [`verify_with_limits`].
 #[cfg(any(test, feature = "dev-tools"))]
 pub fn verify_raw_statement(batch: &TransitionBatch, proof: &Proof) -> Result<()> {
-    verify_with_limits_raw(batch, proof, VerifyLimits::default())
+    verify_raw_statement_with_limits(batch, proof, VerifyLimits::default())
+}
+
+/// Verify a raw cryptographic fixture under explicit, finite resource limits.
+///
+/// Available only to tests and `dev-tools`, this applies every normal resource
+/// and cryptographic check without assigning state-transition semantics. The
+/// caller must select the fixture budget; the verifier never expands it from
+/// proof-controlled lengths. Production verification remains subject to its
+/// authenticated semantic profile and independently selected admission limits.
+///
+/// # Errors
+///
+/// Returns the same cryptographic, encoding, or verifier-limit errors as
+/// [`verify_with_limits`].
+#[cfg(any(test, feature = "dev-tools"))]
+pub fn verify_raw_statement_with_limits(
+    batch: &TransitionBatch,
+    proof: &Proof,
+    limits: VerifyLimits,
+) -> Result<()> {
+    verify_with_limits_raw(batch, proof, limits)
 }
 
 fn verify_with_limits_raw(
@@ -1596,9 +1617,6 @@ mod tests {
             .expect("modulus reduction fits in u64")
     }
 
-    fn verify(batch: &TransitionBatch, proof: &Proof) -> Result<()> {
-        verify_with_limits_raw(batch, proof, VerifyLimits::default())
-    }
     fn verify_with_limits(
         batch: &TransitionBatch,
         proof: &Proof,
@@ -2043,6 +2061,47 @@ mod tests {
         let batch = sample_batch();
         let proof = prover.prove_raw_statement(&batch).unwrap();
         verify_raw_statement(&batch, &proof).unwrap();
+    }
+    #[test]
+    fn raw_fixture_verifier_preserves_explicit_admission_limits() {
+        let batch = sample_batch();
+        let proof = materialise_sample_artifact(sample_backend_artifact()).unwrap();
+        let limits = VerifyLimits {
+            max_proof_bytes: 0,
+            ..VerifyLimits::default()
+        };
+        assert!(matches!(
+            verify_raw_statement_with_limits(&batch, &proof, limits),
+            Err(Error::VerifierLimitExceeded {
+                limit: "max_proof_bytes",
+                max: 0,
+                ..
+            })
+        ));
+        assert_eq!(VerifyLimits::default().max_proof_bytes, 512 * 1024);
+    }
+    #[test]
+    fn raw_proof_is_independent_of_ambient_norito_layout() {
+        let prover = Prover::canonical_with_execution_mode(
+            "fastpq-state-transition-stark-v1",
+            ExecutionMode::Cpu,
+        )
+        .unwrap();
+        let batch = sample_batch();
+        let canonical = prover.prove_raw_statement(&batch).expect("canonical proof");
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let alternate = {
+            let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            verify_raw_statement(&batch, &canonical)
+                .expect("a proof must verify in another decode context");
+            prover
+                .prove_raw_statement(&batch)
+                .expect("proof generated in another decode context")
+        };
+        assert_eq!(canonical, alternate);
+        verify_raw_statement(&batch, &alternate)
+            .expect("canonical verification of alternate proof");
     }
     #[test]
     fn strict_state_profile_accepts_unchanged_empty_batch() {
@@ -4445,6 +4504,30 @@ mod tests {
         assert_digest_path(&proof.air_openings[0].composition_path);
         assert_digest_path(&proof.fri_queries[0].rounds[0].merkle_path);
         assert_digest_path(&proof.fri_queries[0].final_merkle_path);
+    }
+
+    #[test]
+    fn proof_norito_decode_rejects_noncanonical_extension_elements() {
+        let baseline = proof_with_every_goldilocks_container();
+        for location in 0..4 {
+            for coefficient in 0..4 {
+                let mut proof = baseline.clone();
+                let value = match location {
+                    0 => &mut proof.betas[0],
+                    1 => &mut proof.fri_queries[0].rounds[0].values[0],
+                    2 => &mut proof.fri_queries[0].rounds[0].folded_value,
+                    _ => &mut proof.fri_queries[0].final_values[0],
+                };
+                let mut coefficients = value.coefficients();
+                coefficients[coefficient] = GOLDILOCKS_MODULUS;
+                *value = GoldilocksFp4V1::from_coefficients_unchecked_for_test(coefficients);
+                let bytes = norito::core::to_bytes(&proof).expect("encode adversarial proof");
+                assert!(
+                    norito::decode_from_bytes::<Proof>(&bytes).is_err(),
+                    "Fp4 location {location}, coefficient {coefficient} must fail at wire decode"
+                );
+            }
+        }
     }
 
     #[test]

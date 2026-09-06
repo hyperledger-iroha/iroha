@@ -1,9 +1,10 @@
-//! Feature-isolated process-cut hooks for real-network Native AMX tests.
+//! Feature-isolated process-cut hooks for real-network Native AMX and atomic
+//! private-settlement tests.
 //!
 //! Shipping builds do not compile this module. The dedicated adversarial-test daemon supplies a
-//! private, per-peer control directory. A canonical command names one exact Native AMX source and
-//! phase; the hook durably acknowledges that the phase was crossed and then aborts the process. The
-//! acknowledgement makes the command one-shot across restart.
+//! private, per-peer control directory. A canonical command names one exact protocol source and
+//! phase; the hook durably acknowledges that the phase was crossed and then aborts the process.
+//! The acknowledgement makes the command one-shot across restart.
 #[cfg(test)]
 use norito::json::Map;
 use norito::json::Value;
@@ -27,7 +28,7 @@ const FORMAT_VERSION: u64 = 1;
 const MAX_FILE_BYTES: usize = 4 * 1024;
 #[cfg(feature = "test-network-native-amx-fault-injection")]
 static HOOK_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-/// Exact Native AMX phase at which the adversarial-test daemon aborts.
+/// Exact protocol phase at which the adversarial-test daemon aborts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum NativeAmxFaultPhase {
     /// A participant PrepareQC was authenticated and aggregated.
@@ -36,6 +37,20 @@ pub(crate) enum NativeAmxFaultPhase {
     AfterCommitQc,
     /// The complete result-bearing block overlay exists immediately before WSV publication.
     BeforeWorldCommit,
+    /// A private-settlement provisional proof sidecar and its directory entry are durable.
+    AfterPrivateSettlementSidecarFsync,
+    /// A private-settlement verified delta and its reservations are durable.
+    AfterPrivateSettlementStagedDeltaFsync,
+    /// A private-settlement Prepare QC is durable in the leg journal.
+    AfterPrivateSettlementPrepareQcFsync,
+    /// A private-settlement Commit QC is durable in the leg journal.
+    AfterPrivateSettlementCommitQcFsync,
+    /// A block containing a private-settlement carrier is durable in Kura.
+    AfterPrivateSettlementKuraAppend,
+    /// A private-settlement carrier has been published atomically to WSV.
+    AfterPrivateSettlementWsvApplication,
+    /// A committee's terminal private-settlement receipt is durable and queryable.
+    AfterPrivateSettlementReceiptPublication,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct FaultCommand {
@@ -49,7 +64,7 @@ enum Evaluation {
     AlreadyAcknowledged,
     Triggered,
 }
-/// Abort the feature-isolated daemon after durably acknowledging an exact cut.
+/// Abort the feature-isolated daemon after durably acknowledging an exact protocol cut.
 #[cfg(feature = "test-network-native-amx-fault-injection")]
 pub(crate) fn maybe_abort(phase: NativeAmxFaultPhase, source_id: [u8; 32]) {
     let Some(root) = env::var_os(CONTROL_DIR_ENV).map(PathBuf::from) else {
@@ -138,6 +153,27 @@ fn parse_command(bytes: &[u8]) -> Result<FaultCommand, String> {
         Some("after_prepare_qc") => NativeAmxFaultPhase::AfterPrepareQc,
         Some("after_commit_qc") => NativeAmxFaultPhase::AfterCommitQc,
         Some("before_world_commit") => NativeAmxFaultPhase::BeforeWorldCommit,
+        Some("after_private_settlement_sidecar_fsync") => {
+            NativeAmxFaultPhase::AfterPrivateSettlementSidecarFsync
+        }
+        Some("after_private_settlement_staged_delta_fsync") => {
+            NativeAmxFaultPhase::AfterPrivateSettlementStagedDeltaFsync
+        }
+        Some("after_private_settlement_prepare_qc_fsync") => {
+            NativeAmxFaultPhase::AfterPrivateSettlementPrepareQcFsync
+        }
+        Some("after_private_settlement_commit_qc_fsync") => {
+            NativeAmxFaultPhase::AfterPrivateSettlementCommitQcFsync
+        }
+        Some("after_private_settlement_kura_append") => {
+            NativeAmxFaultPhase::AfterPrivateSettlementKuraAppend
+        }
+        Some("after_private_settlement_wsv_application") => {
+            NativeAmxFaultPhase::AfterPrivateSettlementWsvApplication
+        }
+        Some("after_private_settlement_receipt_publication") => {
+            NativeAmxFaultPhase::AfterPrivateSettlementReceiptPublication
+        }
         _ => return Err("unknown fault phase".to_owned()),
     };
     let source_literal = object
@@ -237,6 +273,27 @@ mod tests {
             NativeAmxFaultPhase::AfterPrepareQc => "after_prepare_qc",
             NativeAmxFaultPhase::AfterCommitQc => "after_commit_qc",
             NativeAmxFaultPhase::BeforeWorldCommit => "before_world_commit",
+            NativeAmxFaultPhase::AfterPrivateSettlementSidecarFsync => {
+                "after_private_settlement_sidecar_fsync"
+            }
+            NativeAmxFaultPhase::AfterPrivateSettlementStagedDeltaFsync => {
+                "after_private_settlement_staged_delta_fsync"
+            }
+            NativeAmxFaultPhase::AfterPrivateSettlementPrepareQcFsync => {
+                "after_private_settlement_prepare_qc_fsync"
+            }
+            NativeAmxFaultPhase::AfterPrivateSettlementCommitQcFsync => {
+                "after_private_settlement_commit_qc_fsync"
+            }
+            NativeAmxFaultPhase::AfterPrivateSettlementKuraAppend => {
+                "after_private_settlement_kura_append"
+            }
+            NativeAmxFaultPhase::AfterPrivateSettlementWsvApplication => {
+                "after_private_settlement_wsv_application"
+            }
+            NativeAmxFaultPhase::AfterPrivateSettlementReceiptPublication => {
+                "after_private_settlement_receipt_publication"
+            }
         };
         let mut object = Map::new();
         object.insert("phase".to_owned(), Value::from(phase));
@@ -305,5 +362,26 @@ mod tests {
         );
         let uppercase = norito::json::to_json(&value).expect("encode uppercase source");
         assert!(parse_command(uppercase.as_bytes()).is_err());
+    }
+
+    #[test]
+    fn parser_accepts_every_private_settlement_durability_boundary() {
+        let phases = [
+            NativeAmxFaultPhase::AfterPrivateSettlementSidecarFsync,
+            NativeAmxFaultPhase::AfterPrivateSettlementStagedDeltaFsync,
+            NativeAmxFaultPhase::AfterPrivateSettlementPrepareQcFsync,
+            NativeAmxFaultPhase::AfterPrivateSettlementCommitQcFsync,
+            NativeAmxFaultPhase::AfterPrivateSettlementKuraAppend,
+            NativeAmxFaultPhase::AfterPrivateSettlementWsvApplication,
+            NativeAmxFaultPhase::AfterPrivateSettlementReceiptPublication,
+        ];
+        for (index, phase) in phases.into_iter().enumerate() {
+            let encoded = command(
+                u64::try_from(index + 1).expect("small revision"),
+                phase,
+                [u8::try_from(index + 1).expect("small source seed"); 32],
+            );
+            assert_eq!(parse_command(&encoded).expect("parse phase").phase, phase);
+        }
     }
 }

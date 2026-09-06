@@ -1,0 +1,5 @@
+error: NoritoSchema requires #[norito_schema(name = "canonical identity")]
+ --> tests/ui/fail/schema_identity_missing.rs:3:8
+  |
+3 | struct Missing;
+  |        ^^^^^^^

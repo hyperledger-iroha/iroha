@@ -346,7 +346,7 @@ fn fallback_config_derives_checked_signing_key() {
         .expect("fallback signature should verify");
 }
 #[test]
-fn fallback_config_is_limited_to_offline_commands() {
+fn fallback_config_is_limited_to_kagemusha_commands() {
     let args = Args::try_parse_from([
         "iroha",
         "app",

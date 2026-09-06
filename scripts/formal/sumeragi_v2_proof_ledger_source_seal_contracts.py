@@ -594,6 +594,7 @@ _KURA_PRODUCTION_COMPONENT_FILES = (
     "kura/block_store_definition_and_test_controls.rs",
     "kura/startup_finality_session_reads.rs",
     "kura/pipeline_and_lane_artifacts.rs",
+    "kura/canonical_autonomous_replica.rs",
     "kura/autonomous_terminal_capacity.rs",
     "kura/autonomous_publication_temp_recovery.rs",
     "kura/historical_autonomous_recovery_temp_reconciliation.rs",
@@ -606,6 +607,7 @@ _KURA_PRODUCTION_COMPONENT_FILES = (
     "kura/autonomous_retired_attempt.rs",
     "kura/autonomous_application_evidence.rs",
     "kura/indexed_sidecar_io.rs",
+    "kura/consensus_storage_reads.rs",
     "kura/indexed_sidecar_rewrite.rs",
     "kura/lane_history_compaction.rs",
     "kura/prune_block_store_tail.rs",
@@ -635,10 +637,11 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'block/bootstrap_and_genesis_tests.rs',
     ),
     'crates/iroha_config/src/parameters/actual.rs': (
+        'actual/torii_sccp_replay_archive.rs',
         'actual/torii_tx_history.rs',
         'actual/torii_http_transport.rs',
         'actual/torii_mcp_profile.rs',
-        'actual/offline.rs',
+        'actual/kagemusha.rs',
         'actual/tests.rs',
     ),
     'crates/iroha_config/src/parameters/actual/tests.rs': (
@@ -650,6 +653,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'user_soranet_handshake_tests.rs',
         'user/torii_peer_geo.rs',
         'user/torii_soranet_privacy_ingest.rs',
+        'user/torii_sccp_replay_archive.rs',
         'user/torii_tx_history.rs',
         'user/sorafs_moderation_query_bound_tests.rs',
         'user/governance_dag_head_mode_tests.rs',
@@ -657,6 +661,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'user/zk_attachment_retention_tests.rs',
         'user/query_fanout_memory_tests.rs',
         'user/app_routed_read_body_timeout_tests.rs',
+        'user/torii_api_connect_exactness_tests.rs',
         'user/operator_signature_body_timeout_tests.rs',
         'user/verified_source_ingress_tests.rs',
         'user/iso_bridge_store_memory_tests.rs',
@@ -701,6 +706,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'kura/tests/07j_certified_bundle_capacity_tests.rs',
         'kura/tests/07k_historical_atomic_temp_recovery_tests.rs',
         'kura/tests/07l_pending_canonical_capacity_tests.rs',
+        'kura/tests/07m_canonical_autonomous_replica_tests.rs',
         'kura/tests/08_lane_receipts_and_artifacts.rs',
         'kura/tests/08a_certified_lane_block_read_tests.rs',
         'kura/tests/08b_lane_history_compaction_capacity_tests.rs',
@@ -749,6 +755,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'queue/transaction_guard_return_tests.rs',
         'queue/queue_metadata_and_admission_tests.rs',
         'queue/instruction_and_state_routing_tests.rs',
+        'queue/kagemusha_top_up_admission_tests.rs',
         'queue/routing_batch_admission_tests.rs',
         'queue/config_factory_test_support.rs',
         'queue/teu_limit_and_backlog_tests.rs',
@@ -838,7 +845,6 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'peer_tests.rs',
     ),
     'crates/irohad/src/main.rs': (
-        'main/kagemusha_runtime_effective_config_projection.rs',
         'main/shared_sorafs_provider_cache_tests.rs',
         'main/runtime_deps.rs',
         'sumeragi_lane_relay_item.rs',
@@ -846,8 +852,6 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'main/resolved_genesis_trust_anchor_wrong_hash_test.rs',
         'main_tests/governance_dag_publisher_binding_signer.rs',
         'main/governance_dag_launcher_tests.rs',
-        'main/kagemusha_runtime_effective_config_projection_tests.rs',
-        'main/kagemusha_startup_source_tests.rs',
         'main/runtime_budget_and_config_tests.rs',
         'main/startup_tail_tests.rs',
     ),
@@ -878,6 +882,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'v2_ready_durable_validate_adapter_preview.rs',
         'v2_recovered_lifecycle_sign_completion.rs',
         'v2_wire_registry_and_authentication.rs',
+        'tests/v2_adapter_leader_wire_consumer.rs',
         'tests/v2_adapter_main_00.rs',
         'tests/v2_adapter_main_01.rs',
         'tests/v2_adapter_main_02.rs',
@@ -1002,7 +1007,6 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'tests/v2_worker_main_02.rs',
         'tests/v2_worker_main_04.rs',
         'tests/v2_worker_main_05.rs',
-        'tests/v2_worker_kagemusha_runtime_gate.rs',
     ),
     'crates/iroha_core/src/sumeragi/v2_worker_io_execution.rs': (
         'v2_worker/exact_output_rollover_claim.rs',
@@ -1084,6 +1088,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
     'crates/iroha_core/src/sumeragi/v2_lane_work.rs': (
         'v2_lane_work/canonical_executed_block_application_repair.rs',
         'v2_lane_work/queue_plan_admission_handoff.rs',
+        'v2_lane_work/signing_authority_tests.rs',
         'v2_lane_work/native_amx_signing_guard_capacity_boundary_test.rs',
         'v2_lane_work/typed_finality_handoff_tests.rs',
         'v2_lane_work/terminal_retirement_journal_failure_test.rs',
@@ -1092,6 +1097,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'tests/v2_lane_work_observer_role.rs',
         'tests/v2_lane_work_native_body_recovery.rs',
         'tests/v2_lane_work_lifecycle_and_recovery_cases.rs',
+        'v2_lane_work/strict_historical_read_tests.rs',
         'v2_lane_work/canonical_executed_block_recovery_drift_test.rs',
         'v2_lane_work/historical_recovery_and_carrier_tests.rs',
         'v2_lane_work_autonomous_ready_durability_tests.rs',
@@ -1710,6 +1716,7 @@ _PRODUCTION_CAUSAL_FIFO_NONFORGEABLE_HELPER_CHAIN = (
     "runtime_queue_occurrence_set_matches_snapshot",
     "runtime_queue_selection_seal_projection_hash",
     "matches_scheduler_occurrence",
+    "take_lifecycle_apply_predecessor_scheduler_ownership",
     "runtime_scheduler_projection_hash",
     "current_signature_fence_identity",
     "clear_fence_retry_blocked_fifo_owners",
@@ -1725,10 +1732,10 @@ _PRODUCTION_CAUSAL_FIFO_NONFORGEABLE_ITEM_SHA256 = {
         "a113678ffffef7c7bfae9ba827bfddff80e069dd1c1e84d9dbb5525e99138103"
     ),
     "ownership_snapshot": (
-        "b46fe089ce520f215926646c49fb991755ae3e2ba6b4dda5242808df6f8d0645"
+        "d002623b759dd1fffbac625eb7548bc5132d585152f09899225d21ee6afb47bc"
     ),
     "mint_selection_seal": (
-        "3f4a3eaaa3f1a703392d04b9c05262f2638c2bb3d4f65a9e247b83a0c1a44af8"
+        "59f22305128c3f73214ce245c4a00c1f48b39c326ceecd42a5b05fd6280e71e0"
     ),
     "contains_queue_occurrence_owner": (
         "c116a2a5423be69a43d6dbf13c00525a416f974020cd96ad7f55282a27293a98"
@@ -1761,16 +1768,19 @@ _PRODUCTION_CAUSAL_FIFO_NONFORGEABLE_ITEM_SHA256 = {
         "c220a852adcdb9e7a2a20cec297ee79a87cf5b88acac55410eac3c824614d1a6"
     ),
     "runtime_queue_ownership_snapshot_projection_hash": (
-        "bb6d0062be867b73c5269979c4f850bc9614e8f15c76f65c60dbc9e44d497eb9"
+        "caee9055cfaba7311c80ff277132c5a9c9745591160077ad2f54f627e112b979"
     ),
     "runtime_queue_occurrence_set_matches_snapshot": (
         "c89fd5e9e3df83fb51e201555e53799c625c9978932fb61be844476ad2c977be"
     ),
     "runtime_queue_selection_seal_projection_hash": (
-        "b9036732219388125a51d4652ce4143aaefe00574d7f9f9f359cc90b76b56368"
+        "4746160272b5e345cfb4493eb1af357e43859472bced3bfa665662b59aa9711b"
     ),
     "matches_scheduler_occurrence": (
-        "355052d58f6acbf00d4c7164d0e54a3e13044a087150cd4d56643110f2d51ed6"
+        "2ada5ddfab7917291ad14df7c9fa937179a26f288b205bc58d25a75e666e921d"
+    ),
+    "take_lifecycle_apply_predecessor_scheduler_ownership": (
+        "85a0ccb0c757bf338fd76012430dc6d93ab414d4f9fc46975bc04c862105ae9f"
     ),
     "runtime_scheduler_projection_hash": (
         "415a47652facf9236a0205764edc92f3eb545f35e2f83b9a3562a417bf77c1ba"
@@ -1803,13 +1813,13 @@ _PRODUCTION_CAUSAL_FIFO_NONFORGEABLE_ITEM_SHA256 = {
         "e8544136325028c614b22287649c3e7af5779669328b0b64918093edabb8302a"
     ),
     "queue_snapshot_validate_identity": (
-        "9ee5bf23ffa531c168a3722a216ef32a9c2cf83f4265e25dde0fe750b4fa890f"
+        "7e416721e12641898ec94bc82b4366d87988f01158cb9ac4749937289266f03e"
     ),
     "queue_selection_validate_identity": (
-        "94d5ca84828c28e62e55af3682b290e5d02eb1db477243ae0a25ad55c39d1542"
+        "b75fb3308b71cdc0850880d5cc6354614e9600b30d5cf8c3302cc2bf5ec1919d"
     ),
     "queue_selection_kind_code": (
-        "08b07eaf05cd85228dc54c2f49a2b54071814c916a19e92cb3cff56fd5eb2518"
+        "50aa9dd2545a88137b59941c3883f50846555cb5c4f5fd69b39df9b53bd3e8b4"
     ),
     "view_blocked_authorization_struct": (
         "fec50a1d9938ec78bdf262bb973e4943802843a0d4a48c0be4bf2624dff3c0dd"
@@ -1821,10 +1831,10 @@ _PRODUCTION_CAUSAL_FIFO_NONFORGEABLE_ITEM_SHA256 = {
         "ea80f8f1f216fe71d8219279593dd64b86ba13afec0cfb86ac1b46b6a4a1a903"
     ),
     "queue_selection_matches_scheduler_occurrence": (
-        "355052d58f6acbf00d4c7164d0e54a3e13044a087150cd4d56643110f2d51ed6"
+        "2ada5ddfab7917291ad14df7c9fa937179a26f288b205bc58d25a75e666e921d"
     ),
     "scheduler_evidence_validate_exact": (
-        "458ee09d659891d8f30a77a2b2c49a564914ade84ee013e9be77a8aa89f59459"
+        "08313efed2e27ff279d00331782a6ae192614550de063abcc55fe6702f82339a"
     ),
     "view_blocked_authorization_new": (
         "7c4cfb17b4841105a0bc2c7e966acbd72ea4c8c232cd502918f4136c9f8717ad"
@@ -2596,13 +2606,13 @@ _LOCKED_COMMIT_PROGRESS_WITNESS_HELPER_SHA256 = {
     ),
 }
 
-_PRODUCTION_LIVENESS_RELEASE_COUNT = 864
-_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT = 85
+_PRODUCTION_LIVENESS_RELEASE_COUNT = 866
+_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT = 83
 _PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 = (
-    "44784c79c489d83ab142bb0db84e89138c3a54b1349926a80597e2c5b21a83df"
+    "47a818de4cc0793664977d5e0f4b7e56dda943580b647f15671c3b8aa8a5cd20"
 )
 _PRODUCTION_LIVENESS_INVENTORY_GUARD_SHA256 = (
-    "e294395f0bdb4997e396e3ea876fd26f578c51c6afc3845b71779286d46ed494"
+    "7d459864dd96825152e4d1dc75c7c66e6216127cc2e296e380554b969bc04851"
 )
 _SUMERAGI_V2_PACKAGE_LAYOUT_GUARD_SHA256 = (
     "e99da2c824b86930b76c741d2f7aa47ab16092c2f84e43550fb6362a36133268"
@@ -2724,7 +2734,7 @@ _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS = (
     (
         "production-v2-certified-serve-payload-store",
         "sumeragi::v2_certified_serve_payload_store::tests",
-        11,
+        13,
     ),
     ("production-v2-block-sync", "sumeragi::v2_block_sync::tests", 3),
     ("production-v2-apply", "sumeragi::v2_apply::tests", 3),
@@ -2741,7 +2751,7 @@ _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS = (
     (
         "production-v2-lifecycle-coordinator",
         "sumeragi::v2_lifecycle_coordinator",
-        42,
+        43,
     ),
     ("production-v2-runner", "sumeragi::v2_runner::tests", 37),
     (
@@ -2756,24 +2766,14 @@ _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS = (
         19,
     ),
     (
-        "production-kagemusha-finality",
-        "zk::kagemusha_finality::tests",
-        1,
-    ),
-    (
         "production-data-model-v2-finality",
         "block::consensus_v2::finality::tests",
         1,
     ),
     (
-        "production-data-model-offline-compact-qc",
-        "offline::kagemusha_v4_topup_provenance_tests",
-        1,
-    ),
-    (
         "production-data-model-v2-context-identity",
         "block::consensus_v2::tests",
-        2,
+        3,
     ),
     ("production-v2-integration-runner", "sumeragi_v2_runner", 4),
     ("production-p2p-peer-reliable-flush", "peer::run::tests", 11),
@@ -3102,10 +3102,9 @@ _PRODUCTION_LIVENESS_NEW_REGRESSIONS = (
     "sumeragi::v2_runtime::tests::same_semantic_qc_with_conflicting_route_authority_fails_closed_atomically",
     "sumeragi::v2_runtime::tests::runtime_ingress_carrier_capacity_returns_backpressure_atomically",
     "sumeragi::v2_transport::tests::later_commit_qc_authenticates_the_exact_locked_body_origin",
-    "zk::kagemusha_finality::tests::aggregate_signature_authenticates_proposal_origin",
     "block::consensus_v2::finality::tests::header_binding_requires_exact_origin_but_allows_later_certification",
     "block::consensus_v2::finality::tests::genesis_header_binding_accepts_a_later_first_proposal_origin",
-    "offline::kagemusha_v4_topup_provenance_tests::compact_qc_rejects_foreign_or_future_proposal_origin",
+    "block::consensus_v2::tests::kagemusha_consensus_signature_envelope_roundtrips_and_rejects_drift",
     "block::consensus_v2::tests::height_context_identity_authenticates_the_parent_proposal_origin",
     "sumeragi_v2_runner::prepare_qc_split_tests::restart_scenario_uses_a_contention_tolerant_view_zero_deadline",
     "sumeragi::v2::tests::successor_core_context_preserves_the_parent_certificate_binding",
@@ -3260,10 +3259,12 @@ _PRODUCTION_LIVENESS_POSTCUT_REGRESSIONS = (
     "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_predicate_scan_does_not_create_queue_local_serve_gate",
     "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_occurrence_ordinal_coalesces_and_overflow_closes",
     "sumeragi::authoritative_runtime_gate_tests::restored_productive_retry_stays_behind_an_earlier_certified_request_carrier",
-    "sumeragi::v2_certified_serve_payload_store::tests::authenticated_cut_rejects_a_later_valid_payload_from_a_second_store_owner",
+    "sumeragi::v2_certified_serve_payload_store::tests::authenticated_cut_has_one_exclusive_store_owner",
+    "sumeragi::v2_certified_serve_payload_store::tests::production_open_consumes_the_exact_kura_directory_authority",
+    "sumeragi::v2_certified_serve_payload_store::tests::emergency_fast_payload_store_skips_inventory_and_rejects_retirement",
     "sumeragi::v2_certified_serve_payload_store::tests::capacity_is_checked_before_a_second_file_is_published",
     "sumeragi::v2_certified_serve_payload_store::tests::completed_payload_requires_exact_certified_responder_authority",
-    "sumeragi::v2_certified_serve_payload_store::tests::authenticated_cut_rejects_store_directory_symlink_replacement",
+    "sumeragi::v2_certified_serve_payload_store::tests::authenticated_cut_rejects_store_directory_inode_replacement",
     "sumeragi::v2_certified_serve_payload_store::tests::completed_payload_requires_exact_durable_body_receipt_and_bytes",
     "sumeragi::v2_certified_serve_payload_store::tests::negative_terminal_is_idempotent_and_cannot_be_replaced",
     "sumeragi::v2_certified_serve_payload_store::tests::only_the_call_that_created_pending_owns_preledger_abort_authority",
@@ -3303,6 +3304,7 @@ _PRODUCTION_LIVENESS_POSTCUT_REGRESSIONS = (
     "sumeragi::v2_runtime::tests::pre_dequeue_probe_validates_unfrozen_leader_wire_identity",
     "sumeragi::v2_runtime::tests::busy_deferred_older_aggregate_rebases_owner_and_rejects_identity_mutation",
     "sumeragi::v2_lifecycle_coordinator::ledger::tests::durable_ready_fetch_recovery::fresh_certified_serve_rejects_foreign_target_and_rolls_back_capacity_wait",
+    "sumeragi::v2_lifecycle_coordinator::ledger::tests::durable_ready_fetch_recovery::complete_tip_corrupt_payload_rejects_before_live_apply_ledger_repair",
     "sumeragi::v2_effects::tests::fetch_retransmissions_reuse_one_work_slot_and_one_signed_request",
     "sumeragi::v2_effects::tests::apply_retransmissions_reuse_one_work_slot",
     "sumeragi::v2_runtime::tests::distinct_pre_runtime_leader_wire_qc_waits_behind_busy_deferred_owner",
@@ -3387,7 +3389,7 @@ _RETAINED_EFFECT_PROGRESS_INGRESS_REGRESSION_SHA256 = (
 # only after those owners have drained.
 _PRODUCTION_LIFECYCLE_DECISION_APPLY_ITEM_SHA256 = {
     "lifecycle_decision_apply_dispatch_available": (
-        "235710a10257053d4cd00578dae8297a42b8baa5418b8b8e35cb05d0444db5b4"
+        "426d3735d04fe801c238cf1af30535edb68b374316a514d2ccba71d01084500f"
     ),
     "prepare_lifecycle_decision_apply_executor_dispatch": (
         "e8de0ddb2e236592bcef22f353567b2d2e32013ae79def9ca10ff76a4c8762a8"
@@ -3531,7 +3533,7 @@ _STABLE_LIVENESS_REPAIR_ITEM_SHA256 = {
         "9f93740ea85f6c7d320b25b97b182aa4fd19af763837dbe64473feed3ef89722"
     ),
     "V2LaneWorkAdapter::accept_historical_recovery_response": (
-        "56b8cb036dc038f74c2a6f92ad4ebd24016415182e3d26608cb6b4cf7bb02102"
+        "00e3349fcff2893bfd4e6c5907848d5f8081e839250cbd9e988e6cb2d33c9d4b"
     ),
     "V2LaneWorkAdapter::authenticates_certified_merge_sidecar_service_for_requester": (
         "4121046358ab568ad4f9730de806534e17b48aeec63541f123b61b60c88116db"

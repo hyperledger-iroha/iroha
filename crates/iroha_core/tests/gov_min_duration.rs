@@ -8,8 +8,10 @@ use iroha_core::{
 };
 use iroha_crypto::KeyPair;
 use iroha_data_model::{
-    block::BlockHeader, events::data::governance::GovernanceEvent, isi::governance::CastPlainBallot,
+    Registrable, account::Account, block::BlockHeader, events::data::governance::GovernanceEvent,
+    isi::Grant, isi::governance::CastPlainBallot, permission::Permission,
 };
+use iroha_executor_data_model::permission::governance::CanSubmitGovernanceBallot;
 use iroha_test_samples::ALICE_ID;
 use nonzero_ext::nonzero;
 fn checked_random_plain_ballot_keypair() -> KeyPair {
@@ -23,7 +25,8 @@ fn plain_ballot_fixture_uses_checked_randomness() {
 fn plain_ballot_rejected_when_duration_below_min() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    let mut state = State::new_for_testing(World::default(), kura, query_handle);
+    let world = World::with([], [Account::new(ALICE_ID.clone()).build(&ALICE_ID)], []);
+    let mut state = State::new_for_testing(world, kura, query_handle);
     // Set min step > requested duration
     let mut cfg = state.gov.clone();
     cfg.plain_voting_enabled = true;
@@ -34,12 +37,19 @@ fn plain_ballot_rejected_when_duration_below_min() {
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
+    let permission: Permission = CanSubmitGovernanceBallot {
+        referendum_id: "rid-min-dur".into(),
+    }
+    .into();
+    Grant::account_permission(permission, ALICE_ID.clone())
+        .execute(&ALICE_ID, &mut stx)
+        .expect("grant exact ballot permission");
     let instr = CastPlainBallot {
         referendum_id: "rid-min-dur".to_string(),
+        direction: 0,
         owner: ALICE_ID.clone(),
         amount: 100_u64.into(),
-        duration_blocks: 10, // below min
-        direction: 0,
+        duration_blocks: 10,
     };
     let err = instr.execute(&ALICE_ID, &mut stx).unwrap_err();
     let s = format!("{err}");

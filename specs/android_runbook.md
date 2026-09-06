@@ -600,6 +600,10 @@ artefacts are captured for governance.
 
 ## 7. StrongBox Attestation Harness
 
+This is an optional hardware-integration qualification harness. It is strict
+once selected, but physical hardware and attestation evidence are not required
+for an ordinary software-backed build, deployment, governance flow, or release.
+
 - **Purpose:** Validate hardware-backed attestation bundles before promoting devices into the
   StrongBox pool (AND2/AND6). The harness consumes captured certificate chains and verifies them
   against trusted roots using the same policy that production code executes.
@@ -725,6 +729,11 @@ Sev 1/2 follow-ups and archive the evidence in `incident/<date>-android-*.md`.
    any dropped transactions.
 
 ### 9.2 StrongBox & Attestation Failures
+
+This incident class applies only to applications that explicitly selected a
+StrongBox/TEE policy or claimed hardware qualification. It does not turn
+optional hardware availability into a blocker for software-backed signing or
+the general SDK release path.
 
 **Signals**
 

@@ -2991,7 +2991,13 @@ impl Transcript {
         protocol_version: u16,
         tag: &str,
     ) -> Result<Self> {
-        let payload = norito::core::to_bytes(&(protocol_version, parameter, public_io.clone()))?;
+        // Transcript identity must not inherit the layout of an unrelated
+        // Norito frame being decoded on this thread.
+        let payload = {
+            let _canonical =
+                norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+            norito::core::to_bytes(&(protocol_version, parameter, *public_io))?
+        };
         let state = hash_bytes_v1(
             TRANSCRIPT_ROLE_V1,
             b"initialise",
@@ -3130,6 +3136,45 @@ mod tests {
         assert_ne!(a, 0);
         assert_ne!(b, 0);
         assert_ne!(a, b);
+    }
+    #[test]
+    fn transcript_is_independent_of_ambient_norito_layout() {
+        let public_io = PublicIO {
+            slot: u64::MAX,
+            dsid: [0xA5; 16],
+            old_root: [0x11; 32],
+            new_root: [0x22; 32],
+            perm_root: [0x33; 32],
+            tx_set_hash: [0x44; 32],
+            ordering_hash: [0x55; 32],
+        };
+        let mut canonical =
+            Transcript::initialise(&public_io, FASTPQ_FINAL_V1_ID, 1, TRANSCRIPT_TAG_INIT)
+                .expect("canonical transcript");
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+        let mut alternate =
+            Transcript::initialise(&public_io, FASTPQ_FINAL_V1_ID, 1, TRANSCRIPT_TAG_INIT)
+                .expect("transcript in another decode context");
+        assert_eq!(
+            norito::core::effective_decode_flags(),
+            Some(alternate_flags),
+            "initialization must restore its caller's layout"
+        );
+        for transcript in [&mut canonical, &mut alternate] {
+            transcript.append_message(TRANSCRIPT_TAG_TRACE_ROOT, &[0x66; 48]);
+        }
+        assert_eq!(
+            canonical.challenge_field(TRANSCRIPT_TAG_COLUMN_MIX_PREFIX),
+            alternate.challenge_field(TRANSCRIPT_TAG_COLUMN_MIX_PREFIX)
+        );
+        assert_eq!(canonical.challenge_beta(0), alternate.challenge_beta(0));
+        assert_eq!(
+            canonical.challenge_bytes(TRANSCRIPT_TAG_QUERY_INDEX),
+            alternate.challenge_bytes(TRANSCRIPT_TAG_QUERY_INDEX)
+        );
+        assert_eq!(canonical.counter, alternate.counter);
     }
     #[test]
     fn lookup_grand_product_consumes_only_selected_witnesses() {
@@ -3783,11 +3828,27 @@ mod tests {
     }
     #[test]
     fn fri_layer_commitment_changes_when_values_change() {
-        let original = super::fri_layer_commitment(0, &[1, 2, 3, 4]);
-        let mutated = super::fri_layer_commitment(0, &[1, 2, 3, 5]);
-        assert_ne!(original, mutated);
-        let repeated = super::fri_layer_commitment(0, &[1, 2, 3, 4]);
-        assert_eq!(original, repeated);
+        let commitment = |round, values: &[GoldilocksFp4V1]| {
+            let leaves = hash_fri_leaves_with_mode(round, values, 2, ExecutionMode::Cpu)
+                .expect("canonical FRI leaves");
+            merkle_root_with_mode(
+                &leaves,
+                MerkleTreeRoleV1::Fri(u32::try_from(round).unwrap()),
+                ExecutionMode::Cpu,
+            )
+            .expect("canonical FRI layer commitment")
+        };
+        let values = fp4_values(&[1, 2, 3, 4]);
+        let original = commitment(0, &values);
+        assert_eq!(original, commitment(0, &values));
+        assert_ne!(original, commitment(1, &values));
+        for coefficient in 0..4 {
+            let mut changed = values.clone();
+            let mut coefficients = changed[3].coefficients();
+            coefficients[coefficient] += 1;
+            changed[3] = GoldilocksFp4V1::new(coefficients).unwrap();
+            assert_ne!(original, commitment(0, &changed));
+        }
     }
     #[test]
     fn fri_folding_reduces_layer_length() {

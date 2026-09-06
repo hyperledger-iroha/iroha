@@ -1784,7 +1784,6 @@ fn retarget_sample_full_bootstrap_verifier_key_artifact(
     artifacts: &mut BfvFullBootstrapCircuitArtifactBundleV1,
     vk_box: &iroha_data_model::proof::VerifyingKeyBox,
 ) {
-    use sha2::{Digest as _, Sha256};
     let mut artifact: iroha_crypto::fhe_bfv::BfvFullBootstrapCircuitArtifactPayloadV1 =
         norito::decode_from_bytes(&artifacts.verifier_key)
             .expect("decode sample full-bootstrap verifier-key artifact envelope");
@@ -1798,9 +1797,6 @@ fn retarget_sample_full_bootstrap_verifier_key_artifact(
         norito::decode_from_bytes(&material_envelope.native_key_material)
             .expect("decode sample full-bootstrap native verifier-key material");
     native_material.native_payload = vk_box.bytes.clone();
-    native_material
-        .native_payload_digest
-        .copy_from_slice(&Sha256::digest(&native_material.native_payload));
     material_envelope.native_key_material =
         norito::to_bytes(&native_material).expect("encode retargeted native verifier material");
     key.key_material = norito::to_bytes(&material_envelope)
@@ -9184,7 +9180,6 @@ fn governed_full_bootstrap_execution_verifier_key_rejects_below_floor_stark_payl
                 fold_arity: weak_payload.fold_arity,
                 queries: weak_payload.queries,
                 merkle_arity: weak_payload.merkle_arity,
-                hash_fn: canonical_native_payload.hash_fn,
             };
     weak_vk.bytes =
         norito::to_bytes(&native_weak_payload).expect("encode below-floor native STARK VK");

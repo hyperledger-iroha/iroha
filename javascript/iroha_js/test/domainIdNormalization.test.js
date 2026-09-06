@@ -4,29 +4,16 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { canonicalizeDomainIdLabel } from "../src/domainId.js";
-import { noritoEncodeInstruction } from "../src/norito.js";
+import { _createNoritoInstructionApi } from "../src/norito.js";
+import { createNativeRuntime } from "../src/nativeRuntime.js";
 
-function withPureJsInstructionCodec(body) {
-  const hadBinding = Object.prototype.hasOwnProperty.call(
-    globalThis,
-    "__IROHA_NORITO_BINDING__",
-  );
-  const previous = globalThis.__IROHA_NORITO_BINDING__;
-  globalThis.__IROHA_NORITO_BINDING__ = {
+const { noritoEncodeInstruction } = _createNoritoInstructionApi(
+  createNativeRuntime({
     noritoEncodeInstruction() {
       throw new Error("unsupported instruction");
     },
-  };
-  try {
-    return body();
-  } finally {
-    if (hadBinding) {
-      globalThis.__IROHA_NORITO_BINDING__ = previous;
-    } else {
-      delete globalThis.__IROHA_NORITO_BINDING__;
-    }
-  }
-}
+  }),
+);
 
 function registerDomain(domainId) {
   return {
@@ -91,11 +78,7 @@ test("internal DomainId label normalization retains explicit-domain policy", () 
 
 test("pure-JS DomainId encoding canonicalizes labels without AccountAddress", () => {
   const encode = (domainId) =>
-    Buffer.from(
-      withPureJsInstructionCodec(() =>
-        noritoEncodeInstruction(registerDomain(domainId)),
-      ),
-    );
+    Buffer.from(noritoEncodeInstruction(registerDomain(domainId)));
 
   assert.deepEqual(
     encode("BÜCHER.SORA"),

@@ -1,10 +1,13 @@
 //! Governance slashing and restitution flows for plain ballots and manual appeals.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 use iroha_core::{
+    block::BlockBuilder,
+    governance::manifest::LaneManifestRegistry,
     kura::Kura,
     query::store::LiveQueryStore,
     smartcontracts::Execute,
     state::{State, World, WorldReadOnly},
+    tx::AcceptedTransaction,
 };
 use iroha_data_model::{
     Registrable,
@@ -14,14 +17,22 @@ use iroha_data_model::{
     events::data::governance::GovernanceSlashReason,
     permission::Permission,
     prelude::{AssetDefinitionId, AssetId, Grant},
+    transaction::{
+        FeePaymentIntent, TransactionBuilder, TransactionEntrypoint,
+        signed::{
+            SealedTransactionCommitmentPayload, SealedTransactionReveal,
+            SignedSealedTransactionCommitment, compute_sealed_transaction_commitment,
+        },
+    },
 };
 use iroha_executor_data_model::permission::governance::{
     CanRestituteGovernanceLock, CanSlashGovernanceLock, CanSubmitGovernanceBallot,
 };
 use iroha_primitives::numeric::Quantity;
-use iroha_test_samples::{ALICE_ID, gen_account_in};
+use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, gen_account_in};
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
+use std::{borrow::Cow, sync::Arc};
 fn governance_state_with_accounts(
     voting_asset_id: AssetDefinitionId,
     escrow_account: &iroha_data_model::account::AccountId,
@@ -74,6 +85,15 @@ fn seed_slash_snapshot(
 ) {
     let mut seed_block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
     let mut seed_tx = seed_block.transaction();
+    seed_tx.world.governance_referenda_mut().insert(
+        rid.to_owned(),
+        iroha_core::state::GovernanceReferendumRecord {
+            h_start: 1,
+            h_end: 100,
+            status: iroha_core::state::GovernanceReferendumStatus::Open,
+            mode: iroha_core::state::GovernanceReferendumMode::Plain,
+        },
+    );
     let mut locks = iroha_core::state::GovernanceLocksForReferendum::default();
     locks.locks.insert(
         ALICE_ID.clone(),
@@ -83,7 +103,7 @@ fn seed_slash_snapshot(
             slashed: 40_u64.into(),
             expiry_height: 100,
             direction: 0,
-            duration_blocks: 100,
+            duration_blocks: 99,
             custody: iroha_core::state::GovernanceLockCustody {
                 escrowed: true,
                 asset_definition_id: escrow_asset_id.definition().clone(),
@@ -119,7 +139,9 @@ fn seed_slash_snapshot(
         .asset_mut(slash_asset_id)
         .expect("slash asset") = Quantity::from(40_u64);
     seed_tx.apply();
-    let _ = seed_block.commit_empty_block_for_testing();
+    seed_block
+        .commit_empty_block_for_testing()
+        .expect("commit slash snapshot");
 }
 #[test]
 #[allow(clippy::too_many_lines)]
@@ -141,18 +163,27 @@ fn double_vote_slashes_plain_lock() {
     gov_cfg.slash_receiver_account = slash_id.clone();
     gov_cfg.slash_double_vote_bps = 2_000; // 20%
     state.set_gov(gov_cfg);
+    let nexus = state.nexus_snapshot();
+    state.install_lane_manifests(&Arc::new(
+        LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
+    ));
     // Block 1: seed referendum and cast initial ballot.
     let rid = "rid-slash-plain".to_string();
     {
-        let header1 = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut sblock1 = state.block(header1);
+        // This chain later applies signed blocks, so genesis must also produce
+        // their state side effects, including the Musubi resolver checkpoint.
+        let genesis = BlockBuilder::new(Vec::new())
+            .chain(0, None)
+            .sign(ALICE_KEYPAIR.private_key())
+            .unpack(|_| {});
+        let mut sblock1 = state.block(genesis.header());
         let mut stx1 = sblock1.transaction();
         stx1.world.governance_referenda_mut().insert(
             rid.clone(),
             iroha_core::state::GovernanceReferendumRecord {
                 h_start: 1,
                 h_end: 50,
-                status: iroha_core::state::GovernanceReferendumStatus::Proposed,
+                status: iroha_core::state::GovernanceReferendumStatus::Open,
                 mode: iroha_core::state::GovernanceReferendumMode::Plain,
             },
         );
@@ -165,48 +196,133 @@ fn double_vote_slashes_plain_lock() {
             .expect("grant ballot permission");
         let ballot_ok = iroha_data_model::isi::governance::CastPlainBallot {
             referendum_id: rid.clone(),
+            direction: 0,
             owner: ALICE_ID.clone(),
             amount: 20_u64.into(),
             duration_blocks: 200,
-            direction: 0,
         };
         ballot_ok
             .execute(&ALICE_ID, &mut stx1)
             .expect("first ballot should succeed");
         stx1.apply();
-        let _ = sblock1.commit_empty_block_for_testing();
+        let valid = genesis
+            .validate_and_record_transactions(&mut sblock1)
+            .unpack(|_| {});
+        let committed = valid.commit_unchecked().unpack(|_| {});
+        let _ = sblock1.apply_without_execution(&committed, Vec::new());
+        sblock1.commit().expect("commit seeded governance genesis");
     }
-    // Block 2: conflicting direction triggers slash + rejection.
-    let header2 = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
-    let mut sblock2 = state.block(header2);
-    let mut stx2 = sblock2.transaction();
+    // Block 2: commit the sealed carrier for the conflicting ballot.
     let ballot_conflict = iroha_data_model::isi::governance::CastPlainBallot {
         referendum_id: rid.clone(),
+        direction: 1,
         owner: ALICE_ID.clone(),
         amount: 30_u64.into(),
         duration_blocks: 200,
-        direction: 1, // switch direction to force double-vote slash
     };
-    let err = ballot_conflict.execute(&ALICE_ID, &mut stx2).unwrap_err();
-    assert!(
-        err.to_string().contains("re-vote cannot change direction"),
-        "expected direction change rejection"
+    let transaction = TransactionBuilder::new(
+        *state.network_id_ref(),
+        ALICE_ID.clone(),
+        FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([ballot_conflict])
+    .sign(ALICE_KEYPAIR.private_key());
+    let salt = [0xA5; 32];
+    let reveal_deadline_height = 10;
+    let commitment = compute_sealed_transaction_commitment(
+        state.network_id_ref(),
+        &transaction,
+        salt,
+        reveal_deadline_height,
     );
-    let events = stx2.world.take_external_events();
-    assert!(events.iter().any(|ev| {
-        matches!(
-            ev.as_data_event(),
-            Some(iroha_data_model::events::data::DataEvent::Governance(
-                iroha_data_model::events::data::governance::GovernanceEvent::LockSlashed(payload)
-            )) if payload.referendum_id == rid
-                && payload.reason == GovernanceSlashReason::DoubleVote
-                && payload.amount == Quantity::from(4_u64)
-                && payload.destination == slash_id
-        )
-    }));
-    // Commit side effects so the slash is reflected in state for inspection.
-    stx2.apply();
-    let _ = sblock2.commit_empty_block_for_testing();
+    let sealed_commitment = SignedSealedTransactionCommitment::sign(
+        SealedTransactionCommitmentPayload::new(
+            *state.network_id_ref(),
+            ALICE_ID.clone(),
+            commitment,
+            3,
+            reveal_deadline_height,
+            None,
+        ),
+        ALICE_KEYPAIR.private_key(),
+    );
+    let parent_hash = state
+        .view()
+        .block_hashes()
+        .last()
+        .copied()
+        .expect("signed genesis block hash");
+    let block = BlockBuilder::new(vec![AcceptedTransaction::new_unchecked_entrypoint(
+        Cow::Owned(TransactionEntrypoint::SealedCommitment(sealed_commitment)),
+    )])
+    .chain_with_parent_hash(0, 1, parent_hash)
+    .sign(ALICE_KEYPAIR.private_key())
+    .unpack(|_| {});
+    let mut state_block = state.block(block.header());
+    let valid = block
+        .validate_and_record_transactions(&mut state_block)
+        .unpack(|_| {});
+    let commitment_results = valid.as_ref().entrypoint_results().collect::<Vec<_>>();
+    assert_eq!(commitment_results.len(), 1);
+    assert!(
+        commitment_results[0].2.0.is_ok(),
+        "sealed commitment must be retained before reveal: {:?}",
+        commitment_results[0].2.0
+    );
+    let committed = valid.commit_unchecked().unpack(|_| {});
+    let _ = state_block.apply_without_execution(&committed, Vec::new());
+    state_block
+        .commit()
+        .expect("commit sealed ballot commitment");
+
+    // Block 3: the sealed reveal enters the shared sequential corridor. The
+    // ballot remains rejected while its prevalidated slash commits separately.
+    let reveal_entrypoint = TransactionEntrypoint::SealedReveal(SealedTransactionReveal::new(
+        commitment,
+        transaction.clone(),
+        salt,
+    ));
+    let reveal_hash = reveal_entrypoint.hash();
+    let parent_hash = state
+        .view()
+        .block_hashes()
+        .last()
+        .copied()
+        .expect("sealed commitment block hash");
+    let block = BlockBuilder::new(vec![AcceptedTransaction::new_unchecked_entrypoint(
+        Cow::Owned(reveal_entrypoint),
+    )])
+    .chain_with_parent_hash(0, 2, parent_hash)
+    .sign(ALICE_KEYPAIR.private_key())
+    .unpack(|_| {});
+    let mut state_block = state.block(block.header());
+    let valid = block
+        .validate_and_record_transactions(&mut state_block)
+        .unpack(|_| {});
+    let reveal_results = valid.as_ref().entrypoint_results().collect::<Vec<_>>();
+    assert_eq!(reveal_results.len(), 1);
+    let rejection = reveal_results[0]
+        .2
+        .0
+        .as_ref()
+        .expect_err("conflicting sealed ballot must remain rejected");
+    assert!(
+        format!("{rejection:?}").contains("re-vote cannot change direction"),
+        "unexpected rejection: {rejection:?}"
+    );
+    let committed = valid.commit_unchecked().unpack(|_| {});
+    let _ = state_block.apply_without_execution(&committed, Vec::new());
+    state_block
+        .commit()
+        .expect("commit rejected sealed-ballot penalty");
+    assert!(
+        state.has_committed_entrypoint(reveal_hash),
+        "the exact rejected sealed carrier must be replay protected"
+    );
+    assert!(
+        state.has_committed_entrypoint(transaction.hash_as_entrypoint()),
+        "the rejected reveal's enclosed signed intent must be replay protected"
+    );
     // Escrow should now hold 16 (20 - 20% slash), slash receiver 4.
     let view = state.view();
     let escrow_asset_id = AssetId::new(def_id.clone(), escrow_id);
@@ -234,24 +350,24 @@ fn double_vote_slashes_plain_lock() {
     assert_eq!(escrow_balance.clone(), Quantity::from(16_u64));
     assert_eq!(slash_balance.clone(), Quantity::from(4_u64));
     drop(view);
-    let header3 = BlockHeader::new(nonzero!(3_u64), None, None, None, 0, 0);
-    let mut sblock3 = state.block(header3);
-    let mut stx3 = sblock3.transaction();
+    let header4 = BlockHeader::new(nonzero!(4_u64), None, None, None, 0, 0);
+    let mut sblock4 = state.block(header4);
+    let mut stx4 = sblock4.transaction();
     let unresolved_revote = iroha_data_model::isi::governance::CastPlainBallot {
         referendum_id: rid.clone(),
+        direction: 0,
         owner: ALICE_ID.clone(),
         amount: 20_u64.into(),
         duration_blocks: 200,
-        direction: 0,
     }
-    .execute(&ALICE_ID, &mut stx3)
+    .execute(&ALICE_ID, &mut stx4)
     .expect_err("a re-vote must not overwrite unresolved slash accounting");
     assert!(
         unresolved_revote
             .to_string()
             .contains("re-vote requires prior restitution")
     );
-    let retained = stx3
+    let retained = stx4
         .world
         .governance_locks()
         .get(&rid)
@@ -260,7 +376,7 @@ fn double_vote_slashes_plain_lock() {
     assert_eq!(retained.amount, Quantity::from(16_u64));
     assert_eq!(retained.slashed, Quantity::from(4_u64));
     assert_eq!(
-        stx3.world
+        stx4.world
             .asset(&escrow_asset_id)
             .expect("escrow remains after rejected re-vote")
             .as_ref()
@@ -268,7 +384,7 @@ fn double_vote_slashes_plain_lock() {
         Quantity::from(16_u64)
     );
     assert_eq!(
-        stx3.world
+        stx4.world
             .asset(&slash_asset_id)
             .expect("slash receiver remains after rejected re-vote")
             .as_ref()
@@ -302,15 +418,6 @@ fn restitution_restores_slashed_balance() {
         let header = BlockHeader::new(nonzero!(3_u64), None, None, None, 0, 0);
         let mut sblock = state.block(header);
         let mut stx = sblock.transaction();
-        stx.world.governance_referenda_mut().insert(
-            rid.clone(),
-            iroha_core::state::GovernanceReferendumRecord {
-                h_start: 1,
-                h_end: 200,
-                status: iroha_core::state::GovernanceReferendumStatus::Open,
-                mode: iroha_core::state::GovernanceReferendumMode::Plain,
-            },
-        );
         // Grant restitution permission to ALICE.
         let perm: Permission = CanRestituteGovernanceLock {
             referendum_id: rid.clone(),
@@ -513,6 +620,15 @@ fn slash_and_restitution_use_stored_custody_after_governance_config_change() {
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut tx = block.transaction();
+    tx.world.governance_referenda_mut().insert(
+        referendum_id.to_owned(),
+        iroha_core::state::GovernanceReferendumRecord {
+            h_start: 0,
+            h_end: 99,
+            status: iroha_core::state::GovernanceReferendumStatus::Open,
+            mode: iroha_core::state::GovernanceReferendumMode::Plain,
+        },
+    );
     for permission in [
         Permission::from(CanSlashGovernanceLock {
             referendum_id: referendum_id.to_owned(),

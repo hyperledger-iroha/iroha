@@ -51,7 +51,7 @@ RELEASE_DOCUMENTS: dict[str, tuple[str, ...]] = {
         "exactly the five expected target-triple checksum manifests",
         "The five-target CLI archive implementation is present, but a candidate is not source-complete",
         "build, publish, and clean-install all six",
-        "`ci/check_sorafs_cli_release.sh` runs `python3 scripts/check_source_file_budget.py --require-objective` before any Cargo command",
+        "`ci/check_sorafs_cli_release.sh` runs `python3 scripts/check_source_file_budget.py` before any Cargo command",
         "`specs/sorafs/runbooks/release_rollback_yank.md`",
         "`sorafs-release-authentication` environment",
         "`scripts/release_manifest_signing.py verify`",
@@ -310,7 +310,7 @@ POP_BROKER_WIRE_FIELD_INVENTORIES: dict[str, tuple[tuple[str, str], ...]] = {
 }
 RUNTIME_PROVIDER_DEPLOYMENT_ASSET_MARKERS: dict[str, tuple[str, ...]] = {
     "configs/sorafs/runtime_provider_broker/README.md": (
-        "it does not supply a concrete HSM, KMS,",
+        "it does not supply a concrete signing backend,",
         "statically link a reviewed deployment-owned",
         "Do not add credential, private-key, token, plugin, test-provider, or socket",
         "The expected executable digest must come",
@@ -521,7 +521,7 @@ SORAFS_CLI_BUILD_EFFICIENCY_PROVENANCE_TEST = (
     "scripts/tests/check_build_efficiency_provenance_test.py"
 )
 SORAFS_CLI_SOURCE_FILE_BUDGET_COMMAND = (
-    "python3 scripts/check_source_file_budget.py --require-objective"
+    "python3 scripts/check_source_file_budget.py"
 )
 SORAFS_CLI_L1_QUALIFICATION_TESTS = (
     "scripts/tests/check_sorafs_l1_deployment_qualification_test.py",
@@ -716,6 +716,8 @@ RELEASE_VERSION_MAP_CONTRACT_MARKERS: dict[str, tuple[str, ...]] = {
 WORKFLOWS: dict[str, tuple[str, ...]] = {
     ".github/workflows/sorafs-cli-release.yml": (
         '"sorafs-cli-v*"',
+        '- "scripts/check_sorafs_mobile_parity_reports.py"',
+        '- "scripts/tests/check_sorafs_mobile_parity_reports_test.py"',
         "actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10",
         "actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1",
         "scripts/check_sorafs_release_version_map.py",
@@ -941,6 +943,13 @@ WORKFLOWS: dict[str, tuple[str, ...]] = {
     ),
     ".github/workflows/sorafs-orchestrator-sdk.yml": (
         'cron: "41 3 * * *"',
+        '- "scripts/check_sorafs_mobile_parity_reports.py"',
+        '- "scripts/tests/check_sorafs_mobile_parity_reports_test.py"',
+        '- "scripts/sorafs_evidence_json.py"',
+        '- "scripts/sorafs_evidence_paths.py"',
+        '- "scripts/sorafs_evidence_sensitivity.py"',
+        '- "scripts/sorafs_path_identity.py"',
+        '- "tools/kotlin-fixture-gen/**"',
         '- ".cargo/**"',
         '- "codec/**"',
         '- "scripts/package_mobile_sdk_artifacts.sh"',
@@ -960,7 +969,6 @@ WORKFLOWS: dict[str, tuple[str, ...]] = {
         "actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9",
         "bash ci/check_sorafs_python_native_sdk.sh",
         "bash ci/sdk_sorafs_orchestrator.sh",
-        "bash ci/check_kagemusha_jvm_native_bridge.sh",
         "dotnet test Hyperledger.Iroha.Sdk.sln -c Release --no-build",
         "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
     ),
@@ -1868,10 +1876,36 @@ def _validate_workflow_source(relative: str, source: str) -> list[str]:
                 'sdkmanager_status="${PIPESTATUS[1]}"',
                 'exit "$sdkmanager_status"',
                 "cargo fetch --locked",
-                'NORITO_MOBILE_JAVA_HOME="$JAVA_HOME"',
-                'NORITO_MOBILE_ANDROID_HOME="$ANDROID_HOME"',
+                'java-version: "21"',
+                "Build and authenticate the exact ABI-23 Kotlin bridge",
+                'test ! -e "$native_root"',
+                "cargo build --locked --offline --release -p connect_norito_bridge",
+                "cargo build --locked --offline --release -p kotlin-fixture-gen",
+                "--features dev-tools --bin kotlin-fixture-gen",
+                '--target "$target" --target-dir "$native_root/cargo-target"',
+                "check_native_sdk_abi23_artifact.py record",
+                '--sdk c-jni --target "$target"',
+                'echo "IROHA_NATIVE_LIBRARY_PATH=$native_dir" >> "$GITHUB_ENV"',
+                'echo "IROHA_KOTLIN_FIXTURE_GEN_BIN=$native_dir/kotlin-fixture-gen" >> "$GITHUB_ENV"',
+                'echo "MOBILE_SDK_ANDROID_ARTIFACT_DIR=$artifact_dir" >> "$GITHUB_ENV"',
                 "Require fresh ABI-23 JNI bridge in complete Kotlin and Java suites",
-                "bash ci/check_kagemusha_jvm_native_bridge.sh",
+                "working-directory: kotlin",
+                "./gradlew --no-daemon --no-build-cache --rerun-tasks",
+                "--no-configuration-cache",
+                ":core-jvm:test :tools:test",
+                ":client-android:testDebugUnitTest",
+                ":client-android:testDebugHostNative",
+                ":kagemusha-wallet-android:testDebugUnitTest --console=plain",
+                "Validate every mobile parity test lane",
+                "python3 -I scripts/check_sorafs_mobile_parity_reports.py",
+                '--report-root "$MOBILE_SDK_ANDROID_ARTIFACT_DIR/gradle-build/iroha_kotlin_sdk"',
+                '> "$MOBILE_SDK_ANDROID_ARTIFACT_DIR/test-execution.json"',
+                "Reauthenticate the consumed Kotlin bridge",
+                '--artifact "$IROHA_NATIVE_LIBRARY_PATH/libconnect_norito_bridge.so"',
+                '--manifest "$SORAFS_MOBILE_NATIVE_MANIFEST"',
+                "Upload Kotlin and Java native parity evidence",
+                "sorafs-mobile-parity/gradle-build/iroha_kotlin_sdk/*/test-results/**/TEST-*.xml",
+                "sorafs-mobile-parity/test-execution.json",
                 "if-no-files-found: error",
             ),
             "csharp-parity": (
@@ -1898,6 +1932,38 @@ def _validate_workflow_source(relative: str, source: str) -> list[str]:
                 if marker not in job:
                     errors.append(
                         f"{relative}: `{job_name}` missing contract marker `{marker}`"
+                    )
+            if job_name == "mobile-parity":
+                stages = (
+                    "Build and authenticate the exact ABI-23 Kotlin bridge",
+                    "Prepare canonical Kotlin test outputs",
+                    "Require fresh ABI-23 JNI bridge in complete Kotlin and Java suites",
+                    "Validate every mobile parity test lane",
+                    "Reauthenticate the consumed Kotlin bridge",
+                    "Upload Kotlin and Java native parity evidence",
+                )
+                offsets = [job.find(f"      - name: {stage}\n") for stage in stages]
+                if any(
+                    job.count(f"      - name: {stage}\n") != 1 for stage in stages
+                ) or offsets != sorted(offsets):
+                    errors.append(
+                        f"{relative}: mobile native qualification stages must execute "
+                        "exactly once in build, test, reauthentication, upload order"
+                    )
+                if re.findall(r"(?m)^\s*if:\s*(.+)$", job) != ["always()"]:
+                    errors.append(
+                        f"{relative}: mobile native qualification must not be "
+                        "conditional; only evidence upload uses always()"
+                    )
+                if job.count("check_native_sdk_abi23_artifact.py verify") != 2:
+                    errors.append(
+                        f"{relative}: mobile native artifact must be verified "
+                        "before and after executing the consumer tests"
+                    )
+                if job.count('--target "$target" --target-dir "$native_root/cargo-target"') != 2:
+                    errors.append(
+                        f"{relative}: mobile native bridge and fixture generator "
+                        "must both use the isolated build target"
                     )
 
     if relative.endswith("sorafs-cli-release.yml"):

@@ -9,6 +9,7 @@ import json
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "generate_ton_sccp_stateinit_golden.py"
@@ -104,7 +105,10 @@ class TonSccpStateInitGoldenTests(unittest.TestCase):
             self.assertIn(required, fixture)
 
     def test_source_closure_is_sorted_unique_and_domain_separated(self) -> None:
-        inventory, digest = golden.source_closure()
+        checked_in = json.loads(golden.DEFAULT_OUTPUT.read_text(encoding="ascii"))
+        inventory, digest = golden.source_closure(
+            checked_in["provenance"]["source_inventory"]
+        )
         paths = [item["path"] for item in inventory]
         self.assertEqual(paths, sorted(paths))
         self.assertEqual(len(paths), len(set(paths)))
@@ -117,6 +121,20 @@ class TonSccpStateInitGoldenTests(unittest.TestCase):
             "contracts/ton/sccp/scripts/generate-stateinit-golden.tolk",
             paths,
         )
+
+    def test_checked_in_golden_validates_without_ignored_acton_outputs(self) -> None:
+        data = golden.DEFAULT_OUTPUT.read_bytes()
+        direct_lstat = Path.lstat
+
+        def without_generated(path: Path):
+            if path in golden.GENERATED_SOURCE_PATHS:
+                raise FileNotFoundError(path)
+            return direct_lstat(path)
+
+        with mock.patch.object(Path, "lstat", without_generated):
+            value = golden.validate_checked_in_golden(data)
+
+        self.assertEqual(value["schema"], golden.SCHEMA)
 
     def test_fixture_uses_string_for_u128_supply_and_no_legacy_alias(self) -> None:
         value = json.loads(golden.DEFAULT_OUTPUT.read_text(encoding="ascii"))

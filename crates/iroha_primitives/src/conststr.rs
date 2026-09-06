@@ -54,6 +54,11 @@ pub union ConstString {
     inlined: InlinedString,
     boxed: ManuallyDrop<BoxedString>,
 }
+impl norito::NoritoSchema for ConstString {
+    fn nominal_name() -> String {
+        "iroha_primitives::conststr::ConstString".to_owned()
+    }
+}
 impl ConstString {
     /// Return the length of this [`Self`], in bytes.
     #[inline]

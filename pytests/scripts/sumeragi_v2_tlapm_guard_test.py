@@ -133,12 +133,10 @@ def test_foreign_job_detection_is_same_user_and_name_exact() -> None:
         guard.ProcessRow(12, 1, 12, uid, 1, "/tools/Poly"),
         guard.ProcessRow(13, 1, 13, uid + 1, 1, "/tools/isabelle"),
         guard.ProcessRow(14, 1, 14, uid, 1, "/tools/tlapm-helper.py"),
-        guard.ProcessRow(
-            15, 1, 15, uid, 1, "/tools/kagemusha_recursive_spend_v4_bundle"
-        ),
+        guard.ProcessRow(15, 1, 15, uid, 1, "/tools/iroha3d"),
     ]
 
-    assert [row.pid for row in guard._foreign_heavy_jobs(rows)] == [11, 12, 15]
+    assert [row.pid for row in guard._foreign_heavy_jobs(rows)] == [11, 12]
 
 
 def test_foreign_job_detection_excludes_owned_process_group() -> None:

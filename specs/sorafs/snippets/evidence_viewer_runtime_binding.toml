@@ -51,11 +51,11 @@ webauthn_handle = "webauthn.evidence.primary"
 webauthn_revision = 11
 webauthn_policy_digest_hex = "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
 
-grant_handle = "kms.evidence.grants.primary"
+grant_handle = "software://sorafs/evidence-viewer/grants-primary"
 grant_revision = 12
 grant_policy_digest_hex = "a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2"
 
-erasure_handle = "kms.evidence.erasure.primary"
+erasure_handle = "software://sorafs/evidence-viewer/erasure-primary"
 erasure_revision = 13
 erasure_policy_digest_hex = "a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3"
 

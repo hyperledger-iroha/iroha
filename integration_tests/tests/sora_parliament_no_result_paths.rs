@@ -13,6 +13,7 @@ pub(super) async fn exercise_public_finding_no_result_retries_and_restore(
     logical_beacon: BeaconSessionId,
 ) -> Result<()> {
     let proposal = ProposalKind::DeployContract(DeployContractProposal {
+        proposal_operator: client.account.clone(),
         contract_address: contract_address.clone(),
         code_hash,
         abi_hash,

@@ -24,6 +24,58 @@ struct MusubiPersistedState<'a> {
     replication_shortfall_releases: u64,
 }
 
+fn validate_asset_transfer_control_persistence_v1(world: &World) -> Result<(), json::Error> {
+    let accounts = world.accounts.view();
+    let asset_definitions = world.asset_definitions.view();
+    for (account_id, account) in accounts.iter() {
+        let Some(raw) = account
+            .metadata()
+            .get(iroha_data_model::asset::ASSET_TRANSFER_CONTROL_METADATA_KEY)
+        else {
+            continue;
+        };
+        let store = raw
+            .clone()
+            .try_into_any_norito::<iroha_data_model::asset::AssetTransferControlStoreV1>()
+            .map_err(|error| json::Error::InvalidField {
+                field: "accounts.*.metadata.asset_transfer_controls".to_owned(),
+                message: format!(
+                    "first-release snapshot is incompatible: account {account_id} has undecodable native asset transfer-control state: {error}"
+                ),
+            })?;
+        if store.controls.is_empty() {
+            return Err(json::Error::InvalidField {
+                field: "accounts.*.metadata.asset_transfer_controls".to_owned(),
+                message: format!(
+                    "first-release snapshot is incompatible: account {account_id} persists an empty native asset transfer-control store"
+                ),
+            });
+        }
+        store
+            .validate_canonical()
+            .map_err(|error| json::Error::InvalidField {
+                field: "accounts.*.metadata.asset_transfer_controls".to_owned(),
+                message: format!(
+                    "first-release snapshot is incompatible: account {account_id} has non-canonical native asset transfer-control state: {error}"
+                ),
+            })?;
+        if let Some(record) = store
+            .controls
+            .iter()
+            .find(|record| asset_definitions.get(&record.asset_definition_id).is_none())
+        {
+            return Err(json::Error::InvalidField {
+                field: "accounts.*.metadata.asset_transfer_controls".to_owned(),
+                message: format!(
+                    "first-release snapshot is incompatible: account {account_id} has native transfer-control state for missing asset definition {}",
+                    record.asset_definition_id
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
 fn proposal_status_matches_latest_attempt_v1(
     proposal_status: GovernanceProposalStatus,
     attempt_status: Option<iroha_data_model::governance::types::GovernanceAttemptStatusV1>,
@@ -32,6 +84,37 @@ fn proposal_status_matches_latest_attempt_v1(
         proposal_status == GovernanceProposalStatus::Proposed,
         |status| proposal_status == GovernanceProposalStatus::from_attempt_status(status),
     )
+}
+
+fn validate_no_standalone_governance_state_for_typed_proposals_v1(
+    world: &World,
+) -> Result<(), json::Error> {
+    let proposals = world.governance_proposals.view();
+    let aliases_typed_proposal = |selector: &str| {
+        iroha_data_model::governance::decode_governance_proposal_selector_alias_v1(selector)
+            .is_some_and(|proposal_id| proposals.get(&proposal_id).is_some())
+    };
+    macro_rules! reject_typed_alias {
+        ($field:literal, $storage:expr) => {{
+            let view = $storage.view();
+            if let Some((selector, _)) = view
+                .iter()
+                .find(|(selector, _)| aliases_typed_proposal(selector))
+            {
+                return Err(json::Error::InvalidField {
+                    field: $field.to_owned(),
+                    message: format!(
+                        "standalone governance selector {selector:?} aliases an exact typed proposal"
+                    ),
+                });
+            }
+        }};
+    }
+    reject_typed_alias!("governance_referenda", world.governance_referenda);
+    reject_typed_alias!("governance_locks", world.governance_locks);
+    reject_typed_alias!("governance_slashes", world.governance_slashes);
+    reject_typed_alias!("elections", world.elections);
+    Ok(())
 }
 
 struct SoracloudInrouPersistedStateV1<'a> {
@@ -5032,6 +5115,7 @@ fn validate_musubi_governance_provenance(world: &World) -> Result<(), json::Erro
     let aliases = world.musubi_aliases.view();
     let alias_history = world.musubi_alias_history.view();
     let registry_policy = world.musubi_registry_policy.view();
+    let parliament_attempts = world.parliament_attempts.view();
     let mut actions_by_digest = BTreeMap::new();
     let mut policy_actions = Vec::new();
     let mut owner_recovery_revisions = BTreeSet::new();
@@ -5072,21 +5156,19 @@ fn validate_musubi_governance_provenance(world: &World) -> Result<(), json::Erro
         }
         let proposal_content_id =
             iroha_data_model::governance::types::ProposalContentId::new(*decision_id);
-        let enacted_attempts = world
-            .parliament_attempts
-            .view()
-            .iter()
-            .filter(|(_, attempt)| attempt.proposal_content_id() == proposal_content_id)
-            .filter(|(_, attempt)| {
-                attempt.attempt().status
-                    == iroha_data_model::governance::types::GovernanceAttemptStatusV1::Enacted
-                    && attempt.terminal_height() == Some(decision.enacted_at_height)
-                    && attempt.certificate().is_some_and(|certificate| {
-                        certificate.proposal_content_id == proposal_content_id
-                            && certificate.enact_at_height == decision.enacted_at_height
-                    })
-            })
-            .count();
+        let enacted_attempts =
+            crate::governance::parliament::canonical_governance_attempt_ids_v1(proposal_content_id)
+                .filter_map(|attempt_id| parliament_attempts.get(&attempt_id))
+                .filter(|attempt| {
+                    attempt.attempt().status
+                        == iroha_data_model::governance::types::GovernanceAttemptStatusV1::Enacted
+                        && attempt.terminal_height() == Some(decision.enacted_at_height)
+                        && attempt.certificate().is_some_and(|certificate| {
+                            certificate.proposal_content_id == proposal_content_id
+                                && certificate.enact_at_height == decision.enacted_at_height
+                        })
+                })
+                .count();
         if enacted_attempts != 1 {
             return Err(invalid_musubi_state(
                 "musubi_governance_decisions",
@@ -5522,7 +5604,9 @@ fn validate_global_beacon_persistence(world: &World) -> Result<(), json::Error> 
                 "pulse storage key differs from its canonical pulse id",
             ));
         }
-        if pulse_slots.get(&(pulse.network_id, pulse.height)) != Some(pulse_id) {
+        let logical_session =
+            iroha_data_model::governance::types::BeaconSessionId::for_network_v1(&pulse.network_id);
+        if pulse_slots.get(&(logical_session, pulse.height)) != Some(pulse_id) {
             return Err(invalid_global_beacon_persistence(
                 "derived pulse-slot index differs from finalized history",
             ));
@@ -5551,13 +5635,16 @@ fn validate_global_beacon_persistence(world: &World) -> Result<(), json::Error> 
             ));
         }
     }
-    let parliament_attempts = world.parliament_attempts.view();
-    for ((network_id, height), _) in pulse_slots.iter() {
+    let unavailable_beacon_pulse_slots = world
+        .parliament_attempts
+        .view()
+        .iter()
+        .flat_map(|(_, attempt)| attempt.unavailable_beacon_pulse_slots_v1())
+        .collect::<BTreeSet<_>>();
+    for (_, pulse) in pulses.iter() {
         let logical_session =
-            iroha_data_model::governance::types::BeaconSessionId::for_network_v1(network_id);
-        if parliament_attempts.iter().any(|(_, attempt)| {
-            attempt.classifies_beacon_pulse_unavailable_at(logical_session, *height)
-        }) {
+            iroha_data_model::governance::types::BeaconSessionId::for_network_v1(&pulse.network_id);
+        if unavailable_beacon_pulse_slots.contains(&(logical_session, pulse.height)) {
             return Err(invalid_global_beacon_persistence(
                 "finalized pulse conflicts with a Parliament slot terminally classified as unavailable",
             ));
@@ -5648,9 +5735,15 @@ mod global_beacon_persistence_tests {
             .global_beacon_active_session
             .insert(GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, pulse.session_id);
         world.global_beacon_pulses.insert(pulse.pulse_id, pulse);
-        world
-            .global_beacon_pulse_slots
-            .insert((pulse.network_id, pulse.height), pulse.pulse_id);
+        world.global_beacon_pulse_slots.insert(
+            (
+                iroha_data_model::governance::types::BeaconSessionId::for_network_v1(
+                    &pulse.network_id,
+                ),
+                pulse.height,
+            ),
+            pulse.pulse_id,
+        );
         world
             .global_beacon_latest_pulse
             .insert(GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, link);
@@ -5730,9 +5823,13 @@ fn timed_ovn_phase_matches_ballot_status_v1(
             BallotStatus::NoResult | BallotStatus::Superseded,
             Some(FailureKind::ReleasePulseUnavailable | FailureKind::OpeningDeadlineExpired),
         ) => phase == PersistedTimedOvnPhaseV1::Sealed,
-        (BallotStatus::NoResult, Some(FailureKind::ConfirmationJuryCapacityUnavailable)) => {
-            phase == PersistedTimedOvnPhaseV1::Released
-        }
+        (
+            BallotStatus::NoResult,
+            Some(
+                FailureKind::ConfirmationJuryCapacityUnavailable
+                | FailureKind::RandomnessRedrawBudgetExhausted,
+            ),
+        ) => phase == PersistedTimedOvnPhaseV1::Released,
         _ => false,
     }
 }
@@ -5742,6 +5839,7 @@ fn validate_tle_ovn_persistence(world: &World) -> Result<(), json::Error> {
     let parliament_attempts = world.parliament_attempts.view();
     let timed_ovn_evidence = world.timed_ovn_evidence.view();
     let tle_key_session_rosters = world.tle_key_session_rosters.view();
+    let tle_key_session_lifecycles = world.tle_key_session_lifecycles.view();
     let finalized_beacon_heights = world
         .global_beacon_pulses
         .view()
@@ -5775,6 +5873,28 @@ fn validate_tle_ovn_persistence(world: &World) -> Result<(), json::Error> {
                 ),
             )
         })?;
+        let lifecycle = tle_key_session_lifecycles
+            .get(key_session_id)
+            .copied()
+            .ok_or_else(|| {
+                invalid_tle_ovn_persistence(
+                    "tle_key_session_lifecycles",
+                    format!("TLE key session {key_session_id} is missing lifecycle metadata"),
+                )
+            })?
+            .validate()
+            .map_err(|error| {
+                invalid_tle_ovn_persistence(
+                    "tle_key_session_lifecycles",
+                    format!("invalid TLE key-session lifecycle {key_session_id}: {error}"),
+                )
+            })?;
+        if lifecycle.key_session_id != *key_session_id {
+            return Err(invalid_tle_ovn_persistence(
+                "tle_key_session_lifecycles",
+                "TLE lifecycle storage key differs from its embedded session id",
+            ));
+        }
         validated_key_sessions.insert(*key_session_id, validated);
     }
     for (key_session_id, _) in tle_key_session_rosters.iter() {
@@ -5787,7 +5907,34 @@ fn validate_tle_ovn_persistence(world: &World) -> Result<(), json::Error> {
             ));
         }
     }
+    for (key_session_id, _) in tle_key_session_lifecycles.iter() {
+        if !validated_key_sessions.contains_key(key_session_id) {
+            return Err(invalid_tle_ovn_persistence(
+                "tle_key_session_lifecycles",
+                format!(
+                    "TLE lifecycle metadata references missing public session {key_session_id}"
+                ),
+            ));
+        }
+    }
+    let mut lifecycle_rows = tle_key_session_lifecycles.iter().collect::<Vec<_>>();
+    lifecycle_rows.sort_by(|(left_id, left), (right_id, right)| {
+        left.activation_height
+            .cmp(&right.activation_height)
+            .then_with(|| left_id.cmp(right_id))
+    });
+    for adjacent in lifecycle_rows.windows(2) {
+        let (_, left) = adjacent[0];
+        let (_, right) = adjacent[1];
+        if right.activation_height <= left.selectable_through_height {
+            return Err(invalid_tle_ovn_persistence(
+                "tle_key_session_lifecycles",
+                "TLE key-session new-ballot selection intervals overlap",
+            ));
+        }
+    }
     let active_tle_sessions = world.tle_active_key_session.view();
+    let mut active_key_session_id = None;
     for (key, key_session_id) in active_tle_sessions.iter() {
         if *key != TLE_KEY_SESSION_SINGLETON_KEY {
             return Err(invalid_tle_ovn_persistence(
@@ -5795,13 +5942,27 @@ fn validate_tle_ovn_persistence(world: &World) -> Result<(), json::Error> {
                 "active TLE session pointer uses a noncanonical singleton key",
             ));
         }
-        if !validated_key_sessions.contains_key(key_session_id) {
+        if !validated_key_sessions.contains_key(key_session_id)
+            || tle_key_session_lifecycles.get(key_session_id).is_none()
+        {
             return Err(invalid_tle_ovn_persistence(
                 "tle_active_key_session",
                 "active TLE session pointer references a missing or invalid public session",
             ));
         }
+        if active_key_session_id.replace(*key_session_id).is_some() {
+            return Err(invalid_tle_ovn_persistence(
+                "tle_active_key_session",
+                "multiple active TLE session pointers are persisted",
+            ));
+        }
     }
+    let ordered_lifecycles = lifecycle_rows
+        .iter()
+        .map(|(_, lifecycle)| **lifecycle)
+        .collect::<Vec<_>>();
+    validate_tle_key_session_lifecycle_head_v1(&ordered_lifecycles, active_key_session_id)
+        .map_err(|message| invalid_tle_ovn_persistence("tle_active_key_session", message))?;
 
     for (ballot_attempt_id, lifecycle) in timed_ovn_evidence.iter() {
         if ballot_attempt_id.as_bytes() != &lifecycle.ballot_attempt_id() {
@@ -6061,6 +6222,52 @@ fn validate_tle_ovn_persistence(world: &World) -> Result<(), json::Error> {
             }
         }
     }
+    let mut counted_fresh_ballots = BTreeMap::<_, u32>::new();
+    for (_, governance_attempt) in parliament_attempts.iter() {
+        for (_, ballot) in governance_attempt.ballot_attempts() {
+            let Some(key_session_id) = ballot.tle_key_session_id() else {
+                continue;
+            };
+            let lifecycle = tle_key_session_lifecycles
+                .get(&key_session_id)
+                .ok_or_else(|| {
+                    invalid_tle_ovn_persistence(
+                        "parliament_attempts",
+                        "Parliament ballot references missing TLE lifecycle metadata",
+                    )
+                })?;
+            if !(lifecycle.activation_height..=lifecycle.selectable_through_height)
+                .contains(&ballot.registered_at_height())
+            {
+                return Err(invalid_tle_ovn_persistence(
+                    "parliament_attempts",
+                    "Parliament ballot was registered outside its TLE session selection interval",
+                ));
+            }
+            let count = counted_fresh_ballots.entry(key_session_id).or_insert(0);
+            *count = count.checked_add(1).ok_or_else(|| {
+                invalid_tle_ovn_persistence(
+                    "parliament_attempts",
+                    "TLE fresh-ballot use count overflowed",
+                )
+            })?;
+        }
+    }
+    for (key_session_id, lifecycle) in tle_key_session_lifecycles.iter() {
+        if lifecycle.fresh_ballot_uses
+            != counted_fresh_ballots
+                .get(key_session_id)
+                .copied()
+                .unwrap_or(0)
+        {
+            return Err(invalid_tle_ovn_persistence(
+                "tle_key_session_lifecycles",
+                format!(
+                    "TLE key session {key_session_id} fresh-ballot counter disagrees with committed Parliament history"
+                ),
+            ));
+        }
+    }
     Ok(())
 }
 
@@ -6173,23 +6380,28 @@ mod timed_ovn_persistence_phase_tests {
             }
         }
         for phase in phases {
-            assert_eq!(
-                timed_ovn_phase_matches_ballot_status_v1(
-                    BallotStatus::NoResult,
-                    Some(FailureKind::ConfirmationJuryCapacityUnavailable),
-                    phase,
-                ),
-                phase == Phase::Released,
-                "Confirmation-capacity NoResult must retain its released timed-OVN evidence"
-            );
-            assert!(
-                !timed_ovn_phase_matches_ballot_status_v1(
-                    BallotStatus::Superseded,
-                    Some(FailureKind::ConfirmationJuryCapacityUnavailable),
-                    phase,
-                ),
-                "terminal Confirmation-capacity failure must not become retryable"
-            );
+            for failure_kind in [
+                FailureKind::ConfirmationJuryCapacityUnavailable,
+                FailureKind::RandomnessRedrawBudgetExhausted,
+            ] {
+                assert_eq!(
+                    timed_ovn_phase_matches_ballot_status_v1(
+                        BallotStatus::NoResult,
+                        Some(failure_kind),
+                        phase,
+                    ),
+                    phase == Phase::Released,
+                    "post-opening NoResult must retain its released timed-OVN evidence"
+                );
+                assert!(
+                    !timed_ovn_phase_matches_ballot_status_v1(
+                        BallotStatus::Superseded,
+                        Some(failure_kind),
+                        phase,
+                    ),
+                    "terminal post-opening failure must not become retryable"
+                );
+            }
         }
         for status in [
             BallotStatus::Registration,
@@ -6281,6 +6493,14 @@ mod timed_ovn_persistence_phase_tests {
         world
             .tle_key_session_rosters
             .insert(key_session_id, ordered_roster.clone());
+        world.tle_key_session_lifecycles.insert(
+            key_session_id,
+            TleKeySessionLifecycleV1::new(key_session_id, 1, 100, 1)
+                .expect("valid frozen-roster lifecycle fixture"),
+        );
+        world
+            .tle_active_key_session
+            .insert(TLE_KEY_SESSION_SINGLETON_KEY, key_session_id);
         (world, key_session_id, ordered_roster)
     }
 
@@ -6360,6 +6580,169 @@ mod timed_ovn_persistence_phase_tests {
                         && message.contains("references missing TLE key session")
             ),
             "unexpected orphan-roster rejection: {orphan}"
+        );
+    }
+
+    #[test]
+    fn restore_rejects_missing_misbound_or_miscounted_tle_lifecycle_metadata() {
+        let (mut world, _, _) = world_with_frozen_tle_roster_binding_v1();
+        world.tle_key_session_lifecycles = Storage::default();
+        let missing = validate_tle_ovn_persistence(&world)
+            .expect_err("a public TLE session without lifecycle metadata must fail restore");
+        assert!(
+            matches!(
+                &missing,
+                json::Error::InvalidField { field, message }
+                    if field == "tle_key_session_lifecycles"
+                        && message.contains("missing lifecycle metadata")
+            ),
+            "unexpected missing-lifecycle rejection: {missing}"
+        );
+
+        let (mut world, key_session_id, _) = world_with_frozen_tle_roster_binding_v1();
+        let mut misbound = *world
+            .tle_key_session_lifecycles
+            .view()
+            .get(&key_session_id)
+            .expect("fixture lifecycle");
+        misbound.key_session_id = TleKeySessionId::new([0xDD; 32]);
+        world
+            .tle_key_session_lifecycles
+            .insert(key_session_id, misbound);
+        let mismatch = validate_tle_ovn_persistence(&world)
+            .expect_err("a lifecycle stored under another session id must fail restore");
+        assert!(
+            matches!(
+                &mismatch,
+                json::Error::InvalidField { field, message }
+                    if field == "tle_key_session_lifecycles"
+                        && message.contains("storage key differs")
+            ),
+            "unexpected lifecycle-id rejection: {mismatch}"
+        );
+
+        let (mut world, key_session_id, _) = world_with_frozen_tle_roster_binding_v1();
+        let mut miscounted = *world
+            .tle_key_session_lifecycles
+            .view()
+            .get(&key_session_id)
+            .expect("fixture lifecycle");
+        miscounted.fresh_ballot_uses = 1;
+        world
+            .tle_key_session_lifecycles
+            .insert(key_session_id, miscounted);
+        let mismatch = validate_tle_ovn_persistence(&world)
+            .expect_err("a lifecycle counter without committed ballots must fail restore");
+        assert!(
+            matches!(
+                &mismatch,
+                json::Error::InvalidField { field, message }
+                    if field == "tle_key_session_lifecycles"
+                        && message.contains("counter disagrees")
+            ),
+            "unexpected lifecycle-counter rejection: {mismatch}"
+        );
+
+        let (mut world, key_session_id, _) = world_with_frozen_tle_roster_binding_v1();
+        world.tle_active_key_session = Storage::default();
+        let missing_head = validate_tle_ovn_persistence(&world)
+            .expect_err("an open lifecycle head without its active pointer must fail restore");
+        assert!(
+            matches!(
+                &missing_head,
+                json::Error::InvalidField { field, message }
+                    if field == "tle_active_key_session"
+                        && message.contains("open latest lifecycle head")
+            ),
+            "unexpected missing-head rejection: {missing_head}"
+        );
+
+        let mut closed = *world
+            .tle_key_session_lifecycles
+            .view()
+            .get(&key_session_id)
+            .expect("fixture lifecycle");
+        closed
+            .cut_over_after(50)
+            .expect("close the fixture lifecycle explicitly");
+        world
+            .tle_key_session_lifecycles
+            .insert(key_session_id, closed);
+        validate_tle_ovn_persistence(&world)
+            .expect("a closed latest lifecycle restores without an active pointer");
+        world
+            .tle_active_key_session
+            .insert(TLE_KEY_SESSION_SINGLETON_KEY, key_session_id);
+        let stale_closed_head = validate_tle_ovn_persistence(&world)
+            .expect_err("a closed lifecycle head cannot retain an active pointer");
+        assert!(
+            matches!(
+                &stale_closed_head,
+                json::Error::InvalidField { field, message }
+                    if field == "tle_active_key_session"
+                        && message.contains("closed latest lifecycle head")
+            ),
+            "unexpected closed-head rejection: {stale_closed_head}"
+        );
+
+        let (mut world, first_key_session_id, ordered_roster) =
+            world_with_frozen_tle_roster_binding_v1();
+        let second_public_state = public_key_session_fixture_for_context_v1(
+            [0xC1; 32],
+            0xC3,
+            crate::beacon::global_threshold_beacon_roster_hash_v1(&ordered_roster),
+        );
+        let second_key_session_id = second_public_state.key_session_id;
+        world
+            .tle_key_sessions
+            .insert(second_key_session_id, second_public_state);
+        world
+            .tle_key_session_rosters
+            .insert(second_key_session_id, ordered_roster);
+        world.tle_key_session_lifecycles.insert(
+            second_key_session_id,
+            TleKeySessionLifecycleV1::new(second_key_session_id, 101, 100, 1)
+                .expect("nonoverlapping successor lifecycle"),
+        );
+        world
+            .tle_active_key_session
+            .insert(TLE_KEY_SESSION_SINGLETON_KEY, second_key_session_id);
+        let open_history = validate_tle_ovn_persistence(&world)
+            .expect_err("a non-latest open lifecycle must fail restore");
+        assert!(
+            matches!(
+                &open_history,
+                json::Error::InvalidField { field, message }
+                    if field == "tle_active_key_session"
+                        && message.contains("non-latest")
+            ),
+            "unexpected open-history rejection: {open_history}"
+        );
+
+        let mut first_lifecycle = *world
+            .tle_key_session_lifecycles
+            .view()
+            .get(&first_key_session_id)
+            .expect("first fixture lifecycle");
+        first_lifecycle
+            .cut_over_after(100)
+            .expect("close the predecessor at the successor boundary");
+        world
+            .tle_key_session_lifecycles
+            .insert(first_key_session_id, first_lifecycle);
+        world
+            .tle_active_key_session
+            .insert(TLE_KEY_SESSION_SINGLETON_KEY, first_key_session_id);
+        let stale_head = validate_tle_ovn_persistence(&world)
+            .expect_err("a stale active lifecycle head must fail restore");
+        assert!(
+            matches!(
+                &stale_head,
+                json::Error::InvalidField { field, message }
+                    if field == "tle_active_key_session"
+                        && message.contains("latest lifecycle head")
+            ),
+            "unexpected stale-head rejection: {stale_head}"
         );
     }
 }
@@ -6536,6 +6919,23 @@ mod validation_fee_registry_restore_tests {
             world
                 .tle_key_session_rosters
                 .insert(key_session_id, ordered_roster);
+        }
+        let mut open_key_session_id = None;
+        for (key_session_id, lifecycle) in stored_fixture.tle_key_session_lifecycles {
+            if !lifecycle.selection_is_closed() {
+                assert!(
+                    open_key_session_id.replace(key_session_id).is_none(),
+                    "restore fixture must have at most one open TLE lifecycle head"
+                );
+            }
+            world
+                .tle_key_session_lifecycles
+                .insert(key_session_id, lifecycle);
+        }
+        if let Some(key_session_id) = open_key_session_id {
+            world
+                .tle_active_key_session
+                .insert(TLE_KEY_SESSION_SINGLETON_KEY, key_session_id);
         }
         for (ballot_attempt_id, lifecycle) in stored_fixture.timed_ovn_evidence {
             world
@@ -7130,6 +7530,19 @@ fn parse_world(
         PrivateSettlementOutputKeyV1,
         PrivateSettlementOutputRecordV1,
     > = take_required(&mut map, "private_settlement_outputs")?;
+    let private_settlement_recipient_index = Storage::from_iter(
+        crate::private_settlement::global_state::rebuild_private_settlement_recipient_index_v1(
+            &private_settlement_outputs.view(),
+        )
+        .map_err(|error| json::Error::InvalidField {
+            field: "world.private_settlement_outputs".to_owned(),
+            message: error.to_string(),
+        })?,
+    );
+    let private_settlement_staged_locks: Storage<
+        PrivateSettlementStagedLockKeyV1,
+        PrivateSettlementStagedLockRecordV1,
+    > = take_required(&mut map, "private_settlement_staged_locks")?;
     let private_settlement_receipts: Storage<
         Hash,
         iroha_data_model::nexus::PrivateSettlementReceiptV1,
@@ -7144,6 +7557,8 @@ fn parse_world(
         &private_settlement_roots.view(),
         &private_settlement_nullifiers.view(),
         &private_settlement_outputs.view(),
+        &private_settlement_recipient_index.view(),
+        &private_settlement_staged_locks.view(),
         &private_settlement_receipts.view(),
         &private_settlement_aborts.view(),
     )
@@ -7344,11 +7759,10 @@ fn parse_world(
     let governance_last_unlock_sweep_height =
         take_required(&mut map, "governance_last_unlock_sweep_height")?;
     let governance_unlock_stats = take_required(&mut map, "governance_unlock_stats")?;
-    let council = take_required(&mut map, "council")?;
-    let parliament_bodies = take_required(&mut map, "parliament_bodies")?;
     let parliament_attempts = take_required(&mut map, "parliament_attempts")?;
     let tle_key_sessions = take_required(&mut map, "tle_key_sessions")?;
     let tle_key_session_rosters = take_required(&mut map, "tle_key_session_rosters")?;
+    let tle_key_session_lifecycles = take_required(&mut map, "tle_key_session_lifecycles")?;
     let tle_active_key_session = take_required(&mut map, "tle_active_key_session")?;
     let timed_ovn_evidence = take_required(&mut map, "timed_ovn_evidence")?;
     let global_beacon_dkg = take_required(&mut map, "global_beacon_dkg")?;
@@ -7358,7 +7772,51 @@ fn parse_world(
     let global_beacon_pulses = take_required(&mut map, "global_beacon_pulses")?;
     let repo_agreements = take_required(&mut map, "repo_agreements")?;
     let settlement_receipts = take_required(&mut map, "settlement_receipts")?;
-    let kagemusha_replay_keys = take_required(&mut map, "kagemusha_replay_keys")?;
+    let kagemusha_reserve_pools: Storage<
+        [u8; 32],
+        crate::smartcontracts::isi::kagemusha::kagemusha_v1_reserve::KagemushaReservePoolV1,
+    > = take_required(&mut map, "kagemusha_reserve_pools")?;
+    let kagemusha_reserve_operations: Storage<
+        [u8; 32],
+        crate::smartcontracts::isi::kagemusha::kagemusha_v1_reserve::KagemushaReserveOperationRecordV1,
+    > = take_required(&mut map, "kagemusha_reserve_operations")?;
+    let kagemusha_mint_credit_operations: Storage<[u8; 32], [u8; 32]> =
+        take_required(&mut map, "kagemusha_mint_credit_operations")?;
+    let kagemusha_issuance_operations: Storage<[u8; 32], [u8; 32]> =
+        take_required(&mut map, "kagemusha_issuance_operations")?;
+    let kagemusha_redemption_id_operations: Storage<[u8; 32], [u8; 32]> =
+        take_required(&mut map, "kagemusha_redemption_id_operations")?;
+    let kagemusha_terminal_nullifier_operations: Storage<[u8; 32], [u8; 32]> =
+        take_required(&mut map, "kagemusha_terminal_nullifier_operations")?;
+    {
+        let pools = kagemusha_reserve_pools.view();
+        let operations = kagemusha_reserve_operations.view();
+        let mint_credits = kagemusha_mint_credit_operations.view();
+        let issuances = kagemusha_issuance_operations.view();
+        let redemptions = kagemusha_redemption_id_operations.view();
+        let nullifiers = kagemusha_terminal_nullifier_operations.view();
+        crate::smartcontracts::isi::kagemusha::kagemusha_v1_reserve::validate_persisted_reserve_entries_v1(
+            pools.iter(),
+            operations.iter(),
+            mint_credits.iter(),
+            issuances.iter(),
+            redemptions.iter(),
+            nullifiers.iter(),
+        )
+        .map_err(|error| json::Error::InvalidField {
+            field: "kagemusha_reserve_pools".to_owned(),
+            message: format!("invalid Kagemusha V1 reserve snapshot: {error}"),
+        })?;
+        let assets = assets.view();
+        crate::smartcontracts::isi::kagemusha::kagemusha_v1_reserve::validate_persisted_reserve_custody_v1(
+            pools.iter().map(|(_, pool)| pool),
+            assets.iter(),
+        )
+        .map_err(|error| json::Error::InvalidField {
+            field: "kagemusha_reserve_pools".to_owned(),
+            message: format!("invalid Kagemusha V1 reserve custody snapshot: {error}"),
+        })?;
+    }
     let lane_relay_emergency_validators =
         take_required(&mut map, "lane_relay_emergency_validators")?;
     let manifest_aliases = take_required(&mut map, "manifest_aliases")?;
@@ -7385,6 +7843,8 @@ fn parse_world(
     let merge_hint_roots: Cell<Vec<Hash>> = take_required(&mut map, "merge_hint_roots")?;
     let merge_global_state_root: Cell<Option<Hash>> =
         take_required(&mut map, "merge_global_state_root")?;
+    let consensus_evidence: Storage<Hash, EvidenceRecord> =
+        take_required(&mut map, "consensus_evidence")?;
     reject_unknown(&map, "world")?;
     let mut world = World {
         parameters,
@@ -7495,6 +7955,8 @@ fn parse_world(
         private_settlement_roots,
         private_settlement_nullifiers,
         private_settlement_outputs,
+        private_settlement_recipient_index,
+        private_settlement_staged_locks,
         private_settlement_receipts,
         private_settlement_aborts,
         privacy_pgc_accounts,
@@ -7599,7 +8061,12 @@ fn parse_world(
         repo_agreements_by_counterparty: Storage::default(),
         repo_agreements_by_custodian: Storage::default(),
         settlement_receipts,
-        kagemusha_replay_keys,
+        kagemusha_reserve_pools,
+        kagemusha_reserve_operations,
+        kagemusha_mint_credit_operations,
+        kagemusha_issuance_operations,
+        kagemusha_redemption_id_operations,
+        kagemusha_terminal_nullifier_operations,
         domain_committees,
         domain_endorsement_policies,
         domain_endorsements,
@@ -7623,12 +8090,19 @@ fn parse_world(
         governance_slashes,
         governance_last_unlock_sweep_height,
         governance_unlock_stats,
-        council,
-        parliament_bodies,
         parliament_attempts,
+        parliament_attempt_counts: Cell::default(),
+        parliament_member_reference_counts: Storage::default(),
         parliament_timed_ovn_resource_reservations: Storage::default(),
+        parliament_timed_ovn_casting_candidates: Storage::default(),
+        parliament_required_beacon_pulse_slots: Storage::default(),
+        parliament_certified_enactments: Storage::default(),
+        parliament_unavailable_beacon_pulse_slots: Storage::default(),
+        parliament_tle_key_session_retention_deadlines: Storage::default(),
+        tle_key_session_selection_intervals: Storage::default(),
         tle_key_sessions,
         tle_key_session_rosters,
+        tle_key_session_lifecycles,
         tle_active_key_session,
         timed_ovn_evidence,
         global_beacon_dkg,
@@ -7639,16 +8113,22 @@ fn parse_world(
         global_beacon_pulse_slots: Storage::default(),
         merge_hint_roots,
         merge_global_state_root,
-        consensus_evidence: Storage::default(),
+        consensus_evidence,
         external_event_buf,
     };
+    validate_asset_transfer_control_persistence_v1(&world)?;
     world
         .rebuild_global_beacon_pulse_slots()
         .map_err(invalid_global_beacon_persistence)?;
     validate_parliament_attempt_encoded_size_bounds_v1(&world)?;
+    validate_no_standalone_governance_state_for_typed_proposals_v1(&world)?;
     {
         let parliament_attempts_view = world.parliament_attempts.view();
         let governance_proposals_view = world.governance_proposals.view();
+        let mut parliament_attempts_by_proposal = BTreeMap::<
+            iroha_data_model::governance::types::ProposalContentId,
+            Vec<&ParliamentAttemptStateV1>,
+        >::new();
         for (attempt_id, attempt) in parliament_attempts_view.iter() {
             if attempt_id != &attempt.attempt().id {
                 return Err(json::Error::InvalidField {
@@ -7680,6 +8160,10 @@ fn parse_world(
                     "Parliament attempt differs from its exact governance proposal policy: {error}"
                 ),
             })?;
+            parliament_attempts_by_proposal
+                .entry(attempt.proposal_content_id())
+                .or_default()
+                .push(attempt);
         }
         validate_tle_ovn_persistence(&world)?;
         validate_global_beacon_persistence(&world)?;
@@ -7698,42 +8182,16 @@ fn parse_world(
                             .to_owned(),
                 });
             }
-            let proposal_operator = match &proposal.kind {
-                iroha_data_model::governance::types::ProposalKind::ValidationFeePolicy(payload) => {
-                    Some(&payload.proposal_operator)
-                }
-                iroha_data_model::governance::types::ProposalKind::ValidationFeePayoutLifecycle(
-                    payload,
-                ) => Some(&payload.proposal_operator),
-                _ => None,
-            };
-            if proposal_operator.is_some_and(|operator| operator != &proposal.proposer) {
-                return Err(json::Error::InvalidField {
-                    field: "governance_proposals".into(),
-                    message: "validation-fee proposal operator differs from its retained proposer"
-                        .to_owned(),
-                });
-            }
-            let referendum_id = hex::encode(proposal_id);
-            if world
-                .governance_referenda
-                .view()
-                .get(&referendum_id)
-                .is_some()
-                || world.governance_locks.view().get(&referendum_id).is_some()
-                || world
-                    .governance_slashes
-                    .view()
-                    .get(&referendum_id)
-                    .is_some()
-                || world.elections.view().get(&referendum_id).is_some()
+            if proposal
+                .kind
+                .proposal_operator_v1()
+                .is_some_and(|operator| operator != &proposal.proposer)
             {
                 return Err(json::Error::InvalidField {
-                field: "governance_proposals".into(),
-                message:
-                    "certificate-only governance proposals cannot retain legacy public referendum or pipeline state"
+                    field: "governance_proposals".into(),
+                    message: "governance proposal operator differs from its retained proposer"
                         .to_owned(),
-            });
+                });
             }
             let governed_subject = proposal.kind.governed_subject_id_v1().map_err(|error| {
                 json::Error::InvalidField {
@@ -7745,12 +8203,20 @@ fn parse_world(
             })?;
             let proposal_content_id =
                 iroha_data_model::governance::types::ProposalContentId::new(*proposal_id);
-            let mut proposal_attempts = parliament_attempts_view
-                .iter()
-                .filter(|(_, attempt)| attempt.proposal_content_id() == proposal_content_id)
-                .map(|(_, attempt)| attempt)
-                .collect::<Vec<_>>();
+            let mut proposal_attempts = parliament_attempts_by_proposal
+                .get(&proposal_content_id)
+                .cloned()
+                .unwrap_or_default();
             proposal_attempts.sort_unstable_by_key(|attempt| attempt.attempt().sequence);
+            crate::governance::parliament::validate_parliament_randomness_redraw_lineage_v1(
+                proposal_attempts.iter().copied(),
+            )
+            .map_err(|error| json::Error::InvalidField {
+                field: "parliament_attempts".into(),
+                message: format!(
+                    "governance Parliament randomness-redraw lineage is invalid: {error}"
+                ),
+            })?;
             for (index, attempt) in proposal_attempts.iter().enumerate() {
                 let expected_sequence =
                     u32::try_from(index).map_err(|_| json::Error::InvalidField {
@@ -7767,7 +8233,9 @@ fn parse_world(
                             .to_owned(),
                 });
                 }
-                if attempt.policy_version() != 1 {
+                if attempt.policy_version()
+                    != crate::governance::parliament::PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1
+                {
                     return Err(json::Error::InvalidField {
                         field: "parliament_attempts".into(),
                         message: "governance Parliament attempt has a non-V1 policy version"
@@ -7970,6 +8438,116 @@ fn parse_world(
         })?;
     Ok(world)
 }
+
+#[cfg(test)]
+mod asset_transfer_control_persistence_tests {
+    use super::*;
+    use iroha_data_model::{
+        Registrable,
+        account::Account,
+        asset::{
+            ASSET_TRANSFER_CONTROL_METADATA_KEY, AssetBalancePolicy, AssetDefinition,
+            AssetDefinitionId, AssetTransferControlRecord, AssetTransferControlStoreV1,
+        },
+        domain::DomainId,
+        metadata::Metadata,
+    };
+    use iroha_primitives::json::Json;
+    use iroha_test_samples::ALICE_ID;
+
+    fn account_with_transfer_store(store: AssetTransferControlStoreV1) -> Account {
+        let authority = (*ALICE_ID).clone();
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            ASSET_TRANSFER_CONTROL_METADATA_KEY
+                .parse()
+                .expect("transfer-control metadata key"),
+            Json::new(store),
+        );
+        Account::new(authority.clone())
+            .with_metadata(metadata)
+            .build(&authority)
+    }
+
+    fn world_with_transfer_store(store: AssetTransferControlStoreV1) -> World {
+        let authority = (*ALICE_ID).clone();
+        let asset_definition_id = transfer_asset_definition_id();
+        World::with(
+            [],
+            [account_with_transfer_store(store)],
+            [AssetDefinition::numeric(
+                asset_definition_id,
+                "rose".to_owned(),
+                AssetBalancePolicy::Global,
+                None,
+            )
+            .build(&authority)],
+        )
+    }
+
+    fn transfer_asset_definition_id() -> AssetDefinitionId {
+        AssetDefinitionId::derive_from_components(
+            DomainId::try_new("transfer", "controls").expect("domain id"),
+            "rose".parse().expect("asset name"),
+        )
+    }
+
+    fn active_record() -> AssetTransferControlRecord {
+        let mut record = AssetTransferControlRecord::new(transfer_asset_definition_id());
+        record.blacklisted = true;
+        record
+    }
+
+    #[test]
+    fn snapshot_transfer_control_store_must_be_nonempty_and_canonical() {
+        let record = active_record();
+        assert!(
+            validate_asset_transfer_control_persistence_v1(&world_with_transfer_store(
+                AssetTransferControlStoreV1 {
+                    controls: vec![record.clone()],
+                },
+            ))
+            .is_ok()
+        );
+
+        for invalid in [
+            AssetTransferControlStoreV1::default(),
+            AssetTransferControlStoreV1 {
+                controls: vec![record.clone(), record],
+            },
+        ] {
+            let error =
+                validate_asset_transfer_control_persistence_v1(&world_with_transfer_store(invalid))
+                    .expect_err("ambiguous first-release transfer-control snapshot must fail fast");
+            assert!(
+                error
+                    .to_string()
+                    .contains("first-release snapshot is incompatible"),
+                "unexpected snapshot incompatibility: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn snapshot_transfer_control_store_rejects_missing_asset_definition() {
+        let record = active_record();
+        let world = World::with(
+            [],
+            [account_with_transfer_store(AssetTransferControlStoreV1 {
+                controls: vec![record],
+            })],
+            [],
+        );
+
+        let error = validate_asset_transfer_control_persistence_v1(&world)
+            .expect_err("first-release restore must reject orphaned transfer controls");
+        assert!(
+            error.to_string().contains("missing asset definition"),
+            "unexpected snapshot incompatibility: {error}"
+        );
+    }
+}
+
 struct BuildStateInputs {
     world: World,
     block_hashes: BlockHashes,
@@ -8019,6 +8597,11 @@ fn build_state(
     } = inputs;
     #[cfg(feature = "telemetry")]
     let telemetry_seed = telemetry.clone();
+    validate_no_standalone_governance_state_for_typed_proposals_v1(&world).map_err(|error| {
+        MergeLedgerCommitError::ExecutionStatePublication(format!(
+            "restored standalone governance state is invalid: {error}"
+        ))
+    })?;
     let initial_crypto = iroha_config::parameters::actual::Crypto::default();
     let da_receipt_cursors = parking_lot::RwLock::new(DaReceiptCursorIndex::default());
     let da_shard_cursors = parking_lot::RwLock::new(DaShardCursorIndex::default());
@@ -8027,6 +8610,41 @@ fn build_state(
             "restored committed height does not fit the Parliament height domain: {error}"
         ))
     })?;
+    if !emergency_fast {
+        crate::sumeragi::evidence::validate_persisted_v2_evidence_records(
+            &world.view(),
+            kura.as_ref(),
+            &network_id,
+            restored_height,
+        )
+        .map_err(|error| {
+            MergeLedgerCommitError::ExecutionStatePublication(format!(
+                "restored Sumeragi v2 evidence state is invalid: {error}"
+            ))
+        })?;
+    }
+    crate::smartcontracts::isi::sorafs_moderation::validate_persisted_moderation_schema_v1(
+        &world.view(),
+    )
+    .map_err(|error| {
+        MergeLedgerCommitError::ExecutionStatePublication(format!(
+            "incompatible persisted SoraFS moderation V1 policy/appeal/anchor/case state; regenerate first-release genesis and snapshots: {error}"
+        ))
+    })?;
+    {
+        // Preserve the global State view lock order even though restoration is single-threaded.
+        let committed_block_hashes = block_hashes.view();
+        let world_view = world.view();
+        crate::smartcontracts::isi::sorafs_moderation::validate_persisted_moderation_anchor_history_v1(
+            &world_view,
+            &committed_block_hashes,
+        )
+        .map_err(|error| {
+            MergeLedgerCommitError::ExecutionStatePublication(format!(
+                "restored SoraFS moderation sortition anchors are not bound to committed block history: {error}"
+            ))
+        })?;
+    }
     if !emergency_fast {
         validate_tle_ovn_snapshot_network_v1(&world, &network_id)
             .map_err(MergeLedgerCommitError::ExecutionStatePublication)?;
@@ -8163,10 +8781,9 @@ fn build_state(
         gov: default_governance(),
         content: default_content_cfg(),
         settlement: iroha_config::parameters::actual::Settlement::default(),
-        kagemusha_release_catalog: Arc::new(
-            crate::smartcontracts::isi::offline::KagemushaReleaseCatalogV4::empty(),
+        kagemusha_v1_runtime_verifier: Arc::new(
+            crate::smartcontracts::isi::kagemusha::RejectAllKagemushaV1RuntimeVerifier,
         ),
-        kagemusha_runtime_effective_config_sha256: SyncOnceCell::new(),
         settlement_engine: SettlementEngine::new_roadmap_default(),
         chain_id,
         network_id,
@@ -8176,10 +8793,12 @@ fn build_state(
         #[cfg(feature = "telemetry")]
         telemetry,
         lane_lifecycle_lock: parking_lot::Mutex::new(()),
+        queue_plan_admission_persistence_lock: parking_lot::Mutex::new(()),
         state_commit_lock: Arc::new(parking_lot::Mutex::new(())),
         state_write_lock: parking_lot::Mutex::new(()),
         view_generation: AtomicU64::new(0),
         view_lock_contention_log: parking_lot::Mutex::new(ViewLockContentionLog::default()),
+        sumeragi_v2_pending_evidence: parking_lot::Mutex::new(BTreeMap::new()),
         sccp_registry_cache: parking_lot::Mutex::new(SccpRegistryCache::default()),
     };
     crate::validation_fee::validate_persisted_policy_registry_runtime_v1(
@@ -8204,8 +8823,15 @@ fn build_state(
         let view = state.world.governance_proposals.view();
         let records: Vec<_> = view.iter().map(|(id, rec)| (*id, rec.status)).collect();
         telemetry_seed.seed_governance_proposals(records);
-        let citizens_total =
-            u64::try_from(state.world.citizens.view().iter().count()).unwrap_or(u64::MAX);
+        let (status_counts, stage_counts) = state
+            .world
+            .parliament_attempt_counts
+            .view()
+            .get()
+            .telemetry_counts();
+        telemetry_seed.set_parliament_attempt_counts(status_counts, stage_counts);
+        let citizens_total = u64::try_from(state.world.citizens.view().iter().count())
+            .expect("Parliament citizen count must fit into u64");
         telemetry_seed.record_citizens_total(citizens_total);
     }
     if allow_durable_recovery && state.kura.emergency_fast_startup_enabled() {
@@ -8407,7 +9033,6 @@ fn default_governance() -> iroha_config::parameters::actual::Governance {
                 .collect(),
         runtime_upgrade_provenance:
             iroha_config::parameters::actual::RuntimeUpgradeProvenancePolicy::default(),
-        citizen_service: iroha_config::parameters::actual::CitizenServiceDiscipline::default(),
         viral_incentives: iroha_config::parameters::actual::ViralIncentives::default(),
         sorafs_pin_policy: iroha_config::parameters::actual::SorafsPinPolicyConstraints::default(),
         sorafs_pin_fee_asset_id:
@@ -8424,24 +9049,15 @@ fn default_governance() -> iroha_config::parameters::actual::Governance {
         max_conviction: 6,
         min_enactment_delay: 20,
         window_span: 100,
-        plain_voting_enabled: false,
+        max_active_referenda: iroha_config::parameters::defaults::governance::MAX_ACTIVE_REFERENDA,
+        max_lock_owners_per_referendum:
+            iroha_config::parameters::defaults::governance::MAX_LOCK_OWNERS_PER_REFERENDUM,
+        plain_voting_enabled: iroha_config::parameters::defaults::governance::PLAIN_VOTING_ENABLED,
         approval_threshold_q_num: 1,
         approval_threshold_q_den: 2,
         min_turnout: 0,
-        parliament_committee_size:
-            iroha_config::parameters::defaults::governance::PARLIAMENT_COMMITTEE_SIZE,
-        parliament_term_blocks:
-            iroha_config::parameters::defaults::governance::PARLIAMENT_TERM_BLOCKS,
-        parliament_min_stake: iroha_config::parameters::defaults::governance::parliament_min_stake(
-        ),
-        parliament_eligibility_asset_id:
-            iroha_config::parameters::defaults::governance::parliament_eligibility_asset_id()
-                .parse()
-                .expect("valid default governance asset id"),
         parliament_alternate_size:
             iroha_config::parameters::defaults::governance::PARLIAMENT_ALTERNATE_SIZE,
-        parliament_quorum_bps:
-            iroha_config::parameters::defaults::governance::PARLIAMENT_QUORUM_BPS,
         parliament_sortition_pulse_delay_blocks:
             iroha_config::parameters::defaults::governance::PARLIAMENT_SORTITION_PULSE_DELAY_BLOCKS,
         parliament_invitation_phase_blocks:
@@ -8449,6 +9065,8 @@ fn default_governance() -> iroha_config::parameters::actual::Governance {
         parliament_public_finding_phase_blocks:
             iroha_config::parameters::defaults::governance::PARLIAMENT_PUBLIC_FINDING_PHASE_BLOCKS,
         parliament_timed_ovn: iroha_config::parameters::actual::ParliamentTimedOvn::default(),
+        parliament_tle_key_lifecycle:
+            iroha_config::parameters::actual::ParliamentTleKeyLifecycle::default(),
         parliament_tle_partial_release_signer_provider_handle: None,
         parliament_tle_partial_release_signer_provider_revision: None,
         parliament_tle_partial_release_signer_provider_policy_digest: None,
@@ -8509,7 +9127,6 @@ mod decode_tests {
         ChunkerProfileHandle, ManifestAliasBinding, ManifestRootCid,
         ProviderIngestCompletionSignerPolicyV1, ProviderIngestFinalizedAnchorV1,
     };
-
     #[test]
     fn restored_proposal_status_must_match_latest_attempt_exactly() {
         use iroha_data_model::governance::types::GovernanceAttemptStatusV1 as Attempt;
@@ -8537,6 +9154,101 @@ mod decode_tests {
             .expect("derive deterministic Musubi snapshot account");
         AccountId::new(key_pair.public_key().clone())
     }
+
+    #[test]
+    fn restore_rejects_every_standalone_state_alias_for_a_typed_proposal() {
+        let kind = ProposalKind::DeployContract(
+            iroha_data_model::governance::types::DeployContractProposal {
+                proposal_operator: musubi_account(59),
+                contract_address: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
+                    .parse()
+                    .expect("contract address"),
+                code_hash: iroha_data_model::governance::types::ContractCodeHash::new([0x31; 32]),
+                abi_hash: iroha_data_model::governance::types::ContractAbiHash::new([0x41; 32]),
+                abi_version: iroha_data_model::governance::types::AbiVersion::new(1),
+                manifest_provenance: None,
+            },
+        );
+        let proposal_id = kind.fingerprint();
+        let typed_world = || {
+            let mut world = World::default();
+            world.governance_proposals.insert(
+                proposal_id,
+                GovernanceProposalRecord {
+                    proposer: musubi_account(59),
+                    kind: kind.clone(),
+                    created_height: 1,
+                    status: GovernanceProposalStatus::Proposed,
+                },
+            );
+            world
+        };
+        let lowercase = hex::encode(proposal_id);
+        let uppercase = lowercase.to_ascii_uppercase();
+        let mixed = lowercase
+            .chars()
+            .enumerate()
+            .map(|(index, character)| {
+                if index % 2 == 0 {
+                    character.to_ascii_uppercase()
+                } else {
+                    character
+                }
+            })
+            .collect::<String>();
+        let referendum_alias = uppercase;
+        let mut world = typed_world();
+        world.governance_referenda.insert(
+            referendum_alias.clone(),
+            GovernanceReferendumRecord {
+                h_start: 1,
+                h_end: 2,
+                status: GovernanceReferendumStatus::Proposed,
+                mode: GovernanceReferendumMode::Plain,
+            },
+        );
+        let error = validate_no_standalone_governance_state_for_typed_proposals_v1(&world)
+            .expect_err("uppercase restored referendum alias must fail closed");
+        assert!(matches!(
+            error,
+            json::Error::InvalidField { ref field, .. } if field == "governance_referenda"
+        ));
+        let mut world = typed_world();
+        world
+            .governance_locks
+            .insert(mixed.clone(), GovernanceLocksForReferendum::default());
+        let error = validate_no_standalone_governance_state_for_typed_proposals_v1(&world)
+            .expect_err("mixed-case restored lock alias must fail closed");
+        assert!(matches!(
+            error,
+            json::Error::InvalidField { ref field, .. } if field == "governance_locks"
+        ));
+        let lower_prefixed = format!("0x{lowercase}");
+        let mut world = typed_world();
+        world
+            .governance_slashes
+            .insert(lower_prefixed.clone(), GovernanceSlashLedger::default());
+        let error = validate_no_standalone_governance_state_for_typed_proposals_v1(&world)
+            .expect_err("0x-prefixed restored slash alias must fail closed");
+        assert!(matches!(
+            error,
+            json::Error::InvalidField { ref field, .. } if field == "governance_slashes"
+        ));
+        let upper_prefixed = format!("0X{}", lowercase.to_ascii_uppercase());
+        let mut world = typed_world();
+        world
+            .elections
+            .insert(upper_prefixed.clone(), ElectionState::default());
+        let error = validate_no_standalone_governance_state_for_typed_proposals_v1(&world)
+            .expect_err("0X-prefixed restored election alias must fail closed");
+        assert!(matches!(
+            error,
+            json::Error::InvalidField { ref field, .. } if field == "elections"
+        ));
+        validate_no_standalone_governance_state_for_typed_proposals_v1(&typed_world())
+            .expect("typed proposal without standalone state is valid");
+    }
+
     fn musubi_package(name: &str) -> MusubiPackageIdV1 {
         MusubiPackageIdV1::new(
             DataSpaceId::new(7),
@@ -9448,7 +10160,7 @@ mod decode_tests {
     }
 
     #[test]
-    fn private_settlement_finalized_snapshot_roundtrip_restores_all_seven_maps() {
+    fn private_settlement_finalized_snapshot_roundtrip_restores_all_eight_maps() {
         let world = crate::private_settlement::global_state::tests::finalized_world_fixture();
         let receipt = {
             let receipts = world.private_settlement_receipts.view();
@@ -9482,6 +10194,8 @@ mod decode_tests {
         assert_eq!(restored.private_settlement_roots.view().len(), 4);
         assert_eq!(restored.private_settlement_nullifiers.view().len(), 4);
         assert_eq!(restored.private_settlement_outputs.view().len(), 6);
+        assert_eq!(restored.private_settlement_recipient_index.view().len(), 6);
+        assert_eq!(restored.private_settlement_staged_locks.view().len(), 0);
         assert_eq!(restored.private_settlement_receipts.view().len(), 1);
         assert_eq!(restored.private_settlement_aborts.view().len(), 1);
         assert_eq!(
@@ -9501,7 +10215,94 @@ mod decode_tests {
             encoded,
             "canonical restart must preserve every public settlement byte"
         );
+        assert!(
+            !encoded.contains("private_settlement_recipient_index"),
+            "the deterministically rebuilt recipient index must not alter snapshot schema"
+        );
     }
+
+    #[test]
+    fn private_settlement_prepared_snapshot_roundtrip_restores_exact_lock_rows() {
+        let world = crate::private_settlement::global_state::tests::prepared_world_fixture();
+        let (bundle_id, barrier, row_count) = {
+            let locks = world.private_settlement_staged_locks.view();
+            let (bundle_id, barrier) = locks
+                .iter()
+                .find_map(|(key, record)| match (key, record) {
+                    (
+                        PrivateSettlementStagedLockKeyV1::Bundle(bundle_id),
+                        PrivateSettlementStagedLockRecordV1::Bundle { barrier, .. },
+                    ) => Some((*bundle_id, barrier.clone())),
+                    _ => None,
+                })
+                .expect("prepared fixture bundle lock");
+            (bundle_id, barrier, locks.len())
+        };
+        let encoded = json::to_json(&world).expect("serialize prepared settlement World");
+        let ivm = IVM::new(0);
+        let restored = parse_world(
+            SnapshotJsonMap::parse(&encoded, "world").expect("parse prepared settlement World"),
+            &IvmSeed {
+                ivm: &ivm,
+                _marker: PhantomData,
+            },
+        )
+        .expect("restore prepared settlement lock map");
+        assert_eq!(
+            restored.private_settlement_staged_locks.view().len(),
+            row_count
+        );
+        assert_eq!(
+            restored
+                .view()
+                .private_settlement_prepare_barrier_v1(&bundle_id),
+            Some(&barrier)
+        );
+        assert_eq!(
+            json::to_json(&restored).expect("re-encode prepared settlement World"),
+            encoded,
+            "prepared restart must preserve every staged-lock byte"
+        );
+    }
+
+    #[test]
+    fn private_settlement_snapshot_rejects_recipient_reuse_before_index_rebuild() {
+        let mut world = crate::private_settlement::global_state::tests::finalized_world_fixture();
+        let (first_recipient, second_key, mut second_record) = {
+            let outputs = world.private_settlement_outputs.view();
+            let mut entries = outputs.iter();
+            let (_, first) = entries.next().expect("first finalized output");
+            let (second_key, second) = entries.next().expect("second finalized output");
+            (
+                first.encrypted_output.recipient,
+                *second_key,
+                second.clone(),
+            )
+        };
+        second_record.encrypted_output.recipient = first_recipient;
+        world
+            .private_settlement_outputs
+            .insert(second_key, second_record);
+        let encoded = json::to_json(&world).expect("serialize adversarial settlement World");
+        let ivm = IVM::new(0);
+        let error = match parse_world(
+            SnapshotJsonMap::parse(&encoded, "world").expect("parse adversarial World"),
+            &IvmSeed {
+                ivm: &ivm,
+                _marker: PhantomData,
+            },
+        ) {
+            Ok(_) => panic!("duplicate recipient output must fail before rebuilding the index"),
+            Err(error) => error,
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("private-settlement state conflict"),
+            "unexpected duplicate-recipient restore error: {error}"
+        );
+    }
+
     #[test]
     fn first_release_world_decoder_requires_every_canonical_field() {
         let encoded = json::to_json(&World::default()).expect("serialize default World");
@@ -9538,6 +10339,22 @@ mod decode_tests {
             error.to_string().contains("account_aliases"),
             "unexpected missing-field diagnostic: {error}"
         );
+
+        let encoded_prefix = encoded
+            .strip_suffix('}')
+            .expect("canonical World snapshot is a JSON object");
+        for retired_field in ["council", "parliament_bodies"] {
+            let injected = format!("{encoded_prefix},\"{retired_field}\":[]}}");
+            let error = SnapshotJsonMap::parse(&injected, "world")
+                .and_then(|map| parse_world(map, &seed))
+                .err()
+                .expect("retired caller-selected council state must fail closed");
+            assert!(
+                error.to_string().contains(retired_field)
+                    && error.to_string().contains("unknown field"),
+                "unexpected retired-field diagnostic: {error}"
+            );
+        }
     }
     #[test]
     fn canonical_state_snapshot_persists_manifest_aliases_and_rebuilds_account_indexes() {

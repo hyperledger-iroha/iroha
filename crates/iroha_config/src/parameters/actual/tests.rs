@@ -311,6 +311,49 @@ mod tests {
         );
     }
     #[test]
+    fn nexus_staking_work_bounds_are_signed_by_both_consensus_projections() {
+        let baseline = Nexus::default();
+        let baseline_policy =
+            nexus_consensus_policy_digest(&baseline).expect("valid default Nexus policy");
+        let baseline_context =
+            sumeragi_v2_nexus_amx_context_hash(&baseline, &Pipeline::default(), &[], &[]);
+
+        let mut share_bound_drift = baseline.clone();
+        share_bound_drift.staking.max_stake_shares_per_validator = NonZeroU32::new(
+            share_bound_drift
+                .staking
+                .max_stake_shares_per_validator
+                .get()
+                + 1,
+        )
+        .expect("incremented share bound stays non-zero");
+        let mut pending_bound_drift = baseline;
+        pending_bound_drift.staking.max_pending_unbonds_per_share = NonZeroU32::new(
+            pending_bound_drift
+                .staking
+                .max_pending_unbonds_per_share
+                .get()
+                + 1,
+        )
+        .expect("incremented pending-unbond bound stays non-zero");
+
+        for (label, changed) in [
+            ("stake-share bound", share_bound_drift),
+            ("pending-unbond bound", pending_bound_drift),
+        ] {
+            assert_ne!(
+                nexus_consensus_policy_digest(&changed).expect("valid changed Nexus policy"),
+                baseline_policy,
+                "{label} must change the canonical Nexus policy digest"
+            );
+            assert_ne!(
+                sumeragi_v2_nexus_amx_context_hash(&changed, &Pipeline::default(), &[], &[],),
+                baseline_context,
+                "{label} must change the signed Nexus/AMX context"
+            );
+        }
+    }
+    #[test]
     fn nexus_consensus_policy_digest_canonicalizes_dataspace_catalog_order() {
         let universal = DataSpaceMetadata::default();
         let settlement = DataSpaceMetadata {
@@ -415,7 +458,6 @@ mod tests {
             &config.settlement,
             [0x11; 32],
             [0x22; 32],
-            Some([0x44; 32]),
         )
     }
     #[test]
@@ -446,6 +488,21 @@ mod tests {
         let mut changed = baseline.clone();
         changed.gov.plain_voting_enabled = !changed.gov.plain_voting_enabled;
         assert_changed("governance execution policy", changed);
+        let mut changed = baseline.clone();
+        changed.gov.max_active_referenda =
+            NonZeroU32::new(changed.gov.max_active_referenda.get().saturating_add(1))
+                .expect("incremented referendum cap remains nonzero");
+        assert_changed("active-referendum cardinality policy", changed);
+        let mut changed = baseline.clone();
+        changed.gov.max_lock_owners_per_referendum = NonZeroU32::new(
+            changed
+                .gov
+                .max_lock_owners_per_referendum
+                .get()
+                .saturating_add(1),
+        )
+        .expect("incremented lock-owner cap remains nonzero");
+        assert_changed("per-referendum lock-owner cardinality policy", changed);
         let mut changed = baseline.clone();
         changed.gov.parliament_sortition_pulse_delay_blocks = changed
             .gov
@@ -487,25 +544,9 @@ mod tests {
             changed.settlement.router.epsilon_bps.saturating_add(1);
         assert_changed("settlement execution policy", changed);
         let fixed = super::sora_profile_tests::minimal_root();
-        for (label, nexus, zk, kagemusha) in [
-            (
-                "Nexus runtime policy",
-                [0x12; 32],
-                [0x22; 32],
-                Some([0x44; 32]),
-            ),
-            (
-                "ZK runtime policy",
-                [0x11; 32],
-                [0x23; 32],
-                Some([0x44; 32]),
-            ),
-            (
-                "Kagemusha release catalog",
-                [0x11; 32],
-                [0x22; 32],
-                Some([0x45; 32]),
-            ),
+        for (label, nexus, zk) in [
+            ("Nexus runtime policy", [0x12; 32], [0x22; 32]),
+            ("ZK runtime policy", [0x11; 32], [0x23; 32]),
         ] {
             assert_ne!(
                 execution_policy_digest_v1(
@@ -518,12 +559,83 @@ mod tests {
                     &fixed.settlement,
                     nexus,
                     zk,
-                    kagemusha,
                 ),
                 execution_policy_hash(&fixed),
                 "{label} must change the execution-policy identity"
             );
         }
+    }
+
+    #[test]
+    fn execution_policy_digest_binds_every_oracle_economics_field() {
+        let baseline = super::sora_profile_tests::minimal_root();
+        let expected = execution_policy_hash(&baseline);
+        let alternate_asset = AssetDefinitionId::derive_from_components(
+            DomainId::parse_fully_qualified("security.audit")
+                .expect("valid alternate asset domain"),
+            Name::from_str("alternate").expect("valid alternate asset name"),
+        );
+        let alternate_account = baseline.oracle.economics.slash_receiver.clone();
+        assert_ne!(
+            alternate_account, baseline.oracle.economics.reward_pool,
+            "the default protocol custody accounts must remain distinct"
+        );
+
+        let assert_changed = |label: &str, changed: Root| {
+            assert_ne!(
+                execution_policy_hash(&changed),
+                expected,
+                "oracle economics field `{label}` must change the execution-policy identity"
+            );
+        };
+        let add_one = |value: &Quantity| {
+            value
+                .try_add(&Quantity::one())
+                .expect("test quantity remains representable")
+        };
+
+        let mut changed = baseline.clone();
+        changed.oracle.economics.reward_asset = alternate_asset.clone();
+        assert_changed("reward_asset", changed);
+        let mut changed = baseline.clone();
+        changed.oracle.economics.reward_pool = alternate_account.clone();
+        assert_changed("reward_pool", changed);
+        let mut changed = baseline.clone();
+        changed.oracle.economics.reward_amount = add_one(&changed.oracle.economics.reward_amount);
+        assert_changed("reward_amount", changed);
+        let mut changed = baseline.clone();
+        changed.oracle.economics.slash_asset = alternate_asset.clone();
+        assert_changed("slash_asset", changed);
+        let mut changed = baseline.clone();
+        changed.oracle.economics.slash_receiver = baseline.oracle.economics.reward_pool.clone();
+        assert_changed("slash_receiver", changed);
+        let mut changed = baseline.clone();
+        changed.oracle.economics.slash_outlier_amount =
+            add_one(&changed.oracle.economics.slash_outlier_amount);
+        assert_changed("slash_outlier_amount", changed);
+        let mut changed = baseline.clone();
+        changed.oracle.economics.slash_error_amount =
+            add_one(&changed.oracle.economics.slash_error_amount);
+        assert_changed("slash_error_amount", changed);
+        let mut changed = baseline.clone();
+        changed.oracle.economics.slash_no_show_amount =
+            add_one(&changed.oracle.economics.slash_no_show_amount);
+        assert_changed("slash_no_show_amount", changed);
+        let mut changed = baseline.clone();
+        changed.oracle.economics.dispute_bond_asset = alternate_asset;
+        assert_changed("dispute_bond_asset", changed);
+        let mut changed = baseline.clone();
+        changed.oracle.economics.dispute_bond_amount =
+            add_one(&changed.oracle.economics.dispute_bond_amount);
+        assert_changed("dispute_bond_amount", changed);
+        let mut changed = baseline.clone();
+        changed.oracle.economics.dispute_reward_amount =
+            add_one(&changed.oracle.economics.dispute_reward_amount);
+        assert_changed("dispute_reward_amount", changed);
+        let mut changed = baseline;
+        changed.oracle.economics.frivolous_slash_amount =
+            add_one(&changed.oracle.economics.frivolous_slash_amount);
+        assert_changed("frivolous_slash_amount", changed);
     }
     #[test]
     fn execution_policy_digest_excludes_only_result_preserving_operational_drift() {
@@ -560,44 +672,17 @@ mod tests {
         .expect("nonzero gateway limit");
         operational.content.pow.difficulty_bits =
             operational.content.pow.difficulty_bits.saturating_add(1);
-        operational.settlement.offline.kagemusha_release_policy_path =
-            Some(PathBuf::from("/srv/iroha/policy.norito"));
-        operational.settlement.offline.kagemusha_artifact_dir =
-            Some(PathBuf::from("/srv/iroha/artifacts"));
         assert_eq!(
             execution_policy_hash(&operational),
             expected,
-            "worker, cache, accelerator, tracing, transport, gateway, and offline cache path drift must not partition validators"
+            "worker, cache, accelerator, tracing, transport, and gateway drift must not partition validators"
         );
     }
     #[test]
-    fn offline_defaults_need_no_operator_enablement_or_catalog() {
-        let offline = Offline::default();
-        assert!(offline.escrow_accounts.is_empty());
-        assert!(offline.kagemusha_release_policy_path.is_none());
-        assert!(offline.kagemusha_artifact_dir.is_none());
-        assert!(offline.kagemusha_catalog_qualification_seal_path.is_none());
-        assert!(offline.kagemusha_promotion_controller_public_key.is_none());
-        assert!(
-            offline
-                .kagemusha_catalog_revalidation_authority_key_id
-                .is_none()
-        );
-        assert!(
-            offline
-                .kagemusha_catalog_revalidation_authority_public_key
-                .is_none()
-        );
-        assert!(offline.kagemusha_promotion_reservation_path.is_none());
-        assert!(
-            offline
-                .kagemusha_validator_qualification_seal_path
-                .is_none()
-        );
-        assert_eq!(
-            offline.kagemusha_max_decoded_bytes,
-            defaults::settlement::offline::KAGEMUSHA_MAX_DECODED_BYTES
-        );
+    fn kagemusha_defaults_need_no_operator_enablement_or_catalog() {
+        let kagemusha = Kagemusha::default();
+        assert!(kagemusha.reserve_accounts.is_empty());
+        assert!(kagemusha.proof_release.is_none());
     }
     fn default_v2_sumeragi() -> Sumeragi {
         super::sora_profile_tests::minimal_root().sumeragi
@@ -804,8 +889,17 @@ mod tests {
         assert_eq!(shared.limits.max_payload_bytes, 16 * 1024 * 1024);
         assert_eq!(shared.limits.max_queue_scan, 2_048);
         assert_eq!(shared.limits.authenticated_non_validator_source_capacity, 2);
-        assert_eq!(shared.limits.body_bytes, 231 * 1024 * 1024);
-        assert_eq!(shared.limits.body_source_bytes, 33 * 1024 * 1024);
+        assert_eq!(shared.limits.body_bytes, 1122 * 1024 * 1024);
+        assert_eq!(shared.limits.body_source_bytes, 34 * 1024 * 1024);
+        shared
+            .validate_ingress_roster_capacity(
+                usize::try_from(
+                    iroha_data_model::parameter::system::SumeragiNposParameters::default()
+                        .max_validators(),
+                )
+                .expect("default signed NPoS validator ceiling fits usize"),
+            )
+            .expect("default ingress geometry admits the default signed NPoS ceiling");
         assert_eq!(shared.limits.merge_sidecar_inbound_session_capacity, 32);
         assert_eq!(shared.limits.merge_sidecar_inbound_sessions_per_peer, 4);
         assert_eq!(
@@ -860,6 +954,24 @@ mod tests {
                 )
                 .expect("same input")
         );
+    }
+
+    #[test]
+    fn sumeragi_v2_ingress_capacity_rejects_a_signed_roster_above_byte_geometry() {
+        let config = default_v2_sumeragi();
+        let mut shared = config
+            .v2_config(Duration::from_secs(1), consensus_v2::ConsensusMode::Npos)
+            .expect("default v2 config");
+        shared.limits.body_bytes = shared.limits.body_source_bytes * 6;
+
+        assert_eq!(shared.validate_ingress_roster_capacity(4), Ok(()));
+        assert!(matches!(
+            shared.validate_ingress_roster_capacity(7),
+            Err(SumeragiV2ConfigError::BodyBytesTooSmall {
+                minimum_sources: 9,
+                ..
+            })
+        ));
     }
     #[test]
     fn sumeragi_v2_config_format_changes_the_handshake_fingerprint() {
@@ -1122,17 +1234,8 @@ mod tests {
         assert_config_change!("key expiry", |config: &mut Sumeragi| {
             config.keys.expiry_grace_blocks += 1;
         });
-        assert_config_change!("HSM requirement", |config: &mut Sumeragi| {
-            config.keys.require_hsm = true;
-        });
         assert_config_change!("key algorithms", |config: &mut Sumeragi| {
             config.keys.allowed_algorithms.insert(Algorithm::Ed25519);
-        });
-        assert_config_change!("HSM providers", |config: &mut Sumeragi| {
-            config
-                .keys
-                .allowed_hsm_providers
-                .insert("test-hsm".to_owned());
         });
         assert_ne!(
             baseline,
@@ -1185,11 +1288,11 @@ mod tests {
             &config,
             SumeragiV2ConfigError::BodySourceBytesTooSmall {
                 actual: 16 * 1024 * 1024,
-                minimum: 2 * 16 * 1024 * 1024 + 295_944,
+                minimum: 2 * 16 * 1024 * 1024 + 1_278_984,
                 max_payload_bytes: 16 * 1024 * 1024,
                 envelope_headroom: 64 * 1024,
                 manifest_wire_bytes: 33_800,
-                certified_fence_escape_reserve: 64 * 1024,
+                certified_fence_escape_reserve: 1024 * 1024,
                 timeout_vote_reserve: 64 * 1024,
                 lane_progress_bytes: 1024 * 1024,
                 lane_completion_bytes: 4 * 1024 * 1024,
@@ -1197,7 +1300,7 @@ mod tests {
         );
         let mut config = default_v2_sumeragi();
         config.block.max_payload_bytes = NonZeroUsize::new(1).expect("non-zero");
-        let lane_minimum: usize = 5 * 1024 * 1024 + 2 * 64 * 1024;
+        let lane_minimum: usize = 6 * 1024 * 1024 + 64 * 1024;
         config.queues.body_source_bytes = NonZeroUsize::new(lane_minimum - 1).expect("non-zero");
         assert_error(
             &config,
@@ -1207,7 +1310,7 @@ mod tests {
                 max_payload_bytes: 1,
                 envelope_headroom: 64 * 1024,
                 manifest_wire_bytes: 33_800,
-                certified_fence_escape_reserve: 64 * 1024,
+                certified_fence_escape_reserve: 1024 * 1024,
                 timeout_vote_reserve: 64 * 1024,
                 lane_progress_bytes: 1024 * 1024,
                 lane_completion_bytes: 4 * 1024 * 1024,
@@ -1232,26 +1335,19 @@ mod tests {
             ),
         );
         let mut config = default_v2_sumeragi();
-        config.queues.body_bytes = NonZeroUsize::new(99 * 1024 * 1024 - 1).expect("non-zero");
+        config.queues.body_bytes = NonZeroUsize::new(102 * 1024 * 1024 - 1).expect("non-zero");
         assert_error(
             &config,
             SumeragiV2ConfigError::BodyBytesTooSmall {
-                actual: 99 * 1024 * 1024 - 1,
-                minimum: 99 * 1024 * 1024,
-                body_source_bytes: 33 * 1024 * 1024,
+                actual: 102 * 1024 * 1024 - 1,
+                minimum: 102 * 1024 * 1024,
+                body_source_bytes: 34 * 1024 * 1024,
                 minimum_sources: 3,
             },
         );
         let mut config = default_v2_sumeragi();
         config.keys.allowed_algorithms.clear();
         assert_error(&config, SumeragiV2ConfigError::MissingBlsNormal);
-        let mut config = default_v2_sumeragi();
-        config.keys.require_hsm = true;
-        config.keys.allowed_hsm_providers.clear();
-        assert_error(&config, SumeragiV2ConfigError::MissingHsmProvider);
-        let mut config = default_v2_sumeragi();
-        config.keys.allowed_hsm_providers.insert("   ".to_owned());
-        assert_error(&config, SumeragiV2ConfigError::EmptyHsmProvider);
     }
     #[test]
     fn sumeragi_v2_config_rejects_merge_runtime_limit_boundaries() {
@@ -1509,7 +1605,7 @@ mod tests {
             sumeragi_v2_nexus_amx_context_hash(&Nexus::default(), &Pipeline::default(), &[], &[]);
         assert_eq!(
             hex::encode(hash.as_ref()),
-            "e3b96d8b05e290807ff89e8080c5dcc3b471108d3d5e90cd41ebd89f30a2d301",
+            "fceea54306bbc0cc6441a2aa6f6df5eee6a40404010fe1e50d49badbcb0ba927",
         );
         assert_eq!(
             <[u8; 32]>::from(hash),
@@ -1655,8 +1751,8 @@ mod tests {
             self_stake: iroha_primitives::numeric::Quantity::from(10_u64),
             metadata: Metadata::default(),
             status: PublicLaneValidatorStatus::Active,
-            activation_epoch: Some(0),
-            activation_height: Some(1),
+            activation_height: 1,
+            deactivation_height: None,
             last_reward_epoch: None,
         };
         ((lane, validator), record)

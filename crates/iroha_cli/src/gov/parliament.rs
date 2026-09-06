@@ -1,6 +1,6 @@
 //! Attempt-based SORA Parliament draft and read commands.
 
-use std::{collections::BTreeMap, net::IpAddr};
+use std::collections::BTreeMap;
 
 use super::shared::print_with_summary;
 use crate::{Run, RunContext};
@@ -28,9 +28,8 @@ use iroha_data_model::isi::governance::{
     ParliamentFinalizeOpenedBallotV1, ParliamentLifecycleTransitionV1,
     ParliamentTleFinalReleaseSignatureV1, SubmitParliamentLifecycleTransitionV1,
 };
-use url::Url;
-
-const MAX_RELEASE_PEERS_V1: usize = 31;
+use iroha_torii_shared::parliament_api::PARLIAMENT_TLE_MAX_COMMITTEE_SIZE_V1;
+use url::{Host, Url};
 
 fn parse_governance_attempt_id(input: &str) -> Result<GovernanceAttemptId, String> {
     let id = input.parse::<GovernanceAttemptId>().map_err(|_| {
@@ -61,11 +60,10 @@ fn parse_release_peer_url(input: &str) -> Result<Url, String> {
         && matches!(url.path(), "" | "/")
         && (url.scheme() == "https"
             || (url.scheme() == "http"
-                && url.host_str().is_some_and(|host| {
-                    host.eq_ignore_ascii_case("localhost")
-                        || host
-                            .parse::<IpAddr>()
-                            .is_ok_and(|address| address.is_loopback())
+                && url.host().is_some_and(|host| match host {
+                    Host::Domain(domain) => domain.eq_ignore_ascii_case("localhost"),
+                    Host::Ipv4(address) => address.is_loopback(),
+                    Host::Ipv6(address) => address.is_loopback(),
                 })))
     {
         return Ok(url);
@@ -342,9 +340,9 @@ pub struct FinalizeOpenedBallotArgs {
 
 impl Run for FinalizeOpenedBallotArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        if self.peer_urls.len() > MAX_RELEASE_PEERS_V1 {
+        if self.peer_urls.len() > PARLIAMENT_TLE_MAX_COMMITTEE_SIZE_V1 {
             bail!(
-                "Parliament TLE release coordinator accepts at most {MAX_RELEASE_PEERS_V1} peers"
+                "Parliament TLE release coordinator accepts at most {PARLIAMENT_TLE_MAX_COMMITTEE_SIZE_V1} peers"
             );
         }
         let mut unique_peers = BTreeMap::new();

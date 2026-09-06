@@ -112,7 +112,10 @@ class StructAdapter internal constructor(
 
         private fun extractField(value: Any, field: StructField<*>): Any? {
             if (field.accessor != null) return field.accessor.invoke(value)
-            if (value is Map<*, *>) return value[field.name]
+            if (value is Map<*, *>) {
+                require(value.containsKey(field.name)) { "Missing struct field ${field.name}" }
+                return value[field.name]
+            }
             throw IllegalArgumentException("Unable to extract field ${field.name}: no accessor and not a Map")
         }
     }

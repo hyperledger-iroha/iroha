@@ -6,7 +6,7 @@ Endpoints
 - `/metrics`: Prometheus exposition text. Hidden when telemetry is disabled or the profile does not allow expensive metrics.
 - `/status`: JSON status (hidden when telemetry is disabled). Includes top-level gauges (peers, blocks, queue active count), a `crypto { sm_helpers_available, sm_openssl_preview_enabled, halo2: { enabled, curve, backend, max_k, verifier_budget_ms, verifier_max_batch } }` snapshot, the `sumeragi { leader_index, highest_qc_height, locked_qc_height, locked_qc_view, view_change_proof_accepted_total, view_change_proof_stale_total, view_change_proof_rejected_total, block_created_dropped_by_lock_total, block_created_hint_mismatch_total, block_created_proposal_mismatch_total, tx_queue_depth, tx_queue_capacity, tx_queue_retained_bytes, tx_queue_max_retained_bytes, tx_queue_saturated, tx_queue_saturated_by_count, tx_queue_saturated_by_bytes, tx_queue_saturated_by_age, tx_queue_oldest_queued_age_ms, epoch_length_blocks, epoch_commit_deadline_offset, epoch_reveal_deadline_offset, prf_epoch_seed (hex), prf_height, prf_view }` view, and a `governance` snapshot.
 - `/v1/sumeragi/status` (Norito by default): authoritative protocol-v2 reducer status. JSON flattens the reducer fields (protocol and fingerprints, height context, height/view/phase/leader, QC and timeout references, body/persistence state, and the latest durable commit) and appends `safety_halt`, bounded lane settlement/relay/ownership/committed/session arrays, `local_peer_removed`, and `operator { view_change_install_total, busy_deferral_total, adapter_queues, tx_queue }`. Norito carries the same information as typed `SumeragiV2StatusResponse`, with reducer state under `authoritative`.
-- `/v1/sumeragi/status/sse` (SSE): periodic stream (≈1s) emitting the same JSON payload as `/v1/sumeragi/status` for dashboards.
+- `/v1/sumeragi/status/sse` (SSE): operator-authenticated periodic stream (≈1s) emitting the same JSON payload as `/v1/sumeragi/status` for dashboards.
 - Nexus lane/dataspace status is present for every first-release deployment,
   including the canonical one-lane topology.
 - `/v1/sumeragi/qc` (Norito by default): canonical `SumeragiV2QcResponse` with required nullable `highest_prepare_qc` and `locked_prepare_qc` slots. Each non-null value is a full context-bound `QuorumCertificateRef`; JSON uses the identical schema and encodes unavailable references as explicit `null`.
@@ -64,7 +64,7 @@ Runbook guidance
 
 Configuration
 - `telemetry_profile` (default: `operator`): The sole telemetry switch and capability bundle wiring both Torii routing and runtime sinks. `disabled` skips telemetry workers, exporters, and expensive hardware probes, hides `/metrics` and `/status`, and makes state-telemetry recording paths return without updating observations; a configured sink is rejected instead of being silently ignored. The other profiles select lightweight metrics, costly probes/timings, and developer outputs directly.
-- `torii.peer_telemetry_urls` (default: empty): Optional list of Torii base URLs used to fetch peer telemetry metadata. When unset, peer telemetry discovery is disabled to avoid probing P2P ports.
+- `torii.peer_telemetry_urls` (default: empty): Optional list of canonical Torii HTTP(S) origins used to fetch peer telemetry metadata. Each value must contain only the scheme, host, optional non-default port, and root path (for example, `https://peer.example:8443/`); credentials, non-root paths, queries, and fragments are rejected. Torii derives `/v1/configuration`, `/v1/peers`, and `/status` from the validated origin. When unset, peer telemetry discovery is disabled to avoid probing P2P ports.
 - Peer-monitor HTTP bodies are streamed under first-release caps before JSON decoding: 4 MiB for `/v1/configuration`, 1 MiB for `/v1/peers`, 64 KiB for `/status`, and 16 KiB for the fixed-field geo response. Both an oversized `Content-Length` and chunked/decompressed growth past the applicable cap fail closed without retaining the remainder.
 - Telegram bot key and chat ID are an all-or-none pair of bounded ASCII identifiers. Alert settings without credentials are rejected, and the daemon rejects credentials when the binary/profile cannot run that sink. Telegram API requests use bounded connect/request deadlines, reject redirects and non-success statuses, and remove credential-bearing URLs from diagnostics. When `telegram_include_metrics = true`, each retained, rate-admitted alert requests the core telemetry actor's bounded checked refresh and then reads the four scalar values used by alert rendering from the shared in-process registry; a failed refresh omits the optional snapshot instead of publishing stale values. The first release has no Telegram HTTP metrics sampler: it performs no self-request to `/metrics`, cannot be blocked by Torii profile/auth policy, and rejects the retired `telegram_metrics_url` and `telegram_metrics_period_ms` settings.
 - WebSocket collector URLs must use `ws` or `wss`, reconnect delays are clamped to at least 100 ms, the backoff exponent is capped at 16, and TLS support is part of the exporter feature itself. Exported records carry only the timestamp, tracing `target`, payload, and optional integrity chain; the retired constant `id: 0` field is not emitted. Collector input is control-only: Ping, Pong, and Close are accepted under a 1 KiB frame/message ceiling; Text, Binary, oversized, or malformed inbound frames disconnect the collector.
@@ -194,14 +194,14 @@ Public operator guidance and escalation procedures are maintained at
   Parliament reducer transitions and automatic execution outcomes grouped by
   the closed `ParliamentLifecycleTransitionKindV1` vocabulary.
 - `governance_parliament_no_result_total{class}` (counter): only Core-derived
-  terminal no-result outcomes, grouped by the nine closed
+  terminal no-result outcomes, grouped by the ten closed
   `ParliamentNoResultKindV1` classes. Public findings use
   `public_finding_quorum_unreachable` or `public_finding_deadline_expired`;
   private ballots use `ballot_registration_deadline_expired`,
   `ballot_survivor_deadline_expired`, `ballot_commitment_deadline_expired`,
   `ballot_release_pulse_unavailable`, or `ballot_opening_deadline_expired`.
   Exhausted deterministic body-election retries use
-  `sortition_retries_exhausted`; a narrow Policy Jury result with fewer than two
+  `sortition_retries_exhausted`; a narrow Policy Jury result with fewer than three
   eligible fresh confirmers uses `confirmation_jury_capacity_unavailable`.
   A class attached to an incompatible transition kind is ignored by telemetry.
 - `governance_parliament_attempts_by_status{status}` and
@@ -487,7 +487,7 @@ Block/consensus metrics
 
 P2P metrics (selected)
 - connected_peers, `p2p_peer_churn_total{event="connected|disconnected"}`, p2p_* gauges/counters for queue depth/drops, throttling, DNS, handshake latencies (`p2p_handshake_ms_*`).
-- `consensus_ingress_drop_total{topic,reason}` counts consensus ingress drops for payload topics (`topic` in `ConsensusPayload|ConsensusChunk|BlockSync`, `reason` in `rate|bytes|rbc_session_limit|penalty`).
+- `consensus_ingress_drop_total{topic,reason}` counts consensus ingress drops for payload topics (`topic` in `ConsensusPayload|ConsensusChunk|BlockSync`, `reason` in `rate|bytes|penalty`).
 
 Sumeragi metrics
 - Counters: `sumeragi_tail_votes_total`, `sumeragi_widen_before_rotate_total`, `sumeragi_view_change_suggest_total`, `sumeragi_view_change_install_total`; histogram: `sumeragi_cert_size` (signatures per committed block).
@@ -500,7 +500,7 @@ Sumeragi metrics
   participation penalty, and exposes no consensus-VRF randomness-health or
   release signals. Current randomness is the finalized global threshold-beacon
   pulse.
-- Signed DA availability: use `sumeragi_da_gate_block_total{reason="missing_local_data"}` for missing local payloads and the `sumeragi_da_manifest_*`/`sumeragi_da_spool_*` families for revision-4 manifest and chunk-spool handling. Retired global-RBC INIT/READY/DELIVER counters are not exported.
+- Signed DA availability: revision-4 admission is mandatory; use authenticated Sumeragi status together with `sumeragi_bg_post_queue_depth`, `sumeragi_dropped_block_messages_total`, and `p2p_queue_dropped_total` to inspect transport pressure. Retired global-RBC INIT/READY/DELIVER counters are not exported.
 - Channel pressure: `sumeragi_dropped_block_messages_total` and `sumeragi_dropped_control_messages_total` partition channel drops; `dropped_messages` remains the aggregate counter for existing dashboards.
 
 Sumeragi additions (new series)
@@ -860,7 +860,7 @@ Use this checklist when the Norito transport fails SLOs or generates alerts:
 
 **Mitigation options**
 
-- **Misbehaving clients:** Gate them via `torii.preauth_scheme_limits.norito_rpc` until parity is restored; the config lives under `client_api` in `iroha_config`.
+- **Misbehaving clients:** Gate them via `torii.preauth_scheme_limits.norito_rpc` until parity is restored; the wire records live in `iroha_torii_shared::configuration`.
 - **Decode or schema mismatches:** Ensure Torii and SDKs run the same fixture bundle by checking `fixtures/norito_rpc/schema_hashes.json` (the DTO→hash table). If hashes diverge, run `cargo run --locked -p xtask --features dev-tools --bin xtask -- norito-rpc-fixtures --output-root <absent-absolute-external-root>` at two independent absent absolute external roots. Before any tracked update, require identical exact path sets, entry types, modes, completion manifests, and every file byte; apply the reviewed identity-relative patch from either sealed root, then run `cargo run --locked -p xtask --features dev-tools --bin xtask -- norito-rpc-verify`.
 - **Ingress/proxy issues:** Fix header forwarding or MTU settings, then rerun `python/iroha_python/scripts/run_norito_rpc_smoke.sh`.
 - **Full brownout / rollback:** If service impact persists, flip `torii.transport.norito_rpc.stage` to `canary` or `disabled` (per `specs/torii/norito_rpc_rollout_plan.md`), reload Torii, and ensure `/rpc/capabilities` reports the downgraded stage so SDKs fall back to JSON without guessing. Record the change in the canary runbook (`specs/runbooks/torii_norito_rpc_canary.md`).
@@ -1109,7 +1109,7 @@ the Nexus cut-over. All metrics back the Grafana board stored in
 |--------|-------------|--------------|
 | `histogram_quantile(0.95, iroha_slot_duration_ms)` | Slot-duration histogram derived from the end of every Sumeragi slot. | Keep p95 ≤ 1 000 ms (warning at 950 ms). Breaches must trigger the slot runbook and be recorded in the NX-18 drill log. |
 | `iroha_slot_duration_ms_latest` | Gauge of the most recent slot duration. | Capture alongside the histogram whenever filing incidents; sustained spikes > 1 100 ms indicate an unhealthy validator even if quantiles remain green. |
-| `iroha_da_quorum_ratio` | Rolling fraction of slots that satisfied the DA quorum window. | Target ≥ 0.95; combine with `increase(sumeragi_da_gate_block_total{reason="missing_local_data"}[5m])` to locate failing attesters or timeouts. |
+| `iroha_da_quorum_ratio` | Rolling fraction of slots that satisfied the DA quorum window. | Target ≥ 0.95; capture authenticated Sumeragi status and queue/drop metrics to locate failing validators or transport paths. |
 | `iroha_oracle_price_local_per_xor` | Latest TWAP reported by the lane-specific oracle. | Watch for spikes when swap lines are thin; tie haircuts to treasury reports. |
 | `iroha_oracle_staleness_seconds` | Seconds since the last oracle refresh. | Alert at ≥ 75 s; fail the NX-18 gate at ≥ 90 s until the feed is restarted. |
 | `iroha_oracle_twap_window_seconds` | Effective TWAP window length. | Should remain at 60 s ± 5 s; deviations mean the oracle config drifted. |

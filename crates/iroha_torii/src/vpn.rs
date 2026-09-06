@@ -3,7 +3,7 @@ use axum::{
     http::{HeaderMap, Method, StatusCode, Uri},
     response::{IntoResponse, Response},
 };
-use iroha_config::client_api::ConfigGetDTO;
+use iroha_torii_shared::configuration::Configuration;
 use iroha_core::{
     kiso::KisoHandle,
     smartcontracts::isi::vpn::vpn_lease_custody_account_id,
@@ -590,7 +590,7 @@ fn default_tunnel_addresses() -> Vec<String> {
         .collect()
 }
 fn build_profile_at(
-    dto: &ConfigGetDTO,
+    dto: &Configuration,
     trust: Option<&VpnRelayTrust>,
     operator_signer_available: bool,
     current_ms: u64,
@@ -1612,7 +1612,11 @@ fn committed_transaction_by_hash(
         ));
     };
     for (entrypoint_hash, tx, result) in external_signed_transaction_results(block.as_ref()) {
-        if entrypoint_hash != target {
+        if !crate::signed_transaction_carrier_matches_indexed_identity(
+            &entrypoint_hash,
+            &tx,
+            &target,
+        ) {
             continue;
         }
         if result.as_ref().is_err() {

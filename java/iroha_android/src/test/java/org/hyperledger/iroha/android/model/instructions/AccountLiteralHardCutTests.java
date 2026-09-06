@@ -20,7 +20,6 @@ public final class AccountLiteralHardCutTests {
     final AccountLiteralHardCutTests tests = new AccountLiteralHardCutTests();
     tests.accountBuildersRejectDomainSuffixedLiterals();
     tests.accountTargetInstructionsRejectDomainSuffixedLiterals();
-    tests.persistCouncilRejectsDomainSuffixedMembers();
     tests.uaidPortfolioQueryUsesOnlyExactAssetId();
     tests.connectApprovePreimageRejectsDomainSuffix();
     System.out.println("[IrohaAndroid] AccountLiteralHardCutTests passed.");
@@ -60,15 +59,6 @@ public final class AccountLiteralHardCutTests {
     expectIllegalArgument(() -> SetKeyValueInstruction.builder().setAccountId(nonCanonical));
     expectIllegalArgument(() -> RemoveKeyValueInstruction.builder().setAccountId(nonCanonical));
     expectIllegalArgument(() -> UnregisterInstruction.builder().setAccountId(nonCanonical));
-  }
-
-  @Test
-  public void persistCouncilRejectsDomainSuffixedMembers() throws Exception {
-    final String account = sampleI105(0x33);
-    expectIllegalArgument(
-        () -> PersistCouncilForEpochInstruction.builder().addMember(account + "@banka.dataspace"));
-    expectIllegalArgument(
-        () -> PersistCouncilForEpochInstruction.builder().addAlternate(account + "@banka.dataspace"));
   }
 
   @Test

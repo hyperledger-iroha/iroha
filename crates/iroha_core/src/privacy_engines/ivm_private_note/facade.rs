@@ -330,11 +330,18 @@ mod tests {
             >::from_untyped_unchecked(
                 iroha_crypto::Hash::prehashed([0xD0; 32]),
             ));
-        changed.genesis_hash = [0xD0; 32];
+        changed.genesis_hash = *changed.network_id.as_bytes();
         substitutions.push((
             "network id",
             changed,
             PrivacyNativeConsensusBindingValidationErrorV1::NetworkIdMismatch,
+        ));
+        let mut changed = binding.clone();
+        changed.genesis_hash[0] ^= 1;
+        substitutions.push((
+            "genesis hash without its network id",
+            changed,
+            PrivacyNativeConsensusBindingValidationErrorV1::NetworkGenesisMismatch,
         ));
         let mut changed = binding.clone();
         changed.action_index ^= 1;

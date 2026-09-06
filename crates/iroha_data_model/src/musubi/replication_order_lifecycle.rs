@@ -6,6 +6,8 @@
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::musubi::MusubiReplicationOrderArchiveBindingV1")]
 pub struct MusubiReplicationOrderArchiveBindingV1 {
     /// Exact replication-order key duplicated for snapshot consistency validation.
     pub replication_order: ReplicationOrderId,
@@ -58,6 +60,8 @@ impl MusubiReplicationOrderArchiveBindingV1 {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::musubi::MusubiRetiredReplicationOrderLocationV1")]
 pub struct MusubiRetiredReplicationOrderLocationV1 {
     /// Location identity the order formerly backed.
     pub location: MusubiArchiveLocationKeyV1,
@@ -107,6 +111,8 @@ impl MusubiRetiredReplicationOrderLocationV1 {
     feature = "json",
     norito(tag = "kind", content = "value", deny_unknown_fields)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::musubi::MusubiReplicationOrderLocationLifecycleV1")]
 pub enum MusubiReplicationOrderLocationLifecycleV1 {
     /// The order is bound to the archive before any location has been admitted.
     PreLocation,
@@ -119,6 +125,8 @@ pub enum MusubiReplicationOrderLocationLifecycleV1 {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::musubi::MusubiReplicationOrderLocationReferenceV1")]
 pub struct MusubiReplicationOrderLocationReferenceV1 {
     /// Immutable order-to-archive trust binding.
     pub binding: MusubiReplicationOrderArchiveBindingV1,
@@ -176,3 +184,6 @@ impl MusubiReplicationOrderLocationReferenceV1 {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod captured_replication_order_lifecycle_schema_tests;

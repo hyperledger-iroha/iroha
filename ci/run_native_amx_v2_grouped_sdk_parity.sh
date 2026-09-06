@@ -675,7 +675,7 @@ PY
     if [[ -n "$sdk_gradle_launcher" ]]; then
       gradle_command=("$sdk_gradle_launcher")
     else
-      gradle_command=(sh "${repo_root}/java/iroha_android/gradlew")
+      gradle_command=(sh "${repo_root}/kotlin/gradlew")
     fi
     run_and_capture \
       env GRADLE_USER_HOME="$sdk_gradle_user_home" JAVA_HOME="$java_home" \
@@ -683,14 +683,14 @@ PY
       IROHA_NATIVE_AMX_V2_GROUPED_GRADLE_BUILD_ROOT="$gradle_build_root" \
       "${gradle_command[@]}" \
       --offline --no-daemon --no-build-cache --rerun-tasks --console=plain \
-      --project-dir "${repo_root}/java/iroha_android" \
+      --project-dir "${repo_root}/kotlin" \
       --project-cache-dir "${temporary_root}/java-project-cache" \
       --init-script "$gradle_init_path" \
-      :core:test \
-      --tests org.hyperledger.iroha.android.consensus.NativeAmxV2GroupedFixtureTests
+      :core-jvm:test \
+      --tests org.hyperledger.iroha.sdk.consensus.NativeAmxV2GroupedFixtureTests
     assert_gradle_report \
       "$gradle_build_root" \
-      org.hyperledger.iroha.android.consensus.NativeAmxV2GroupedFixtureTests \
+      org.hyperledger.iroha.sdk.consensus.NativeAmxV2GroupedFixtureTests \
       "$observed_test_count"
     ;;
 esac

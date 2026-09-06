@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import tarfile
 from pathlib import Path
@@ -31,6 +32,36 @@ def _write_executable(path: Path, payload: str) -> Path:
     path.write_text(payload, encoding="utf-8")
     path.chmod(0o755)
     return path
+
+
+def _write_clean_git_shim(directory: Path) -> None:
+    real_git = shutil.which("git")
+    assert real_git is not None
+    _write_executable(
+        directory / "git",
+        "#!/usr/bin/env python3\n"
+        "import os, sys\n"
+        f"real_git = {real_git!r}\n"
+        "arguments = sys.argv[1:]\n"
+        "if arguments and arguments[0] == 'diff':\n"
+        "    counter_path = os.environ.get('IROHA_TEST_GIT_DIFF_COUNTER')\n"
+        "    count = 1\n"
+        "    if counter_path:\n"
+        "        try:\n"
+        "            count = int(open(counter_path, encoding='ascii').read()) + 1\n"
+        "        except FileNotFoundError:\n"
+        "            pass\n"
+        "        with open(counter_path, 'w', encoding='ascii') as counter:\n"
+        "            counter.write(str(count))\n"
+        "    dirty_after = int(os.environ.get('IROHA_TEST_GIT_DIRTY_AFTER', '0'))\n"
+        "    if os.environ.get('IROHA_TEST_GIT_ALWAYS_DIRTY') == '1' or (\n"
+        "        dirty_after and count > dirty_after\n"
+        "    ):\n"
+        "        raise SystemExit(1)\n"
+        "if arguments == ['ls-files', '--cached', '-z']:\n"
+        "    arguments = ['ls-files', '--cached', '--others', '-z']\n"
+        "os.execv(real_git, [real_git, *arguments])\n",
+    )
 
 
 def _fixture(tmp_path: Path) -> tuple[Path, Path, str, Path, str, Path]:
@@ -95,7 +126,67 @@ def _fixture(tmp_path: Path) -> tuple[Path, Path, str, Path, str, Path]:
     docker_digest = hashlib.sha256(docker.read_bytes()).hexdigest()
     buildx_digest = hashlib.sha256(buildx.read_bytes()).hexdigest()
     log = tmp_path / "docker-calls.jsonl"
+    _write_clean_git_shim(tmp_path)
     return binaries, docker, docker_digest, buildx, buildx_digest, log
+
+
+def _authenticated_prebuilt(
+    binaries: Path, *, destination: Path, commit: str
+) -> tuple[Path, str]:
+    package_by_binary = {
+        "iroha3d": "irohad",
+        "iroha3d_taira": "irohad",
+        "sorafs_governance_dag": "irohad",
+        "iroha": "iroha_cli",
+        "kagami": "iroha_kagami",
+        "attachment_sanitizer": "iroha_torii",
+        "sorafs_external_software_signer": "irohad",
+    }
+    destination.mkdir()
+    rows = []
+    for name in sorted(package_by_binary):
+        source = binaries / name
+        binary = destination / name
+        payload = source.read_bytes()
+        binary.write_bytes(payload)
+        binary.chmod(0o755)
+        if source.stat().st_nlink != 1:
+            os.link(binary, destination.with_name(f"{destination.name}-{name}.link"))
+        rows.append(
+            {
+                "name": name,
+                "package": package_by_binary[name],
+                "sha256": hashlib.sha256(payload).hexdigest(),
+                "size": len(payload),
+            }
+        )
+    manifest = {
+        "schema": "iroha.release_prebuilt_provenance",
+        "schema_version": 1,
+        "source_commit": commit,
+        "cargo_lock_sha256": hashlib.sha256(
+            (REPO_ROOT / "Cargo.lock").read_bytes()
+        ).hexdigest(),
+        "target": "x86_64-unknown-linux-gnu",
+        "cargo_profile": "deploy",
+        "default_features": True,
+        "selected_features": ["irohad/external-software-signer-bin"],
+        "binaries": rows,
+    }
+    payload = (
+        json.dumps(
+            manifest,
+            indent=2,
+            sort_keys=True,
+            ensure_ascii=True,
+            allow_nan=False,
+        )
+        + "\n"
+    ).encode()
+    path = destination / "release-prebuilt-provenance.json"
+    path.write_bytes(payload)
+    path.chmod(0o644)
+    return destination, hashlib.sha256(payload).hexdigest()
 
 
 def _run(
@@ -116,6 +207,9 @@ def _run(
 ) -> subprocess.CompletedProcess[str]:
     output.mkdir(parents=True, exist_ok=True)
     environment = os.environ.copy()
+    environment["PATH"] = (
+        f"{binaries.parent}{os.pathsep}{environment['PATH']}"
+    )
     environment.update(
         {
             "FAKE_BUILDX_VERSION": BUILDX_VERSION,
@@ -130,9 +224,13 @@ def _run(
         cwd=REPO_ROOT,
         text=True,
     ).strip()
+    authenticated_binaries, provenance_digest = _authenticated_prebuilt(
+        binaries,
+        destination=output.with_name(f".{output.name}-prebuilt"),
+        commit=commit,
+    )
     return subprocess.run(
         [
-            "bash",
             str(SCRIPT),
             "--source-commit",
             commit,
@@ -159,7 +257,9 @@ def _run(
             "--trusted-buildx-builder-inspect-sha256",
             builder_inspect_sha256,
             "--prebuilt-bin-dir",
-            str(binaries),
+            str(authenticated_binaries),
+            "--trusted-prebuilt-provenance-sha256",
+            provenance_digest,
             "--artifacts-dir",
             str(output),
         ],
@@ -302,6 +402,49 @@ def test_image_refuses_stale_output_without_replacement(tmp_path: Path) -> None:
     assert result.returncode != 0
     assert "refusing stale reuse" in result.stderr
     assert archive.read_bytes() == b"preserve"
+
+
+def test_image_rejects_dirty_reviewed_source_before_outputs(tmp_path: Path) -> None:
+    binaries, docker, docker_digest, buildx, buildx_digest, log = _fixture(
+        tmp_path
+    )
+    output = tmp_path / "out"
+    result = _run(
+        output,
+        binaries,
+        docker,
+        docker_digest,
+        buildx,
+        buildx_digest,
+        log,
+        extra_env={"IROHA_TEST_GIT_ALWAYS_DIRTY": "1"},
+    )
+    assert result.returncode != 0
+    assert "tracked working-tree drift" in result.stderr
+    assert not _outputs(output)["archive"].exists()
+
+
+def test_image_rechecks_reviewed_source_after_manifest(tmp_path: Path) -> None:
+    binaries, docker, docker_digest, buildx, buildx_digest, log = _fixture(
+        tmp_path
+    )
+    output = tmp_path / "out"
+    result = _run(
+        output,
+        binaries,
+        docker,
+        docker_digest,
+        buildx,
+        buildx_digest,
+        log,
+        extra_env={
+            "IROHA_TEST_GIT_DIFF_COUNTER": str(tmp_path / "git-diff-count"),
+            "IROHA_TEST_GIT_DIRTY_AFTER": "1",
+        },
+    )
+    assert result.returncode != 0
+    assert "tracked working-tree drift" in result.stderr
+    assert _outputs(output)["manifest"].is_file()
 
 
 def test_image_rejects_untrusted_docker_before_invocation(tmp_path: Path) -> None:

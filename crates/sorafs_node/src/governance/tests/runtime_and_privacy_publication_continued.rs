@@ -472,7 +472,7 @@ fn fused_writer_and_head_reader_require_one_exact_runtime_binding() {
     let writer = qualified_test_fenced_publisher(Arc::clone(&target));
     let cases = [
         (
-            "hsm:governance:fenced-privacy-secondary",
+            "provider:governance:fenced-privacy-secondary",
             GovernanceDagRuntimeProviderQualificationV1::new(
                 1,
                 TEST_FENCED_PUBLISHER_POLICY_DIGEST,
@@ -576,7 +576,7 @@ fn persisted_pending_and_head_sync_reject_qualified_target_rotation() {
     let request = sample_fenced_request(7, None);
     let mut pending = FencedPrivacyPendingRequestV1::from_request(&request, &publisher)
         .expect("build pending request");
-    pending.target_handle = "hsm:governance:fenced-privacy-retired".to_owned();
+    pending.target_handle = "provider:governance:fenced-privacy-retired".to_owned();
     write_fenced_privacy_pending_request(temp.path(), &pending)
         .expect("persist old-target pending request");
     let restored = read_fenced_privacy_pending_request(temp.path())
@@ -602,7 +602,7 @@ fn persisted_pending_and_head_sync_reject_qualified_target_rotation() {
         Some(receipt.included_head()),
     )
     .expect("build verified publication cache");
-    retired_cache.target_handle = "hsm:governance:fenced-privacy-retired".to_owned();
+    retired_cache.target_handle = "provider:governance:fenced-privacy-retired".to_owned();
     write_fenced_privacy_head_cache(temp.path(), &retired_cache)
         .expect("persist retired target cache");
     let error = synchronize_fenced_privacy_authoritative_head(temp.path(), &reader, None)

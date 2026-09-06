@@ -28,7 +28,7 @@ public sealed class TairaTestnetProfileTests
         using var client = TairaTestnetProfile.CreateClient(networkId);
 
         Assert.Equal(TairaTestnetProfile.ToriiBaseUri, client.BaseUri);
-        Assert.Equal(networkId, client.Options.LocalSigningContext?.NetworkId);
+        Assert.Equal(networkId, client.Options.NetworkId);
         Assert.Throws<ArgumentNullException>(() => TairaTestnetProfile.CreateClientOptions(null!));
     }
 }

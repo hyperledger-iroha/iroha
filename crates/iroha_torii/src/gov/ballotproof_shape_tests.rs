@@ -39,20 +39,17 @@ async fn ballot_zk_v1_ballotproof_rejects_noncanonical_owner_hint_in_raw_json() 
         }))
         .unwrap(),
     );
-    let res = super::handle_gov_ballot_zk_v1_ballotproof(
+    let error = super::handle_gov_ballot_zk_v1_ballotproof(
         state,
         &authenticated,
         MaybeTelemetry::disabled(),
         crate::NoritoJsonWithBytes { value: dto, raw },
     )
     .await
-    .expect("handler ok");
-    let body = res.0;
-    assert!(!body.ok);
-    assert!(!body.accepted);
+    .expect_err("noncanonical owner must fail the ballot-proof draft");
     assert_eq!(
-        body.reason.as_deref(),
-        Some("owner must use canonical I105 account id form")
+        conversion_message(error),
+        "owner must use canonical I105 account id form"
     );
 }
 #[tokio::test]
@@ -77,20 +74,17 @@ async fn ballot_zk_v1_ballotproof_rejects_partial_lock_hints() {
         ballot,
     };
     let raw = Bytes::from(norito::json::to_vec(&norito::json::to_value(&dto).unwrap()).unwrap());
-    let res = super::handle_gov_ballot_zk_v1_ballotproof(
+    let error = super::handle_gov_ballot_zk_v1_ballotproof(
         state,
         &authenticated,
         MaybeTelemetry::disabled(),
         crate::NoritoJsonWithBytes { value: dto, raw },
     )
     .await
-    .expect("handler ok");
-    let body = res.0;
-    assert!(!body.ok);
-    assert!(!body.accepted);
+    .expect_err("partial lock hints must fail the ballot-proof draft");
     assert_eq!(
-        body.reason.as_deref(),
-        Some("lock hints must include owner, amount, duration_blocks")
+        conversion_message(error),
+        "lock hints must include owner, amount, duration_blocks"
     );
 }
 #[tokio::test]
@@ -115,19 +109,13 @@ async fn ballot_zk_v1_ballotproof_rejects_owner_hint_different_from_authority() 
         ballot,
     };
     let raw = Bytes::from(norito::json::to_vec(&norito::json::to_value(&dto).unwrap()).unwrap());
-    let response = super::handle_gov_ballot_zk_v1_ballotproof(
+    let error = super::handle_gov_ballot_zk_v1_ballotproof(
         state,
         &authenticated,
         MaybeTelemetry::disabled(),
         crate::NoritoJsonWithBytes { value: dto, raw },
     )
     .await
-    .expect("handler response");
-    assert!(!response.0.ok);
-    assert!(!response.0.accepted);
-    assert_eq!(
-        response.0.reason.as_deref(),
-        Some("owner must equal authority")
-    );
-    assert!(response.0.tx_instructions.is_empty());
+    .expect_err("foreign owner must fail the ballot-proof draft");
+    assert_eq!(conversion_message(error), "owner must equal authority");
 }

@@ -21,8 +21,9 @@ use crate::{
     },
 };
 use iroha_core::privacy_engines::atomic_private_settlement::{
-    AtomicPrivateSettlementPreparedProofV1, AtomicPrivateSettlementWalletErrorV1,
-    AtomicPrivateSettlementWalletInspectionV1, consume_atomic_private_settlement_wallet_bundle_v1,
+    AtomicPrivateSettlementPreparedLegV1, AtomicPrivateSettlementWalletErrorV1,
+    AtomicPrivateSettlementWalletInspectionV1, complete_atomic_private_settlement_prepared_leg_v1,
+    consume_atomic_private_settlement_wallet_bundle_v1,
     inspect_atomic_private_settlement_wallet_bundle_v1,
 };
 use iroha_crypto::Algorithm;
@@ -855,7 +856,7 @@ struct PrivateSettlementProofResponseV1 {
     statement_digest: [u8; DIGEST_BYTES],
     capsule_digest: [u8; DIGEST_BYTES],
     audit_plaintext_commitment: [u8; DIGEST_BYTES],
-    prepared: AtomicPrivateSettlementPreparedProofV1,
+    prepared: AtomicPrivateSettlementPreparedLegV1,
 }
 struct ValidatedPublicIntentV1 {
     operation_schema: String,
@@ -1159,6 +1160,8 @@ fn prove_private_settlement_v1(
         .map_err(|error| match error {
             ConsumeError::Custody(error) | ConsumeError::Operation(error) => error,
         })?;
+    let prepared = complete_atomic_private_settlement_prepared_leg_v1(prepared)
+        .map_err(|_| WorkerError::InvalidPrivateSettlementBundle)?;
     if prepared.statement != request.statement || prepared.audit_capsule != request.capsule {
         return Err(WorkerError::NativePrivateSettlementProofFailed);
     }
@@ -1464,9 +1467,12 @@ fn encode_response(response: CommandResponse) -> Vec<u8> {
                 .expect("validated private-settlement statement");
             let capsule = norito::encode_canonical(&response.prepared.audit_capsule)
                 .expect("validated private-settlement audit capsule");
+            let delta = norito::encode_canonical(&response.prepared.delta)
+                .expect("validated private-settlement delta");
             put_bytes_u32(&mut output, &statement).expect("bounded private-settlement statement");
             put_bytes_u32(&mut output, &response.prepared.proof)
                 .expect("bounded private-settlement proof");
+            put_bytes_u32(&mut output, &delta).expect("bounded private-settlement delta");
             put_bytes_u32(&mut output, &capsule).expect("bounded private-settlement audit capsule");
         }
         CommandResponse::Error(error) => {

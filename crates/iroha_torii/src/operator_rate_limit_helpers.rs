@@ -5,8 +5,8 @@ async fn check_access_with_rate_limiter(
     hint: &str,
     rate_limiter: &limits::RateLimiter,
 ) -> Result<(), Error> {
-    validate_api_token(app, headers)?;
-    let key = rate_limit_key(headers, remote, hint, app.api_token_enforced());
+    let principal = validate_api_token(app, headers)?.authenticated_principal();
+    let key = rate_limit_key(headers, remote, hint, principal);
     if !limits::allow_conditionally(rate_limiter, &key, true).await {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
@@ -25,7 +25,7 @@ async fn check_operator_rate_limit(
     hint: &str,
     enforce_rate: bool,
 ) -> Result<(), Error> {
-    let key = rate_limit_key(headers, remote, hint, false);
+    let key = rate_limit_key(headers, remote, hint, None);
     if !limits::allow_conditionally(&app.rate_limiter, &key, enforce_rate).await {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
@@ -42,7 +42,7 @@ async fn check_operator_proof_access(
     enforce_rate: bool,
 ) -> Result<(), Error> {
     check_operator_rate_limit(app, headers, remote, hint, enforce_rate).await?;
-    let key = rate_limit_key(headers, remote, hint, false);
+    let key = rate_limit_key(headers, remote, hint, None);
     if limits::allow_cost_conditionally(&app.proof_rate_limiter, &key, cost, enforce_rate).await {
         return Ok(());
     }
@@ -55,7 +55,6 @@ async fn check_operator_proof_access(
     iroha_logger::warn!(
         %hint,
         %retry_after_secs,
-        %key,
         "proof endpoint throttled request"
     );
     Err(Error::ProofRateLimited {

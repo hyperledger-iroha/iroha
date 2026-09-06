@@ -1498,23 +1498,25 @@ impl PorCoordinatorRuntime {
             let storage = Arc::clone(&self.storage);
             let coordinator = Arc::clone(&self.coordinator);
             let challenge_for_worker = challenge.clone();
-            tokio::task::spawn_blocking(move || {
-                // Cancellation detaches a blocking task. Retain the pipeline
-                // guard in the physical worker so no later delta can overtake
-                // the durable node mutation or its projection update.
-                let _pipeline = pipeline;
-                match storage.record_challenge(&challenge_for_worker) {
-                    Ok(update) => coordinator
-                        .apply_authoritative_update(update)
-                        .map_err(PorAutomationError::Coordinator),
-                    Err(error) => {
-                        if error.disposition().invalidates_projection() {
-                            coordinator.invalidate_authoritative_projection();
+            crate::panic_recovery::join_recoverable(
+                crate::panic_recovery::spawn_blocking_recoverable(move || {
+                    // Cancellation detaches a blocking task. Retain the pipeline
+                    // guard in the physical worker so no later delta can overtake
+                    // the durable node mutation or its projection update.
+                    let _pipeline = pipeline;
+                    match storage.record_challenge(&challenge_for_worker) {
+                        Ok(update) => coordinator
+                            .apply_authoritative_update(update)
+                            .map_err(PorAutomationError::Coordinator),
+                        Err(error) => {
+                            if error.disposition().invalidates_projection() {
+                                coordinator.invalidate_authoritative_projection();
+                            }
+                            Err(PorAutomationError::Storage(error))
                         }
-                        Err(PorAutomationError::Storage(error))
                     }
-                }
-            })
+                }),
+            )
             .await
             .map_err(|error| {
                 self.coordinator.invalidate_authoritative_projection();
@@ -1565,16 +1567,26 @@ impl PorCoordinatorRuntime {
         }
         provider.accept_verified(submission, current_epoch)
     }
-    /// Spawn a Tokio task that periodically runs [`run_once`](Self::run_once`) until shutdown.
-    pub fn spawn(self: Arc<Self>, shutdown: ShutdownSignal) {
+    /// Spawn the supervised Tokio task that periodically runs [`run_once`](Self::run_once) until
+    /// shutdown.
+    pub(crate) fn spawn(
+        self: Arc<Self>,
+        shutdown: ShutdownSignal,
+    ) -> tokio::task::JoinHandle<crate::ToriiCriticalWorkerExit> {
         const TICK_INTERVAL_SECS: u64 = 60;
         tokio::spawn(async move {
             let mut ticker = interval(StdDuration::from_secs(TICK_INTERVAL_SECS));
             ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
             loop {
                 tokio::select! {
-                    _ = shutdown.receive() => break,
+                    biased;
+                    _ = shutdown.receive() => {
+                        return crate::ToriiCriticalWorkerExit::StoppedByShutdown;
+                    }
                     _ = ticker.tick() => {
+                        if shutdown.is_sent() {
+                            return crate::ToriiCriticalWorkerExit::StoppedByShutdown;
+                        }
                         if let Err(err) = self.run_once().await {
                             self.record_scheduler_failure();
                             iroha_logger::error!(%err, "PoR coordinator runtime tick failed");
@@ -1582,7 +1594,7 @@ impl PorCoordinatorRuntime {
                     }
                 }
             }
-        });
+        })
     }
 }
 #[cfg(feature = "app_api")]

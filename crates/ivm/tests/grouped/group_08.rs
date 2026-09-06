@@ -32,16 +32,12 @@ mod syscalls_policy;
 mod syscalls_policy_versions;
 #[path = "../syscalls_register_compact.rs"]
 mod syscalls_register_compact;
-#[path = "../system_circuit.rs"]
-mod system_circuit;
 #[path = "../tlv_examples.rs"]
 mod tlv_examples;
 #[path = "../trace_mode.rs"]
 mod trace_mode;
 #[path = "../vadd.rs"]
 mod vadd;
-#[path = "../vector_circuit.rs"]
-mod vector_circuit;
 #[path = "../vector_detect.rs"]
 mod vector_detect;
 #[path = "../vector_execution_regression.rs"]

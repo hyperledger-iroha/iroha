@@ -9971,6 +9971,7 @@ mod tests {
             carrier_parent_hash: context.parent_hash,
             lane_catalog_hash: Hash::new_from_chunks(&[b"catalog", label]),
             active_lanes: Vec::new(),
+            lane_authority_catalog: Default::default(),
             incarnation_root: Hash::new_from_chunks(&[b"incarnations", label]),
             activation_root: Hash::new_from_chunks(&[b"activations", label]),
             lane_snapshots: Vec::new(),

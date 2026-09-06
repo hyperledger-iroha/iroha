@@ -1507,9 +1507,12 @@ mod tests {
             .split("#[cfg(test)]\nmod tests")
             .next()
             .expect("production masked-relaxed source");
-        assert!(!source.contains("fn precompute_masked_relaxed_v1"));
-        assert!(!source.contains("fn prove_masked_relaxed_v1"));
-        assert!(source.contains("self.0.pop_front()"));
+        assert!(!production.contains("fn precompute_masked_relaxed_v1"));
+        assert!(!production.contains("fn prove_masked_relaxed_v1"));
+        assert!(production.contains("struct SecretCircuitAssignmentV1(CircuitAssignment);"));
+        assert!(production.contains("SecretCircuitAssignmentV1::new(assignment_at(index)?)"));
+        assert!(!production.contains("VecDeque<CircuitAssignment>"));
+        assert!(!production.contains(".pop_front()"));
         assert!(production.contains("Arc::ptr_eq(&assignment.shape, &shape)"));
         assert!(!production.contains("remove(0)"));
         assert!(!production.contains("&vec![Scalar::zero(); shape.constraint_count()]"));
@@ -1698,6 +1701,7 @@ mod tests {
         let assignment_before = secret_assignment_witness_zeroized_drop_count_v1();
         let shape = Arc::new(precomputed_test_shape());
         let strict_public_inputs = vec![vec![s(19)]];
+        let assignment_requested = core::cell::Cell::new(false);
         assert!(matches!(
             precompute_masked_relaxed_stream_v1(
                 MaskedRelaxedStreamConfigV1::new(
@@ -1708,20 +1712,25 @@ mod tests {
                     &strict_public_inputs,
                     1,
                 ),
-                |_| Ok(strict_assignment(&shape, 19)),
+                |_| {
+                    assignment_requested.set(true);
+                    Ok(strict_assignment(&shape, 19))
+                },
                 &mut FailureRandom,
             ),
             Err(MaskedRelaxedErrorV1::Random(
                 MaskedRelaxedRandomErrorV1::Unavailable
             ))
         ));
+        assert!(!assignment_requested.get());
         assert_eq!(
             secret_assignment_witness_zeroized_drop_count_v1(),
-            assignment_before + 1
+            assignment_before
         );
         let assignment_before = secret_assignment_witness_zeroized_drop_count_v1();
         let shape = Arc::new(precomputed_test_shape());
         let strict_public_inputs = vec![vec![s(23)]];
+        let assignment_requested = core::cell::Cell::new(false);
         let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _ = precompute_masked_relaxed_stream_v1(
                 MaskedRelaxedStreamConfigV1::new(
@@ -1732,14 +1741,18 @@ mod tests {
                     &strict_public_inputs,
                     1,
                 ),
-                |_| Ok(strict_assignment(&shape, 23)),
+                |_| {
+                    assignment_requested.set(true);
+                    Ok(strict_assignment(&shape, 23))
+                },
                 &mut PanicRandom,
             );
         }));
         assert!(unwind.is_err());
+        assert!(!assignment_requested.get());
         assert_eq!(
             secret_assignment_witness_zeroized_drop_count_v1(),
-            assignment_before + 1
+            assignment_before
         );
         let fixture = precomputed_fixture(&[17]);
         let relaxed_before = secret_relaxed_witness_zeroized_clear_count_v1();

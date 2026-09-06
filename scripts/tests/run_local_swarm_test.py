@@ -76,6 +76,14 @@ class RunLocalSwarmSafetyTest(unittest.TestCase):
         text = _script_text()
 
         self.assertIn("$KAGAMI genesis generate", text)
+        self.assertIn(
+            'KAGEMUSHA_MINT_FINALITY_PARAMETERS_FILE="${KAGEMUSHA_MINT_FINALITY_PARAMETERS_FILE:-}"',
+            text,
+        )
+        self.assertIn(
+            '--kagemusha-mint-finality-parameters "$KAGEMUSHA_MINT_FINALITY_PARAMETERS_FILE"',
+            text,
+        )
         self.assertIn("Consensus mode, validator set, and DA geometry come from the signed genesis", text)
         self.assertNotIn("consensus_mode =", text)
         self.assertNotIn("enable_bls =", text)

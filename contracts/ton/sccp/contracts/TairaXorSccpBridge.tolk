@@ -38,8 +38,8 @@ fun assertBridgeConfiguration(storage: BridgeStorage): BridgeConfig {
     val codeHashes = hashes.tail.load().deploymentCodeHashes.load();
     val pending = storage.pending.load();
     val replay = storage.replay.load();
-    sccpReplayValidateForestV1(replay.inboundMint.load());
-    sccpReplayValidateForestV1(replay.outboundBurn.load());
+    sccpReplayValidateRuntimeForestV1(replay.inboundMint.load());
+    sccpReplayValidateRuntimeForestV1(replay.outboundBurn.load());
     assert (getNetworkGlobalId() == config.expectedGlobalId) throw SccpErrors.WrongNetwork;
     assert (
         storage.routeConfigurationHash == hashes.routeConfigurationHash &&
@@ -193,9 +193,11 @@ fun onInternalMessage(in: InMessage) {
             requireSccpInboundBudget(in.valueCoins, sccpBridgeFinalizeMinimum());
             assert (isCanonicalSccpMessageVersion(msg.version)) throw SccpErrors.InvalidMessage;
             val payload = decodeCanonicalPayloadCells(msg.canonicalPayload);
-            val config = assertBridgeConfiguration(BridgeStorage.load());
+            val storage = BridgeStorage.load();
+            val config = assertBridgeConfiguration(storage);
             assertCanonicalDestinationLaneRuntimeV1(config);
             val parsed = parseProvenTairaToTonPayloadCells(payload, config.routeRevision);
+            assert (parsed.recipient != masterAddress(storage)) throw SccpErrors.InvalidPayload;
             val blockCount = sccpPayloadHashBlockCountV1(payload);
             assert (
                 blockCount > 0 && blockCount <= SCCP_MAX_TAIRA_TO_TON_HASH_BLOCKS
@@ -296,6 +298,7 @@ fun onInternalMessage(in: InMessage) {
                 recipient: material.recipient,
                 amount: material.amountScale9,
             };
+            assert (parsed.recipient != masterAddress(storage)) throw SccpErrors.InvalidPayload;
             val messageId = sccpMessageId(config.destinationLaneBytes, payload);
             assert (messageId == msg.messageId) throw SccpErrors.InvalidMessage;
             val hashes = config.routeHashes.load();

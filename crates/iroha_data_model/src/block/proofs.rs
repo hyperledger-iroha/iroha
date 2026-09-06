@@ -39,6 +39,8 @@ pub const AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1: usize = 32 * 1024 
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::proofs::BlockReceiptProof")]
 pub struct BlockReceiptProof {
     /// Hash of the transaction entrypoint proven to be part of the block.
     leaf: HashOf<TransactionEntrypoint>,
@@ -78,6 +80,8 @@ impl BlockReceiptProof {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::proofs::ExecutionReceiptProof")]
 pub struct ExecutionReceiptProof {
     /// Hash of the execution result proven to be part of the block.
     leaf: HashOf<TransactionResult>,
@@ -116,6 +120,8 @@ impl ExecutionReceiptProof {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::proofs::BlockProofs")]
 pub struct BlockProofs {
     /// Height of the block containing the transaction.
     pub block_height: NonZeroU64,
@@ -579,11 +585,37 @@ mod tests {
                 power: 1,
             })
             .collect::<Vec<_>>();
+        let network_id = test_network_id();
+        let mint_finality_roster = crate::isi::kagemusha_v1::KagemushaMintFinalityEpochRosterV1 {
+            version: crate::isi::kagemusha_v1::KAGEMUSHA_CHAIN_VERSION_V1,
+            network_id,
+            epoch: 0,
+            validators: roster
+                .iter()
+                .enumerate()
+                .map(|(index, validator)| {
+                    crate::isi::kagemusha_v1::KagemushaMintFinalityValidatorKeysV1 {
+                        validator: validator.validator.clone(),
+                        eq_proof_public_key: [u8::try_from(index + 1)
+                            .expect("small fixture roster");
+                            32],
+                        ep_proof_public_key: [u8::try_from(index + 17)
+                            .expect("small fixture roster");
+                            32],
+                    }
+                })
+                .collect(),
+        };
+        let mint_finality_epoch_id = mint_finality_roster
+            .finality_epoch_id()
+            .expect("valid fixture mint-finality roster");
         let context = HeightContext {
-            network_id: test_network_id(),
+            network_id,
             protocol_version: PROTOCOL_VERSION,
             height: block.header().height().get(),
             epoch: 0,
+            kagemusha_mint_finality_epoch_id: mint_finality_epoch_id,
+            kagemusha_mint_finality_epoch_roster: mint_finality_roster,
             epoch_end_height: u64::MAX,
             next_epoch_snapshot: None,
             mode: ConsensusMode::Permissioned,
@@ -711,7 +743,7 @@ mod tests {
         let executed_block_wire_len =
             u64::try_from(executed_block_wire.len()).expect("fixture wire length fits u64");
         let executed_block_wire_hash = Hash::new(&executed_block_wire);
-        let execution_commitment = ExecutionCommitment::without_topups_or_merge_carrier(
+        let execution_commitment = ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
             Hash::new(b"trusted proof parent state"),
             Hash::new(b"trusted proof post state"),
             Hash::new(b"trusted proof ordinary writes"),
@@ -846,14 +878,15 @@ mod tests {
     fn trusted_anchor_rejects_cryptographically_finalized_wrong_executed_wire() {
         let (block, _, external_hash, _) = authenticated_block_with_scheduled_entry();
         let wrong_executed_block_wire = b"different finalized executed block wire";
-        let wrong_execution_commitment = ExecutionCommitment::without_topups_or_merge_carrier(
-            Hash::new(b"wrong-wire parent state"),
-            Hash::new(b"wrong-wire post state"),
-            Hash::new(b"wrong-wire ordinary writes"),
-            u64::try_from(wrong_executed_block_wire.len())
-                .expect("wrong fixture wire length fits u64"),
-            Hash::new(wrong_executed_block_wire),
-        );
+        let wrong_execution_commitment =
+            ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+                Hash::new(b"wrong-wire parent state"),
+                Hash::new(b"wrong-wire post state"),
+                Hash::new(b"wrong-wire ordinary writes"),
+                u64::try_from(wrong_executed_block_wire.len())
+                    .expect("wrong fixture wire length fits u64"),
+                Hash::new(wrong_executed_block_wire),
+            );
         let artifact = finalized_artifact_for_block(&block, &wrong_execution_commitment);
         assert_eq!(
             TrustedBlockProofAnchor::from_untrusted_finality_artifact(
@@ -916,7 +949,7 @@ mod tests {
         let executed_block_wire = block
             .encode_wire()
             .expect("misaligned fixture wire still encodes");
-        let execution_commitment = ExecutionCommitment::without_topups_or_merge_carrier(
+        let execution_commitment = ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
             Hash::new(b"misaligned proof parent state"),
             Hash::new(b"misaligned proof post state"),
             Hash::new(b"misaligned proof ordinary writes"),
@@ -1046,3 +1079,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod captured_proofs_schema_tests;

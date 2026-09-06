@@ -19,11 +19,14 @@ Responses can be negotiated with the `Accept` header
 URL encoding and a strict string extractor: unknown keys, duplicate keys,
 whitespace, signs, leading zeroes, non-decimal integers, and non-canonical kind
 spellings are rejected.
+An omitted `Accept` selects canonical Norito. Unacceptable or malformed
+negotiation returns a JSON `406` error, and negotiated responses declare
+`Vary: Accept`.
 
 ### `GET /v1/sumeragi/evidence/count`
 
-- Returns a monotonic count of unique evidence records observed by the node
-  during the retention horizon.
+- Returns the current count of unique committed evidence records retained in
+  WSV during the governed evidence horizon.
 - Response body (JSON):
 
 ```json
@@ -32,8 +35,11 @@ spellings are rejected.
 }
 ```
 
-- Binary parity: `CountResponse` (`norito::derive::NoritoSerialize`) is sent
-  when `Accept: application/x-norito` is supplied.【crates/iroha_torii/src/routing.rs:263】【crates/iroha_torii/src/routing.rs:2855】
+- Binary parity: `SumeragiEvidenceCountResponse` under stable schema
+  `iroha.torii.v1.sumeragi.evidence.count.response` is sent when
+  `Accept: application/x-norito` is supplied.
+- JSON and Norito count bodies are measured and limited to 1 KiB before their
+  exact-size allocation.
 
 ### `GET /v1/sumeragi/evidence`
 
@@ -43,7 +49,7 @@ parameters (`EvidenceListQuery`):
 | Parameter | Type | Default | Notes |
 |-----------|------|---------|-------|
 | `limit`   | `usize` | 50 | Must be a canonical unsigned decimal integer in `1..=1000`. |
-| `offset`  | `usize` | `0` | Canonical unsigned decimal offset into the ordered snapshot. |
+| `offset`  | `usize` | `0` | Canonical unsigned decimal offset in `0..=10000`. |
 | `kind`    | `string` | _none_ | The sole accepted value is `SumeragiV2Equivocation`. |
 
 Response JSON is a Norito JSON object:
@@ -65,15 +71,28 @@ Response JSON is a Norito JSON object:
       "recorded_height": 2048,
       "recorded_view": 16,
       "recorded_ms": 1731883656123,
-      "consensus_admitted_height": 2049
+      "consensus_admitted_height": 2048,
+      "penalty_status": {
+        "status": "applied",
+        "details": {
+          "height": 2050
+        }
+      }
     }
   ]
 }
 ```
 
 The fixed keys mirror the JSON produced by `evidence_to_json`. When
-`Accept: application/x-norito` the response is a binary
-`EvidenceListWire` payload (`total: u64`, `items: Vec<EvidenceRecord>`).【crates/iroha_torii/src/routing.rs:2915】【crates/iroha_torii/src/routing.rs:2954】
+`Accept: application/x-norito` the response is the shared binary
+`SumeragiEvidenceListWireResponse` payload (`total: u64`,
+`items: Vec<EvidenceRecord>`).
+
+The closed JSON projection has a 1 MiB response ceiling. The full-proof Norito
+response has a 17 MiB ceiling: canonical proof payloads retained in WSV are
+jointly limited to 16 MiB, leaving bounded envelope headroom. Both formats use
+count-first bounded encoders, so an oversized body is rejected without first
+materializing an unbounded response.
 
 `SumeragiV2Equivocation` JSON includes `class`, `height`, `view`, `epoch`,
 `signer`, `context_id`, and canonical hashes of both retained signed artifacts.
@@ -81,13 +100,20 @@ The binary record additionally contains the complete frozen context,
 roster-ordered BLS proofs of possession, and both exact artifacts.
 Retired global-v1 kind/payload layouts fail binary decode and are never
 upgraded or reconstructed by the endpoint.
-The JSON record includes `consensus_admitted_height`: `null` means the exact v2
-proof is only a node-local pending observation and is not slash-eligible. A
-numeric value is the committed block height that admitted the proof. Candidate
+Every JSON record has a numeric `consensus_admitted_height`, equal to the WSV
+record's committed admission height. Node-local observations have no
+`EvidenceRecord` and never appear in either endpoint. The required closed
+`penalty_status` object is exactly one of
+`{ "status": "pending", "details": null }`,
+`{ "status": "applied", "details": { "height": <u64> } }`, or
+`{ "status": "cancelled", "details": { "height": <u64> } }`. Retired
+penalty booleans and nullable terminal-height fields are not emitted. Candidate
 blocks carry at most eight proofs and 4 MiB of encoded evidence in canonical
 key order; every follower anchors the embedded context to immutable committed
 v2 context history, revalidates the self-contained proof, and only permits
-penalties to consume an admission from a prior committed block.
+penalties to consume an admission from a prior committed block. The committed
+table additionally holds at most 124 records and 16 MiB of canonical proof
+payloads after deterministic stale-terminal reclamation.
 
 Evidence mutation is deliberately absent from Torii. Evidence is admitted only
 through the authenticated consensus peer path and signed-block proof batches;
@@ -104,9 +130,8 @@ threshold-beacon protocol.
 
 ## Proof & Pipeline SSE (`GET /v1/events/sse`)
 
-The SSE handler and DTO live at
-`crates/iroha_torii/src/routing.rs:14376-14571` and expose the shared
-`EventsSender` broadcast stream.【crates/iroha_torii/src/routing.rs:14376】【crates/iroha_torii/src/lib.rs:6602】
+The SSE handler and DTO live in `crates/iroha_torii/src/routing.rs` and expose
+the shared `EventsSender` broadcast stream.
 
 - Endpoint: `GET /v1/events/sse`
 - Protocol: `text/event-stream`; each `data:` line is a single JSON document.

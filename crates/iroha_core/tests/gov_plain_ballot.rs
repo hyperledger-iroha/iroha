@@ -40,11 +40,11 @@ fn plain_ballot_emits_ballot_accepted_with_weight() {
     stx.world.governance_referenda_mut().insert(
         "ref-1".to_string(),
         iroha_core::state::GovernanceReferendumRecord {
-            h_start: 0,
+            h_start: 1,
             // At H=1, the shortest ballot below expires at H=11 and must
             // remain active through this inclusive referendum boundary.
             h_end: 11,
-            status: iroha_core::state::GovernanceReferendumStatus::Proposed,
+            status: iroha_core::state::GovernanceReferendumStatus::Open,
             mode: iroha_core::state::GovernanceReferendumMode::Plain,
         },
     );
@@ -59,10 +59,10 @@ fn plain_ballot_emits_ballot_accepted_with_weight() {
     let duration_blocks = 10;
     let instr = CastPlainBallot {
         referendum_id: "ref-1".to_string(),
+        direction: 0,
         owner: ALICE_ID.clone(),
         amount: amount.into(),
         duration_blocks,
-        direction: 0, // Aye
     };
     instr
         .clone()
@@ -84,14 +84,14 @@ fn plain_ballot_emits_ballot_accepted_with_weight() {
             break;
         }
     }
-    assert!(saw_ok, "expected a BallotAccepted(Plain) event");
+    assert!(saw_ok, "expected a BallotAccepted event");
     // Vote again with longer duration to trigger LockExtended
     let instr2 = CastPlainBallot {
         referendum_id: "ref-1".to_string(),
+        direction: 0,
         owner: ALICE_ID.clone(),
         amount: amount.into(),
         duration_blocks: 200,
-        direction: 0,
     };
     instr2
         .execute(&ALICE_ID, &mut stx)

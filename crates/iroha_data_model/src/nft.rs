@@ -66,6 +66,7 @@ mod model {
         IntoSchema,
         RegistrableBuilder,
     )]
+    #[registrable_builder(schema_name = "iroha_data_model::nft::model::NewNft")]
     #[cfg_attr(
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -181,6 +182,25 @@ mod json_tests {
 mod tests {
     use super::*;
     use crate::{Name, domain::prelude::DomainId};
+
+    #[test]
+    fn registration_builder_schema_identity_matches_capture() {
+        // Controlled pre-declaration report: be82d3661d9e2a79fd1a60d6922f1387d3821a0ad5a65d80d294aca1251caedd.
+        let nominal = "iroha_data_model::nft::model::NewNft";
+        let expected: [u8; 16] = hex::decode("d01008409996af58b242fdd93cbb9d17")
+            .expect("captured schema hash")
+            .try_into()
+            .expect("16-byte hash");
+        assert_eq!(<NewNft as norito::NoritoSchema>::nominal_name(), nominal);
+        assert_eq!(<NewNft as norito::NoritoSchema>::frame_name(), nominal);
+        assert_eq!(norito::schema::identity::frame_hash::<NewNft>(), expected);
+        assert_eq!(<NewNft as norito::NoritoSerialize>::schema_hash(), expected);
+        assert_eq!(
+            <NewNft as norito::NoritoDeserialize>::schema_hash(),
+            expected
+        );
+    }
+
     #[test]
     fn bare_domain_literal_defaults_to_universal_dataspace() {
         let id: NftId = "mona_lisa$art".parse().expect("valid nft id");

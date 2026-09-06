@@ -70,14 +70,12 @@ Account roles on a value-moving route are not interchangeable. An irreversible
 external-to-Taira burn recipient is limited to the exact `test...` I105 spelling
 of a canonical single-key Ed25519 account in the prime-order subgroup. Both
 small-order and mixed-torsion points are rejected. A proof-authenticated
-Taira-to-external sender may be a canonical single-key or multisig `AccountId`,
-but every controller key must be Ed25519 or compressed secp256k1 in V1. Core
-checks the typed controller and exact discriminant-`369` spelling before moving
-assets into custody; the EVM/TVM and TON destination contracts independently
-check the same AccountAddress tags, policy ordering, key admission, I105 round
-trip, and checksum before proof dispatch. Other Rust-supported controller algorithms are
-fail-closed for SCCP V1 so they cannot create an outbound lock that the
-destination route cannot finalize.
+Taira-to-external sender must use the same canonical single-key Ed25519
+`AccountId`; this is the only controller shape constrained by every fixed V1
+semantic circuit. Core checks the typed controller and exact discriminant-`369`
+spelling before moving assets into custody. Multisig, secp256k1, and every other
+Rust-supported controller remain fail-closed for SCCP V1 so they cannot create
+an outbound lock that no destination proof can finalize.
 
 ## Atomic typed registry
 

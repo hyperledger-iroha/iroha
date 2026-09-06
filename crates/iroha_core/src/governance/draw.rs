@@ -2,24 +2,10 @@
 use crate::governance::sortition;
 use iroha_config::parameters::actual::Governance;
 use iroha_crypto::blake2::{Blake2b512, Digest as _};
-use iroha_data_model::{
-    NetworkId,
-    account::AccountId,
-    governance::types::{ParliamentBodies, ParliamentBody, ParliamentRoster},
-    isi::governance::CouncilDerivationKind,
-};
-use iroha_primitives::numeric::Quantity;
-use std::collections::{BTreeMap, BTreeSet};
-/// Sortition result with winners and alternates.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Draw {
-    /// Selected members in deterministic rank order.
-    pub members: Vec<AccountId>,
-    /// Alternates to replace members that decline or are ineligible.
-    pub alternates: Vec<AccountId>,
-}
+use iroha_data_model::{NetworkId, account::AccountId, governance::types::ParliamentBody};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 /// Bodies selected before a narrow Policy Jury result can trigger a fresh Confirmation Jury.
-pub const PRIMARY_PARLIAMENT_BODIES_V1: [ParliamentBody; 9] = [
+const PRIMARY_PARLIAMENT_BODIES_V1: [ParliamentBody; 9] = [
     ParliamentBody::RulesCommittee,
     ParliamentBody::AgendaCouncil,
     ParliamentBody::InterestPanel,
@@ -32,31 +18,26 @@ pub const PRIMARY_PARLIAMENT_BODIES_V1: [ParliamentBody; 9] = [
 ];
 /// Deterministic simultaneous body assignment and its binding concentration cap.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ParliamentDrawPlan {
+pub(crate) struct ParliamentDrawPlan {
     /// Rosters derived from the committed candidate snapshot and future pulse.
-    pub bodies: ParliamentBodies,
-    /// Smallest feasible maximum number of primary bodies assigned to one citizen.
-    pub assignment_cap: u32,
+    pub(crate) rosters: BTreeMap<ParliamentBody, ParliamentDrawRoster>,
+    /// Smallest allocator-feasible maximum body invitations assigned to one citizen.
+    pub(crate) assignment_cap: u32,
 }
-/// Replace a missing member with the next alternate. Returns `true` if replaced.
-pub fn replace_with_alternate(
-    members: &mut [AccountId],
-    alternates: &mut Vec<AccountId>,
-    missing: &AccountId,
-) -> bool {
-    if let Some(pos) = members.iter().position(|m| m == missing) {
-        if let Some(next) = alternates.first().cloned() {
-            members[pos] = next;
-            alternates.remove(0);
-            return true;
-        }
-    }
-    false
+/// One attempt-local roster derived from a committed candidate snapshot and future pulse.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ParliamentDrawRoster {
+    /// Body this roster belongs to.
+    pub(crate) body: ParliamentBody,
+    /// Finalized future-pulse height used for the draw.
+    pub(crate) pulse_height: u64,
+    /// Number of candidates in the committed snapshot.
+    pub(crate) candidate_count: u32,
+    /// Deterministically ordered primary members.
+    pub(crate) members: Vec<AccountId>,
+    /// Deterministically ordered alternates.
+    pub(crate) alternates: Vec<AccountId>,
 }
-/// Domain separator for citizen draws.
-pub const CITIZEN_SEED_DOMAIN: &[u8] = b"gov:citizen:seed:v1";
-/// Domain separator for citizen sortition inputs derived from a finalized beacon pulse.
-pub const CITIZEN_INPUT_DOMAIN: &[u8] = b"iroha:beacon-sortition:v1:citizen|";
 fn scored_output(seed: &[u8; 64], input_domain: &[u8], account_id: &AccountId) -> [u8; 32] {
     let input = sortition::build_input(input_domain, seed, account_id);
     let digest = Blake2b512::digest(input);
@@ -64,161 +45,6 @@ fn scored_output(seed: &[u8; 64], input_domain: &[u8], account_id: &AccountId) -
     output.copy_from_slice(&digest[..32]);
     output
 }
-/// Deterministic draw over bonded citizens.
-pub fn run_citizen_draw<'a, I>(
-    network_id: &NetworkId,
-    epoch: u64,
-    beacon: &[u8; 32],
-    candidates: I,
-    committee_size: usize,
-    alternate_size: usize,
-) -> Draw
-where
-    I: IntoIterator<Item = (&'a AccountId, u128)>,
-{
-    let seed = sortition::compute_seed(network_id, epoch, beacon, CITIZEN_SEED_DOMAIN);
-    let dedup: BTreeMap<AccountId, u128> =
-        candidates
-            .into_iter()
-            .fold(BTreeMap::new(), |mut acc, (account_id, bond)| {
-                acc.entry(account_id.clone())
-                    .and_modify(|existing| *existing = (*existing).max(bond))
-                    .or_insert(bond);
-                acc
-            });
-    let mut scored: Vec<([u8; 32], AccountId)> = Vec::new();
-    for account_id in dedup.keys() {
-        let output = scored_output(&seed, CITIZEN_INPUT_DOMAIN, account_id);
-        scored.push((output, account_id.clone()));
-    }
-    scored.sort_by(|a, b| {
-        use core::cmp::Ordering;
-        match b.0.cmp(&a.0) {
-            Ordering::Equal => a.1.cmp(&b.1),
-            other => other,
-        }
-    });
-    scored.dedup_by(|a, b| a.1 == b.1);
-    let total = committee_size.saturating_add(alternate_size);
-    let mut members = Vec::new();
-    let mut alternates = Vec::new();
-    for (idx, (_, account_id)) in scored.into_iter().take(total).enumerate() {
-        if idx < committee_size {
-            members.push(account_id);
-        } else {
-            alternates.push(account_id);
-        }
-    }
-    Draw {
-        members,
-        alternates,
-    }
-}
-/// Deterministically derive parliament bodies directly from bonded citizen candidates.
-///
-/// Each body is sampled with body-specific domain tags. A citizen is unique within one body's
-/// member/alternate roster, but may serve on multiple bodies when the electorate is too small for
-/// complete separation.
-/// Bond amounts are used only for eligibility before this function is called, so every bonded
-/// citizen has one draw per body. Proposal-time JIT sortition intentionally does not consume the
-/// persisted per-epoch seat budget; that budget governs accepted, persisted service assignments.
-pub fn derive_parliament_bodies_from_bonded_citizens<'a, I, B>(
-    gov_cfg: &Governance,
-    network_id: &NetworkId,
-    epoch: u64,
-    beacon: &[u8; 32],
-    candidates: I,
-    derived_by: CouncilDerivationKind,
-) -> ParliamentBodies
-where
-    I: IntoIterator<Item = (&'a AccountId, B)>,
-    B: Into<Quantity>,
-{
-    let dedup: BTreeMap<AccountId, Quantity> =
-        candidates
-            .into_iter()
-            .fold(BTreeMap::new(), |mut acc, (account_id, bond)| {
-                let bond = bond.into();
-                acc.entry(account_id.clone())
-                    .and_modify(|existing| *existing = existing.clone().max(bond.clone()))
-                    .or_insert(bond);
-                acc
-            });
-    let candidate_count = u32::try_from(dedup.len()).unwrap_or(u32::MAX);
-    let candidates: Vec<AccountId> = dedup.into_keys().collect();
-    derive_body_plan(
-        gov_cfg,
-        network_id,
-        epoch,
-        beacon,
-        &candidates,
-        candidate_count,
-        derived_by,
-        &PRIMARY_PARLIAMENT_BODIES_V1,
-    )
-    .bodies
-}
-/// Deterministically derive parliament rosters for all bodies from the persisted council draw.
-///
-/// Uses per-body domain separators to shuffle the combined member+alternate list into distinct
-/// committees so each stage has an independent roster while remaining reproducible across peers.
-pub fn derive_parliament_bodies(
-    gov_cfg: &Governance,
-    network_id: &NetworkId,
-    epoch: u64,
-    beacon: &[u8; 32],
-    council: &super::state::ParliamentTerm,
-) -> ParliamentBodies {
-    let mut candidates: Vec<AccountId> = Vec::new();
-    candidates.extend(council.members.iter().cloned());
-    candidates.extend(council.alternates.iter().cloned());
-    let mut seen = BTreeSet::new();
-    candidates.retain(|id| seen.insert(id.clone()));
-    derive_body_plan(
-        gov_cfg,
-        network_id,
-        epoch,
-        beacon,
-        &candidates,
-        council.candidate_count,
-        council.derived_by,
-        &PRIMARY_PARLIAMENT_BODIES_V1,
-    )
-    .bodies
-}
-/// Derive a fresh Confirmation Jury from a later finalized pulse.
-///
-/// Policy Jury members are excluded unconditionally. If the remaining electorate is smaller than
-/// the configured jury, the nonempty feasible roster is binding and its reduced size is visible in
-/// the returned roster.
-#[must_use]
-pub fn derive_confirmation_jury(
-    gov_cfg: &Governance,
-    network_id: &NetworkId,
-    pulse_height: u64,
-    future_beacon: &[u8; 32],
-    candidates: &[AccountId],
-    policy_jury_members: &BTreeSet<AccountId>,
-    derived_by: CouncilDerivationKind,
-) -> ParliamentDrawPlan {
-    let eligible: Vec<_> = candidates
-        .iter()
-        .filter(|candidate| !policy_jury_members.contains(*candidate))
-        .cloned()
-        .collect();
-    let candidate_count = u32::try_from(eligible.len()).unwrap_or(u32::MAX);
-    derive_body_plan(
-        gov_cfg,
-        network_id,
-        pulse_height,
-        future_beacon,
-        &eligible,
-        candidate_count,
-        derived_by,
-        &[ParliamentBody::ConfirmationJury],
-    )
-}
-
 /// Derive an attempt-local body plan from an exact precommitted candidate snapshot.
 ///
 /// `pulse_height` and `future_beacon` must come from the finalized pulse named by
@@ -227,7 +53,7 @@ pub fn derive_confirmation_jury(
 /// request in `bodies`; this function defensively deduplicates without using the
 /// caller's ordering as entropy.
 #[must_use]
-pub fn derive_attempt_body_plan_v1(
+pub(crate) fn derive_attempt_body_plan_v1(
     gov_cfg: &Governance,
     network_id: &NetworkId,
     pulse_height: u64,
@@ -241,33 +67,35 @@ pub fn derive_attempt_body_plan_v1(
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect();
-    let candidate_count = u32::try_from(candidates.len()).unwrap_or(u32::MAX);
     derive_body_plan(
         gov_cfg,
         network_id,
         pulse_height,
         future_beacon,
         &candidates,
-        candidate_count,
-        CouncilDerivationKind::Sortition,
         bodies,
     )
 }
 
 /// Return the smallest feasible simultaneous assignment cap for `bodies`.
 #[must_use]
-pub fn smallest_feasible_assignment_cap(
+fn smallest_feasible_assignment_cap(
     gov_cfg: &Governance,
     candidate_count: usize,
     bodies: &[ParliamentBody],
+    alternates_per_body: usize,
 ) -> u32 {
     if candidate_count == 0 || bodies.is_empty() {
         return 0;
     }
-    let required_seats = bodies.iter().fold(0usize, |total, body| {
-        total.saturating_add(body_committee_size(gov_cfg, *body).min(candidate_count))
+    let required_invitations = bodies.iter().fold(0usize, |total, body| {
+        let primary = body_committee_size(gov_cfg, *body).min(candidate_count);
+        let alternates = alternates_per_body.min(candidate_count.saturating_sub(primary));
+        total.saturating_add(primary.saturating_add(alternates))
     });
-    let cap = required_seats.div_ceil(candidate_count).min(bodies.len());
+    let cap = required_invitations
+        .div_ceil(candidate_count)
+        .min(bodies.len());
     u32::try_from(cap).unwrap_or(u32::MAX)
 }
 
@@ -278,14 +106,10 @@ fn derive_body_plan(
     epoch: u64,
     beacon: &[u8; 32],
     candidates: &[AccountId],
-    candidate_count: u32,
-    derived_by: CouncilDerivationKind,
     bodies: &[ParliamentBody],
 ) -> ParliamentDrawPlan {
-    let alternates_per_body = gov_cfg
-        .parliament_alternate_size
-        .unwrap_or(gov_cfg.parliament_committee_size);
-    let assignment_cap = smallest_feasible_assignment_cap(gov_cfg, candidates.len(), bodies);
+    let candidate_count = u32::try_from(candidates.len()).unwrap_or(u32::MAX);
+    let alternates_per_body = gov_cfg.parliament_alternate_size;
     let mut rankings = BTreeMap::new();
     for body in bodies {
         rankings.insert(
@@ -293,6 +117,39 @@ fn derive_body_plan(
             ranked_body_candidates(network_id, epoch, beacon, candidates, *body),
         );
     }
+    let minimum_cap =
+        smallest_feasible_assignment_cap(gov_cfg, candidates.len(), bodies, alternates_per_body);
+    let maximum_cap = u32::try_from(bodies.len()).unwrap_or(u32::MAX);
+    for assignment_cap in minimum_cap..=maximum_cap {
+        if let Some(plan) = try_derive_body_plan_with_cap(
+            gov_cfg,
+            epoch,
+            candidates,
+            bodies,
+            &rankings,
+            epoch,
+            alternates_per_body,
+            candidate_count,
+            assignment_cap,
+        ) {
+            return plan;
+        }
+    }
+    unreachable!("a per-body invitation cap must admit every duplicate-free body plan")
+}
+
+#[allow(clippy::too_many_arguments)]
+fn try_derive_body_plan_with_cap(
+    gov_cfg: &Governance,
+    epoch: u64,
+    candidates: &[AccountId],
+    bodies: &[ParliamentBody],
+    rankings: &BTreeMap<ParliamentBody, Vec<AccountId>>,
+    pulse_height: u64,
+    alternates_per_body: usize,
+    candidate_count: u32,
+    assignment_cap: u32,
+) -> Option<ParliamentDrawPlan> {
     let mut loads: BTreeMap<AccountId, u32> = candidates
         .iter()
         .cloned()
@@ -301,9 +158,7 @@ fn derive_body_plan(
     let mut selected: BTreeMap<ParliamentBody, Vec<AccountId>> = BTreeMap::new();
     for body in bodies {
         let target = body_committee_size(gov_cfg, *body).min(candidates.len());
-        let ranked = rankings
-            .get(body)
-            .expect("every requested body has a deterministic ranking");
+        let ranked = rankings.get(body)?;
         let mut eligible: Vec<_> = ranked
             .iter()
             .enumerate()
@@ -330,6 +185,9 @@ fn derive_body_plan(
             .filter(|candidate| chosen_set.contains(*candidate))
             .cloned()
             .collect();
+        if members.len() != target {
+            return None;
+        }
         for member in &members {
             let load = loads
                 .get_mut(member)
@@ -339,37 +197,193 @@ fn derive_body_plan(
         selected.insert(*body, members);
     }
 
+    let alternates = derive_alternates_with_cap(
+        candidates,
+        bodies,
+        rankings,
+        &selected,
+        &loads,
+        alternates_per_body,
+        assignment_cap,
+    )?;
     let mut rosters = BTreeMap::new();
     for body in bodies {
         let members = selected.remove(body).unwrap_or_default();
-        let member_set: BTreeSet<_> = members.iter().cloned().collect();
-        let alternates = rankings
-            .remove(body)
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|candidate| !member_set.contains(candidate))
-            .filter(|candidate| loads.get(candidate).copied().unwrap_or(0) < assignment_cap)
-            .take(alternates_per_body)
-            .collect();
+        let alternates = alternates.get(body)?.clone();
         rosters.insert(
             *body,
-            ParliamentRoster {
+            ParliamentDrawRoster {
                 body: *body,
-                epoch,
+                pulse_height,
                 members,
                 alternates,
                 candidate_count,
-                derived_by,
             },
         );
     }
-    ParliamentDrawPlan {
-        bodies: ParliamentBodies {
-            selection_epoch: epoch,
-            rosters,
-        },
+    Some(ParliamentDrawPlan {
+        rosters,
         assignment_cap,
+    })
+}
+
+/// Reserve a capacity-bounded, duplicate-free alternate matching.
+///
+/// Greedy selection alone can strand a later body even when the requested cap
+/// is feasible. The deterministic alternating-path search below reassigns an
+/// earlier reservation when necessary. Final vectors are restored to their
+/// body-local beacon ranking before they are committed.
+#[allow(clippy::too_many_arguments)]
+fn derive_alternates_with_cap(
+    candidates: &[AccountId],
+    bodies: &[ParliamentBody],
+    rankings: &BTreeMap<ParliamentBody, Vec<AccountId>>,
+    primary: &BTreeMap<ParliamentBody, Vec<AccountId>>,
+    primary_loads: &BTreeMap<AccountId, u32>,
+    alternates_per_body: usize,
+    assignment_cap: u32,
+) -> Option<BTreeMap<ParliamentBody, Vec<AccountId>>> {
+    let candidate_indices: BTreeMap<_, _> = candidates
+        .iter()
+        .cloned()
+        .enumerate()
+        .map(|(index, candidate)| (candidate, index))
+        .collect();
+    let mut ranked_indices = Vec::with_capacity(bodies.len());
+    let mut primary_indices = Vec::with_capacity(bodies.len());
+    let mut alternate_targets = Vec::with_capacity(bodies.len());
+    for body in bodies {
+        let ranked = rankings.get(body)?;
+        let ranked = ranked
+            .iter()
+            .map(|candidate| candidate_indices.get(candidate).copied())
+            .collect::<Option<Vec<_>>>()?;
+        let members = primary.get(body)?;
+        let member_indices = members
+            .iter()
+            .map(|candidate| candidate_indices.get(candidate).copied())
+            .collect::<Option<BTreeSet<_>>>()?;
+        alternate_targets
+            .push(alternates_per_body.min(candidates.len().saturating_sub(member_indices.len())));
+        ranked_indices.push(ranked);
+        primary_indices.push(member_indices);
     }
+
+    let mut capacities = Vec::with_capacity(candidates.len());
+    let mut total_loads = Vec::with_capacity(candidates.len());
+    for candidate in candidates {
+        let primary_load = primary_loads.get(candidate).copied().unwrap_or(0);
+        capacities.push(assignment_cap.saturating_sub(primary_load) as usize);
+        total_loads.push(primary_load as usize);
+    }
+    let mut matching = vec![BTreeSet::<usize>::new(); bodies.len()];
+    for (body_index, target) in alternate_targets.into_iter().enumerate() {
+        while matching[body_index].len() < target {
+            if !augment_alternate_matching(
+                body_index,
+                &ranked_indices,
+                &primary_indices,
+                &capacities,
+                &mut total_loads,
+                &mut matching,
+            ) {
+                return None;
+            }
+        }
+    }
+
+    let mut result = BTreeMap::new();
+    for (body_index, body) in bodies.iter().copied().enumerate() {
+        let alternates = ranked_indices[body_index]
+            .iter()
+            .filter(|candidate| matching[body_index].contains(candidate))
+            .map(|candidate| candidates[*candidate].clone())
+            .collect();
+        result.insert(body, alternates);
+    }
+    Some(result)
+}
+
+/// Add one alternate reservation through a deterministic alternating path.
+fn augment_alternate_matching(
+    root_body: usize,
+    ranked_indices: &[Vec<usize>],
+    primary_indices: &[BTreeSet<usize>],
+    capacities: &[usize],
+    total_loads: &mut [usize],
+    matching: &mut [BTreeSet<usize>],
+) -> bool {
+    let body_count = matching.len();
+    let mut parents = vec![None; body_count.saturating_add(capacities.len())];
+    parents[root_body] = Some(root_body);
+    let mut queue = VecDeque::from([root_body]);
+    let mut terminal_candidate = None;
+
+    while let Some(node) = queue.pop_front() {
+        if node < body_count {
+            let mut eligible = ranked_indices[node]
+                .iter()
+                .enumerate()
+                .filter(|(_, candidate)| {
+                    !primary_indices[node].contains(candidate)
+                        && !matching[node].contains(candidate)
+                })
+                .map(|(rank, candidate)| (total_loads[*candidate], rank, *candidate))
+                .collect::<Vec<_>>();
+            eligible.sort_unstable();
+            for (_, _, candidate) in eligible {
+                let candidate_node = body_count + candidate;
+                if capacities[candidate] == 0 || parents[candidate_node].is_some() {
+                    continue;
+                }
+                parents[candidate_node] = Some(node);
+                let alternate_load = matching
+                    .iter()
+                    .filter(|assignments| assignments.contains(&candidate))
+                    .count();
+                if alternate_load < capacities[candidate] {
+                    terminal_candidate = Some(candidate_node);
+                    break;
+                }
+                queue.push_back(candidate_node);
+            }
+            if terminal_candidate.is_some() {
+                break;
+            }
+        } else {
+            let candidate = node - body_count;
+            for (owner_body, assignments) in matching.iter().enumerate() {
+                if assignments.contains(&candidate) && parents[owner_body].is_none() {
+                    parents[owner_body] = Some(node);
+                    queue.push_back(owner_body);
+                }
+            }
+        }
+    }
+
+    let Some(mut candidate_node) = terminal_candidate else {
+        return false;
+    };
+    loop {
+        let body = parents[candidate_node].expect("candidate on an alternating path has a parent");
+        let candidate = candidate_node - body_count;
+        if body != root_body {
+            let previous_candidate_node =
+                parents[body].expect("intermediate body on an alternating path has a parent");
+            let previous_candidate = previous_candidate_node - body_count;
+            assert!(matching[body].remove(&previous_candidate));
+            total_loads[previous_candidate] = total_loads[previous_candidate]
+                .checked_sub(1)
+                .expect("matched alternate contributes one candidate load");
+            candidate_node = previous_candidate_node;
+        }
+        assert!(matching[body].insert(candidate));
+        total_loads[candidate] = total_loads[candidate].saturating_add(1);
+        if body == root_body {
+            break;
+        }
+    }
+    true
 }
 
 fn same_matter_overlap(
@@ -513,403 +527,6 @@ mod tests {
         assert_eq!(account, expected);
     }
     #[test]
-    fn citizen_draw_orders_without_rerolls() {
-        let network_id = network_id(b"citizen-demo");
-        let beacon = [5u8; 32];
-        let epoch = 3u64;
-        let accounts = [mk_account(1), mk_account(2), mk_account(3)];
-        let bonds = [
-            (&accounts[0], 150u128),
-            (&accounts[1], 250u128),
-            (&accounts[2], 350u128),
-        ];
-        let draw = run_citizen_draw(&network_id, epoch, &beacon, bonds, 2, 1);
-        assert_eq!(draw.members.len(), 2);
-        assert_eq!(draw.alternates.len(), 1);
-        let mut combined = Vec::new();
-        combined.extend(draw.members.iter().cloned());
-        combined.extend(draw.alternates.iter().cloned());
-        let unique: BTreeSet<_> = combined.iter().collect();
-        assert_eq!(unique.len(), 3, "draw must not re-roll candidates");
-    }
-    #[test]
-    fn citizen_draw_ignores_bond_amounts() {
-        let network_id = network_id(b"citizen-demo");
-        let beacon = [7u8; 32];
-        let epoch = 9u64;
-        let accounts = [mk_account(1), mk_account(2), mk_account(3), mk_account(4)];
-        let floor_bonds = [
-            (&accounts[0], 150u128),
-            (&accounts[1], 150u128),
-            (&accounts[2], 150u128),
-            (&accounts[3], 150u128),
-        ];
-        let high_bonds = [
-            (&accounts[0], 150u128),
-            (&accounts[1], 15_000u128),
-            (&accounts[2], 150_000u128),
-            (&accounts[3], 1_500_000u128),
-        ];
-        let floor_draw = run_citizen_draw(&network_id, epoch, &beacon, floor_bonds, 2, 2);
-        let high_draw = run_citizen_draw(&network_id, epoch, &beacon, high_bonds, 2, 2);
-        assert_eq!(floor_draw.members, high_draw.members);
-        assert_eq!(floor_draw.alternates, high_draw.alternates);
-    }
-    #[test]
-    fn citizen_draw_deduplicates_duplicate_accounts_without_extra_chances() {
-        let network_id = network_id(b"citizen-demo");
-        let beacon = [9u8; 32];
-        let epoch = 12u64;
-        let accounts = [mk_account(1), mk_account(2), mk_account(3), mk_account(4)];
-        let baseline = [
-            (&accounts[0], 100u128),
-            (&accounts[1], 100u128),
-            (&accounts[2], 100u128),
-            (&accounts[3], 100u128),
-        ];
-        let duplicated_whale = [
-            (&accounts[0], 100u128),
-            (&accounts[1], 1_000_000u128),
-            (&accounts[1], 2_000_000u128),
-            (&accounts[1], 3_000_000u128),
-            (&accounts[2], 100u128),
-            (&accounts[3], 100u128),
-        ];
-        let baseline_draw = run_citizen_draw(&network_id, epoch, &beacon, baseline, 2, 2);
-        let duplicated_draw = run_citizen_draw(&network_id, epoch, &beacon, duplicated_whale, 2, 2);
-        assert_eq!(baseline_draw.members, duplicated_draw.members);
-        assert_eq!(baseline_draw.alternates, duplicated_draw.alternates);
-        let combined: Vec<_> = duplicated_draw
-            .members
-            .iter()
-            .chain(duplicated_draw.alternates.iter())
-            .collect();
-        let unique: BTreeSet<_> = combined.iter().copied().collect();
-        assert_eq!(
-            combined.len(),
-            unique.len(),
-            "duplicate citizen entries must not create duplicate seats"
-        );
-    }
-    #[test]
-    fn bonded_body_draws_deduplicate_candidates_and_ignore_whale_bonds() {
-        let network_id = network_id(b"body-demo");
-        let beacon = [0xA5; 32];
-        let epoch = 14u64;
-        let accounts = [
-            mk_account(1),
-            mk_account(2),
-            mk_account(3),
-            mk_account(4),
-            mk_account(5),
-        ];
-        let cfg = Governance {
-            rules_committee_size: 2,
-            agenda_council_size: 2,
-            interest_panel_size: 2,
-            review_panel_size: 2,
-            policy_jury_size: 2,
-            oversight_committee_size: 2,
-            fma_committee_size: 2,
-            parliament_alternate_size: Some(2),
-            ..Governance::default()
-        };
-        let baseline = accounts.iter().map(|account| (account, 100u128));
-        let inflated = [
-            (&accounts[0], 100u128),
-            (&accounts[1], 10_000_000u128),
-            (&accounts[1], 20_000_000u128),
-            (&accounts[2], 100u128),
-            (&accounts[3], 100u128),
-            (&accounts[4], 100u128),
-            (&accounts[4], 40_000_000u128),
-        ];
-        let baseline_bodies = derive_parliament_bodies_from_bonded_citizens(
-            &cfg,
-            &network_id,
-            epoch,
-            &beacon,
-            baseline,
-            CouncilDerivationKind::Manual,
-        );
-        let inflated_bodies = derive_parliament_bodies_from_bonded_citizens(
-            &cfg,
-            &network_id,
-            epoch,
-            &beacon,
-            inflated,
-            CouncilDerivationKind::Manual,
-        );
-        for body in PRIMARY_PARLIAMENT_BODIES_V1 {
-            let baseline = baseline_bodies.rosters.get(&body).expect("baseline roster");
-            let inflated = inflated_bodies.rosters.get(&body).expect("inflated roster");
-            assert_eq!(baseline.members, inflated.members, "{body:?} members");
-            assert_eq!(
-                baseline.alternates, inflated.alternates,
-                "{body:?} alternates"
-            );
-            assert_eq!(inflated.candidate_count, 5);
-            let combined: Vec<_> = inflated
-                .members
-                .iter()
-                .chain(inflated.alternates.iter())
-                .collect();
-            let unique: BTreeSet<_> = combined.iter().copied().collect();
-            assert_eq!(
-                combined.len(),
-                unique.len(),
-                "{body:?} duplicate bonded candidates must not create duplicate seats"
-            );
-        }
-    }
-    #[test]
-    fn one_bonded_citizen_fills_each_actual_body_and_sets_one_person_quorum() {
-        let network_id = network_id(b"body-one-citizen-demo");
-        let beacon = [0x1C; 32];
-        let epoch = 17_u64;
-        let citizen = mk_account(1);
-        let cfg = Governance {
-            parliament_quorum_bps: 6_667,
-            rules_committee_size: 7,
-            agenda_council_size: 9,
-            interest_panel_size: 11,
-            review_panel_size: 13,
-            policy_jury_size: 25,
-            oversight_committee_size: 7,
-            fma_committee_size: 5,
-            parliament_alternate_size: Some(25),
-            ..Governance::default()
-        };
-        let bodies = derive_parliament_bodies_from_bonded_citizens(
-            &cfg,
-            &network_id,
-            epoch,
-            &beacon,
-            [(&citizen, 10_000_u128)],
-            CouncilDerivationKind::Sortition,
-        );
-        for body in PRIMARY_PARLIAMENT_BODIES_V1 {
-            let roster = bodies.rosters.get(&body).expect("one-citizen roster");
-            assert_eq!(roster.members, [citizen.clone()]);
-            assert!(roster.alternates.is_empty());
-            assert_eq!(roster.candidate_count, 1);
-            assert_eq!(
-                crate::state::council_quorum_threshold(
-                    roster.members.len(),
-                    cfg.parliament_quorum_bps,
-                ),
-                1
-            );
-        }
-    }
-    #[test]
-    fn body_rosters_are_independently_domain_separated() {
-        let network_id = network_id(b"body-domain-demo");
-        let beacon = [0xC3; 32];
-        let epoch = 16u64;
-        let accounts = [
-            mk_account(1),
-            mk_account(2),
-            mk_account(3),
-            mk_account(4),
-            mk_account(5),
-            mk_account(6),
-            mk_account(7),
-            mk_account(8),
-            mk_account(9),
-            mk_account(10),
-        ];
-        let cfg = Governance {
-            rules_committee_size: 3,
-            agenda_council_size: 3,
-            interest_panel_size: 3,
-            review_panel_size: 3,
-            policy_jury_size: 3,
-            oversight_committee_size: 3,
-            fma_committee_size: 3,
-            parliament_alternate_size: Some(2),
-            ..Governance::default()
-        };
-        let bodies = derive_parliament_bodies_from_bonded_citizens(
-            &cfg,
-            &network_id,
-            epoch,
-            &beacon,
-            accounts.iter().map(|account| (account, 100u128)),
-            CouncilDerivationKind::Manual,
-        );
-        let distinct_member_lists: BTreeSet<_> = PRIMARY_PARLIAMENT_BODIES_V1
-            .into_iter()
-            .map(|body| {
-                bodies
-                    .rosters
-                    .get(&body)
-                    .expect("body roster")
-                    .members
-                    .clone()
-            })
-            .collect();
-        assert!(
-            distinct_member_lists.len() > 1,
-            "body draws must not clone one shared membership list across all parliament bodies"
-        );
-    }
-    #[test]
-    fn forty_six_citizens_bind_each_primary_body_to_its_feasible_size() {
-        let network_id = network_id(b"body-readiness-demo");
-        let beacon = [0x46; 32];
-        let epoch = 46u64;
-        let accounts: Vec<_> = (1..=46).map(mk_account).collect();
-        let cfg = Governance::default();
-        let bodies = derive_parliament_bodies_from_bonded_citizens(
-            &cfg,
-            &network_id,
-            epoch,
-            &beacon,
-            accounts.iter().map(|account| (account, 100u128)),
-            CouncilDerivationKind::Manual,
-        );
-        for (body, expected) in [
-            (ParliamentBody::RulesCommittee, 46),
-            (ParliamentBody::AgendaCouncil, 46),
-            (ParliamentBody::InterestPanel, 12),
-            (ParliamentBody::ReviewPanel, 46),
-            (ParliamentBody::CoordinationCouncil, 46),
-            (ParliamentBody::MpcCommittee, 46),
-            (ParliamentBody::FmaCommittee, 46),
-            (ParliamentBody::OversightCommittee, 46),
-            (ParliamentBody::PolicyJury, 46),
-        ] {
-            let roster = bodies.rosters.get(&body).expect("default body roster");
-            assert_eq!(roster.members.len(), expected, "{body:?} members");
-            let within_body: BTreeSet<_> =
-                roster.members.iter().chain(&roster.alternates).collect();
-            assert_eq!(
-                within_body.len(),
-                roster.members.len() + roster.alternates.len(),
-                "{body:?} must not repeat a citizen within its own roster"
-            );
-        }
-        let total_member_seats: usize = bodies
-            .rosters
-            .values()
-            .map(|roster| roster.members.len())
-            .sum();
-        let distinct_members: BTreeSet<_> = bodies
-            .rosters
-            .values()
-            .flat_map(|roster| roster.members.iter())
-            .collect();
-        assert_eq!(total_member_seats, 380);
-        assert!(
-            distinct_members.len() <= accounts.len(),
-            "independent body draws may reuse a citizen across bodies"
-        );
-    }
-    #[test]
-    fn bonded_body_draws_are_stable_under_candidate_order_permutation() {
-        let network_id = network_id(b"body-order-demo");
-        let beacon = [0xB7; 32];
-        let epoch = 17u64;
-        let accounts = [
-            mk_account(1),
-            mk_account(2),
-            mk_account(3),
-            mk_account(4),
-            mk_account(5),
-            mk_account(6),
-        ];
-        let cfg = Governance {
-            rules_committee_size: 2,
-            agenda_council_size: 2,
-            interest_panel_size: 2,
-            review_panel_size: 2,
-            policy_jury_size: 2,
-            oversight_committee_size: 2,
-            fma_committee_size: 2,
-            parliament_alternate_size: Some(2),
-            ..Governance::default()
-        };
-        let forward = accounts.iter().map(|account| (account, 100u128));
-        let reverse = accounts.iter().rev().map(|account| (account, 100u128));
-        let forward_bodies = derive_parliament_bodies_from_bonded_citizens(
-            &cfg,
-            &network_id,
-            epoch,
-            &beacon,
-            forward,
-            CouncilDerivationKind::Manual,
-        );
-        let reverse_bodies = derive_parliament_bodies_from_bonded_citizens(
-            &cfg,
-            &network_id,
-            epoch,
-            &beacon,
-            reverse,
-            CouncilDerivationKind::Manual,
-        );
-        assert_eq!(
-            forward_bodies, reverse_bodies,
-            "candidate ordering supplied by an API must not bias parliament body draws"
-        );
-    }
-    #[test]
-    fn persisted_body_draws_deduplicate_member_and_alternate_overlap() {
-        let network_id = network_id(b"body-demo");
-        let beacon = [0x5A; 32];
-        let epoch = 15u64;
-        let accounts = [
-            mk_account(1),
-            mk_account(2),
-            mk_account(3),
-            mk_account(4),
-            mk_account(5),
-        ];
-        let cfg = Governance {
-            rules_committee_size: 3,
-            agenda_council_size: 3,
-            interest_panel_size: 3,
-            review_panel_size: 3,
-            policy_jury_size: 3,
-            oversight_committee_size: 3,
-            fma_committee_size: 3,
-            parliament_alternate_size: Some(2),
-            ..Governance::default()
-        };
-        let council = super::super::state::ParliamentTerm {
-            epoch,
-            members: vec![
-                accounts[0].clone(),
-                accounts[1].clone(),
-                accounts[1].clone(),
-                accounts[2].clone(),
-            ],
-            alternates: vec![
-                accounts[2].clone(),
-                accounts[3].clone(),
-                accounts[4].clone(),
-                accounts[4].clone(),
-            ],
-            candidate_count: 8,
-            derived_by: CouncilDerivationKind::Manual,
-        };
-        let bodies = derive_parliament_bodies(&cfg, &network_id, epoch, &beacon, &council);
-        for (body, roster) in bodies.rosters {
-            let combined: Vec<_> = roster
-                .members
-                .iter()
-                .chain(roster.alternates.iter())
-                .collect();
-            let unique: BTreeSet<_> = combined.iter().copied().collect();
-            assert_eq!(
-                combined.len(),
-                unique.len(),
-                "{body:?} member/alternate overlap must be deduplicated before body selection"
-            );
-        }
-    }
-
-    #[test]
     fn simultaneous_primary_draw_uses_the_smallest_feasible_overlap_cap() {
         let network_id = network_id(b"body-cap-demo");
         let beacon = [0xD4; 32];
@@ -924,7 +541,7 @@ mod tests {
             fma_committee_size: 2,
             oversight_committee_size: 2,
             policy_jury_size: 2,
-            parliament_alternate_size: Some(0),
+            parliament_alternate_size: 0,
             ..Governance::default()
         };
         let plan = derive_body_plan(
@@ -933,13 +550,11 @@ mod tests {
             19,
             &beacon,
             &accounts,
-            3,
-            CouncilDerivationKind::Sortition,
             &PRIMARY_PARLIAMENT_BODIES_V1,
         );
         assert_eq!(plan.assignment_cap, 6);
         let mut loads: BTreeMap<AccountId, u32> = BTreeMap::new();
-        for roster in plan.bodies.rosters.values() {
+        for roster in plan.rosters.values() {
             assert_eq!(roster.members.len(), 2);
             for member in &roster.members {
                 *loads.entry(member.clone()).or_default() += 1;
@@ -958,7 +573,7 @@ mod tests {
         let cfg = Governance {
             rules_committee_size: 3,
             agenda_council_size: 3,
-            parliament_alternate_size: Some(2),
+            parliament_alternate_size: 2,
             ..Governance::default()
         };
         let bodies = [
@@ -974,6 +589,12 @@ mod tests {
             &[0xA7; 32],
             &reordered_with_duplicate,
             &bodies,
+        );
+        assert!(
+            expected
+                .rosters
+                .values()
+                .all(|roster| roster.pulse_height == 31)
         );
         assert_eq!(expected, reordered);
         assert_ne!(
@@ -997,7 +618,7 @@ mod tests {
             fma_committee_size: 2,
             oversight_committee_size: 2,
             policy_jury_size: 2,
-            parliament_alternate_size: Some(0),
+            parliament_alternate_size: 0,
             ..Governance::default()
         };
         let plan = derive_body_plan(
@@ -1006,13 +627,10 @@ mod tests {
             20,
             &beacon,
             &accounts,
-            18,
-            CouncilDerivationKind::Sortition,
             &PRIMARY_PARLIAMENT_BODIES_V1,
         );
         assert_eq!(plan.assignment_cap, 1);
         let members: Vec<_> = plan
-            .bodies
             .rosters
             .values()
             .flat_map(|roster| roster.members.iter())
@@ -1022,48 +640,91 @@ mod tests {
     }
 
     #[test]
-    fn confirmation_jury_uses_a_fresh_pulse_and_excludes_policy_jurors() {
-        let network_id = network_id(b"confirmation-jury-demo");
-        let candidates: Vec<_> = (1..=8).map(mk_account).collect();
-        let policy_jury_members: BTreeSet<_> = candidates[..3].iter().cloned().collect();
+    fn alternate_matching_reassigns_an_earlier_reservation() {
+        let ranked = vec![vec![0, 1], vec![0, 1]];
+        let primary = vec![BTreeSet::new(), BTreeSet::from([1])];
+        let capacities = [1, 1];
+        let mut loads = [0, 0];
+        let mut matching = vec![BTreeSet::new(), BTreeSet::new()];
+
+        assert!(augment_alternate_matching(
+            0,
+            &ranked,
+            &primary,
+            &capacities,
+            &mut loads,
+            &mut matching,
+        ));
+        assert_eq!(matching[0], BTreeSet::from([0]));
+        assert!(augment_alternate_matching(
+            1,
+            &ranked,
+            &primary,
+            &capacities,
+            &mut loads,
+            &mut matching,
+        ));
+        assert_eq!(matching[0], BTreeSet::from([1]));
+        assert_eq!(matching[1], BTreeSet::from([0]));
+        assert_eq!(loads, [1, 1]);
+    }
+
+    #[test]
+    fn exact_primary_fill_reserves_ranked_alternates_within_the_persisted_cap() {
+        let network_id = network_id(b"body-alternate-cap-demo");
+        let beacon = [0xE6; 32];
+        let accounts: Vec<_> = (1..=18).map(mk_account).collect();
         let cfg = Governance {
-            confirmation_jury_size: 4,
-            parliament_alternate_size: Some(1),
+            rules_committee_size: 2,
+            agenda_council_size: 2,
+            interest_panel_size: 2,
+            review_panel_size: 2,
+            coordination_council_size: 2,
+            mpc_committee_size: 2,
+            fma_committee_size: 2,
+            oversight_committee_size: 2,
+            policy_jury_size: 2,
+            parliament_alternate_size: 2,
             ..Governance::default()
         };
-        let first = derive_confirmation_jury(
+        let plan = derive_body_plan(
             &cfg,
             &network_id,
             21,
-            &[0xF1; 32],
-            &candidates,
-            &policy_jury_members,
-            CouncilDerivationKind::Sortition,
+            &beacon,
+            &accounts,
+            &PRIMARY_PARLIAMENT_BODIES_V1,
         );
-        let second = derive_confirmation_jury(
+        let repeated = derive_body_plan(
             &cfg,
             &network_id,
-            22,
-            &[0xF2; 32],
-            &candidates,
-            &policy_jury_members,
-            CouncilDerivationKind::Sortition,
+            21,
+            &beacon,
+            &accounts,
+            &PRIMARY_PARLIAMENT_BODIES_V1,
         );
-        for plan in [&first, &second] {
-            assert_eq!(plan.assignment_cap, 1);
-            let roster = plan
-                .bodies
-                .rosters
-                .get(&ParliamentBody::ConfirmationJury)
-                .expect("confirmation roster");
-            assert_eq!(roster.members.len(), 4);
-            assert!(
-                roster
-                    .members
-                    .iter()
-                    .all(|member| !policy_jury_members.contains(member))
-            );
+
+        assert_eq!(plan, repeated);
+        assert_eq!(plan.assignment_cap, 2);
+        let mut invitation_loads = BTreeMap::<AccountId, u32>::new();
+        for roster in plan.rosters.values() {
+            assert_eq!(roster.members.len(), 2);
+            assert_eq!(roster.alternates.len(), 2);
+            let invited = roster
+                .members
+                .iter()
+                .chain(&roster.alternates)
+                .collect::<BTreeSet<_>>();
+            assert_eq!(invited.len(), 4);
+            for invited in roster.members.iter().chain(&roster.alternates) {
+                *invitation_loads.entry(invited.clone()).or_default() += 1;
+            }
         }
-        assert_ne!(first.bodies, second.bodies);
+        assert_eq!(invitation_loads.len(), accounts.len());
+        assert!(
+            invitation_loads
+                .values()
+                .all(|load| *load <= plan.assignment_cap)
+        );
     }
 }

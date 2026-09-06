@@ -611,7 +611,7 @@ async function checkedReplayWitness(bridge, source, forest, domainHash, replayId
 
 function validateReplayHelpers(document) {
   const actorKinds = { route: 0, evm: 1, tron: 2, ton: 3 };
-  const principalKinds = { evm: 2, tron: 3 };
+  const principalKinds = { evm: 1, tron: 2 };
   const domainHash = independentReplayDomainHash({
     sourceNetwork: document.domain.source_network_tag,
     targetNetwork: document.domain.target_network_tag,

@@ -14,10 +14,10 @@ omission never means `None`. Signed messages and their canonical signature-paylo
 reject unknown JSON fields, and shortened pre-release binary layouts fail typed decode rather than
 being padded with implicit defaults.
 
-The retained authenticated `QcVote` and `Qc` JSON objects likewise always carry
-their nullable `highest_qc` slot, using `null` for `None`; those objects and
-`QcAggregate` reject unknown keys. Their Norito encoding is unchanged, but a
-shortened layout which omits the slot is not accepted.
+The authenticated revision-4 `Vote` and `QuorumCertificate` objects are the
+only global vote and certificate DTOs. A certificate carries a strictly
+increasing exact signer vector rather than a bitmap and must contain exactly
+the frozen height context's `2f + 1` validators.
 
 The live `BlockMessage` wire enum contains only canonical `V2` messages, the independent lane-local
 message family, and authenticated Kura replica adverts. Its variants use the contiguous
@@ -35,11 +35,23 @@ The typed `SumeragiV2EquivocationEvidence` JSON object is closed and requires
 all three of its fields; its nested current consensus types retain their
 explicit nullable slots. `Evidence` itself remains a binary-only wrapper.
 
-The persisted `EvidenceRecord` wrapper is exact as well: its penalty flags,
-nullable penalty heights, and nullable consensus-admission height are all part
-of the first-release binary layout, and a shortened prefix receives no defaults.
-It is also binary-only; Torii constructs the bounded audit JSON projection
-explicitly instead of exposing a second full-evidence object schema.
+The persisted `EvidenceRecord` wrapper is exact as well: it stores commit
+height, commit view, commit time, and one closed `EvidencePenaltyStatus` value.
+The status is either pending, applied at one canonical height, or cancelled at
+one canonical height. Shortened records and the retired boolean/nullable
+penalty layout receive no defaults and fail decode. `EvidenceRecord` is
+binary-only; Torii constructs the bounded audit JSON projection explicitly and
+adds the non-null committed admission height instead of exposing a second
+full-evidence object schema.
+
+Committed evidence has two independent first-release bounds: 124 records
+(four maximum validator rosters) and 16 MiB of canonical proof payloads.
+Candidate validation, post-execution insertion, restored-state authentication,
+and proposer selection use the same checked accounting after deterministic
+stale-terminal pruning. The operator count response is capped at 1 KiB; the
+closed JSON list projection is capped at 1 MiB, and the complete Norito list is
+capped at 17 MiB including its record and frame envelope. Encoding is
+count-first, so no response body is allocated until its exact size is accepted.
 
 The protocol has one executable decision authority, the package-local
 `iroha_core::sumeragi::v2_core::Reducer`. Networking,
@@ -69,6 +81,14 @@ The context for height `h` is derived only from the finalized state at `h - 1`. 
 committed at `h` may activate at `h + 1`; certificates from the old context cannot act in the new
 one.
 
+Height `u64::MAX` is the terminal wire height. Once its exact context, proofs of
+possession, finality artifact, Kura receipt, State tip, live Kura identity, and
+canonical Kura block have all authenticated, the runner closes consensus
+ingress and remains inert until operator shutdown. It never wraps, saturates,
+or fabricates an H+1 context, lifecycle store, or activation authority. The
+same rule applies both to startup from an already complete terminal tip and to
+ordinary or pending-Kura execution that finalizes the terminal height live.
+
 The next context and its view-zero proposal bind the parent CommitQC by semantic finality identity:
 parent context, height, immutable proposal-origin round, Commit phase, block subject, and execution
 commitment. The QC finality view, aggregate bytes, and signer subset are excluded because the same
@@ -96,6 +116,25 @@ and every live height context authenticates the exact `NetworkId` separately. Af
 Kagami re-stages the final signed body under that final `NetworkId` and refuses to publish it unless
 both context commitments reproduce exactly. A template is therefore not a deployable commitment
 by itself.
+
+KAGEMUSHA mint-finality authority uses the same post-hash binding boundary, but remains a
+distinct signed genesis field. `ConsensusHandshakeMetadata.kagemusha_mint_finality` contains a
+mandatory networkless epoch-zero `KagemushaMintFinalityEpochRosterTemplateV1` and an optional
+networkless epoch-one template. The successor template is present only when height one is the
+epoch-zero boundary. Once the final signed genesis exists, its canonical block hash defines
+`NetworkId = hash(final signed genesis)`; only then does Core bind each signed template into an
+`KagemushaMintFinalityEpochRosterV1` before constructing the first `HeightContext`. For the
+closed four-validator genesis profile, Core requires the template's validator vector to match the
+frozen Sumeragi voter vector exactly in count, order, and `PeerId` at every position, and it rejects
+any Pasta key which is not a canonical non-identity Pallas or Vesta point.
+
+Network independence ends at the signed templates. Each bound runtime roster contains the final
+`NetworkId`; its `finality_epoch_id`, the containing `HeightContext`, every mint-finality seal
+message, and deterministic Schnorr nonce derivation remain network-bound. The paired public keys
+are provisioned earlier as a domain-separated derivation of a validator-local seed, the election
+epoch, and the canonical `PeerId`; they are not derived from BLS keys or from a placeholder network
+identity. Every validator must use a seed unique to that validator and deployment, and deployments
+must never reuse those seeds across networks.
 
 Genesis also carries `sumeragi_v2.execution_policy_hash`. This is a separate, versioned identity
 for boot configuration which is read from `State` during transaction admission, transaction and
@@ -190,9 +229,14 @@ Peer admission also checks a distinct, domain-separated genesis fingerprint. Its
 projection contains the protocol, genesis-selected mode, signed cadence and block bound,
 DA/Nexus/execution-policy context, and (for NPoS) the epoch seed, election and reconfiguration
 inputs. Network identity is authenticated separately and deliberately excluded from this
-genesis-embedded value. Legacy collectors, phase-specific/adaptive timeouts, the old global-DA
-boolean, and mutable BLS-domain strings are excluded. The former full-parameter fingerprint is
-available only to archival tooling and is never an input to live v2 admission.
+genesis-embedded value. The KAGEMUSHA mint-finality templates are also excluded from this
+secondary fingerprint because the final genesis signature already authenticates their exact bytes
+beside the fingerprint. Snapshot reconstruction therefore retains only the stable three-field
+`SumeragiV2GenesisContextParameters` projection--`da_layout`, `nexus_amx_context_hash`, and
+`execution_policy_hash`--rather than inventing or rebinding genesis templates. Legacy collectors,
+phase-specific/adaptive timeouts, the old global-DA boolean, and mutable BLS-domain strings are
+excluded. The former full-parameter fingerprint is available only to archival tooling and is never
+an input to live v2 admission.
 
 The peer handshake carries the canonical `ivm::gas::schedule_hash()` as an
 independent execution capability. Admission requires an exact match before a
@@ -244,9 +288,11 @@ session and threshold signature again, checks the singleton history tail, and de
 committee-election seed and `leader_seed` from that pulse. Missing, duplicated, stale,
 foreign-chain, or otherwise inconsistent pulse state fails context construction.
 
-Committed Parliament sortition and timed-ballot requests use the same producer, but their slots are
-optional for chain liveness so the governance reducer can classify objective pulse absence and
-advance to a fresh attempt.
+Committed Parliament sortition and timed-ballot requests use the same producer, and every requested
+slot is consensus-mandatory. Candidate construction waits for its exact height/view pulse and block
+validation rejects omission, so a proposer cannot selectively abort an unfavourable pulse and
+advance Parliament to fresh randomness. A malformed restored-state absence remains fail-closed;
+there is no alternate entropy path.
 
 The pre-release per-validator VRF commit/reveal protocol is not part of the wire enum, runner, or
 signed effects schema. Pre-release frames and effects therefore fail exact decoding instead of
@@ -905,6 +951,12 @@ the initial import has completed, operators may disable the one-time digest bypa
 permits startup from the marker alone. Missing or substituted lineage, an unexpected anchor parent,
 or a later snapshot above the anchor without the complete lineage-bound first finality artifact
 stops startup before Kura writers, consensus, or network ingress open.
+
+Snapshot recovery does not recreate the networkless KAGEMUSHA genesis templates. The
+snapshot-reconstructible Sumeragi boot projection is exactly the stable three fields named above;
+the authenticated full `HeightContext` separately restores the already-bound mint-finality roster,
+its `finality_epoch_id`, and the final `NetworkId`. Neither path accepts a locally synthesized
+template as authority.
 
 The token-consuming finalizer may complete deferred commit-manifest, retained-stage, finality, and
 carrier recovery. Startup therefore never executes the replay plan computed while Kura was still

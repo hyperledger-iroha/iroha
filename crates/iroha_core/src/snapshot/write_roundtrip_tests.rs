@@ -1,3 +1,5 @@
+use iroha_data_model::parameter::{Parameter, system::SumeragiNposParameters};
+
 #[tokio::test]
 async fn creates_all_dirs_while_writing_snapshots() {
     let tmp_root = tempdir().unwrap();
@@ -35,6 +37,71 @@ async fn can_read_snapshot_after_writing() {
         canonical_state_snapshot_bytes_for_tests(&snapshot_state),
         canonical_state_snapshot_bytes_for_tests(&state),
         "snapshot roundtrip must preserve canonical WSV bytes"
+    );
+}
+#[tokio::test]
+async fn normal_snapshot_restore_rejects_overdue_pending_consensus_evidence() {
+    let tmp_root = tempdir().expect("snapshot tempdir");
+    let store_dir = tmp_root.path().join("snapshot");
+    let mut state = state_factory();
+    {
+        let mut parameters = state.world.parameters.block();
+        parameters.set_parameter(Parameter::Custom(
+            SumeragiNposParameters {
+                evidence_horizon_blocks: 1,
+                slashing_delay_blocks: 1,
+                ..SumeragiNposParameters::default()
+            }
+            .into_custom_parameter(),
+        ));
+        parameters.commit();
+    }
+    for marker in [0x71, 0x72, 0x73] {
+        state.push_block_hash_for_testing(dummy_block_hash(marker));
+    }
+    let evidence = canonical_snapshot_v2_phase_vote_evidence(*state.network_id_ref());
+    let evidence_key = crate::sumeragi::evidence::evidence_key(&evidence);
+    {
+        let mut records = state.world.consensus_evidence.block();
+        records.insert(
+            evidence_key,
+            EvidenceRecord {
+                evidence,
+                recorded_at_height: 2,
+                recorded_at_view: 0,
+                recorded_at_ms: 2_000,
+                penalty_status: EvidencePenaltyStatus::Pending,
+            },
+        );
+        records.commit();
+    }
+    let snapshot_bytes = exact_snapshot_payload_bytes(&state);
+    let key_pair = checked_random_snapshot_keypair();
+    write_snapshot_bundle_from_bytes(&store_dir, &snapshot_bytes, &key_pair);
+    let kura = Kura::blank_kura_for_testing();
+    let error = match try_read_snapshot(
+        &store_dir,
+        &kura,
+        LiveQueryStore::start_test,
+        BlockCount(state.view().height()),
+        TEST_CHUNK_SIZE,
+        key_pair.public_key(),
+        state.network_id_ref(),
+        &crate::state::default_zk_config(),
+        #[cfg(feature = "telemetry")]
+        StateTelemetry::new(<_>::default(), true),
+    ) {
+        Ok(_) => panic!("normal snapshot restore must reject overdue pending evidence"),
+        Err(error) => error,
+    };
+    let TryReadError::Serialization(error) = error else {
+        panic!("unexpected snapshot restore error: {error:?}");
+    };
+    assert!(
+        error
+            .to_string()
+            .contains("committed evidence remains pending at or after its penalty due height"),
+        "normal restore must surface the persisted evidence lifecycle violation: {error}"
     );
 }
 #[tokio::test]
@@ -1330,10 +1397,6 @@ async fn snapshot_roundtrip_preserves_space_directory_manifests_and_rebuilds_bin
     assert!(
         snapshot_has_space_directory_manifest_section(&snapshot_value),
         "new snapshots must carry a Space Directory manifest section"
-    );
-    assert!(
-        snapshot_world_has_field(&snapshot_value, "kagemusha_replay_keys"),
-        "new snapshots must carry Kagemusha replay keys"
     );
     let snapshot_state = try_read_snapshot(
         &store_dir,

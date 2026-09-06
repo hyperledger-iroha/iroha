@@ -17,7 +17,7 @@ use std::{
     num::NonZeroUsize,
     path::Path,
     sync::{
-        Arc, Mutex, RwLock, RwLockReadGuard,
+        Arc, Mutex, RwLock,
         atomic::{AtomicBool, Ordering},
     },
     time::Duration,
@@ -34,7 +34,6 @@ use iroha_data_model::bridge::{
     SccpReplayBoundaryV1, SccpReplayDomainV1, SccpReplayForestV1, SccpRouteKeyV1,
     SccpSparseMerkleWitnessV1,
 };
-use iroha_data_model::sorafs::pin_registry::StorageClass;
 use iroha_sccp::{
     SccpReplayArchiveCheckpointBodyV1, SccpReplayArchiveCheckpointSetEntryV1,
     SccpReplayArchiveDecodeLimitsV1, SccpReplayArchiveHeadFinalityV1,
@@ -56,7 +55,7 @@ use sorafs_car::{
 };
 use sorafs_manifest::{
     BLAKE3_256_MULTIHASH_CODE, DagCodecId, ManifestBuilder, ManifestV1, PinPolicy,
-    PinPolicyConstraints as SorafsPinPolicyConstraints, decode_manifest_v1_canonical,
+    PinPolicyConstraints as SorafsPinPolicyConstraints, StorageClass, decode_manifest_v1_canonical,
     validate_manifest as validate_sorafs_manifest,
 };
 
@@ -96,6 +95,18 @@ impl core::fmt::Display for SccpReplayPathErrorV1 {
 
 impl std::error::Error for SccpReplayPathErrorV1 {}
 
+/// Canonical public route coordinate used to select a SORA replay accumulator.
+///
+/// The authenticated inventory supplies the full domain hash; URL text alone
+/// cannot establish that consensus identity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SccpReplayAccumulatorPathV1 {
+    /// Exact governed external-to-SORA route coordinate.
+    pub route_key: SccpRouteKeyV1,
+    /// One of the two public SORA replay boundaries.
+    pub boundary: SccpReplayBoundaryV1,
+}
+
 /// Decode the exact five-segment public identity of one authoritative SORA
 /// replay accumulator.
 ///
@@ -108,7 +119,7 @@ pub fn decode_sccp_replay_accumulator_path_v1(
     route_id: &str,
     asset_key: &str,
     revision: &str,
-) -> Result<SccpReplayAccumulatorIdV1, SccpReplayPathErrorV1> {
+) -> Result<SccpReplayAccumulatorPathV1, SccpReplayPathErrorV1> {
     let boundary = match boundary {
         SCCP_REPLAY_SORA_OUTBOUND_LOCK_PATH_V1 => SccpReplayBoundaryV1::SoraOutboundLock,
         SCCP_REPLAY_SORA_INBOUND_RELEASE_PATH_V1 => SccpReplayBoundaryV1::SoraInboundRelease,
@@ -132,7 +143,7 @@ pub fn decode_sccp_replay_accumulator_path_v1(
         revision_value,
     )
     .map_err(|_| SccpReplayPathErrorV1::Malformed)?;
-    let accumulator_id = SccpReplayAccumulatorIdV1 {
+    let accumulator_id = SccpReplayAccumulatorPathV1 {
         route_key,
         boundary,
     };
@@ -154,7 +165,7 @@ pub fn decode_sccp_replay_accumulator_path_v1(
 /// Encode the unique five-segment public identity of one authoritative SORA
 /// replay accumulator.
 pub fn encode_sccp_replay_accumulator_path_v1(
-    accumulator_id: &SccpReplayAccumulatorIdV1,
+    accumulator_id: &SccpReplayAccumulatorPathV1,
 ) -> Result<[String; 5], SccpReplayPathErrorV1> {
     accumulator_id
         .route_key
@@ -360,8 +371,31 @@ pub trait SccpReplayLocalAuthorityV1: Send + Sync {
         expected: &BTreeMap<SccpReplayAccumulatorIdV1, (SccpReplayDomainV1, SccpReplayForestV1)>,
     ) -> Result<SccpReplayArchiveV1, SccpReplayLocalAuthorityErrorV1>;
 
-    /// Revalidate that a previously rebuilt head is still the exact current
-    /// local consensus projection before it is served. Implementations may
+    /// Authenticate a new remote candidate at the exact current committed coordinate.
+    ///
+    /// This is separate from serving a previously admitted inventory after
+    /// unrelated blocks. A new candidate cannot claim that a later-created
+    /// route already existed at an older finalized height.
+    fn verify_candidate(
+        &self,
+        finality: iroha_sccp::SccpReplayArchiveFinalityV1,
+        expected: &BTreeMap<SccpReplayAccumulatorIdV1, (SccpReplayDomainV1, SccpReplayForestV1)>,
+    ) -> Result<(), SccpReplayLocalAuthorityErrorV1>;
+
+    /// Rebuild a securely persisted checkpoint whose replay inventory remains current.
+    ///
+    /// Implementations must authenticate the historical finalized coordinate
+    /// and recheck the current inventory after the rebuild.
+    fn rebuild_persisted_and_verify(
+        &self,
+        finality: iroha_sccp::SccpReplayArchiveFinalityV1,
+        expected: &BTreeMap<SccpReplayAccumulatorIdV1, (SccpReplayDomainV1, SccpReplayForestV1)>,
+    ) -> Result<SccpReplayArchiveV1, SccpReplayLocalAuthorityErrorV1> {
+        self.rebuild_and_verify(finality, expected)
+    }
+
+    /// Revalidate a previously rebuilt head against the current local replay
+    /// projection before it is served. Implementations may
     /// override this with a cheaper current-head check, but must authenticate
     /// both the finalized coordinate and the complete accumulator inventory.
     fn verify_current(
@@ -383,27 +417,20 @@ impl CoreKuraSccpReplayLocalAuthorityV1 {
         &self,
         finality: iroha_sccp::SccpReplayArchiveFinalityV1,
         expected: &BTreeMap<SccpReplayAccumulatorIdV1, (SccpReplayDomainV1, SccpReplayForestV1)>,
+        require_current_coordinate: bool,
     ) -> Result<NonZeroUsize, SccpReplayLocalAuthorityErrorV1> {
-        let state = self.state.view();
-        let committed_height = state.height();
-        if usize::try_from(finality.finalized_height).ok() != Some(committed_height)
-            || sccp_replay_archive_network_identity_sha256_v1(self.state.network_id_ref())
-                != finality.network_identity_sha256
-            || state.block_hashes.last().map(|hash| *hash.as_ref())
-                != Some(finality.finalized_block_hash)
-        {
-            return Err(SccpReplayLocalAuthorityErrorV1::Finality);
-        }
+        let state = self.state.query_view();
         let height =
-            NonZeroUsize::new(committed_height).ok_or(SccpReplayLocalAuthorityErrorV1::Finality)?;
-        if self.kura.get_block_hash(height).map(|hash| *hash.as_ref())
+            validate_checkpoint_against_core_view(&state, finality, require_current_coordinate)?;
+        if self
+            .kura
+            .get_durable_block_hash(height)
+            .map(|hash| *hash.as_ref())
             != Some(finality.finalized_block_hash)
         {
             return Err(SccpReplayLocalAuthorityErrorV1::Finality);
         }
-
-        let authoritative = authoritative_core_replay_inventory(&state)?;
-        if &authoritative != expected {
+        if &authoritative_core_replay_inventory(&state)? != expected {
             return Err(SccpReplayLocalAuthorityErrorV1::CoreMismatch);
         }
         Ok(height)
@@ -411,14 +438,37 @@ impl CoreKuraSccpReplayLocalAuthorityV1 {
 }
 
 impl SccpReplayLocalAuthorityV1 for CoreKuraSccpReplayLocalAuthorityV1 {
+    fn verify_candidate(
+        &self,
+        finality: iroha_sccp::SccpReplayArchiveFinalityV1,
+        expected: &BTreeMap<SccpReplayAccumulatorIdV1, (SccpReplayDomainV1, SccpReplayForestV1)>,
+    ) -> Result<(), SccpReplayLocalAuthorityErrorV1> {
+        self.verify_current_projection(finality, expected, true)
+            .map(|_| ())
+    }
+
     fn rebuild_and_verify(
         &self,
         finality: iroha_sccp::SccpReplayArchiveFinalityV1,
         expected: &BTreeMap<SccpReplayAccumulatorIdV1, (SccpReplayDomainV1, SccpReplayForestV1)>,
     ) -> Result<SccpReplayArchiveV1, SccpReplayLocalAuthorityErrorV1> {
-        let height = self.verify_current_projection(finality, expected)?;
-        rebuild_sccp_replay_archive_from_kura_v1(&self.kura, height, expected)
-            .map_err(|_| SccpReplayLocalAuthorityErrorV1::Rebuild)
+        let height = self.verify_current_projection(finality, expected, true)?;
+        let archive = rebuild_sccp_replay_archive_from_kura_v1(&self.kura, height, expected)
+            .map_err(|_| SccpReplayLocalAuthorityErrorV1::Rebuild)?;
+        self.verify_current_projection(finality, expected, false)?;
+        Ok(archive)
+    }
+
+    fn rebuild_persisted_and_verify(
+        &self,
+        finality: iroha_sccp::SccpReplayArchiveFinalityV1,
+        expected: &BTreeMap<SccpReplayAccumulatorIdV1, (SccpReplayDomainV1, SccpReplayForestV1)>,
+    ) -> Result<SccpReplayArchiveV1, SccpReplayLocalAuthorityErrorV1> {
+        let height = self.verify_current_projection(finality, expected, false)?;
+        let archive = rebuild_sccp_replay_archive_from_kura_v1(&self.kura, height, expected)
+            .map_err(|_| SccpReplayLocalAuthorityErrorV1::Rebuild)?;
+        self.verify_current_projection(finality, expected, false)?;
+        Ok(archive)
     }
 
     fn verify_current(
@@ -426,19 +476,48 @@ impl SccpReplayLocalAuthorityV1 for CoreKuraSccpReplayLocalAuthorityV1 {
         finality: iroha_sccp::SccpReplayArchiveFinalityV1,
         expected: &BTreeMap<SccpReplayAccumulatorIdV1, (SccpReplayDomainV1, SccpReplayForestV1)>,
     ) -> Result<(), SccpReplayLocalAuthorityErrorV1> {
-        self.verify_current_projection(finality, expected)
+        self.verify_current_projection(finality, expected, false)
             .map(|_| ())
     }
 }
 
+fn validate_checkpoint_against_core_view(
+    state: &impl iroha_core::state::StateReadOnly,
+    finality: iroha_sccp::SccpReplayArchiveFinalityV1,
+    require_current_coordinate: bool,
+) -> Result<NonZeroUsize, SccpReplayLocalAuthorityErrorV1> {
+    let checkpoint_height = usize::try_from(finality.finalized_height)
+        .ok()
+        .and_then(NonZeroUsize::new)
+        .filter(|height| {
+            if require_current_coordinate {
+                height.get() == state.block_hashes().len()
+            } else {
+                height.get() <= state.block_hashes().len()
+            }
+        })
+        .ok_or(SccpReplayLocalAuthorityErrorV1::Finality)?;
+    if finality.network_identity_sha256
+        != sccp_replay_archive_network_identity_sha256_v1(state.network_id())
+        || state
+            .block_hashes()
+            .get(checkpoint_height.get() - 1)
+            .map(|hash| *hash.as_ref())
+            != Some(finality.finalized_block_hash)
+    {
+        return Err(SccpReplayLocalAuthorityErrorV1::Finality);
+    }
+    Ok(checkpoint_height)
+}
+
 fn authoritative_core_replay_inventory(
-    state: &iroha_core::state::StateView<'_>,
+    state: &impl iroha_core::state::StateReadOnly,
 ) -> Result<
     BTreeMap<SccpReplayAccumulatorIdV1, (SccpReplayDomainV1, SccpReplayForestV1)>,
     SccpReplayLocalAuthorityErrorV1,
 > {
-    let registry = state.sccp_registry.as_ref();
-    let world = &state.world;
+    let registry = state.sccp_registry();
+    let world = state.world();
     let mut authoritative = BTreeMap::new();
     for route in registry.lanes().iter().flat_map(|lane| &lane.routes) {
         let route_key = route.key();
@@ -457,10 +536,6 @@ fn authoritative_core_replay_inventory(
                 route.lane_id.target,
             ),
         ] {
-            let accumulator_id = SccpReplayAccumulatorIdV1 {
-                route_key: route_key.clone(),
-                boundary,
-            };
             let domain = SccpReplayDomainV1 {
                 source_network,
                 target_network,
@@ -469,6 +544,8 @@ fn authoritative_core_replay_inventory(
                 route_configuration_hash,
                 actor: SccpReplayActorV1::Route,
             };
+            let accumulator_id = SccpReplayAccumulatorIdV1::from_domain(route_key.clone(), &domain)
+                .map_err(|_| SccpReplayLocalAuthorityErrorV1::CoreMismatch)?;
             let forest = world
                 .sccp_replay_forests()
                 .get(&accumulator_id)
@@ -478,7 +555,7 @@ fn authoritative_core_replay_inventory(
                 .insert(accumulator_id, (domain, forest))
                 .is_some()
             {
-                return Err(SccpReplayLocalAuthorityErrorV1::CoreMismatch);
+                return Err(SccpReplayLocalAuthorityErrorV1::Finality);
             }
         }
     }
@@ -633,6 +710,57 @@ enum CandidateLocalValidationV1 {
     CurrentProjection,
 }
 
+fn restore_persisted_if_current(
+    persisted: &PersistedReplayHeadStateV1,
+    local_authority: &dyn SccpReplayLocalAuthorityV1,
+) -> Result<Option<PublishedReplayStateV1>, ToriiSccpReplayStartupErrorV1> {
+    let generation = &persisted.head.current;
+    let coordinate = generation.signed_set.body.finality;
+    let finality = iroha_sccp::SccpReplayArchiveFinalityV1 {
+        network_identity_sha256: coordinate.network_identity_sha256,
+        finalized_height: coordinate.finalized_height,
+        finalized_block_hash: coordinate.finalized_block_hash,
+    };
+    let expected = persisted
+        .entries
+        .iter()
+        .map(|entry| {
+            (
+                entry.snapshot.accumulator_id.clone(),
+                (entry.snapshot.domain, entry.snapshot.forest.clone()),
+            )
+        })
+        .collect();
+    match local_authority.verify_current(finality, &expected) {
+        Ok(()) => {}
+        Err(
+            SccpReplayLocalAuthorityErrorV1::Finality
+            | SccpReplayLocalAuthorityErrorV1::CoreMismatch,
+        ) => return Ok(None),
+        Err(SccpReplayLocalAuthorityErrorV1::Rebuild) => {
+            return Err(ToriiSccpReplayStartupErrorV1::LocalAuthority);
+        }
+    }
+    let archive = local_authority
+        .rebuild_persisted_and_verify(finality, &expected)
+        .map_err(|_| ToriiSccpReplayStartupErrorV1::LocalAuthority)?;
+    Ok(Some(PublishedReplayStateV1 {
+        archive,
+        checkpoints: persisted
+            .entries
+            .iter()
+            .map(|entry| {
+                (
+                    entry.snapshot.accumulator_id.clone(),
+                    entry.checkpoint.clone(),
+                )
+            })
+            .collect(),
+        signed_set: generation.signed_set.clone(),
+        checkpoint_set_sha256: generation.checkpoint_set_sha256,
+    }))
+}
+
 /// Live Torii provider. The visible state changes only after every immutable
 /// artifact and the manifest-last head are durably published.
 pub struct ToriiSccpReplayArchiveServiceV1 {
@@ -641,8 +769,8 @@ pub struct ToriiSccpReplayArchiveServiceV1 {
     local_authority: Arc<dyn SccpReplayLocalAuthorityV1>,
     store: SecureReplayStoreV1,
     update_lock: Mutex<()>,
-    replicas_currently_available: AtomicBool,
-    published: RwLock<PublishedReplayStateV1>,
+    published_available: AtomicBool,
+    published: RwLock<Arc<PublishedReplayStateV1>>,
 }
 
 impl ToriiSccpReplayArchiveServiceV1 {
@@ -653,9 +781,10 @@ impl ToriiSccpReplayArchiveServiceV1 {
         kura: Arc<Kura>,
     ) -> Result<Arc<Self>, ToriiSccpReplayStartupErrorV1> {
         validate_runtime_config(&config)?;
-        let source = Arc::new(HttpsSccpReplayCheckpointSourceV1::new(
-            config.request_timeout,
-        )?);
+        let source = Arc::new(
+            HttpsSccpReplayCheckpointSourceV1::new(config.request_timeout)
+                .map_err(|_| ToriiSccpReplayStartupErrorV1::Transport)?,
+        );
         let local_authority = Arc::new(CoreKuraSccpReplayLocalAuthorityV1 { state, kura });
         Self::bootstrap_with_components(config, source, local_authority)
     }
@@ -673,6 +802,22 @@ impl ToriiSccpReplayArchiveServiceV1 {
         validate_runtime_config(&config)?;
         let store = SecureReplayStoreV1::open(&config.state_dir)?;
         let previous = store.load_head(&config)?;
+        if let Some(published) = previous
+            .as_ref()
+            .map(|previous| restore_persisted_if_current(previous, local_authority.as_ref()))
+            .transpose()?
+            .flatten()
+        {
+            return Ok(Arc::new(Self {
+                config,
+                source,
+                local_authority,
+                store,
+                update_lock: Mutex::new(()),
+                published_available: AtomicBool::new(true),
+                published: RwLock::new(Arc::new(published)),
+            }));
+        }
         let bytes = fetch_exact_three(&config, source.as_ref(), &store)?;
         let candidate = validate_candidate(
             &config,
@@ -688,17 +833,14 @@ impl ToriiSccpReplayArchiveServiceV1 {
             local_authority,
             store,
             update_lock: Mutex::new(()),
-            replicas_currently_available: AtomicBool::new(true),
-            published: RwLock::new(candidate.published),
+            published_available: AtomicBool::new(true),
+            published: RwLock::new(Arc::new(candidate.published)),
         }))
     }
 
-    /// Fetch and atomically publish one strictly newer three-replica head.
+    /// Fetch and atomically publish the current or a newer three-replica head.
     pub fn refresh(&self) -> Result<(), ToriiSccpReplayStartupErrorV1> {
-        let result = self.refresh_inner();
-        self.replicas_currently_available
-            .store(result.is_ok(), Ordering::Release);
-        result
+        self.refresh_inner()
     }
 
     fn refresh_inner(&self) -> Result<(), ToriiSccpReplayStartupErrorV1> {
@@ -710,6 +852,25 @@ impl ToriiSccpReplayArchiveServiceV1 {
             .store
             .load_head(&self.config)?
             .ok_or(ToriiSccpReplayStartupErrorV1::Persistence)?;
+        let visible_digest = self
+            .published
+            .read()
+            .map_err(|_| ToriiSccpReplayStartupErrorV1::Persistence)?
+            .checkpoint_set_sha256;
+        if !self.published_available.load(Ordering::Acquire)
+            || visible_digest != previous.head.current.checkpoint_set_sha256
+        {
+            self.published_available.store(false, Ordering::Release);
+            if let Some(restored) =
+                restore_persisted_if_current(&previous, self.local_authority.as_ref())?
+            {
+                *self
+                    .published
+                    .write()
+                    .map_err(|_| ToriiSccpReplayStartupErrorV1::Persistence)? = Arc::new(restored);
+                self.published_available.store(true, Ordering::Release);
+            }
+        }
         let bytes = fetch_exact_three(&self.config, self.source.as_ref(), &self.store)?;
         let candidate = validate_candidate(
             &self.config,
@@ -718,13 +879,30 @@ impl ToriiSccpReplayArchiveServiceV1 {
             self.local_authority.as_ref(),
             CandidateLocalValidationV1::CurrentProjection,
         )?;
-        self.store.persist_candidate(&self.config, &candidate)?;
+        // Once manifest publication begins, any ambiguous failure disables
+        // serving until the durable head is reauthenticated on the next retry.
+        self.published_available.store(false, Ordering::Release);
+        let manifest_bytes = self
+            .store
+            .publish_candidate_head(&self.config, &candidate)?;
         let mut published = self
             .published
             .write()
             .map_err(|_| ToriiSccpReplayStartupErrorV1::Persistence)?;
-        *published = candidate.published;
-        Ok(())
+        *published = Arc::new(candidate.published);
+        self.published_available.store(true, Ordering::Release);
+        drop(published);
+        self.store
+            .prune_to_head(&self.config, &candidate.manifest, &manifest_bytes)
+    }
+
+    /// Refresh only when the authenticated published replay inventory is stale.
+    pub fn refresh_if_stale(&self) -> Result<bool, ToriiSccpReplayStartupErrorV1> {
+        if self.current_published().is_ok() {
+            return Ok(false);
+        }
+        self.refresh()?;
+        Ok(true)
     }
 
     /// Configured delay between bounded refresh attempts.
@@ -736,6 +914,28 @@ impl ToriiSccpReplayArchiveServiceV1 {
     /// Digest of the exact currently visible three-replica checkpoint set.
     pub fn checkpoint_set_sha256(&self) -> Result<[u8; 32], ToriiSccpReplayEndpointErrorV1> {
         Ok(self.current_published()?.checkpoint_set_sha256)
+    }
+
+    /// Resolve a public path only within the locally authenticated complete inventory.
+    pub fn accumulator_id_for_path(
+        &self,
+        path: &SccpReplayAccumulatorPathV1,
+    ) -> Result<SccpReplayAccumulatorIdV1, ToriiSccpReplayEndpointErrorV1> {
+        encode_sccp_replay_accumulator_path_v1(path)
+            .map_err(|_| ToriiSccpReplayEndpointErrorV1::NotFound)?;
+        let published = self.current_published()?;
+        let mut matching = published
+            .checkpoints
+            .keys()
+            .filter(|id| id.route_key == path.route_key && id.boundary == path.boundary);
+        let id = matching
+            .next()
+            .cloned()
+            .ok_or(ToriiSccpReplayEndpointErrorV1::NotFound)?;
+        if matching.next().is_some() {
+            return Err(ToriiSccpReplayEndpointErrorV1::Integrity);
+        }
+        Ok(id)
     }
 
     /// Return one signed root only after reauthenticating the complete
@@ -805,14 +1005,17 @@ impl ToriiSccpReplayArchiveServiceV1 {
 
     fn current_published(
         &self,
-    ) -> Result<RwLockReadGuard<'_, PublishedReplayStateV1>, ToriiSccpReplayEndpointErrorV1> {
-        if !self.replicas_currently_available.load(Ordering::Acquire) {
+    ) -> Result<Arc<PublishedReplayStateV1>, ToriiSccpReplayEndpointErrorV1> {
+        if !self.published_available.load(Ordering::Acquire) {
             return Err(ToriiSccpReplayEndpointErrorV1::Unavailable);
         }
-        let published = self
-            .published
-            .read()
-            .map_err(|_| ToriiSccpReplayEndpointErrorV1::Integrity)?;
+        let published = {
+            let guard = self
+                .published
+                .read()
+                .map_err(|_| ToriiSccpReplayEndpointErrorV1::Integrity)?;
+            Arc::clone(&guard)
+        };
         let signed_body = verify_sccp_replay_archive_checkpoint_set_v1(
             &replica_policy(&self.config),
             &published.signed_set,
@@ -990,14 +1193,16 @@ fn fetch_exact_three(
             .map(|replica| {
                 let (replica, mut file) = replica;
                 scope.spawn(move || {
-                    let length = source
-                        .fetch_to(
+                    let length = iroha_core::panic_hook::catch_unwind_suppressed(|| {
+                        source.fetch_to(
                             replica,
                             config.max_response_bytes,
                             config.request_timeout,
                             &mut file,
                         )
-                        .map_err(|_| ToriiSccpReplayStartupErrorV1::Transport)?;
+                    })
+                    .map_err(|_| ToriiSccpReplayStartupErrorV1::Transport)?
+                    .map_err(|_| ToriiSccpReplayStartupErrorV1::Transport)?;
                     file.flush()
                         .map_err(|_| ToriiSccpReplayStartupErrorV1::Persistence)?;
                     validate_anonymous_fetch_file(&file, length)?;
@@ -1011,6 +1216,8 @@ fn fetch_exact_three(
                     .join()
                     .map_err(|_| ToriiSccpReplayStartupErrorV1::Transport)?
             })
+            .collect::<Vec<_>>()
+            .into_iter()
             .collect::<Result<Vec<_>, _>>()
     })?;
 
@@ -1080,7 +1287,7 @@ fn validate_candidate(
     let set: SccpReplayReplicaCheckpointSetV1 =
         norito::decode_canonical_with_limits(&bytes, norito::canonical_decode_limits(bytes.len()))
             .map_err(|_| ToriiSccpReplayStartupErrorV1::Malformed)?;
-    if norito::to_bytes(&set).ok().as_deref() != Some(bytes.as_slice())
+    if norito::encode_canonical(&set).ok().as_deref() != Some(bytes.as_slice())
         || set.version != CHECKPOINT_SET_VERSION_V1
         || set.entries.len() > config.max_accumulators
     {
@@ -1161,9 +1368,15 @@ fn validate_candidate(
             .rebuild_and_verify(finality, &expected)
             .map_err(|_| ToriiSccpReplayStartupErrorV1::LocalAuthority)?,
         CandidateLocalValidationV1::CurrentProjection => {
-            local_authority
-                .verify_current(finality, &expected)
-                .map_err(|_| ToriiSccpReplayStartupErrorV1::LocalAuthority)?;
+            let is_retained_exact_frame = previous.is_some_and(|previous| {
+                previous.head.current.checkpoint_set_sha256 == checkpoint_set_sha256
+            });
+            if is_retained_exact_frame {
+                local_authority.verify_current(finality, &expected)
+            } else {
+                local_authority.verify_candidate(finality, &expected)
+            }
+            .map_err(|_| ToriiSccpReplayStartupErrorV1::LocalAuthority)?;
             let mut archive = SccpReplayArchiveV1::default();
             for entry in &entries {
                 archive
@@ -1237,8 +1450,8 @@ fn validate_entry(
         .body
         .agreement_digest()
         .map_err(|_| ToriiSccpReplayStartupErrorV1::Malformed)?;
-    let checkpoint_bytes =
-        norito::to_bytes(&checkpoint).map_err(|_| ToriiSccpReplayStartupErrorV1::Malformed)?;
+    let checkpoint_bytes = norito::encode_canonical(&checkpoint)
+        .map_err(|_| ToriiSccpReplayStartupErrorV1::Malformed)?;
     if checkpoint_bytes.is_empty() || checkpoint_bytes.len() > MAX_PERSISTED_CHECKPOINT_BYTES_V1 {
         return Err(ToriiSccpReplayStartupErrorV1::Malformed);
     }
@@ -1500,7 +1713,7 @@ impl SecureReplayStoreV1 {
             norito::canonical_decode_limits(bytes.len()),
         )
         .map_err(|_| ToriiSccpReplayStartupErrorV1::Persistence)?;
-        if norito::to_bytes(&head).ok().as_deref() != Some(bytes.as_slice())
+        if norito::encode_canonical(&head).ok().as_deref() != Some(bytes.as_slice())
             || head.version != HEAD_MANIFEST_VERSION_V1
             || head
                 .recovery
@@ -1586,7 +1799,9 @@ impl SecureReplayStoreV1 {
                     norito::canonical_decode_limits(checkpoint_bytes.len()),
                 )
                 .map_err(|_| ToriiSccpReplayStartupErrorV1::Persistence)?;
-            if norito::to_bytes(&checkpoint).ok().as_deref() != Some(checkpoint_bytes.as_slice()) {
+            if norito::encode_canonical(&checkpoint).ok().as_deref()
+                != Some(checkpoint_bytes.as_slice())
+            {
                 return Err(ToriiSccpReplayStartupErrorV1::Persistence);
             }
             let entry = validate_entry(checkpoint.clone(), snapshot_bytes.clone(), &policy, limits)
@@ -1633,8 +1848,8 @@ impl SecureReplayStoreV1 {
             sorafs_manifest_bytes,
             entries: wire_entries,
         };
-        let wire_bytes =
-            norito::to_bytes(&wire).map_err(|_| ToriiSccpReplayStartupErrorV1::Persistence)?;
+        let wire_bytes = norito::encode_canonical(&wire)
+            .map_err(|_| ToriiSccpReplayStartupErrorV1::Persistence)?;
         if sccp_replay_archive_checkpoint_set_frame_sha256_v1(&wire_bytes)
             != generation.checkpoint_set_sha256
         {
@@ -1681,7 +1896,7 @@ impl SecureReplayStoreV1 {
                 MAX_PERSISTED_CHECKPOINT_BYTES_V1,
             )?;
         }
-        let manifest_bytes = norito::to_bytes(&candidate.manifest)
+        let manifest_bytes = norito::encode_canonical(&candidate.manifest)
             .map_err(|_| ToriiSccpReplayStartupErrorV1::Persistence)?;
         secure_write_manifest_last_relative(
             &self.directory,
@@ -2736,7 +2951,7 @@ mod tests {
             );
         }
 
-        let external_id = SccpReplayAccumulatorIdV1 {
+        let external_id = SccpReplayAccumulatorPathV1 {
             route_key: SccpRouteKeyV1::new(
                 SccpLaneIdV1 {
                     source: SccpNetworkV1::EthereumMainnet,
@@ -2827,6 +3042,17 @@ mod tests {
     struct EmptyForestLocalAuthority;
 
     impl SccpReplayLocalAuthorityV1 for EmptyForestLocalAuthority {
+        fn verify_candidate(
+            &self,
+            finality: SccpReplayArchiveFinalityV1,
+            expected: &BTreeMap<
+                SccpReplayAccumulatorIdV1,
+                (SccpReplayDomainV1, SccpReplayForestV1),
+            >,
+        ) -> Result<(), SccpReplayLocalAuthorityErrorV1> {
+            self.verify_current(finality, expected)
+        }
+
         fn rebuild_and_verify(
             &self,
             finality: SccpReplayArchiveFinalityV1,
@@ -2855,6 +3081,17 @@ mod tests {
     struct RejectingLocalAuthority;
 
     impl SccpReplayLocalAuthorityV1 for RejectingLocalAuthority {
+        fn verify_candidate(
+            &self,
+            finality: SccpReplayArchiveFinalityV1,
+            expected: &BTreeMap<
+                SccpReplayAccumulatorIdV1,
+                (SccpReplayDomainV1, SccpReplayForestV1),
+            >,
+        ) -> Result<(), SccpReplayLocalAuthorityErrorV1> {
+            self.verify_current(finality, expected)
+        }
+
         fn rebuild_and_verify(
             &self,
             _finality: SccpReplayArchiveFinalityV1,
@@ -2874,6 +3111,17 @@ mod tests {
     }
 
     impl SccpReplayLocalAuthorityV1 for CountingLocalAuthority {
+        fn verify_candidate(
+            &self,
+            finality: SccpReplayArchiveFinalityV1,
+            expected: &BTreeMap<
+                SccpReplayAccumulatorIdV1,
+                (SccpReplayDomainV1, SccpReplayForestV1),
+            >,
+        ) -> Result<(), SccpReplayLocalAuthorityErrorV1> {
+            self.verify_current(finality, expected)
+        }
+
         fn rebuild_and_verify(
             &self,
             finality: SccpReplayArchiveFinalityV1,
@@ -2915,6 +3163,17 @@ mod tests {
     }
 
     impl SccpReplayLocalAuthorityV1 for RevocableLocalAuthority {
+        fn verify_candidate(
+            &self,
+            finality: SccpReplayArchiveFinalityV1,
+            expected: &BTreeMap<
+                SccpReplayAccumulatorIdV1,
+                (SccpReplayDomainV1, SccpReplayForestV1),
+            >,
+        ) -> Result<(), SccpReplayLocalAuthorityErrorV1> {
+            self.verify_current(finality, expected)
+        }
+
         fn rebuild_and_verify(
             &self,
             finality: SccpReplayArchiveFinalityV1,
@@ -3002,9 +3261,9 @@ mod tests {
             let first_snapshot_sha256 = first_snapshot
                 .content_sha256()
                 .expect("snapshot content hash is defined");
-            let first_bytes = checkpoint_set_bytes(&first_snapshot, &key_pairs, &replicas);
+            let first_bytes = checkpoint_set_bytes(&first_snapshot, &key_pairs, &config.replicas);
             let source = Arc::new(MutableSource::default());
-            source.set_all(&replicas, &first_bytes);
+            source.set_all(&config.replicas, &first_bytes);
             Self {
                 _temporary_root: temporary_root,
                 config,
@@ -3057,8 +3316,8 @@ mod tests {
     }
 
     fn accumulator_id() -> SccpReplayAccumulatorIdV1 {
-        SccpReplayAccumulatorIdV1 {
-            route_key: SccpRouteKeyV1::new(
+        SccpReplayAccumulatorIdV1::from_domain(
+            SccpRouteKeyV1::new(
                 SccpLaneIdV1 {
                     source: SccpNetworkV1::EthereumMainnet,
                     target: SccpNetworkV1::SoraTaira,
@@ -3068,8 +3327,9 @@ mod tests {
                 7,
             )
             .expect("valid final-V1 route key"),
-            boundary: SccpReplayBoundaryV1::SoraOutboundLock,
-        }
+            &domain(),
+        )
+        .expect("valid replay accumulator identity")
     }
 
     fn domain() -> SccpReplayDomainV1 {
@@ -3127,7 +3387,7 @@ mod tests {
                 let attestations = sign_attestations(message, key_pairs, replicas);
                 SccpReplayReplicaCheckpointEntryV1 {
                     checkpoint: SccpReplayArchiveSignedCheckpointV1 { body, attestations },
-                    snapshot_bytes: norito::to_bytes(snapshot).expect("snapshot encodes"),
+                    snapshot_bytes: norito::encode_canonical(snapshot).expect("snapshot encodes"),
                 }
             })
             .collect::<Vec<_>>();
@@ -3176,7 +3436,7 @@ mod tests {
             body: set_body,
             attestations: sign_attestations(set_message, key_pairs, replicas),
         };
-        norito::to_bytes(&SccpReplayReplicaCheckpointSetV1 {
+        norito::encode_canonical(&SccpReplayReplicaCheckpointSetV1 {
             version: CHECKPOINT_SET_VERSION_V1,
             signed_set,
             sorafs_manifest_bytes,
@@ -3456,7 +3716,7 @@ mod tests {
         )
         .expect("fixture checkpoint set decodes");
         set.entries[0].checkpoint.attestations[1].signature[0] ^= 1;
-        let forged = norito::to_bytes(&set).expect("forged set remains canonical");
+        let forged = norito::encode_canonical(&set).expect("forged set remains canonical");
         fixture.source.set_all(&fixture.config.replicas, &forged);
         assert_eq!(
             fixture.bootstrap().map(|_| ()),
@@ -3473,7 +3733,7 @@ mod tests {
         )
         .expect("fixture checkpoint set decodes");
         set.signed_set.body.sorafs_manifest.snapshot_total_bytes += 1;
-        let forged = norito::to_bytes(&set).expect("forged set remains canonical");
+        let forged = norito::encode_canonical(&set).expect("forged set remains canonical");
         fixture.source.set_all(&fixture.config.replicas, &forged);
         assert_eq!(
             fixture.bootstrap().map(|_| ()),
@@ -3488,7 +3748,7 @@ mod tests {
         )
         .expect("fixture checkpoint set decodes");
         set.entries.clear();
-        let omitted = norito::to_bytes(&set).expect("omitted set remains canonical");
+        let omitted = norito::encode_canonical(&set).expect("omitted set remains canonical");
         fixture.source.set_all(&fixture.config.replicas, &omitted);
         assert_eq!(
             fixture.bootstrap().map(|_| ()),
@@ -3503,7 +3763,7 @@ mod tests {
         )
         .expect("fixture checkpoint set decodes");
         set.sorafs_manifest_bytes[0] ^= 1;
-        let substituted = norito::to_bytes(&set).expect("substitution remains canonical");
+        let substituted = norito::encode_canonical(&set).expect("substitution remains canonical");
         fixture
             .source
             .set_all(&fixture.config.replicas, &substituted);
@@ -3542,7 +3802,8 @@ mod tests {
             &fixture.key_pairs,
             &fixture.config.replicas,
         );
-        let substituted = norito::to_bytes(&set).expect("resigned manifest remains canonical");
+        let substituted =
+            norito::encode_canonical(&set).expect("resigned manifest remains canonical");
         fixture
             .source
             .set_all(&fixture.config.replicas, &substituted);
@@ -3828,7 +4089,7 @@ mod tests {
         let mut recovery = head.current.clone();
         recovery.checkpoint_set_sha256[0] ^= 1;
         head.recovery = Some(recovery);
-        let head_bytes = norito::to_bytes(&head).expect("synthetic retention head encodes");
+        let head_bytes = norito::encode_canonical(&head).expect("synthetic retention head encodes");
         secure_write_manifest_last_relative(
             &service.store.directory,
             HEAD_MANIFEST_FILENAME_V1,
@@ -4079,5 +4340,168 @@ mod tests {
             fixture.bootstrap().map(|_| ()),
             Err(ToriiSccpReplayStartupErrorV1::Persistence)
         );
+    }
+    #[test]
+    fn public_path_resolves_the_authenticated_complete_domain() {
+        let fixture = Fixture::new();
+        let service = fixture.bootstrap().expect("valid exact-three bootstrap");
+        let mut path = SccpReplayAccumulatorPathV1 {
+            route_key: fixture.accumulator_id.route_key.clone(),
+            boundary: fixture.accumulator_id.boundary,
+        };
+        assert_eq!(
+            service.accumulator_id_for_path(&path),
+            Ok(fixture.accumulator_id.clone())
+        );
+        path.route_key.route_id = "absent_route".to_owned();
+        assert_eq!(
+            service.accumulator_id_for_path(&path),
+            Err(ToriiSccpReplayEndpointErrorV1::NotFound)
+        );
+    }
+
+    #[test]
+    fn refresh_if_stale_retains_an_authenticated_current_generation() {
+        let fixture = Fixture::new();
+        let service = fixture.bootstrap().expect("valid exact-three bootstrap");
+        fixture
+            .source
+            .set_all(&fixture.config.replicas, b"untrusted replacement");
+        assert_eq!(service.refresh_if_stale(), Ok(false));
+        assert_eq!(
+            service.checkpoint_set_sha256(),
+            Ok(sccp_replay_archive_checkpoint_set_frame_sha256_v1(
+                &fixture.first_bytes
+            ))
+        );
+    }
+
+    #[test]
+    fn published_snapshot_arc_releases_the_swap_lock_before_read_work() {
+        let fixture = Fixture::new();
+        let service = fixture.bootstrap().expect("valid exact-three bootstrap");
+        let published = service
+            .current_published()
+            .expect("authenticated generation is readable");
+        let digest = published.checkpoint_set_sha256;
+
+        let publication_guard = service
+            .published
+            .try_write()
+            .expect("an owned read generation does not retain the publication lock");
+
+        assert_eq!(published.checkpoint_set_sha256, digest);
+        assert_eq!(publication_guard.checkpoint_set_sha256, digest);
+    }
+
+    #[test]
+    fn restart_prefers_authenticated_persisted_state_over_remote_divergence() {
+        let fixture = Fixture::new();
+        let service = fixture.bootstrap().expect("first head is admitted");
+        let digest = service.checkpoint_set_sha256().expect("head is readable");
+        drop(service);
+        fixture
+            .source
+            .set_all(&fixture.config.replicas, b"untrusted replacement");
+        let restarted = fixture
+            .bootstrap()
+            .expect("persisted current head is independently rebuilt");
+        assert_eq!(restarted.checkpoint_set_sha256(), Ok(digest));
+    }
+
+    #[test]
+    fn replica_fetch_contains_every_child_panic() {
+        struct PanickingSource;
+        impl SccpReplayCheckpointSourceV1 for PanickingSource {
+            fn fetch_to(
+                &self,
+                _replica: &ToriiSccpReplayArchiveReplica,
+                _max_response_bytes: usize,
+                _timeout: Duration,
+                _destination: &mut dyn std::io::Write,
+            ) -> Result<usize, SccpReplayCheckpointSourceErrorV1> {
+                panic!("untrusted transport panic")
+            }
+        }
+        let fixture = Fixture::new();
+        let store =
+            SecureReplayStoreV1::open(&fixture.config.state_dir).expect("private store opens");
+        assert_eq!(
+            fetch_exact_three(&fixture.config, &PanickingSource, &store),
+            Err(ToriiSccpReplayStartupErrorV1::Transport)
+        );
+        assert!(!iroha_core::panic_hook::is_suppressed());
+    }
+
+    #[test]
+    fn failed_remote_refresh_preserves_a_current_authenticated_head() {
+        let fixture = Fixture::new();
+        let service = fixture.bootstrap().expect("first head is admitted");
+        let digest = service.checkpoint_set_sha256().expect("head is readable");
+        fixture
+            .source
+            .set_all(&fixture.config.replicas, b"untrusted replacement");
+        assert!(service.refresh().is_err());
+        assert_eq!(service.checkpoint_set_sha256(), Ok(digest));
+    }
+
+    #[test]
+    fn retry_reauthenticates_the_unchanged_durable_head_after_publication_failure() {
+        let fixture = Fixture::new();
+        let service = fixture.bootstrap().expect("first head is admitted");
+        let digest = service.checkpoint_set_sha256().expect("head is readable");
+        // A failure before manifest replacement disables reads without changing either digest.
+        service.published_available.store(false, Ordering::Release);
+        fixture
+            .source
+            .set_all(&fixture.config.replicas, b"untrusted replacement");
+        assert!(service.refresh().is_err());
+        assert_eq!(service.checkpoint_set_sha256(), Ok(digest));
+    }
+    #[test]
+    fn new_remote_candidates_require_exact_tip_admission_while_retained_frames_do_not() {
+        struct HistoricalReadAuthority;
+        impl SccpReplayLocalAuthorityV1 for HistoricalReadAuthority {
+            fn rebuild_and_verify(
+                &self,
+                finality: SccpReplayArchiveFinalityV1,
+                expected: &BTreeMap<
+                    SccpReplayAccumulatorIdV1,
+                    (SccpReplayDomainV1, SccpReplayForestV1),
+                >,
+            ) -> Result<SccpReplayArchiveV1, SccpReplayLocalAuthorityErrorV1> {
+                EmptyForestLocalAuthority.rebuild_and_verify(finality, expected)
+            }
+            fn verify_candidate(
+                &self,
+                _finality: SccpReplayArchiveFinalityV1,
+                _expected: &BTreeMap<
+                    SccpReplayAccumulatorIdV1,
+                    (SccpReplayDomainV1, SccpReplayForestV1),
+                >,
+            ) -> Result<(), SccpReplayLocalAuthorityErrorV1> {
+                Err(SccpReplayLocalAuthorityErrorV1::Finality)
+            }
+        }
+        let fixture = Fixture::new();
+        let service = ToriiSccpReplayArchiveServiceV1::bootstrap_with_components(
+            fixture.config.clone(),
+            fixture.source.clone(),
+            Arc::new(HistoricalReadAuthority),
+        )
+        .expect("initial Kura rebuild admits the head");
+        service
+            .refresh()
+            .expect("byte-identical securely retained frame remains admissible");
+        let before = service
+            .checkpoint_set_sha256()
+            .expect("retained head is readable");
+        let (successor, _) = fixture.bytes_at(2, [0x42; 32]);
+        fixture.source.set_all(&fixture.config.replicas, &successor);
+        assert_eq!(
+            service.refresh(),
+            Err(ToriiSccpReplayStartupErrorV1::LocalAuthority)
+        );
+        assert_eq!(service.checkpoint_set_sha256(), Ok(before));
     }
 }

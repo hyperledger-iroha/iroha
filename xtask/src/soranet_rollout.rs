@@ -1,7 +1,7 @@
 use blake3::Hasher as Blake3Hasher;
 use hex::encode as hex_encode;
-use iroha_config::parameters::actual::SorafsRolloutPhase;
 use iroha_crypto::{Algorithm, KeyPair, PrivateKey, Signature};
+use iroha_service_model::soranet::RolloutPhase;
 use norito::json::{Map as JsonMap, Number as JsonNumber, Value as JsonValue};
 use std::{
     collections::HashSet,
@@ -17,7 +17,7 @@ use time::{
 pub struct PlanOptions {
     pub label: String,
     pub environment: String,
-    pub phase: SorafsRolloutPhase,
+    pub phase: RolloutPhase,
     pub start: OffsetDateTime,
     pub regions: Vec<String>,
     pub window: TimeDuration,
@@ -214,7 +214,7 @@ pub struct CaptureOptions {
     pub base_output_dir: PathBuf,
     pub label: Option<String>,
     pub environment: String,
-    pub phase: SorafsRolloutPhase,
+    pub phase: RolloutPhase,
     pub log_path: PathBuf,
     pub additional_artifacts: Vec<ArtifactInput>,
     pub key_path: PathBuf,
@@ -488,7 +488,7 @@ mod tests {
             base_output_dir: temp.path().join("captures"),
             label: Some("canary".to_owned()),
             environment: "testnet".to_owned(),
-            phase: SorafsRolloutPhase::Canary,
+            phase: RolloutPhase::Canary,
             log_path,
             additional_artifacts: Vec::new(),
             key_path,

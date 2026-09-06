@@ -1,9 +1,8 @@
 //! Norito-encoded consensus message types shared across Sumeragi implementations.
 //!
 //! These types cover shared consensus parameters and diagnostics, authenticated v2 evidence,
-//! lane-local certificates, and retained QC projections. Global consensus messages and
-//! signed RS16 data availability live in [`super::consensus_v2`]; there is no global-v1 RBC
-//! message family.
+//! and lane-local certificates. Global consensus messages and signed RS16 data availability
+//! live in [`super::consensus_v2`]; there is no global-v1 message family.
 use super::Header as BlockHeader;
 #[cfg(feature = "json")]
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
@@ -20,14 +19,6 @@ use iroha_primitives::numeric::{Numeric, Quantity};
 use iroha_schema::{EnumMeta, EnumVariant, Ident, IntoSchema, MetaMap, Metadata, TypeId};
 use norito::codec::{Decode, DecodeAll, Encode};
 use std::{string::String, vec::Vec};
-/// Chain-order hash used by fixtures that do not model live validator ordering.
-///
-/// Live consensus code should populate QC votes and certificates with the
-/// selected canonical validator-order hash for the active height/view.
-#[must_use]
-pub fn default_chain_order_hash() -> Hash {
-    Hash::new(b"iroha:sumeragi:v1:chain-order:default")
-}
 /// Height alias for consensus.
 pub type Height = u64;
 /// View/round number alias.
@@ -39,6 +30,8 @@ pub type ValidatorIndex = u32;
 /// These parameters are encoded with Norito (binary) in a fixed order to
 /// guarantee determinism across peers and platforms.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus::ConsensusGenesisParams")]
 pub struct ConsensusGenesisParams {
     /// Signed, immutable interval between block-production opportunities.
     pub block_cadence_ms: NonZeroU64,
@@ -53,6 +46,8 @@ pub struct ConsensusGenesisParams {
 }
 /// Type-safe first-release consensus mode carrier.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus::ConsensusGenesisModeParams")]
 pub enum ConsensusGenesisModeParams {
     /// Permissioned consensus has no election parameters.
     Permissioned,
@@ -83,6 +78,8 @@ impl ConsensusGenesisParams {
 }
 /// `NPoS`-specific consensus parameters hashed into the genesis fingerprint.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus::NposGenesisParams")]
 pub struct NposGenesisParams {
     /// Non-zero epoch length in blocks.
     pub epoch_length_blocks: NonZeroU64,
@@ -141,6 +138,20 @@ impl NposGenesisParams {
         {
             return Err("NPoS finality and reconfiguration bounds must be greater than zero");
         }
+        let accountability_window = self
+            .evidence_horizon_blocks
+            .checked_add(self.slashing_delay_blocks)
+            .ok_or("NPoS evidence-and-slashing window overflows u64")?;
+        let retained_roster_window = self
+            .epoch_length_blocks
+            .get()
+            .checked_mul(3)
+            .ok_or("NPoS three-epoch evidence capacity window overflows u64")?;
+        if accountability_window > retained_roster_window {
+            return Err(
+                "evidence_horizon_blocks + slashing_delay_blocks must not exceed three epoch lengths",
+            );
+        }
         Ok(())
     }
 }
@@ -149,6 +160,8 @@ impl NposGenesisParams {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(tag = "phase", content = "detail", rename_all = "snake_case")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus::CertPhase")]
 pub enum CertPhase {
     /// Prepare/lock certificate for a proposal.
     Prepare = 1,
@@ -187,131 +200,6 @@ impl IntoSchema for CertPhase {
         metamap.insert::<Self>(Metadata::Enum(EnumMeta { variants }));
     }
 }
-/// Reference to an existing QC header for embedding in proposals.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-pub struct QcRef {
-    /// Height of the certified block.
-    pub height: Height,
-    /// View in which the certificate was formed.
-    pub view: View,
-    /// Epoch index (0 in permissioned mode).
-    pub epoch: u64,
-    /// Block hash certified by the certificate.
-    pub subject_block_hash: HashOf<BlockHeader>,
-    /// Phase certified by the certificate.
-    pub phase: CertPhase,
-}
-/// Block header fields essential for consensus (proposal header subset).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-pub struct ConsensusBlockHeader {
-    /// Parent block hash.
-    pub parent_hash: HashOf<BlockHeader>,
-    /// Merkle root of included transactions.
-    pub tx_root: Hash,
-    /// State commitment after executing the block.
-    pub state_root: Hash,
-    /// Proposer index within the active validator set.
-    pub proposer: ValidatorIndex,
-    /// Block height.
-    pub height: Height,
-    /// Consensus view/round number.
-    pub view: View,
-    /// Epoch index for `NPoS`. Zero in permissioned builds.
-    pub epoch: u64,
-    /// Embedded reference to the highest QC known to the proposer.
-    pub highest_qc: QcRef,
-}
-/// Proposal message with payload commitment.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-pub struct Proposal {
-    /// Proposal header (consensus-relevant subset).
-    pub header: ConsensusBlockHeader,
-    /// Hash of the full block payload (DA). Used for availability tracking.
-    pub payload_hash: Hash,
-}
-/// QC vote over a specific block and phase (BLS-only).
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[norito(deny_unknown_fields)]
-pub struct QcVote {
-    /// Target phase (`Prepare`, `Commit`, `NewView`).
-    pub phase: CertPhase,
-    /// Hash of the block being voted on.
-    pub block_hash: HashOf<BlockHeader>,
-    /// Parent state root bound into the QC vote.
-    pub parent_state_root: Hash,
-    /// Post-state root bound into the QC vote.
-    pub post_state_root: Hash,
-    /// Block height of the subject.
-    pub height: Height,
-    /// View number of the vote.
-    pub view: View,
-    /// Epoch index for `NPoS`; 0 in permissioned.
-    pub epoch: u64,
-    /// Hash of the canonical validator ordering this vote is valid under.
-    pub chain_order_hash: Hash,
-    /// Validator-order update sequence this vote is valid under.
-    pub rechain_seq: u64,
-    /// Highest known QC for `NewView` votes, bound into the vote signature.
-    ///
-    /// The slot is always encoded; `None` is canonical for the other phases.
-    #[norito(required)]
-    pub highest_qc: Option<QcRef>,
-    /// Signer index within the active validator set.
-    pub signer: ValidatorIndex,
-    /// BLS signature over the canonical QC-vote preimage.
-    pub bls_sig: Vec<u8>,
-}
-/// BLS aggregate signature envelope with signer bitmap for constant-size certificates.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[norito(deny_unknown_fields)]
-pub struct QcAggregate {
-    /// Compact signer bitmap (LSB-first).
-    pub signers_bitmap: Vec<u8>,
-    /// BLS12-381 aggregate signature bytes (compressed).
-    pub bls_aggregate_signature: Vec<u8>,
-}
-/// QC certifying a phase for a block.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[norito(deny_unknown_fields)]
-pub struct Qc {
-    /// Phase certified by this certificate.
-    pub phase: CertPhase,
-    /// Block hash certified by the certificate.
-    pub subject_block_hash: HashOf<BlockHeader>,
-    /// Parent state root bound into the QC.
-    pub parent_state_root: Hash,
-    /// Post-state root bound into the QC.
-    pub post_state_root: Hash,
-    /// Height of the subject block.
-    pub height: Height,
-    /// View in which the certificate was formed.
-    pub view: View,
-    /// Epoch index.
-    pub epoch: u64,
-    /// Hash of the canonical validator ordering this certificate is valid under.
-    pub chain_order_hash: Hash,
-    /// Validator-order update sequence this certificate is valid under.
-    pub rechain_seq: u64,
-    /// Consensus mode tag used to domain-separate signatures.
-    pub mode_tag: String,
-    /// Highest known QC that justifies a `NewView` QC, bound into the aggregate signature.
-    ///
-    /// The slot is always encoded; `None` is canonical for the other phases.
-    #[norito(required)]
-    pub highest_qc: Option<QcRef>,
-    /// Stable hash of the validator set that produced the certificate.
-    pub validator_set_hash: HashOf<Vec<PeerId>>,
-    /// Version of the validator-set hashing scheme.
-    pub validator_set_hash_version: u16,
-    /// Ordered validator set used when assembling the certificate.
-    pub validator_set: Vec<PeerId>,
-    /// Aggregate signature and signer bitmap.
-    pub aggregate: QcAggregate,
-}
 /// Self-contained frozen context and exact signed artifacts for one Sumeragi v2 equivocation proof.
 ///
 /// Proofs of possession are retained in roster order so an auditor can verify current-context
@@ -321,6 +209,8 @@ pub struct Qc {
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus::SumeragiV2EquivocationEvidence")]
 pub struct SumeragiV2EquivocationEvidence {
     /// Immutable context which governed both conflicting artifacts.
     pub context: super::consensus_v2::HeightContext,
@@ -333,9 +223,13 @@ pub struct SumeragiV2EquivocationEvidence {
 ///
 /// The first release has one evidence shape. Retired global-v1 kind/payload
 /// enums are intentionally absent, so old wire and storage layouts fail decode.
-/// This wrapper is a binary persistence/instruction type; typed JSON embeds the
-/// closed [`SumeragiV2EquivocationEvidence`] object directly where required.
+/// Snapshot JSON persists this wrapper directly so restart cannot discard an
+/// admitted penalty or replay fence.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus::Evidence")]
 pub struct Evidence {
     /// Frozen height context, roster proofs, and exact conflicting signed artifacts.
     pub equivocation: SumeragiV2EquivocationEvidence,
@@ -352,12 +246,52 @@ impl PartialOrd for Evidence {
         Some(self.cmp(other))
     }
 }
+/// Closed penalty lifecycle for one committed evidence record.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(
+    tag = "status",
+    content = "details",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus::EvidencePenaltyStatus")]
+pub enum EvidencePenaltyStatus {
+    /// The deterministic penalty delay has not elapsed or no action has run yet.
+    Pending,
+    /// Consensus applied the penalty at the stated canonical block height.
+    Applied {
+        /// Canonical height that applied the penalty.
+        height: Height,
+    },
+    /// Governance cancelled the penalty at the stated canonical block height.
+    Cancelled {
+        /// Canonical height that cancelled the penalty.
+        height: Height,
+    },
+}
+impl EvidencePenaltyStatus {
+    /// Return whether this status can no longer produce a penalty action.
+    #[must_use]
+    pub const fn is_terminal(self) -> bool {
+        !matches!(self, Self::Pending)
+    }
+}
 /// Persisted evidence entry annotated with commit metadata.
 ///
-/// Every field belongs to the first-release storage layout; shortened records
-/// are rejected instead of receiving implicit penalty or admission state. The
-/// type is binary-only; endpoint JSON uses a purpose-built audit projection.
+/// Every record has already been admitted by a committed block. Node-local
+/// pending observations use no data-model representation and never enter WSV.
+/// Shortened records are rejected instead of receiving implicit penalty state.
+/// Penalty state is a closed sum type so impossible combinations such as an
+/// applied-and-cancelled record cannot enter WSV or its binary representation.
+/// Endpoint JSON still uses a purpose-built audit projection; this closed JSON
+/// layout is reserved for canonical state snapshots.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus::EvidenceRecord")]
 pub struct EvidenceRecord {
     /// Slashing material captured for governance processing.
     pub evidence: Evidence,
@@ -367,23 +301,14 @@ pub struct EvidenceRecord {
     pub recorded_at_view: View,
     /// Block creation timestamp in milliseconds since UNIX epoch.
     pub recorded_at_ms: u64,
-    /// Whether a penalty was already applied for this evidence record.
-    pub penalty_applied: bool,
-    /// Whether governance cancelled penalty application for this evidence record.
-    pub penalty_cancelled: bool,
-    /// Block height at which the penalty was cancelled, if any.
-    pub penalty_cancelled_at_height: Option<Height>,
-    /// Block height at which the penalty was applied, if any.
-    pub penalty_applied_at_height: Option<Height>,
-    /// Block height which first admitted this exact evidence into consensus.
-    ///
-    /// `None` denotes node-local pending diagnostic material. Pending material
-    /// is never eligible for deterministic penalty derivation.
-    pub consensus_admitted_at_height: Option<Height>,
+    /// Exact pending, applied, or cancelled penalty state.
+    pub penalty_status: EvidencePenaltyStatus,
 }
 /// Membership snapshot exported through `/v1/sumeragi/status`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus::SumeragiMembershipStatus")]
 pub struct SumeragiMembershipStatus {
     /// Height associated with the snapshot.
     #[norito(default)]
@@ -402,6 +327,8 @@ pub struct SumeragiMembershipStatus {
 /// Membership mismatch snapshot exported through `/v1/sumeragi/status`.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus::SumeragiMembershipMismatchStatus")]
 pub struct SumeragiMembershipMismatchStatus {
     /// Peers currently flagged for membership mismatches.
     #[norito(default)]
@@ -434,6 +361,8 @@ pub struct SumeragiMembershipMismatchStatus {
 /// Aggregated per-lane commitment summary reported by Sumeragi status.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus::SumeragiLaneCommitment")]
 pub struct SumeragiLaneCommitment {
     /// Block height associated with the commitment.
     pub block_height: u64,
@@ -453,6 +382,8 @@ pub struct SumeragiLaneCommitment {
 /// Aggregated per-dataspace commitment summary reported by Sumeragi status.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus::SumeragiDataspaceCommitment")]
 pub struct SumeragiDataspaceCommitment {
     /// Block height associated with the commitment.
     pub block_height: u64,
@@ -519,6 +450,8 @@ pub fn committed_lane_block_status_counts_as_progress(
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus::SumeragiCommittedLaneBlock")]
 pub struct SumeragiCommittedLaneBlock {
     /// Lane whose local block is committed.
     pub lane_id: LaneId,
@@ -559,6 +492,8 @@ pub struct SumeragiCommittedLaneBlock {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus::SumeragiLanePayloadOwnership")]
 pub struct SumeragiLanePayloadOwnership {
     /// Global proposal height that planned this lane-local payload.
     pub proposal_height: u64,
@@ -605,6 +540,8 @@ pub struct SumeragiLanePayloadOwnership {
     pub rbc_instance_hash: Hash,
 }
 #[derive(Clone, Debug, Encode)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus::LaneBlockProposalPreimage")]
 struct LaneBlockProposalPreimage {
     purpose: String,
     version: u8,
@@ -631,6 +568,8 @@ struct LaneBlockProposalPreimage {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus::LaneBlockDescriptorV1")]
 pub struct LaneBlockDescriptorV1 {
     /// Lane whose local block is described.
     pub lane_id: LaneId,
@@ -719,6 +658,8 @@ impl LaneBlockDescriptorV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus::LaneBlockProposalPayloadHintV1")]
 pub struct LaneBlockProposalPayloadHintV1 {
     /// Global proposal height that anchored the lane payload ownership.
     pub proposal_height: u64,
@@ -731,6 +672,8 @@ pub struct LaneBlockProposalPayloadHintV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus::LaneBlockProposalV1")]
 pub struct LaneBlockProposalV1 {
     /// Replayable descriptor proposed to the lane committee.
     pub descriptor: LaneBlockDescriptorV1,
@@ -813,6 +756,8 @@ impl LaneBlockProposalV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus::LaneBlockVoteBodyV1")]
 pub struct LaneBlockVoteBodyV1 {
     /// Lane-local QC phase certified by this vote body.
     pub phase: CertPhase,
@@ -873,6 +818,8 @@ impl LaneBlockVoteBodyV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus::LanePayloadAvailabilityBodyV1")]
 pub struct LanePayloadAvailabilityBodyV1 {
     /// Artifact schema version. Only version one is accepted.
     pub version: u8,
@@ -937,6 +884,8 @@ impl LanePayloadAvailabilityBodyV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus::LanePayloadAvailabilityQcV1")]
 pub struct LanePayloadAvailabilityQcV1 {
     /// READY body certified by the aggregate signature.
     pub body: LanePayloadAvailabilityBodyV1,
@@ -957,6 +906,8 @@ pub struct LanePayloadAvailabilityQcV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus::LaneBlockQcV1")]
 pub struct LaneBlockQcV1 {
     /// Vote body certified by the aggregate signature.
     pub body: LaneBlockVoteBodyV1,
@@ -985,6 +936,8 @@ pub struct LaneBlockQcV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus::LaneBlockCertificateV1")]
 pub struct LaneBlockCertificateV1 {
     /// Exact canonical proposal certified by both quorum certificates.
     pub proposal: LaneBlockProposalV1,
@@ -994,6 +947,8 @@ pub struct LaneBlockCertificateV1 {
     pub commit_qc: LaneBlockQcV1,
 }
 #[derive(Clone, Debug, Encode)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus::LanePayloadOwnershipSubjectPreimage")]
 struct LanePayloadOwnershipSubjectPreimage {
     version: u8,
     lane_id: LaneId,
@@ -1006,6 +961,8 @@ struct LanePayloadOwnershipSubjectPreimage {
     qc_mode_tag: String,
 }
 #[derive(Clone, Debug, Encode)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus::LanePayloadOwnershipPreimage")]
 struct LanePayloadOwnershipPreimage {
     purpose: String,
     version: u8,
@@ -1020,6 +977,8 @@ struct LanePayloadOwnershipPreimage {
     qc_mode_tag: String,
 }
 #[derive(Clone, Debug, Encode)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus::LanePayloadOwnershipRbcPreimage")]
 struct LanePayloadOwnershipRbcPreimage {
     purpose: String,
     version: u8,
@@ -1032,6 +991,8 @@ struct LanePayloadOwnershipRbcPreimage {
     payload_ownership_hash: Hash,
 }
 #[derive(Clone, Debug, Encode)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus::LaneBlockDescriptorPreimage")]
 struct LaneBlockDescriptorPreimage {
     purpose: String,
     version: u8,
@@ -1401,6 +1362,8 @@ impl SumeragiLanePayloadOwnership {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus::LaneSettlementReceipt")]
 pub struct LaneSettlementReceipt {
     /// Caller-specified identifier linking the receipt to the originating transaction.
     pub source_id: [u8; 32],
@@ -1419,6 +1382,8 @@ pub struct LaneSettlementReceipt {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus::NexusFeeScheduleInputs")]
 pub struct NexusFeeScheduleInputs {
     /// Serialized signed transaction payload length used for fee metering.
     pub tx_bytes_len: u64,
@@ -1439,6 +1404,8 @@ pub struct NexusFeeScheduleInputs {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus::NexusFeeReceipt")]
 pub struct NexusFeeReceipt {
     /// Receipt format version.
     pub version: u16,
@@ -1488,6 +1455,8 @@ pub const NATIVE_AMX_BLS_PROOF_BYTES: usize = 96;
     rename_all = "snake_case",
     deny_unknown_fields
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus::NativeAmxPhase")]
 pub enum NativeAmxPhase {
     /// Participant prepared its dataspace-local leg.
     Prepare,
@@ -1502,6 +1471,8 @@ pub enum NativeAmxPhase {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus::NativeAmxAttestationBodyV2")]
 pub struct NativeAmxAttestationBodyV2 {
     /// Exact frozen global round in which the receipt may be included.
     pub round: super::consensus_v2::ConsensusRound,
@@ -1686,6 +1657,8 @@ impl std::error::Error for NativeAmxAttestationQcV2AlignmentError {}
 /// Validator-set proof for a context-bound native AMX v2 attestation.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(crate::DeriveJsonSerialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus::NativeAmxAttestationQcV2")]
 pub struct NativeAmxAttestationQcV2 {
     /// Context-bound body certified by the aggregate signature.
     pub body: NativeAmxAttestationBodyV2,
@@ -1763,6 +1736,8 @@ impl NativeAmxAttestationQcV2 {
 #[derive(Clone, Debug, Encode, Decode)]
 #[cfg_attr(feature = "json", derive(crate::DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus::NativeAmxAttestationQcV2Wire")]
 struct NativeAmxAttestationQcV2Wire {
     body: NativeAmxAttestationBodyV2,
     validator_set_hash_version: u16,
@@ -1819,6 +1794,8 @@ impl norito::json::JsonDeserialize for NativeAmxAttestationQcV2 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus::NativeAmxLegRecordV2")]
 pub struct NativeAmxLegRecordV2 {
     /// Participant lane certified by both phase QCs.
     pub lane_id: LaneId,
@@ -1849,6 +1826,8 @@ impl PartialOrd for NativeAmxLegRecordV2 {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus::NativeAmxReceipt")]
 pub struct NativeAmxReceipt {
     /// Receipt format version.
     pub version: u16,
@@ -1896,6 +1875,8 @@ impl NativeAmxLegRecordV2 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(tag = "profile", content = "state")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus::LaneLiquidityProfile")]
 pub enum LaneLiquidityProfile {
     /// Deep pools with negligible slippage.
     Tier1,
@@ -1908,6 +1889,8 @@ pub enum LaneLiquidityProfile {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(tag = "bucket", content = "state")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus::LaneVolatilityClass")]
 pub enum LaneVolatilityClass {
     /// Normal operating conditions.
     #[default]
@@ -1921,6 +1904,8 @@ pub enum LaneVolatilityClass {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus::LaneSwapMetadata")]
 pub struct LaneSwapMetadata {
     /// Basis-point safety margin applied on top of the TWAP.
     pub epsilon_bps: u16,
@@ -1937,6 +1922,8 @@ pub struct LaneSwapMetadata {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus::LaneBlockCommitment")]
 pub struct LaneBlockCommitment {
     /// Lane-local block height associated with the commitment.
     pub block_height: u64,
@@ -2342,6 +2329,8 @@ impl<'a> norito::core::DecodeFromSlice<'a> for LaneSwapMetadata {
 /// Runtime-upgrade governance hook snapshot.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus::SumeragiRuntimeUpgradeHook")]
 pub struct SumeragiRuntimeUpgradeHook {
     /// Whether runtime-upgrade instructions are allowed.
     pub allow: bool,
@@ -2357,6 +2346,8 @@ pub struct SumeragiRuntimeUpgradeHook {
 /// Governance manifest readiness snapshot for a lane.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus::SumeragiLaneGovernance")]
 pub struct SumeragiLaneGovernance {
     /// Numeric lane identifier.
     pub lane_id: LaneId,
@@ -2385,55 +2376,11 @@ pub struct SumeragiLaneGovernance {
     #[norito(default)]
     pub runtime_upgrade: Option<SumeragiRuntimeUpgradeHook>,
 }
-/// DA availability reason reported by `/v1/sumeragi/status`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[norito(tag = "kind", content = "detail", rename_all = "snake_case")]
-pub enum SumeragiDaGateReason {
-    /// No gate currently blocking commit/finalize.
-    #[default]
-    None,
-    /// Missing local data required to validate the pending block.
-    MissingLocalData,
-    /// Manifest is missing for the pending commitment.
-    ManifestMissing,
-    /// Manifest hash mismatched the commitment.
-    ManifestHashMismatch,
-    /// Manifest could not be read from disk.
-    ManifestReadFailed,
-    /// Manifest spool could not be scanned.
-    ManifestSpoolScan,
-}
-/// Which DA availability condition was satisfied most recently.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[norito(tag = "kind", content = "detail", rename_all = "snake_case")]
-pub enum SumeragiDaGateSatisfaction {
-    /// No condition has been satisfied yet.
-    #[default]
-    None,
-    /// Missing local data was recovered.
-    MissingDataRecovered,
-    /// Manifest guard was satisfied after previously reporting missing or invalid manifests.
-    ManifestGuardRecovered,
-}
-/// Snapshot of DA availability tracking counters for `/v1/sumeragi/status`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-pub struct SumeragiDaGateStatus {
-    /// Most recent reason that reported missing availability evidence.
-    pub reason: SumeragiDaGateReason,
-    /// Most recent condition that satisfied availability tracking.
-    pub last_satisfied: SumeragiDaGateSatisfaction,
-    /// Count of times local data was missing.
-    pub missing_local_data_total: u64,
-    /// Count of times the manifest guard reported missing/invalid manifests.
-    #[norito(default)]
-    pub manifest_guard_total: u64,
-}
 /// Snapshot of missing-block fetch attempts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus::SumeragiMissingBlockFetchStatus")]
 pub struct SumeragiMissingBlockFetchStatus {
     /// Total fetch evaluations after QC-first arrival (including backoff/no-target cases).
     pub total: u64,
@@ -2445,6 +2392,8 @@ pub struct SumeragiMissingBlockFetchStatus {
 /// Snapshot of kura persistence failures and retries.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus::SumeragiKuraStoreStatus")]
 pub struct SumeragiKuraStoreStatus {
     /// Total times a block failed to enqueue for persistence.
     pub failures_total: u64,
@@ -2509,6 +2458,8 @@ pub struct SumeragiKuraStoreStatus {
 /// View-change cause counters surfaced via `/v1/sumeragi/status`.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus::SumeragiViewChangeCauseStatus")]
 pub struct SumeragiViewChangeCauseStatus {
     /// Total view changes triggered after commit failures (with QC quorum).
     #[norito(default)]
@@ -2522,9 +2473,6 @@ pub struct SumeragiViewChangeCauseStatus {
     /// Total view changes triggered after roster-unavailability recovery.
     #[norito(default)]
     pub roster_unavailable_total: u64,
-    /// Total view changes triggered after the DA availability gate remains unresolved.
-    #[norito(default)]
-    pub da_gate_total: u64,
     /// Total view changes triggered after censorship evidence reaches quorum.
     #[norito(default)]
     pub censorship_evidence_total: u64,
@@ -2556,9 +2504,6 @@ pub struct SumeragiViewChangeCauseStatus {
     /// Milliseconds since UNIX epoch when a roster-unavailable cause was last recorded.
     #[norito(default)]
     pub last_roster_unavailable_timestamp_ms: u64,
-    /// Milliseconds since UNIX epoch when a DA-gate cause was last recorded.
-    #[norito(default)]
-    pub last_da_gate_timestamp_ms: u64,
     /// Milliseconds since UNIX epoch when a censorship-evidence cause was last recorded.
     #[norito(default)]
     pub last_censorship_evidence_timestamp_ms: u64,
@@ -2575,6 +2520,8 @@ pub struct SumeragiViewChangeCauseStatus {
 /// Validation-gate reject counters and last-occurrence snapshot.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus::SumeragiValidationRejectStatus")]
 pub struct SumeragiValidationRejectStatus {
     /// Total rejects recorded before voting.
     #[norito(default)]
@@ -2617,19 +2564,15 @@ pub struct SumeragiValidationRejectStatus {
 /// Peer consensus-key policy reject counters and last-occurrence snapshot.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus::SumeragiPeerKeyPolicyStatus")]
 pub struct SumeragiPeerKeyPolicyStatus {
     /// Total peer-key policy rejects recorded.
     #[norito(default)]
     pub total: u64,
-    /// Rejects due to missing HSM binding when required.
-    #[norito(default)]
-    pub missing_hsm_total: u64,
     /// Rejects due to disallowed public-key algorithm.
     #[norito(default)]
     pub disallowed_algorithm_total: u64,
-    /// Rejects due to disallowed HSM provider.
-    #[norito(default)]
-    pub disallowed_provider_total: u64,
     /// Rejects due to activation height violating lead-time policy.
     #[norito(default)]
     pub lead_time_violation_total: u64,
@@ -2653,6 +2596,8 @@ pub struct SumeragiPeerKeyPolicyStatus {
 /// Consensus message drop/deferral counter entry.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus::SumeragiConsensusMessageHandlingEntry")]
 pub struct SumeragiConsensusMessageHandlingEntry {
     /// Message kind label (e.g., `block_created`).
     pub kind: String,
@@ -2666,6 +2611,8 @@ pub struct SumeragiConsensusMessageHandlingEntry {
 /// Consensus message drop/deferral counters surfaced via Sumeragi status.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus::SumeragiConsensusMessageHandlingStatus")]
 pub struct SumeragiConsensusMessageHandlingStatus {
     /// Per-kind drop/deferral counters (best-effort).
     #[norito(default)]
@@ -2674,6 +2621,8 @@ pub struct SumeragiConsensusMessageHandlingStatus {
 /// Vote validation drop entry with roster context.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus::SumeragiVoteValidationDropEntry")]
 pub struct SumeragiVoteValidationDropEntry {
     /// Drop reason label.
     pub reason: String,
@@ -2703,6 +2652,8 @@ pub struct SumeragiVoteValidationDropEntry {
 /// Aggregated count for a vote-validation drop reason.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus::SumeragiVoteValidationDropReasonCount")]
 pub struct SumeragiVoteValidationDropReasonCount {
     /// Drop reason label.
     pub reason: String,
@@ -2712,6 +2663,8 @@ pub struct SumeragiVoteValidationDropReasonCount {
 /// Aggregated vote validation drops for a peer/roster hash pairing.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus::SumeragiVoteValidationDropPeerEntry")]
 pub struct SumeragiVoteValidationDropPeerEntry {
     /// Peer associated with the drop counts.
     pub peer_id: PeerId,
@@ -2738,6 +2691,8 @@ pub struct SumeragiVoteValidationDropPeerEntry {
 /// Vote validation drop snapshot surfaced via Sumeragi status.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus::SumeragiVoteValidationDropStatus")]
 pub struct SumeragiVoteValidationDropStatus {
     /// Total vote validation drops recorded.
     #[norito(default)]
@@ -2752,6 +2707,8 @@ pub struct SumeragiVoteValidationDropStatus {
 /// Deterministic consensus configuration caps captured alongside status snapshots.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus::SumeragiConsensusCapsStatus")]
 pub struct SumeragiConsensusCapsStatus {
     /// Canonical digest of deterministic, locally configured Nexus policy.
     #[norito(default)]
@@ -2763,6 +2720,8 @@ pub struct SumeragiConsensusCapsStatus {
 /// Queue depth snapshot for Sumeragi worker-loop channels.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus::SumeragiWorkerQueueDepths")]
 pub struct SumeragiWorkerQueueDepths {
     /// Vote channel depth.
     #[norito(default)]
@@ -2789,6 +2748,8 @@ pub struct SumeragiWorkerQueueDepths {
 /// Per-queue totals for worker-loop diagnostics.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus::SumeragiWorkerQueueTotals")]
 pub struct SumeragiWorkerQueueTotals {
     /// Vote channel total.
     #[norito(default)]
@@ -2815,6 +2776,8 @@ pub struct SumeragiWorkerQueueTotals {
 /// Worker-loop queue diagnostics (drops/blocking).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus::SumeragiWorkerQueueDiagnostics")]
 pub struct SumeragiWorkerQueueDiagnostics {
     /// Total count of blocking enqueues per queue.
     #[norito(default)]
@@ -2832,6 +2795,8 @@ pub struct SumeragiWorkerQueueDiagnostics {
 /// Worker-loop diagnostics exposed by `/v1/sumeragi/status`.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus::SumeragiWorkerLoopStatus")]
 pub struct SumeragiWorkerLoopStatus {
     /// Last observed worker-loop stage label.
     #[norito(default)]
@@ -2852,6 +2817,8 @@ pub struct SumeragiWorkerLoopStatus {
 /// Commit inflight diagnostics exposed by `/v1/sumeragi/status`.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus::SumeragiCommitInflightStatus")]
 pub struct SumeragiCommitInflightStatus {
     /// Whether a commit job is currently in flight.
     #[norito(default)]
@@ -2916,6 +2883,8 @@ pub struct SumeragiCommitInflightStatus {
 /// Commit-pipeline timing snapshot exposed by `/v1/sumeragi/status`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus::SumeragiCommitPipelineStatus")]
 pub struct SumeragiCommitPipelineStatus {
     /// End-to-end time spent in the most recent commit-pipeline run.
     #[norito(default)]
@@ -2966,6 +2935,8 @@ pub struct SumeragiCommitPipelineStatus {
 /// DELIVER-to-next-proposal gap snapshot exposed by `/v1/sumeragi/status`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus::SumeragiRoundGapStatus")]
 pub struct SumeragiRoundGapStatus {
     /// Most recent elapsed time from first accepted DELIVER to local state commit.
     #[norito(default)]
@@ -2989,6 +2960,8 @@ pub struct SumeragiRoundGapStatus {
 /// Latest commit-quorum signature tally exposed by `/v1/sumeragi/status`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus::SumeragiCommitQuorumStatus")]
 pub struct SumeragiCommitQuorumStatus {
     /// Block height associated with the tally.
     #[norito(default)]
@@ -3019,6 +2992,8 @@ pub struct SumeragiCommitQuorumStatus {
 /// Latest commit QC summary exposed by `/v1/sumeragi/status`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus::SumeragiQcStatus")]
 pub struct SumeragiQcStatus {
     /// Block height certified by the commit QC.
     #[norito(default)]
@@ -3047,6 +3022,8 @@ pub struct SumeragiQcStatus {
 /// Observational `NPoS` repair fanout stake-coverage snapshot.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus::SumeragiNposRepairCoverageStatus")]
 pub struct SumeragiNposRepairCoverageStatus {
     /// Last height for which a repair fanout selection was recorded.
     #[norito(default)]
@@ -3073,6 +3050,8 @@ pub struct SumeragiNposRepairCoverageStatus {
 /// Fail-closed consensus safety halt exposed via `/v1/sumeragi/status`.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus::SumeragiSafetyHaltStatus")]
 pub struct SumeragiSafetyHaltStatus {
     /// Whether this process has halted consensus participation.
     #[norito(default)]
@@ -3119,6 +3098,8 @@ pub struct SumeragiSafetyHaltStatus {
     clippy::struct_excessive_bools,
     reason = "each boolean is an independent V1 operator-visible session fact; collapsing them would change the canonical diagnostics wire shape"
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus::SumeragiLaneBlockSessionStatus")]
 pub struct SumeragiLaneBlockSessionStatus {
     /// Lane whose lane-local block is being certified.
     #[norito(default)]
@@ -3174,6 +3155,8 @@ pub struct SumeragiLaneBlockSessionStatus {
     clippy::struct_excessive_bools,
     reason = "operator diagnostics expose independent proposal-gate booleans"
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus::SumeragiProposalGateStatus")]
 pub struct SumeragiProposalGateStatus {
     /// Height currently considered by the proposal path.
     #[norito(default)]
@@ -3243,6 +3226,8 @@ pub struct SumeragiProposalGateStatus {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus::SumeragiNposDiagnostics")]
 pub struct SumeragiNposDiagnostics {
     /// Length of the active epoch in blocks.
     pub epoch_length_blocks: NonZeroU64,
@@ -3270,6 +3255,8 @@ impl SumeragiNposDiagnostics {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus::SumeragiPipelineExecutionStatus")]
 pub struct SumeragiPipelineExecutionStatus {
     /// Total transaction vertices across all lanes.
     pub tx_vertices_total: u64,
@@ -3324,6 +3311,8 @@ pub const SUMERAGI_AUTONOMOUS_LANE_EXECUTIONS_MAX: usize = 128;
 /// Highest independently durable autonomous lane-execution stage.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
 #[norito(rename_all = "snake_case")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus::SumeragiAutonomousLaneExecutionStage")]
 pub enum SumeragiAutonomousLaneExecutionStage {
     /// Exact Queue-owned reservation keys are fsynced before executable-payload durability.
     ReservationsDurable,
@@ -3401,6 +3390,8 @@ impl norito::json::JsonDeserialize for SumeragiAutonomousLaneExecutionStage {
 /// Evidence-derived reason that an autonomous lane execution is not advancing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
 #[norito(rename_all = "snake_case")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus::SumeragiAutonomousLaneExecutionStuckReason")]
 pub enum SumeragiAutonomousLaneExecutionStuckReason {
     /// Queue ownership is durable, but the producer-authenticated executable payload is not.
     AwaitingExecutablePayload,
@@ -3548,6 +3539,8 @@ impl SumeragiAutonomousLaneExecutionStage {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus::SumeragiAutonomousLaneExecution")]
 pub struct SumeragiAutonomousLaneExecution {
     /// Execution lane.
     pub lane_id: LaneId,
@@ -3746,6 +3739,8 @@ impl SumeragiAutonomousLaneExecution {
 /// Durable-application state of one Native AMX participant control.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
 #[norito(rename_all = "snake_case")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus::SumeragiNativeAmxParticipantApplicationState")]
 pub enum SumeragiNativeAmxParticipantApplicationState {
     /// Participant QCs are certified, but no canonical global carrier is committed yet.
     CertifiedPendingCarrier,
@@ -3804,6 +3799,8 @@ impl norito::json::JsonDeserialize for SumeragiNativeAmxParticipantApplicationSt
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus::SumeragiNativeAmxParticipantApplication")]
 pub struct SumeragiNativeAmxParticipantApplication {
     /// Participant lane.
     pub lane_id: LaneId,
@@ -3914,6 +3911,8 @@ impl SumeragiNativeAmxParticipantApplication {
     clippy::struct_excessive_bools,
     reason = "operator diagnostics expose independent queue-pressure flags"
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus::SumeragiDiagnosticsStatus")]
 pub struct SumeragiDiagnosticsStatus {
     /// Latest block-pipeline execution diagnostics.
     pub pipeline_execution: SumeragiPipelineExecutionStatus,
@@ -4036,6 +4035,8 @@ impl SumeragiDiagnosticsStatus {
 /// Minimal execution witness KV pair for SBV-AM prototypes.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus::ExecKv")]
 pub struct ExecKv {
     /// Raw key bytes.
     pub key: Vec<u8>,
@@ -4045,6 +4046,8 @@ pub struct ExecKv {
 /// Execution witness containing reads and writes for SMT recomputation.
 #[derive(Clone, Debug, PartialEq, Eq, Default, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus::ExecWitness")]
 pub struct ExecWitness {
     /// Witnessed reads during execution (key,value).
     pub reads: Vec<ExecKv>,
@@ -4057,6 +4060,8 @@ pub struct ExecWitness {
 }
 /// Execution witness message bound to a specific block and round. Used on-wire.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::block::consensus::ExecWitnessMsg")]
 pub struct ExecWitnessMsg {
     /// Hash of the block the witness applies to.
     pub block_hash: HashOf<BlockHeader>,
@@ -4096,12 +4101,6 @@ macro_rules! impl_decode_from_slice_via_codec {
         }
     };
 }
-impl_decode_from_slice_via_codec!(QcRef);
-impl_decode_from_slice_via_codec!(ConsensusBlockHeader);
-impl_decode_from_slice_via_codec!(Proposal);
-impl_decode_from_slice_via_codec!(QcVote);
-impl_decode_from_slice_via_codec!(QcAggregate);
-impl_decode_from_slice_via_codec!(Qc);
 impl_decode_from_slice_via_codec!(ExecKv);
 impl_decode_from_slice_via_codec!(ExecWitness);
 impl_decode_from_slice_via_codec!(Evidence);
@@ -4148,3 +4147,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for LaneSettlementReceipt {
 #[cfg(test)]
 #[path = "consensus_model_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod captured_consensus_schema_tests;

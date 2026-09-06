@@ -32,5 +32,7 @@ mod router_feature_matrix;
 mod runtime_endpoints;
 #[path = "../rwas_endpoints.rs"]
 mod rwas_endpoints;
+#[path = "../transactions_query_operator_auth.rs"]
+mod transactions_query_operator_auth;
 #[path = "../webhooks_subrouter_smoke.rs"]
 mod webhooks_subrouter_smoke;

@@ -499,7 +499,7 @@ pub trait EvidenceViewerGrantBoundaryV1: EvidenceViewerRuntimeProviderV1 {
     fn revoke(&self, token_digest: [u8; 32]) -> Result<(), EvidenceViewerExternalErrorV1>;
 }
 include!("evidence_viewer/receipt_signing.rs");
-/// Runtime-only erasure/KMS boundary.
+/// Runtime-only authenticated erasure boundary.
 pub trait EvidenceViewerErasureBoundaryV1: EvidenceViewerRuntimeProviderV1 {
     /// Irreversibly erase or cryptographically destroy one exact object.
     ///
@@ -1781,9 +1781,9 @@ struct IdempotencyRecordV1 {
 }
 /// Durable write-ahead intent for one irreversible erasure.
 ///
-/// The intent is committed before crossing the KMS/object-store boundary and is retained until the
-/// signed receipt and terminal erasure record are durably committed. This makes crash recovery an
-/// exact idempotent replay instead of a second irreversible operation.
+/// The intent is committed before crossing the key-provider/object-store boundary and is retained
+/// until the signed receipt and terminal erasure record are durably committed. This makes crash
+/// recovery an exact idempotent replay instead of a second irreversible operation.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct EvidenceViewerErasureIntentV1 {
     operation_id: [u8; 32],
@@ -6547,7 +6547,7 @@ mod tests {
             .to_bytes(),
             compaction_interval_ms: 60_000,
             compaction_max_records: 256,
-            receipt_signer_handle: "pkcs11:prod-evidence-receipts".to_owned(),
+            receipt_signer_handle: "provider:prod-evidence-receipts".to_owned(),
             expected_receipt_signer_qualification:
                 EvidenceViewerRuntimeProviderQualificationV1::new(1, [0xA3; 32]),
             receipt_signer_public_key: public_key,
@@ -7550,7 +7550,7 @@ mod tests {
                 .build();
             let key_wrapper: Arc<dyn ModerationQuarantineKeyWrapper> =
                 Arc::new(TestQuarantineKeyWrapper {
-                    key_id: "kms:test/evidence-quarantine".to_owned(),
+                    key_id: "software://sorafs/moderation/evidence-quarantine".to_owned(),
                     key: [0xD1; 32],
                 });
             let node = NodeHandle::try_new_with_quarantine_key_wrapper(storage_config, key_wrapper)
@@ -7587,7 +7587,7 @@ mod tests {
             let grants = Arc::new(MockGrantBoundary::new("kms:prod-evidence-grants"));
             let signing_key = SigningKey::from_bytes(&[0x51; 32]);
             let signer = Arc::new(MockReceiptSigner::new(
-                "pkcs11:prod-evidence-receipts",
+                "provider:prod-evidence-receipts",
                 signing_key,
             ));
             let erasure = Arc::new(MockErasureBoundary::new("kms:prod-evidence-erasure"));
@@ -7952,7 +7952,7 @@ mod tests {
         EvidenceViewerSignedReceiptV1 {
             body,
             receipt_digest,
-            signer_handle: "pkcs11:prod-evidence-receipts".to_owned(),
+            signer_handle: "provider:prod-evidence-receipts".to_owned(),
             signer_public_key: signing_key.verifying_key().to_bytes(),
             signature: signing_key
                 .sign(&receipt_signature_message(receipt_digest))
@@ -10480,7 +10480,7 @@ mod tests {
             EvidenceViewerErrorV1::InvalidConfig
         );
         let wrong_signer = Arc::new(MockReceiptSigner::new(
-            "pkcs11:unexpected-receipts",
+            "provider:unexpected-receipts",
             SigningKey::from_bytes(&[0x52; 32]),
         ));
         let drifted_signer = EvidenceViewerRuntimeDepsV1 {

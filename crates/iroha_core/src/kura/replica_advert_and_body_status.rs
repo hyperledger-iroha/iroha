@@ -99,6 +99,13 @@ impl Kura {
                 Err(Error::KuraReplicaLocalPeerConflict)
             };
         }
+        // Kura is deliberately constructed before the transport identity is
+        // available. Replica-backed terminal outcomes are therefore
+        // structurally authenticated during strict startup and must be
+        // re-audited against the proposed immutable peer before it can become
+        // process context. Audit first so a rejected committee identity is not
+        // left installed in the OnceLock.
+        self.audit_canonical_replica_terminal_outcomes_for_local_peer(&peer)?;
         match self.local_peer_id.set(peer) {
             Ok(()) => Ok(()),
             Err(peer) if self.local_peer_id.get() == Some(&peer) => Ok(()),

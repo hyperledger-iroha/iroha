@@ -8,7 +8,7 @@ import org.hyperledger.iroha.sdk.tx.norito.NoritoJavaCodecAdapter
 import org.hyperledger.iroha.sdk.sccp.SccpV1
 
 /** Closed SCCP payload kinds admitted by the first-release bridge flow. */
-enum class SccpPayloadKindV1(val wireKey: String) {
+internal enum class SccpPayloadKindV1(val wireKey: String) {
     TRANSFER("transfer");
 
     companion object {
@@ -17,7 +17,7 @@ enum class SccpPayloadKindV1(val wireKey: String) {
 }
 
 /** Unified strict detached-signing response returned by both SCCP submit endpoints. */
-class SccpBridgeSubmitResponse(
+internal class SccpBridgeSubmitResponse(
     val submitted: Boolean,
     val payloadKind: SccpPayloadKindV1,
     val messageIdHex: String,
@@ -34,7 +34,7 @@ class SccpBridgeSubmitResponse(
 )
 
 /** Exact decoder for the unified two-phase SCCP signing response. */
-object SccpBridgeSubmitResponseParser {
+internal object SccpBridgeSubmitResponseParser {
     @JvmStatic fun parse(bytes: ByteArray): SccpBridgeSubmitResponse {
         val value = root(bytes)
         val unknown = value.keys.firstOrNull { it !in FIELDS }

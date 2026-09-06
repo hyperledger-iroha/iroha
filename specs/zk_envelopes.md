@@ -15,7 +15,7 @@ Scope (current)
 Backends (tags)
 - Generic non-privacy IPA verifier entrypoint: `halo2/ipa`
   - The envelope selects the concrete curve/backend with `curve_id`
-    (`1 = Pallas`, `2 = Goldilocks`, `20 = BN254`).
+    (`1 = Pallas`, `20 = BN254`).
 - STARK (native): `stark/fri/poseidon-x7-goldilocks-6x64-v1`
 
 General notes
@@ -50,9 +50,9 @@ Wire types (as implemented in `crates/iroha_zkp_halo2`)
   retries with `message || 0xff || u64_le(counter)`, starting at counter 1. This
   prevents a prover from choosing bases or
   learning discrete-log relationships between them and avoids transmitting
-  `O(n)` redundant point encodings. The optional additive Goldilocks backend
-  cannot provide unknown-discrete-log bases and is compatibility-test-only, not
-  a production commitment backend.
+  `O(n)` redundant point encodings. Goldilocks is a STARK field and does not
+  select an IPA commitment group. Its field identifier (`2`) is unconditionally
+  rejected by IPA decoding; no algebraic test backend or feature is shipped.
 
 - `IpaProofData`
   - `version: u16` — format version, currently 1
@@ -205,7 +205,9 @@ Wire types (as implemented in `iroha_core::zk_stark`)
 - `FoldDecommitV1`
   - `j: u32` — index at this layer
   - `y0: GoldilocksFp4V1`, `y1: GoldilocksFp4V1` — four canonical
-    little-endian Goldilocks coefficients for inputs at positions `(2*j, 2*j+1)`
+    little-endian Goldilocks coefficients for inputs at positions `(2*j, 2*j+1)`;
+    each payload is exactly 32 bytes without an inner struct frame. The shared
+    FASTPQ field codec rejects any coefficient greater than or equal to `p`.
   - `path_y0: MerklePath`, `path_y1: MerklePath`
   - `z: GoldilocksFp4V1` — domain-aware binary FRI fold
     `(y0 + y1)/2 + r_k * (y0 - y1)/(2x)`, where `x` is the domain element for
@@ -325,7 +327,7 @@ Verifier behavior (native STARK)
   same circuit. The generic `halo2/ipa` entry point uses a closed v1 circuit
 	  registry containing only IVM execution, Kaigi roster/usage, the
 	  protocol-private confidential transfer/unshield circuits used by native
-	  escrow and Kagemusha, and Kagemusha top-up shielding. Tiny arithmetic,
+	  escrow, plus the authenticated KAGEMUSHA V1 artifact set. Tiny arithmetic,
   anonymous-transfer demos, vote-bool demos, the historical IVM overlay-binding
   stand-in, retired recursive-spend labels, cross-family ids, and trusted-setup
   ids all fail before verifier dispatch. Prefixing or otherwise normalizing a
@@ -337,7 +339,8 @@ Verifier behavior (native STARK)
   `OpenVerifyEnvelope`. Its `public_inputs` field contains a schema descriptor,
   not the concrete instance columns. Every admitted circuit id normalizes to one
   closed, authoritative descriptor (IVM execution, Kaigi roster/usage,
-  confidential transfer/full-unshield/change-unshield, or Kagemusha top-up).
+  confidential transfer/full-unshield/change-unshield, or an authenticated
+  KAGEMUSHA V1 artifact role).
   Preverification, guardrails, final dispatch, and verifying-key record
   preparation require exact descriptor bytes or the Iroha hash of those bytes;
   arbitrary nonempty replacements and unmapped circuits fail closed.

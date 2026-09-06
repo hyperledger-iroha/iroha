@@ -539,6 +539,7 @@ fn native_coordinator_height_ignores_retired_incarnation_artifacts() {
         adapter
             .kura
             .latest_lane_block_artifact(lane_id)
+            .expect("read durable lane artifact")
             .is_some_and(|artifact| artifact.ownership.lane_block_height == 100),
         "fixture must first install a reachable high lane-local artifact"
     );
@@ -565,7 +566,11 @@ fn native_coordinator_height_ignores_retired_incarnation_artifacts() {
         "lane recreation must retire the historical namespace"
     );
     assert!(
-        adapter.kura.latest_lane_block_artifact(lane_id).is_none(),
+        adapter
+            .kura
+            .latest_lane_block_artifact(lane_id)
+            .expect("read durable lane artifact")
+            .is_none(),
         "the active Kura marker must hide the retired high artifact"
     );
     let body = native_body(&adapter);

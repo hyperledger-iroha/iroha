@@ -10,6 +10,7 @@ import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import org.hyperledger.iroha.android.client.CanonicalRequestSigner;
+import org.hyperledger.iroha.android.client.LocalSigningContext;
 import org.hyperledger.iroha.android.client.PlatformHttpTransportExecutor;
 import org.hyperledger.iroha.android.client.ToriiCanonicalRequestAuth;
 import org.hyperledger.iroha.android.client.TransportSecurity;
@@ -247,10 +248,8 @@ public final class SorafsReputationClient {
       throw new IllegalArgumentException("listener is required");
     }
     final Map<String, String> query = eventQuery(since, limit);
-    final URI target = buildTarget(EVENTS_STREAM_PATH, query);
-    final Map<String, String> headers = canonicalHeaders(target, canonicalAuth);
     final ToriiEventStreamOptions.Builder options =
-        ToriiEventStreamOptions.builder().queryParameters(query).headers(headers);
+        ToriiEventStreamOptions.builder().queryParameters(query);
     if (timeout != null) {
       options.setTimeout(timeout);
     }
@@ -258,6 +257,7 @@ public final class SorafsReputationClient {
         ToriiEventStreamClient.builder()
             .setBaseUri(baseUri)
             .setTransportExecutor(transport)
+            .canonicalRequestAuth(new LocalSigningContext(networkId), canonicalAuth)
             .build();
     return streamClient.openSseStream(
         EVENTS_STREAM_PATH,

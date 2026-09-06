@@ -147,7 +147,8 @@ The external signer is an authenticated adapter to the isolated software
 signing service. The wrapper rejects missing inputs and verifies the exact raw
 signature and key with the pinned native validator. OIDC/cosign attestations can
 be added for provenance, but are not a substitute for this authentication step.
-A future HSM adapter requires new HSM-backed evidence.
+Iroha exposes no hardware-specific signer mode; the authenticated signer
+process boundary remains provider-neutral.
 
 ## Additional resources
 

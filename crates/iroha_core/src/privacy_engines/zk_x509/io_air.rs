@@ -951,7 +951,7 @@ mod tests {
             .expect("sorted root")
             .to_le_bytes();
         let mut transcript = TransparentTranscriptV1::new(
-            super::stark::ZK_X509_DIGEST_CONTEXT_V1,
+            super::super::stark::ZK_X509_DIGEST_CONTEXT_V1,
             b"zk-x509-io-test",
             &profile,
             &public,
@@ -968,7 +968,7 @@ mod tests {
         let mut changed_root = sorted_root;
         changed_root[5] ^= 1;
         let mut changed = TransparentTranscriptV1::new(
-            super::stark::ZK_X509_DIGEST_CONTEXT_V1,
+            super::super::stark::ZK_X509_DIGEST_CONTEXT_V1,
             b"zk-x509-io-test",
             &profile,
             &public,

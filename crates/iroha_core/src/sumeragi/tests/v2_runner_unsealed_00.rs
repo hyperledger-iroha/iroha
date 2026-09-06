@@ -10,13 +10,14 @@ fn canonical_body_recovery_batches_all_ordered_heights_before_gate_close() {
             finality_artifact_hash: HashOf::from_untyped_unchecked(Hash::new(
                 &[b"finality".as_slice(), &height.to_le_bytes()].concat(),
             )),
-            execution_commitment: wire::ExecutionCommitment::without_topups_or_merge_carrier(
-                Hash::new(b"parent state"),
-                Hash::new(b"post state"),
-                Hash::new(b"writes"),
-                1,
-                executed_block_wire_hash,
-            ),
+            execution_commitment:
+                wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+                    Hash::new(b"parent state"),
+                    Hash::new(b"post state"),
+                    Hash::new(b"writes"),
+                    1,
+                    executed_block_wire_hash,
+                ),
             executed_block_wire_len: 1,
             executed_block_wire_hash,
         }
@@ -227,9 +228,12 @@ fn context() -> (wire::HeightContext, Vec<KeyPair>) {
             power: 1,
         })
         .collect::<Vec<_>>();
+    let network_id = crate::sumeragi::synthetic_network_id("v2-runner-test");
+    let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
+        crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(network_id, 0, &roster);
     (
         wire::HeightContext {
-            network_id: crate::sumeragi::synthetic_network_id("v2-runner-test"),
+            network_id,
             protocol_version: wire::PROTOCOL_VERSION,
             height: 1,
             epoch: 0,
@@ -240,6 +244,8 @@ fn context() -> (wire::HeightContext, Vec<KeyPair>) {
             snapshot_bootstrap: None,
             quorum: wire::DualQuorum::from_roster(&roster).expect("quorum"),
             roster,
+            kagemusha_mint_finality_epoch_id,
+            kagemusha_mint_finality_epoch_roster,
             nexus_amx_context_hash: Hash::new(b"runner-test-nexus-amx"),
             execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: wire::DataAvailabilityLayout {
@@ -269,13 +275,14 @@ fn decided_recovery_certified_request(
             proposal_round: round,
             phase: wire::GlobalPhase::Prepare,
             subject,
-            execution_commitment: wire::ExecutionCommitment::without_topups_or_merge_carrier(
-                Hash::new(b"runner recovery parent state"),
-                Hash::new(b"runner recovery post state"),
-                Hash::new(b"runner recovery ordinary writes"),
-                1,
-                Hash::new(b"runner recovery executed block"),
-            ),
+            execution_commitment:
+                wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+                    Hash::new(b"runner recovery parent state"),
+                    Hash::new(b"runner recovery post state"),
+                    Hash::new(b"runner recovery ordinary writes"),
+                    1,
+                    Hash::new(b"runner recovery executed block"),
+                ),
             signers: (0..super::super::network_topology::commit_quorum_from_len(
                 context.roster.len(),
             ))
@@ -486,6 +493,94 @@ fn terminal_current_serve_source_retention_retries_without_reopening_runtime() {
         0,
         "unauthorized retry must fail before touching the output owner"
     );
+}
+
+#[test]
+fn validate_sidecar_barrier_services_the_typed_pacemaker_escape_before_lane_work() {
+    let run_inner = include_str!("../v2_runner/lifecycle_run_inner.rs");
+    let turn_driver = include_str!("../v2_lifecycle_turn_driver.rs");
+    let lane_branch_start = run_inner
+        .find("} else if lane_only_completion_barrier {")
+        .expect("runner retains an explicit lane-only Completion branch");
+    let lane_branch_end = run_inner[lane_branch_start..]
+        .find("} else {")
+        .map(|offset| lane_branch_start + offset)
+        .expect("ordinary Runtime service follows the lane-only branch");
+    let lane_branch = &run_inner[lane_branch_start..lane_branch_end];
+    let ingress_gate = lane_branch
+        .find("producer_claim.validate_sidecar_pacemaker_escape_permit()")
+        .expect("the missing-sidecar barrier retains a typed ingress gate");
+    let progress_dequeue = lane_branch[ingress_gate..]
+        .find("activated.prepare_validate_sidecar_pacemaker_ingress_turn(permit)")
+        .map(|offset| ingress_gate + offset)
+        .expect("the sidecar barrier admits one sealed global Progress occurrence");
+    let pacemaker_gate = lane_branch[progress_dequeue..]
+        .find("producer_claim.validate_sidecar_pacemaker_escape_permit()")
+        .map(|offset| progress_dequeue + offset)
+        .expect("the missing-sidecar barrier retains a typed runtime gate");
+    let physical_cut = lane_branch[pacemaker_gate..]
+        .find(".set_ingress_physical_cut(")
+        .map(|offset| pacemaker_gate + offset)
+        .expect("the escape preserves the fair-ingress physical cut");
+    let completion_cut = lane_branch[physical_cut..]
+        .find(".prepare_completion_runtime_cut(")
+        .map(|offset| physical_cut + offset)
+        .expect("the escape linearizes behind the physical Completion prefix");
+    let pacemaker_step = lane_branch[completion_cut..]
+        .find("executor.step_pacemaker_after_completion_runtime_cut(")
+        .map(|offset| completion_cut + offset)
+        .expect("the escape services one typed pacemaker turn");
+    let retain_certified_view = lane_branch[pacemaker_step..]
+        .find("lane_work.retain_merge_sidecars_for_global_view(")
+        .map(|offset| pacemaker_step + offset)
+        .expect("the resulting certified view is reconciled into lane ownership");
+    let generic_sidecar_drive = lane_branch[retain_certified_view..]
+        .find("drive_merge_sidecar_recovery(")
+        .map(|offset| retain_certified_view + offset)
+        .expect("ordinary sidecar recovery follows certified-view reconciliation");
+    let capacity_relief = lane_branch[completion_cut..]
+        .find("executor.step_completion_capacity_relief_after_cut(")
+        .map(|offset| completion_cut + offset)
+        .expect("a full FIFO admits only the typed Completion-class relief turn");
+
+    assert!(ingress_gate < progress_dequeue);
+    assert!(progress_dequeue < pacemaker_gate);
+    assert!(pacemaker_gate < physical_cut);
+    assert!(physical_cut < completion_cut);
+    assert!(physical_cut < pacemaker_step);
+    assert!(pacemaker_step < retain_certified_view);
+    assert!(retain_certified_view < generic_sidecar_drive);
+    assert!(completion_cut < capacity_relief);
+    assert!(
+        !lane_branch.contains("executor.step_after_completion_runtime_cut("),
+        "the Validate-sidecar barrier must never reopen generic reducer scheduling"
+    );
+
+    let predicate_start = turn_driver
+        .find("fn selected_ingress_is_validate_sidecar_pacemaker_progress(")
+        .expect("the sealed dequeue retains an explicit wire-family predicate");
+    let predicate_end = turn_driver[predicate_start..]
+        .find("\n}\n")
+        .map(|offset| predicate_start + offset)
+        .expect("pacemaker wire-family predicate remains finite");
+    let predicate = &turn_driver[predicate_start..predicate_end];
+    for allowed in ["QuorumCertificate", "TimeoutVote", "TimeoutCertificate"] {
+        assert!(
+            predicate.contains(allowed),
+            "missing {allowed} Progress root"
+        );
+    }
+    for fenced in [
+        "ConsensusMessageV2Payload::Proposal(",
+        "ConsensusMessageV2Payload::Vote(",
+        "ConsensusMessageV2Payload::PayloadChunk(",
+        "ConsensusMessageV2Payload::CertifiedBodyRequest(",
+    ] {
+        assert!(
+            !predicate.contains(fenced),
+            "{fenced} must remain behind ordinary lifecycle ingress"
+        );
+    }
 }
 
 #[test]
@@ -1040,13 +1135,14 @@ fn test_recovered_complete_tip_authority(
             proposal_round: round,
             phase: wire::GlobalPhase::Commit,
             subject,
-            execution_commitment: wire::ExecutionCommitment::without_topups_or_merge_carrier(
-                Hash::new(b"recovered complete-tip parent state"),
-                Hash::new(b"recovered complete-tip post state"),
-                Hash::new(b"recovered complete-tip writes"),
-                1,
-                Hash::new(b"recovered complete-tip executed block"),
-            ),
+            execution_commitment:
+                wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+                    Hash::new(b"recovered complete-tip parent state"),
+                    Hash::new(b"recovered complete-tip post state"),
+                    Hash::new(b"recovered complete-tip writes"),
+                    1,
+                    Hash::new(b"recovered complete-tip executed block"),
+                ),
             signers: Vec::new(),
             aggregate_signature: Vec::new(),
         },

@@ -19,8 +19,12 @@ use iroha_config::parameters::{
 use iroha_crypto::{Algorithm, Hash as CryptoHash, HashOf, PublicKey};
 use iroha_data_model::{
     NetworkId,
-    block::consensus_v2::{
-        BlockSubject, ConsensusMessageV2, ConsensusMessageV2Payload, ConsensusMode, ConsensusRound,
+    block::{
+        consensus::Evidence,
+        consensus_v2::{
+            BlockSubject, ConsensusMessageV2, ConsensusMessageV2Payload, ConsensusMode,
+            ConsensusRound,
+        },
     },
     merge::{
         MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES, MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES,
@@ -51,7 +55,7 @@ use std::{
 };
 static CONFIGURED_SUMERAGI_STACK_SIZE_BYTES: AtomicUsize = AtomicUsize::new(0);
 const WORKER_WAKE_CHANNEL_CAP: usize = 1;
-// The valid v2 timeout-vote envelope has at most 128 signers and two bounded BLS signatures.
+// The valid v2 timeout-vote envelope has at most 31 signers and two bounded signatures.
 // Keep this conservative ceiling aligned with the formal refinement and maximal fixture below;
 // the production byte reserve is intentionally much larger.
 const MAX_VALID_TIMEOUT_VOTE_WIRE_BYTES: usize = 4 * 1024;
@@ -61,7 +65,10 @@ const MAX_VALID_TIMEOUT_VOTE_WIRE_BYTES: usize = 4 * 1024;
 const MAX_LANE_PROGRESS_MESSAGE_WIRE_BYTES: usize = MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES;
 const MAX_LANE_COMPLETION_MESSAGE_WIRE_BYTES: usize = MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES;
 const _: () = assert!(TIMEOUT_VOTE_RESERVE_BYTES >= MAX_VALID_TIMEOUT_VOTE_WIRE_BYTES);
-const _: () = assert!(iroha_data_model::block::consensus_v2::MAX_CONSENSUS_SIGNATURE_BYTES == 256);
+// A maximal Kagemusha V1 CommitQC carries the ordinary BLS aggregate plus
+// the exact 2f + 1 paired-Pasta seal bundle for the bounded 31-validator roster.
+const _: () =
+    assert!(iroha_data_model::block::consensus_v2::MAX_CONSENSUS_SIGNATURE_BYTES == 16 * 1024);
 type SumeragiThreadWork = Box<dyn FnOnce() + Send + 'static>;
 type SumeragiThreadCompletion = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
 type SumeragiThreadSpawner =
@@ -417,6 +424,8 @@ mod epoch_schedule_tests {
         );
         let mut parameters = SumeragiNposParameters::default();
         parameters.epoch_length_blocks = NonZeroU64::new(7).expect("non-zero epoch length");
+        parameters.evidence_horizon_blocks = 14;
+        parameters.slashing_delay_blocks = 7;
         parameters
             .validate()
             .expect("test NPoS parameters must be internally consistent");
@@ -481,7 +490,6 @@ mod epoch_schedule_tests {
 }
 /// QC-based consensus message types and helpers (single-chain).
 pub mod consensus;
-pub mod da;
 pub(crate) mod evidence;
 pub(crate) mod exec;
 pub(crate) mod lane_planner;
@@ -543,7 +551,7 @@ pub use evidence::evidence_subject_height_view;
 /// Propagates [`EvidenceValidationError`](evidence::EvidenceValidationError) when the payload
 /// fails any of the structural or metadata consistency checks enforced by consensus.
 pub fn validate_evidence(
-    evidence: &consensus::Evidence,
+    evidence: &Evidence,
     context: &EvidenceValidationContext<'_>,
 ) -> Result<(), evidence::EvidenceValidationError> {
     evidence::validate_evidence(evidence, context)
@@ -986,7 +994,6 @@ enum FairV2IngressMessageKind {
     V2QuorumCertificate,
     V2TimeoutVote,
     V2TimeoutCertificate,
-    V2PayloadManifest,
     V2PayloadChunk,
     V2CertifiedBodyRequest,
     V2CertifiedBodyResponse,
@@ -1033,8 +1040,7 @@ fn fair_v2_ingress_control_kind(message: &BlockMessage) -> Option<FairV2IngressC
         ConsensusMessageV2Payload::TimeoutCertificate(_) => {
             FairV2IngressControlKind::TimeoutCertificate
         }
-        ConsensusMessageV2Payload::PayloadManifest(_)
-        | ConsensusMessageV2Payload::PayloadChunk(_)
+        ConsensusMessageV2Payload::PayloadChunk(_)
         | ConsensusMessageV2Payload::CertifiedBodyRequest(_)
         | ConsensusMessageV2Payload::CertifiedBodyResponse(_)
         | ConsensusMessageV2Payload::CommitCertificateRequest(_)
@@ -1057,8 +1063,7 @@ fn fair_v2_ingress_same_control_slot(
             ConsensusMessageV2Payload::QuorumCertificate(certificate) => certificate.round,
             ConsensusMessageV2Payload::TimeoutVote(vote) => vote.round,
             ConsensusMessageV2Payload::TimeoutCertificate(certificate) => certificate.round,
-            ConsensusMessageV2Payload::PayloadManifest(_)
-            | ConsensusMessageV2Payload::PayloadChunk(_)
+            ConsensusMessageV2Payload::PayloadChunk(_)
             | ConsensusMessageV2Payload::CertifiedBodyRequest(_)
             | ConsensusMessageV2Payload::CertifiedBodyResponse(_)
             | ConsensusMessageV2Payload::CommitCertificateRequest(_)
@@ -1248,7 +1253,6 @@ fn fair_v2_ingress_history_serve_request(
         | ConsensusMessageV2Payload::QuorumCertificate(_)
         | ConsensusMessageV2Payload::TimeoutVote(_)
         | ConsensusMessageV2Payload::TimeoutCertificate(_)
-        | ConsensusMessageV2Payload::PayloadManifest(_)
         | ConsensusMessageV2Payload::PayloadChunk(_)
         | ConsensusMessageV2Payload::CertifiedBodyRequest(_)
         | ConsensusMessageV2Payload::CertifiedBodyResponse(_)
@@ -1416,8 +1420,7 @@ fn fair_v2_ingress_leader_wire_identity(
             FairV2IngressLeaderWirePhase::CertifiedResponse,
             None,
         ),
-        ConsensusMessageV2Payload::PayloadManifest(_)
-        | ConsensusMessageV2Payload::CertifiedBodyRequest(_)
+        ConsensusMessageV2Payload::CertifiedBodyRequest(_)
         | ConsensusMessageV2Payload::CommitCertificateRequest(_)
         | ConsensusMessageV2Payload::CommitCertificateResponse(_)
         | ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => {
@@ -1438,6 +1441,22 @@ fn fair_v2_ingress_leader_wire_identity(
         phase,
         semantic_origin: semantic_origin.clone(),
         canonical_wire_hash,
+        vote_statement_hash: match &message.payload {
+            ConsensusMessageV2Payload::Vote(vote) if vote.round == vote.proposal_round => {
+                Some(v2::leader_wire_vote_statement_hash(
+                    vote.proposal_round,
+                    vote.subject,
+                    &vote.execution_commitment,
+                ))
+            }
+            _ => None,
+        },
+        timeout_prepare_view: match &message.payload {
+            ConsensusMessageV2Payload::TimeoutCertificate(tc) => {
+                tc.highest_prepare_qc().map(|qc| qc.round.view)
+            }
+            _ => None,
+        },
     };
     FairV2IngressLeaderWireDerivation::Exact { identity, slot }
 }
@@ -1643,23 +1662,22 @@ impl FairV2IngressMessageKind {
             Self::V2QuorumCertificate => 2,
             Self::V2TimeoutVote => 3,
             Self::V2TimeoutCertificate => 4,
-            Self::V2PayloadManifest => 5,
-            Self::V2PayloadChunk => 6,
-            Self::V2CertifiedBodyRequest => 7,
-            Self::V2CertifiedBodyResponse => 8,
-            Self::V2CommitCertificateRequest => 9,
-            Self::V2CommitCertificateResponse => 10,
-            Self::KuraReplicaAdvert => 11,
-            Self::LaneBlockProposal => 12,
-            Self::LaneExecutablePayload => 13,
-            Self::LaneBlockNewViewVote => 14,
-            Self::LaneBlockNewViewCertificate => 15,
-            Self::LaneBlockVote => 16,
-            Self::LaneBlockQc => 17,
-            Self::LaneBlockCertificate => 18,
-            Self::LaneHistoricalRecoveryRequest => 19,
-            Self::LaneHistoricalRecoveryResponse => 20,
-            Self::V2GlobalBeaconPartialSignature => 21,
+            Self::V2PayloadChunk => 5,
+            Self::V2CertifiedBodyRequest => 6,
+            Self::V2CertifiedBodyResponse => 7,
+            Self::V2CommitCertificateRequest => 8,
+            Self::V2CommitCertificateResponse => 9,
+            Self::KuraReplicaAdvert => 10,
+            Self::LaneBlockProposal => 11,
+            Self::LaneExecutablePayload => 12,
+            Self::LaneBlockNewViewVote => 13,
+            Self::LaneBlockNewViewCertificate => 14,
+            Self::LaneBlockVote => 15,
+            Self::LaneBlockQc => 16,
+            Self::LaneBlockCertificate => 17,
+            Self::LaneHistoricalRecoveryRequest => 18,
+            Self::LaneHistoricalRecoveryResponse => 19,
+            Self::V2GlobalBeaconPartialSignature => 20,
         }
     }
     fn classify(message: &BlockMessage) -> Option<Self> {
@@ -1671,7 +1689,6 @@ impl FairV2IngressMessageKind {
                 ConsensusMessageV2Payload::QuorumCertificate(_) => Self::V2QuorumCertificate,
                 ConsensusMessageV2Payload::TimeoutVote(_) => Self::V2TimeoutVote,
                 ConsensusMessageV2Payload::TimeoutCertificate(_) => Self::V2TimeoutCertificate,
-                ConsensusMessageV2Payload::PayloadManifest(_) => Self::V2PayloadManifest,
                 ConsensusMessageV2Payload::PayloadChunk(_) => Self::V2PayloadChunk,
                 ConsensusMessageV2Payload::CertifiedBodyRequest(_) => Self::V2CertifiedBodyRequest,
                 ConsensusMessageV2Payload::CertifiedBodyResponse(_) => {
@@ -1711,7 +1728,6 @@ impl FairV2IngressMessageKind {
                 | Self::V2QuorumCertificate
                 | Self::V2TimeoutVote
                 | Self::V2TimeoutCertificate
-                | Self::V2PayloadManifest
                 | Self::V2PayloadChunk
                 | Self::V2CertifiedBodyRequest
                 | Self::V2CertifiedBodyResponse
@@ -1730,7 +1746,6 @@ fn fair_v2_ingress_projection_codes_are_dense() {
         FairV2IngressMessageKind::V2QuorumCertificate,
         FairV2IngressMessageKind::V2TimeoutVote,
         FairV2IngressMessageKind::V2TimeoutCertificate,
-        FairV2IngressMessageKind::V2PayloadManifest,
         FairV2IngressMessageKind::V2PayloadChunk,
         FairV2IngressMessageKind::V2CertifiedBodyRequest,
         FairV2IngressMessageKind::V2CertifiedBodyResponse,
@@ -1765,7 +1780,6 @@ fn fair_v2_ingress_consensus_round(
         ConsensusMessageV2Payload::QuorumCertificate(certificate) => Some(certificate.round),
         ConsensusMessageV2Payload::TimeoutVote(vote) => Some(vote.round),
         ConsensusMessageV2Payload::TimeoutCertificate(certificate) => Some(certificate.round),
-        ConsensusMessageV2Payload::PayloadManifest(manifest) => Some(manifest.round),
         ConsensusMessageV2Payload::CertifiedBodyRequest(request) => Some(request.round),
         ConsensusMessageV2Payload::CertifiedBodyResponse(response) => Some(response.manifest.round),
         ConsensusMessageV2Payload::CommitCertificateResponse(response) => {
@@ -2803,9 +2817,9 @@ impl FairV2IngressClass {
             | ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => Self::Progress,
             ConsensusMessageV2Payload::PayloadChunk(_)
             | ConsensusMessageV2Payload::CertifiedBodyResponse(_) => Self::TransportCompletion,
-            ConsensusMessageV2Payload::Proposal(_)
-            | ConsensusMessageV2Payload::Vote(_)
-            | ConsensusMessageV2Payload::PayloadManifest(_) => Self::Auxiliary,
+            ConsensusMessageV2Payload::Proposal(_) | ConsensusMessageV2Payload::Vote(_) => {
+                Self::Auxiliary
+            }
         }
     }
 }
@@ -3630,8 +3644,8 @@ fn fair_v2_ingress_required_commit_certificate_response_bytes(roster_len: usize)
 /// compact lengths. `F(x)` is one compact length prefix plus `x` payload
 /// bytes. A `Vec<Hash>` is its eight-byte sequence count plus 33 bytes per
 /// element: one compact element-length byte and the 32-byte hash. The numeric
-/// constants are the exact maxima for the remaining bounded structural fields
-/// (including a 256-byte consensus signature) at each nesting layer. Overflow
+/// constants are the exact maxima for the remaining bounded structural fields;
+/// the current consensus-signature ceiling is charged explicitly below at each nesting layer. Overflow
 /// maps to `usize::MAX`, making height activation fail closed before ingress
 /// opens. `raw_key_bytes` excludes the compact public-key algorithm tag.
 fn fair_v2_ingress_required_transport_completion_bytes_for_key(
@@ -4661,18 +4675,37 @@ impl FairV2Ingress {
             .leader_wire_lifecycles
             .iter()
             .filter_map(|(slot, record)| {
-                (record.status == FairV2IngressLeaderWireStatus::Dormant
-                    && next.retires(&record.token))
+                (matches!(
+                    record.status,
+                    FairV2IngressLeaderWireStatus::Dormant
+                        | FairV2IngressLeaderWireStatus::VolatileTerminal
+                ) && next.retires(&record.token))
                 .then(|| slot.clone())
             })
             .collect::<BTreeSet<_>>();
-        gate.advance_recovery_cut(next, &retiring)?;
+        let rearming = gate.advance_recovery_cut(next, &retiring)?;
         for slot in &retiring {
             let removed = state
                 .leader_wire_lifecycles
                 .remove(slot)
                 .expect("durably retired dormant leader-wire slot remains mirrored");
-            debug_assert_eq!(removed.status, FairV2IngressLeaderWireStatus::Dormant);
+            debug_assert!(matches!(
+                removed.status,
+                FairV2IngressLeaderWireStatus::Dormant
+                    | FairV2IngressLeaderWireStatus::VolatileTerminal
+            ));
+        }
+        for slot in &rearming {
+            let record = state
+                .leader_wire_lifecycles
+                .get_mut(slot)
+                .expect("durably rearmed terminal remains mirrored");
+            assert_eq!(
+                record.status,
+                FairV2IngressLeaderWireStatus::VolatileTerminal
+            );
+            record.status = FairV2IngressLeaderWireStatus::Dormant;
+            record.ingress_predecessors.clear();
         }
         self.debug_assert_consistent(&state);
         Ok(retiring.len())
@@ -5107,12 +5140,20 @@ impl FairV2Ingress {
                 "leader-wire obsolete terminal lacks durable recovery authority".to_owned(),
             );
         }
-        gate.mark_volatile_terminal(runtime)?;
+        let terminal_status = gate.mark_volatile_terminal(runtime)?;
         let record = state
             .leader_wire_lifecycles
             .get_mut(&token.slot)
             .expect("validated leader-wire runtime record remains bound");
-        record.status = FairV2IngressLeaderWireStatus::VolatileTerminal;
+        record.status = match terminal_status {
+            serviced_candidate_store::LeaderWireLifecycleStatus::Dormant => {
+                FairV2IngressLeaderWireStatus::Dormant
+            }
+            serviced_candidate_store::LeaderWireLifecycleStatus::VolatileTerminal => {
+                FairV2IngressLeaderWireStatus::VolatileTerminal
+            }
+            _ => return Err("leader-wire terminal returned a carrier-owning status".to_owned()),
+        };
         record.ingress_predecessors.clear();
         self.debug_assert_consistent(&state);
         Ok(())
@@ -7051,6 +7092,11 @@ pub struct SumeragiStartArgs {
     /// serialized into configuration or World state.
     pub global_beacon_partial_signer:
         Option<Arc<dyn crate::beacon::GlobalThresholdBeaconPartialSignerV1>>,
+    /// Runtime-only separately provisioned Pasta authority for Kagemusha
+    /// V1 mint-finality Commit votes. Absence leaves ordinary consensus live
+    /// but makes every top-up-bearing vote fail closed.
+    pub kagemusha_mint_finality_authority:
+        Option<Arc<crate::zk::kagemusha_v1_recursion::KagemushaMintFinalityLocalAuthorityV1>>,
     /// Exact startup replay boundary authenticated before Kura replay and
     /// moved into active-height recovery without a historical rescan.
     pub startup_replay_plan: V2StartupReplayPlan,
@@ -7133,6 +7179,7 @@ impl SumeragiStartArgs {
             provider_ingest_finalized_archive,
             reputation_finalized_archive,
             global_beacon_partial_signer,
+            kagemusha_mint_finality_authority,
             startup_replay_plan,
             startup_replay_inventory_guard,
             network,
@@ -7234,6 +7281,7 @@ impl SumeragiStartArgs {
             provider_ingest_finalized_archive,
             reputation_finalized_archive,
             global_beacon_partial_signer,
+            kagemusha_mint_finality_authority,
             startup_replay_plan,
             startup_replay_inventory_guard,
             network,
@@ -7454,6 +7502,8 @@ struct SumeragiWorker {
         Option<Arc<crate::query::reputation_finalized::ReputationFinalizedArchive>>,
     global_beacon_partial_signer:
         Option<Arc<dyn crate::beacon::GlobalThresholdBeaconPartialSignerV1>>,
+    kagemusha_mint_finality_authority:
+        Option<Arc<crate::zk::kagemusha_v1_recursion::KagemushaMintFinalityLocalAuthorityV1>>,
     startup_replay_plan: V2StartupReplayPlan,
     startup_replay_inventory_guard: V2StartupReplayInventoryGuard,
     network: IrohaNetwork,
@@ -8540,7 +8590,7 @@ mod authoritative_runtime_gate_tests {
     }
     #[test]
     fn fair_v2_ingress_recommended_context_fits_default_disjoint_byte_partitions() {
-        let layout = wire::SumeragiV2GenesisContextParameters::recommended().da_layout;
+        let layout = wire::recommended_data_availability_layout();
         assert_eq!(
             usize::try_from(layout.max_chunk_count).expect("recommended count fits usize"),
             iroha_config::parameters::defaults::sumeragi::RECOMMENDED_DA_MAX_CHUNK_COUNT,
@@ -8548,13 +8598,13 @@ mod authoritative_runtime_gate_tests {
         );
         let required = super::fair_v2_ingress_required_transport_completion_bytes(layout);
         assert_eq!(
-            required, 16_828_108,
+            required, 16_844_237,
             "recommended wire ceiling is a regression boundary"
         );
         let required_proposal =
             super::fair_v2_ingress_required_proposal_bytes(layout, wire::MAX_VALIDATORS_PER_HEIGHT);
         assert_eq!(
-            required_proposal, 73_916,
+            required_proposal, 1_106_267,
             "maximal proposal wire geometry is a regression boundary"
         );
         let proposal = v2_maximum_structural_proposal_wire(layout, wire::MAX_VALIDATORS_PER_HEIGHT);
@@ -8668,16 +8718,16 @@ mod authoritative_runtime_gate_tests {
         let minimal_layout = minimal_rs16_layout();
         let minimal_proposal_bytes =
             super::fair_v2_ingress_required_proposal_bytes(minimal_layout, 1);
-        assert_eq!(minimal_proposal_bytes, 2_709);
+        assert_eq!(minimal_proposal_bytes, 67_236);
         assert_eq!(
             encoded_v2_len(&v2_maximum_structural_proposal_wire(minimal_layout, 1)),
             minimal_proposal_bytes,
             "minimal-layout/single-validator geometry must not rely on maximal-roster dominance"
         );
         assert!(
-            super::fair_v2_ingress_required_commit_certificate_response_bytes(1)
-                > minimal_proposal_bytes,
-            "protocol-maximum rotated responder must dominate a minimal proposal"
+            minimal_proposal_bytes
+                > super::fair_v2_ingress_required_commit_certificate_response_bytes(1),
+            "the two signature-bearing proposal branches must dominate a minimal recovery response"
         );
         let minimal_peer = maximal_roster
             .first()

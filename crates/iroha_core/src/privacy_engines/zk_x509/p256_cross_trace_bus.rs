@@ -2330,7 +2330,7 @@ mod tests {
             P256_CROSS_TRACE_LANES_V1 * P256_CROSS_TRACE_CHALLENGE_TERMS_V1
         );
         let mut transcript = TransparentTranscriptV1::new(
-            super::stark::ZK_X509_DIGEST_CONTEXT_V1,
+            super::super::stark::ZK_X509_DIGEST_CONTEXT_V1,
             b"p256-cross-trace-test",
             &GoldilocksDigest384V1::new([0x43; 6]).expect("profile digest"),
             &GoldilocksDigest384V1::new([0xb8; 6]).expect("public digest"),

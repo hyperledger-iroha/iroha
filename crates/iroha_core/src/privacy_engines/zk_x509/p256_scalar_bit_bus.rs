@@ -1889,7 +1889,7 @@ mod tests {
         window_commitments: &[GoldilocksDigest384V1; 128],
     ) -> TransparentTranscriptV1 {
         let mut transcript = TransparentTranscriptV1::new(
-            super::stark::ZK_X509_DIGEST_CONTEXT_V1,
+            super::super::stark::ZK_X509_DIGEST_CONTEXT_V1,
             b"p256-scalar-bit-bus-test",
             &GoldilocksDigest384V1::new([0x31; 6]).expect("profile digest"),
             &GoldilocksDigest384V1::new([0x72; 6]).expect("public digest"),
@@ -3018,7 +3018,7 @@ mod tests {
             first_challenges
         );
         let mut bare = TransparentTranscriptV1::new(
-            super::stark::ZK_X509_DIGEST_CONTEXT_V1,
+            super::super::stark::ZK_X509_DIGEST_CONTEXT_V1,
             b"p256-scalar-bit-bus-test",
             &GoldilocksDigest384V1::new([0x31; 6]).expect("profile digest"),
             &GoldilocksDigest384V1::new([0x72; 6]).expect("public digest"),

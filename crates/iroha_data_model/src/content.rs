@@ -23,6 +23,8 @@ pub type ContentBundleId = Hash;
 /// Entry in a content bundle file index.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::content::ContentFileEntry")]
 pub struct ContentFileEntry {
     /// Normalised POSIX path inside the tar archive.
     pub path: String,
@@ -47,6 +49,8 @@ impl ContentFileEntry {
 /// cache cannot bypass current role or sponsor authorization.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::content::ContentCachePolicy")]
 pub struct ContentCachePolicy {
     /// Maximum public-cache lifetime in seconds (used for `Cache-Control` max-age).
     pub max_age_seconds: u32,
@@ -66,6 +70,8 @@ impl ContentCachePolicy {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(tag = "mode", content = "value")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::content::ContentAuthMode")]
 pub enum ContentAuthMode {
     /// Bundle is publicly readable.
     Public,
@@ -77,6 +83,8 @@ pub enum ContentAuthMode {
 /// Bundle-level manifest describing cache/auth/placement metadata.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::content::ContentBundleManifest")]
 pub struct ContentBundleManifest {
     /// Stable identifier of the tar archive (BLAKE2b-256).
     pub bundle_id: ContentBundleId,
@@ -120,6 +128,8 @@ impl ContentBundleManifest {
 /// Metadata and chunk layout for a published content bundle.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::content::ContentBundleRecord")]
 pub struct ContentBundleRecord {
     /// Stable identifier derived from the tar bytes.
     pub bundle_id: ContentBundleId,
@@ -161,6 +171,8 @@ pub struct ContentBundleRecord {
 /// Chunk payload stored in the content lane store with a reference counter.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::content::ContentChunk")]
 pub struct ContentChunk {
     /// Raw chunk bytes (at most `chunk_size` bytes).
     pub data: Vec<u8>,
@@ -190,6 +202,8 @@ impl ContentChunk {
 /// Range of bytes served for a content file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::content::ContentRange")]
 pub struct ContentRange {
     /// Inclusive start offset (bytes) within the file.
     pub start: u64,
@@ -199,6 +213,8 @@ pub struct ContentRange {
 /// Receipt attached to content responses carrying DA evidence and served range metadata.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::content::ContentDaReceipt")]
 pub struct ContentDaReceipt {
     /// Identifier of the bundle that contained the served file.
     pub bundle_id: ContentBundleId,
@@ -273,3 +289,6 @@ mod tests {
         assert_eq!(sponsor.cache_control_value(), "private, no-store");
     }
 }
+
+#[cfg(test)]
+mod captured_content_schema_tests;

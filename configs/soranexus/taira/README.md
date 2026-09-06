@@ -362,23 +362,15 @@ It requires the exact two-field operator-signature `401` from
 topology and four-replica Inrou convergence belong to the signed Inrou canary,
 not the public route-posture probe.
 
-The maintained SDKs also carry opt-in, credential-free Kagemusha capability
-probes. They perform one bounded `GET /v1/offline/readiness`, reject redirects,
-and require `cash_handoff_v1`, native bridge ABI 23, eight hops, and
-`ready=true`:
+Maintained clients may perform one bounded, credential-free
+`GET /v1/kagemusha/readiness` and must reject redirects. A ready deployment
+advertises only the sole `KagemushaV1` aggregate-balance protocol and its
+authenticated proof and hardware profiles. The readiness schema has no hop,
+origin, ancestry, input-count, note-count, or proof-depth capability field.
 
-```bash
-npm --prefix javascript/iroha_js run test:taira-kagemusha-read-only
-IROHA_TAIRA_KAGEMUSHA_READ_ONLY=1 python3 -m pytest python/iroha_torii_client/tests/taira_kagemusha_live_test.py -q
-(cd kotlin && IROHA_TAIRA_KAGEMUSHA_READ_ONLY=1 ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.TairaKagemushaReadOnlyPublicTest --console=plain)
-(cd java/iroha_android && IROHA_TAIRA_KAGEMUSHA_READ_ONLY=1 ./gradlew :core:test --tests org.hyperledger.iroha.android.offline.TairaKagemushaReadOnlyPublicTests --console=plain)
-(cd IrohaSwift && IROHA_TAIRA_KAGEMUSHA_READ_ONLY=1 swift test --filter TairaKagemushaReadOnlyPublicTests)
-IROHA_TAIRA_KAGEMUSHA_READ_ONLY=1 dotnet test csharp/tests/Hyperledger.Iroha.Sdk.IntegrationTests -- --filter-method '*LiveTairaKagemushaCapabilityIsExactAndReadOnly'
-```
-
-`ready=true` describes the universal peer-cash protocol surface; it does not
+`ready=true` describes the universal KAGEMUSHA peer-cash protocol surface; it does not
 assert that a particular asset has a promoted proof release or operational
-command authority. Use the signed Kagemusha rollout evidence before attempting
+command authority. Use the signed KAGEMUSHA V1 rollout evidence before attempting
 top-up or redemption. Override the probe origin only with the credential-free
 HTTPS origin in `IROHA_TAIRA_PUBLIC_ROOT`.
 The Taira rollout asset is Digital Shekel `7ZepsJTHCVLKsrFFNZGSRGZgvBhv`
@@ -453,9 +445,10 @@ authorization headers in this repository.
 
 ## Retained source-coupled assets
 
-- `config.toml` and `genesis.json` are canonical profile fixtures consumed by
-  compiled Kagami/config/genesis tests. They are not inputs to the disposable
-  generator.
+- `config.toml` and `genesis.template.json` are canonical profile sources
+  consumed by compiled Kagami/config/genesis tests. The genesis source omits
+  operator-owned mint-finality authority, is not a raw or signable manifest,
+  and is not an input to the disposable generator.
 - `privacy_bootstrap_plan.json` and `privacy_rollout_plan_v1.json` remain
   coupled to Kagami's compiled privacy bootstrap feature. The V1 rollout does
   not carry caller-authored assurance or availability claims. It admits a wave
@@ -463,9 +456,16 @@ authorization headers in this repository.
   the twelve rows as `production-qualified`; missing release, audit, security,
   or deployment evidence therefore halts rollout.
 - `dns_records.json`, `explorer.runtime-config.json`, `sorafs_sites.json`, and
-  `taira-canary-client.example.toml` describe the live public profile.
+  `taira-canary-client.example.toml` describe the live public profile. The
+  Explorer runtime config carries the exact genesis-derived `NETWORK_ID`, the
+  fixed public Torii origin, and `toriiForceBaseUrl: true`; retired feature
+  flags are not accepted by the first-release Explorer.
 - `validator_roster.example.toml`, the edge renderer, nginx template, and edge
-  installer remain the public-ingress configuration surface.
+  installer remain the public-ingress configuration surface. The production
+  `taira-explorer.sora.org` TLS vhost serves only the Explorer release symlink
+  at `/Users/administrator/dev/iroha2-block-explorer-web/dist`; it does not
+  proxy `/status` or `/v1`. Both Torii CORS and the public-edge CORS map admit
+  the exact `https://taira-explorer.sora.org` browser origin.
 
 The edge installer validates with the fixed production executable
 `/usr/sbin/nginx`. Dry runs may run unprivileged; installation and reload must

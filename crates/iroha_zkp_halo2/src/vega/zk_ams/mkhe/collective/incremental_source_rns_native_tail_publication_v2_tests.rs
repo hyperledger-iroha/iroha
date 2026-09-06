@@ -920,8 +920,25 @@ fn parent_declaration_is_exactly_once_and_private() {
         &[
             "#[path = \"incremental_source_rns_native_tail_publication_v2.rs\"]",
             "mod incremental_source_rns_native_tail_publication_v2;",
-            "pub(in crate::vega::zk_ams::mkhe) use incremental_source_rns_native_tail_publication_v2::RnsNativeClaimedDirectNumericOriginV2;",
+            "pub(in crate::vega::zk_ams::mkhe) use incremental_source_rns_native_tail_publication_v2::{",
         ]
+    );
+    let exports = parent
+        .split_once(
+            "pub(in crate::vega::zk_ams::mkhe) use incremental_source_rns_native_tail_publication_v2::{",
+        )
+        .expect("private tail-publication re-export")
+        .1
+        .split_once("};")
+        .expect("tail-publication re-export boundary")
+        .0;
+    assert_eq!(
+        exports
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .collect::<Vec<_>>(),
+        ["RnsNativeClaimedDirectNumericOriginV2, RnsNativeQpcsCompositeAuthorityV2,"]
     );
     assert_eq!(
         parent
@@ -1086,8 +1103,8 @@ fn coordinator_preserves_callback_error_origin_and_every_live_gate_remains_close
         );
     }
     assert!(source.contains("let callback_failure = Cell::new(None);"));
-    assert!(source.contains("let callback_failure_ref = &callback_failure;"));
-    assert_eq!(source.matches("callback_failure_ref").count(), 6);
+    assert!(source.contains("let callback_failure_slot = &callback_failure;"));
+    assert_eq!(source.matches("callback_failure_slot").count(), 6);
     assert_eq!(source.matches(".set(Some(").count(), 5);
     assert_eq!(source.matches("callback_failure.get()").count(), 2);
     assert!(!source.contains("let mut callback_failure = None;"));

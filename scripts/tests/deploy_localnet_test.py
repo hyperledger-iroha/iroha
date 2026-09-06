@@ -58,6 +58,20 @@ class DeployLocalnetShellSafetyTest(unittest.TestCase):
         self.assertIn("(PEERS - 1) % 3 != 0", text)
         self.assertIn("exact revision-4 3f + 1 committee", text)
 
+    def test_tool_binaries_share_one_cargo_build_invocation(self) -> None:
+        text = SCRIPT.read_text(encoding="utf-8")
+        start = text.index("build_tool_bins() {")
+        end = text.index("\n}", start)
+        build_function = text[start:end]
+
+        self.assertEqual(build_function.count('"${cargo_runner[@]}" build'), 1)
+        for package_and_binary in (
+            "-p iroha_kagami --bin kagami",
+            "-p irohad --bin iroha3d",
+            "-p iroha_cli --bin iroha",
+        ):
+            self.assertIn(package_and_binary, build_function)
+
 
 if __name__ == "__main__":
     unittest.main()

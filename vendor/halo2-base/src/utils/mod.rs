@@ -207,7 +207,11 @@ pub fn bigint_to_fe<F: BigPrimeField>(e: &BigInt) -> F {
     {
         let (sign, bytes) = e.to_bytes_le();
         let f_abs = F::from_bytes_le(&bytes);
-        if sign == Sign::Minus { -f_abs } else { f_abs }
+        if sign == Sign::Minus {
+            -f_abs
+        } else {
+            f_abs
+        }
     }
 }
 
@@ -511,15 +515,15 @@ pub mod fs {
 
     use crate::halo2_proofs::{
         halo2curves::{
-            CurveAffine,
             bn256::{Bn256, G1Affine},
+            CurveAffine,
         },
         poly::{
             commitment::{Params, ParamsProver},
             kzg::commitment::ParamsKZG,
         },
     };
-    use rand_chacha::{ChaCha20Rng, rand_core::SeedableRng};
+    use rand_chacha::{rand_core::SeedableRng, ChaCha20Rng};
 
     /// Reads the srs from a file found in `./params/kzg_bn254_{k}.srs` or `{dir}/kzg_bn254_{k}.srs` if `PARAMS_DIR` env var is specified.
     /// * `k`: degree that expresses the size of circuit (i.e., 2^<sup>k</sup> is the number of rows in the circuit)
@@ -578,8 +582,8 @@ mod tests {
     };
     use num_bigint::RandomBits;
     use rand::{
-        Rng, SeedableRng,
         rngs::{OsRng, StdRng},
+        Rng, SeedableRng,
     };
     use std::ops::Shl;
 

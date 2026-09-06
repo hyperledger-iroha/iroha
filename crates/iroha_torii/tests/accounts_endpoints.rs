@@ -76,4 +76,5 @@ async fn accounts_endpoints_exist() {
         resp.status(),
         StatusCode::OK | StatusCode::TOO_MANY_REQUESTS
     ));
+    app.shutdown().await;
 }

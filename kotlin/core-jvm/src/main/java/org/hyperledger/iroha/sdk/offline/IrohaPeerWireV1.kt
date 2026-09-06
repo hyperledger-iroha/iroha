@@ -13,7 +13,7 @@ enum class IrohaPeerPayloadProfile(
     val code: Int,
     val requiredSchemaVersion: Int,
 ) {
-    KAGEMUSHA_RECURSIVE_SPEND(2, 0x0102);
+    KAGEMUSHA_V1(1, 1);
 
     companion object {
         @JvmStatic fun fromCode(code: Int): IrohaPeerPayloadProfile? =
@@ -21,9 +21,9 @@ enum class IrohaPeerPayloadProfile(
     }
 }
 
-/** Stable request/payment/acknowledgement identifiers carried by IPM1. */
+/** Frozen three-message KAGEMUSHA V1 lifecycle identifiers carried by IPM1. */
 enum class IrohaPeerPayloadKind(val code: Int) {
-    RECEIVE_REQUEST(1),
+    REQUEST(1),
     PAYMENT(2),
     ACKNOWLEDGEMENT(3);
 
@@ -51,12 +51,12 @@ enum class IrohaPeerWireCompressionPolicyV1 {
 
 /** Allocation limits shared byte-for-byte by all peer V1 transports. */
 class IrohaPeerWireLimitsV1 @JvmOverloads constructor(
-    val maximumCanonicalBytes: Int = 32 * 1024,
-    val maximumKagemushaEncodedBytes: Int = 24_576,
+    val maximumCanonicalBytes: Int = KagemushaWireV1.MAXIMUM_PAYMENT_BYTES,
+    val maximumKagemushaEncodedBytes: Int = KagemushaWireV1.MAXIMUM_PAYMENT_BYTES,
 ) {
     init {
-        require(maximumCanonicalBytes in 1..(32 * 1_024))
-        require(maximumKagemushaEncodedBytes in 1..24_576)
+        require(maximumCanonicalBytes in 1..KagemushaWireV1.MAXIMUM_PAYMENT_BYTES)
+        require(maximumKagemushaEncodedBytes in 1..KagemushaWireV1.MAXIMUM_PAYMENT_BYTES)
     }
 
     companion object {
@@ -71,7 +71,7 @@ class IrohaPeerCanonicalPayload(
     val schemaVersion: Int,
     bytes: ByteArray,
 ) {
-    private val canonicalBytes = bytes.copyOf()
+    private val canonicalBytes = bytes.boundedCanonicalCopy()
     val bytes: ByteArray get() = canonicalBytes.copyOf()
     val byteCount: Int get() = canonicalBytes.size
 
@@ -81,9 +81,8 @@ class IrohaPeerCanonicalPayload(
             "Peer payload profile ${profile.name} requires schema " +
                 "${profile.requiredSchemaVersion}, received $schemaVersion"
         }
-        require(canonicalBytes.isNotEmpty()) { "Peer payload is empty" }
-        require(canonicalBytes.size <= IrohaPeerWireMessageV1.MAXIMUM_CANONICAL_BYTES) {
-            "Peer payload exceeds its bound"
+        require(canonicalBytes.size <= maximumCanonicalBytes(profile, kind)) {
+            "${profile.name} ${kind.name} payload exceeds its frozen protocol bound"
         }
         validateTypedCanonicalPayload(profile, kind, canonicalBytes)
     }
@@ -101,24 +100,31 @@ class IrohaPeerCanonicalPayload(
 
 }
 
+private fun ByteArray.boundedCanonicalCopy(): ByteArray {
+    require(isNotEmpty()) { "Peer payload is empty" }
+    require(size <= IrohaPeerWireMessageV1.MAXIMUM_CANONICAL_BYTES) {
+        "Peer payload exceeds its bound"
+    }
+    return copyOf()
+}
+
 private fun validateTypedCanonicalPayload(
     profile: IrohaPeerPayloadProfile,
     kind: IrohaPeerPayloadKind,
     bytes: ByteArray,
 ) {
-    if (profile != IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND) return
+    if (profile != IrohaPeerPayloadProfile.KAGEMUSHA_V1) return
     val schema = when (kind) {
-        IrohaPeerPayloadKind.RECEIVE_REQUEST ->
-            "iroha_torii_shared::offline_api::OfflineRecipientReceiveOfferV2"
+        IrohaPeerPayloadKind.REQUEST ->
+            "iroha_data_model::kagemusha::kagemusha_v1::KagemushaPaymentRequestV1"
         IrohaPeerPayloadKind.PAYMENT ->
-            "iroha_data_model::offline::model::KagemushaRecursiveSpendPeerPaymentV4"
+            "iroha_data_model::kagemusha::kagemusha_v1::KagemushaPaymentV1"
         IrohaPeerPayloadKind.ACKNOWLEDGEMENT ->
-            "iroha_data_model::offline::model::KagemushaReceiverAcknowledgementV2"
+            "iroha_data_model::kagemusha::kagemusha_v1::KagemushaAcknowledgementV1"
     }
-    val requiredPadding = when (kind) {
-        IrohaPeerPayloadKind.RECEIVE_REQUEST, IrohaPeerPayloadKind.PAYMENT -> 8
-        IrohaPeerPayloadKind.ACKNOWLEDGEMENT -> 0
-    }
+    val alignment = KagemushaNoritoV1.canonicalAlignment(schema)
+    val requiredPadding =
+        (alignment - NoritoHeader.HEADER_LENGTH % alignment) % alignment
     try {
         val decoded = NoritoHeader.decode(bytes, SchemaHash.hash16(schema))
         val header = decoded.header
@@ -130,13 +136,24 @@ private fun validateTypedCanonicalPayload(
                 header.encode().contentEquals(
                     bytes.copyOfRange(0, NoritoHeader.HEADER_LENGTH),
                 ),
-        ) { "Kagemusha canonical payload must use canonical compact Norito framing" }
+        ) { "KAGEMUSHA V1 payload must use canonical compact Norito framing" }
         header.validateChecksum(decoded.payload)
     } catch (failure: RuntimeException) {
         throw IllegalArgumentException(
-            "Invalid Kagemusha canonical payload for ${kind.name.lowercase()}",
+            "Invalid KAGEMUSHA V1 payload for ${kind.name.lowercase()}",
             failure,
         )
+    }
+}
+
+private fun maximumCanonicalBytes(
+    profile: IrohaPeerPayloadProfile,
+    kind: IrohaPeerPayloadKind,
+): Int = when (profile) {
+    IrohaPeerPayloadProfile.KAGEMUSHA_V1 -> when (kind) {
+        IrohaPeerPayloadKind.REQUEST -> KagemushaWireV1.MAXIMUM_PAYMENT_REQUEST_BYTES
+        IrohaPeerPayloadKind.PAYMENT -> KagemushaWireV1.MAXIMUM_PAYMENT_BYTES
+        IrohaPeerPayloadKind.ACKNOWLEDGEMENT -> KagemushaWireV1.MAXIMUM_ACKNOWLEDGEMENT_BYTES
     }
 }
 
@@ -155,6 +172,8 @@ class IrohaPeerWireMessageV1 private constructor(
     val canonicalHash: ByteArray get() = canonicalDigest.copyOf()
     val wireHash: ByteArray get() = messageDigest.copyOf()
     val encodedBody: ByteArray get() = body.copyOf()
+    /** Complete encoded IPM1 byte count, available without copying its body. */
+    val byteCount: Int get() = HEADER_LENGTH + body.size
     val streamId: ByteArray get() = messageDigest.copyOfRange(0, 16)
 
     @JvmOverloads
@@ -227,8 +246,8 @@ class IrohaPeerWireMessageV1 private constructor(
     companion object {
         const val VERSION = 1
         const val HEADER_LENGTH = 84
-        const val MAXIMUM_CANONICAL_BYTES = 32 * 1024
-        const val MAXIMUM_KAGEMUSHA_ENCODED_BYTES = 24_576
+        const val MAXIMUM_CANONICAL_BYTES = KagemushaWireV1.MAXIMUM_PAYMENT_BYTES
+        const val MAXIMUM_KAGEMUSHA_ENCODED_BYTES = KagemushaWireV1.MAXIMUM_PAYMENT_BYTES
         private val MAGIC = "IPM1".toByteArray(Charsets.US_ASCII)
         private val CANONICAL_DOMAIN = "IROHA-PEER-PAYLOAD-V1\u0000".toByteArray(Charsets.UTF_8)
         private val MESSAGE_DOMAIN = "IROHA-PEER-MESSAGE-V1\u0000".toByteArray(Charsets.UTF_8)
@@ -275,30 +294,36 @@ class IrohaPeerWireMessageV1 private constructor(
             val canonicalDigest = data.copyOfRange(20, 52)
             val messageDigest = data.copyOfRange(52, 84)
             val encodedBody = data.copyOfRange(84, data.size)
-            val computedWire = Blake2b.digest256(MESSAGE_DOMAIN + data.copyOfRange(0, 52) + encodedBody)
-            require(computedWire.contentEquals(messageDigest)) { "Peer message wire hash mismatch" }
+            try {
+                val computedWire = Blake2b.digest256(MESSAGE_DOMAIN + data.copyOfRange(0, 52) + encodedBody)
+                require(computedWire.contentEquals(messageDigest)) { "Peer message wire hash mismatch" }
 
-            val canonicalBytes = when (encoding) {
-                IrohaPeerContentEncodingV1.NONE -> {
-                    require(encodedLength == canonicalLength) { "Peer message length mismatch" }
-                    encodedBody.copyOf()
+                val canonicalBytes = when (encoding) {
+                    IrohaPeerContentEncodingV1.NONE -> {
+                        require(encodedLength == canonicalLength) { "Peer message length mismatch" }
+                        encodedBody.copyOf()
+                    }
+                    IrohaPeerContentEncodingV1.ZLIB -> inflateBounded(encodedBody, canonicalLength)
                 }
-                IrohaPeerContentEncodingV1.ZLIB -> inflateBounded(encodedBody, canonicalLength)
+                val payload = try {
+                    IrohaPeerCanonicalPayload(profile, kind, schemaVersion, canonicalBytes)
+                } finally {
+                    canonicalBytes.fill(0)
+                }
+                require(canonicalHash(payload).contentEquals(canonicalDigest)) {
+                    "Peer canonical payload hash mismatch"
+                }
+                val message = IrohaPeerWireMessageV1(
+                    payload,
+                    encoding,
+                    canonicalDigest,
+                    messageDigest,
+                    encodedBody,
+                )
+                return message
+            } finally {
+                encodedBody.fill(0)
             }
-            val payload = IrohaPeerCanonicalPayload(profile, kind, schemaVersion, canonicalBytes)
-            canonicalBytes.fill(0)
-            require(canonicalHash(payload).contentEquals(canonicalDigest)) {
-                "Peer canonical payload hash mismatch"
-            }
-            val message = IrohaPeerWireMessageV1(
-                payload,
-                encoding,
-                canonicalDigest,
-                messageDigest,
-                encodedBody,
-            )
-            encodedBody.fill(0)
-            return message
         }
 
         internal fun decodeHeader(
@@ -495,29 +520,25 @@ class IrohaPeerWireMessageV1 private constructor(
     )
 }
 
-/** Bounded small-handoff adapter to the existing native-canonical Kagemusha API. */
+/** Bounded handoff adapter for the sole canonical KAGEMUSHA V1 wire values. */
 object IrohaPeerKagemushaAdapterV1 {
-    const val NATIVE_ARCHIVE_SCHEMA_VERSION = 0x0102
+    const val ARCHIVE_SCHEMA_VERSION = 1
 
     @JvmStatic
     @JvmOverloads
     fun wrap(
-        payload: KagemushaPeerPayload,
+        kind: IrohaPeerPayloadKind,
+        canonicalPayload: ByteArray,
         compressionPolicy: IrohaPeerWireCompressionPolicyV1 =
             IrohaPeerWireCompressionPolicyV1.DISABLED,
         limits: IrohaPeerWireLimitsV1 = IrohaPeerWireLimitsV1.PEER_V1,
     ): IrohaPeerWireMessageV1 {
-        val kind = when (payload.kind) {
-            KagemushaPeerPayloadKind.RECEIVE_REQUEST -> IrohaPeerPayloadKind.RECEIVE_REQUEST
-            KagemushaPeerPayloadKind.PAYMENT -> IrohaPeerPayloadKind.PAYMENT
-            KagemushaPeerPayloadKind.ACKNOWLEDGEMENT -> IrohaPeerPayloadKind.ACKNOWLEDGEMENT
-        }
-        val bytes = payload.archive()
+        val bytes = canonicalPayload.copyOf()
         return try {
             IrohaPeerWireMessageV1(IrohaPeerCanonicalPayload(
-                IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND,
+                IrohaPeerPayloadProfile.KAGEMUSHA_V1,
                 kind,
-                NATIVE_ARCHIVE_SCHEMA_VERSION,
+                ARCHIVE_SCHEMA_VERSION,
                 bytes,
             ), compressionPolicy, limits)
         } finally {
@@ -526,25 +547,15 @@ object IrohaPeerKagemushaAdapterV1 {
     }
 
     @JvmStatic
-    fun decode(message: IrohaPeerWireMessageV1): KagemushaPeerPayload {
+    fun decode(message: IrohaPeerWireMessageV1): ByteArray {
         val payload = message.canonicalPayload
-        require(payload.profile == IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND) {
+        require(payload.profile == IrohaPeerPayloadProfile.KAGEMUSHA_V1) {
             "Unexpected peer payload profile"
         }
-        require(payload.schemaVersion == NATIVE_ARCHIVE_SCHEMA_VERSION) {
-            "Unsupported Kagemusha native archive schema"
+        require(payload.schemaVersion == ARCHIVE_SCHEMA_VERSION) {
+            "Unsupported KAGEMUSHA V1 archive schema"
         }
-        val kind = when (payload.kind) {
-            IrohaPeerPayloadKind.RECEIVE_REQUEST -> KagemushaPeerPayloadKind.RECEIVE_REQUEST
-            IrohaPeerPayloadKind.PAYMENT -> KagemushaPeerPayloadKind.PAYMENT
-            IrohaPeerPayloadKind.ACKNOWLEDGEMENT -> KagemushaPeerPayloadKind.ACKNOWLEDGEMENT
-        }
-        val bytes = payload.bytes
-        return try {
-            KagemushaPeerPayload.decode(bytes, kind)
-        } finally {
-            bytes.fill(0)
-        }
+        return payload.bytes
     }
 }
 

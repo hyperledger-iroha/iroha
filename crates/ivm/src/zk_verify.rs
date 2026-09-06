@@ -42,18 +42,6 @@ pub fn verify_open_envelope(raw: &[u8]) -> Result<bool, iroha_zkp_halo2::Error> 
             proof.as_ref(),
             metadata,
         ),
-        #[cfg(feature = "goldilocks_backend")]
-        DecodedEnvelope::Goldilocks { .. } => {
-            return Err(iroha_zkp_halo2::Error::UnsupportedBackend {
-                backend: iroha_zkp_halo2::ZkCurveId::Goldilocks,
-            });
-        }
-        #[cfg(not(feature = "goldilocks_backend"))]
-        DecodedEnvelope::Goldilocks => {
-            return Err(iroha_zkp_halo2::Error::UnsupportedBackend {
-                backend: iroha_zkp_halo2::ZkCurveId::Goldilocks,
-            });
-        }
     };
     match result {
         Ok(()) => Ok(true),

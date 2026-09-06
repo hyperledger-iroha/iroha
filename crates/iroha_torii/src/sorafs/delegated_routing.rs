@@ -224,32 +224,47 @@ struct RoutingFilters {
 }
 impl RoutingFilters {
     fn parse(raw_query: Option<&str>) -> Result<Self, RoutingError> {
-        let Some(raw_query) = raw_query.filter(|query| !query.is_empty()) else {
+        let Some(raw_query) = raw_query else {
             return Ok(Self::default());
         };
         if raw_query.len() > MAX_RAW_QUERY_BYTES {
             return Err(RoutingError::QueryTooLarge);
         }
+        if raw_query.is_empty() {
+            return Err(RoutingError::MalformedQuery);
+        }
         let mut addrs = None;
         let mut protocols = None;
         let mut pairs = 0usize;
-        for (key, value) in url::form_urlencoded::parse(raw_query.as_bytes()) {
+        for pair in raw_query.split('&') {
+            if pair.is_empty() {
+                return Err(RoutingError::MalformedQuery);
+            }
+            let Some((key, value)) = pair.split_once('=') else {
+                return Err(RoutingError::MalformedQuery);
+            };
+            if key.is_empty() || value.contains('=') {
+                return Err(RoutingError::MalformedQuery);
+            }
+            if key.bytes().any(|byte| matches!(byte, b'%' | b'+')) || value.contains('%') {
+                return Err(RoutingError::NonCanonicalQueryEncoding);
+            }
             pairs = pairs.saturating_add(1);
             if pairs > 2 {
                 return Err(RoutingError::TooManyQueryParameters);
             }
-            match key.as_ref() {
+            match key {
                 "filter-addrs" => {
                     if addrs.is_some() {
                         return Err(RoutingError::DuplicateQueryParameter);
                     }
-                    addrs = Some(AddressFilters::parse(value.as_ref())?);
+                    addrs = Some(AddressFilters::parse(value)?);
                 }
                 "filter-protocols" => {
                     if protocols.is_some() {
                         return Err(RoutingError::DuplicateQueryParameter);
                     }
-                    protocols = Some(parse_protocol_filters(value.as_ref())?);
+                    protocols = Some(parse_protocol_filters(value)?);
                 }
                 _ => return Err(RoutingError::UnknownQueryParameter),
             }
@@ -708,6 +723,8 @@ enum RoutingError {
     InvalidContentCid,
     InvalidPeerId,
     QueryTooLarge,
+    MalformedQuery,
+    NonCanonicalQueryEncoding,
     TooManyQueryParameters,
     UnknownQueryParameter,
     DuplicateQueryParameter,
@@ -732,6 +749,8 @@ impl RoutingError {
             | Self::InvalidContentCid
             | Self::InvalidPeerId
             | Self::QueryTooLarge
+            | Self::MalformedQuery
+            | Self::NonCanonicalQueryEncoding
             | Self::TooManyQueryParameters
             | Self::UnknownQueryParameter
             | Self::DuplicateQueryParameter
@@ -756,6 +775,8 @@ impl RoutingError {
             Self::InvalidContentCid => "invalid_content_cid",
             Self::InvalidPeerId => "invalid_peer_id",
             Self::QueryTooLarge => "query_too_large",
+            Self::MalformedQuery => "malformed_query",
+            Self::NonCanonicalQueryEncoding => "non_canonical_query_encoding",
             Self::TooManyQueryParameters => "too_many_query_parameters",
             Self::UnknownQueryParameter => "unknown_query_parameter",
             Self::DuplicateQueryParameter => "duplicate_query_parameter",
@@ -780,6 +801,12 @@ impl RoutingError {
             Self::InvalidContentCid => "content identifier is not a canonical SoraFS CIDv1",
             Self::InvalidPeerId => "peer identifier is not a canonical libp2p peer ID",
             Self::QueryTooLarge => "routing query exceeds the first-release size limit",
+            Self::MalformedQuery => {
+                "routing query must contain non-empty name=value parameters separated by &"
+            }
+            Self::NonCanonicalQueryEncoding => {
+                "routing query must use literal parameter names and filter values"
+            }
             Self::TooManyQueryParameters => "routing query contains too many parameters",
             Self::UnknownQueryParameter => "routing query contains an unsupported parameter",
             Self::DuplicateQueryParameter => "routing query repeats a parameter",
@@ -1494,10 +1521,40 @@ mod tests {
         );
     }
     #[test]
-    fn query_parser_rejects_duplicate_unknown_oversized_and_case_bypass_parameters() {
+    fn query_parser_rejects_non_literal_malformed_and_unsupported_parameters() {
+        assert_eq!(RoutingFilters::parse(None), Ok(RoutingFilters::default()));
+        for query in [
+            "",
+            "&",
+            "filter-addrs",
+            "=tcp",
+            "filter-addrs=tcp=udp",
+            "filter-addrs=tcp&",
+            "&filter-addrs=tcp",
+            "filter-addrs=tcp&&filter-protocols=transport-a",
+        ] {
+            assert_eq!(
+                RoutingFilters::parse(Some(query)),
+                Err(RoutingError::MalformedQuery),
+                "query {query:?} must be rejected as malformed"
+            );
+        }
+        for query in [
+            "filter%2Daddrs=tcp",
+            "%66ilter-addrs=tcp",
+            "filter+addrs=tcp",
+            "filter-addrs=tcp%2Cudp",
+            "filter-addrs=%FF",
+        ] {
+            assert_eq!(
+                RoutingFilters::parse(Some(query)),
+                Err(RoutingError::NonCanonicalQueryEncoding),
+                "query {query:?} must not acquire an encoded alias"
+            );
+        }
         for (query, expected) in [
             (
-                "filter-addrs=tcp&filter%2Daddrs=udp",
+                "filter-addrs=tcp&filter-addrs=udp",
                 RoutingError::DuplicateQueryParameter,
             ),
             ("FILTER-ADDRS=tcp", RoutingError::UnknownQueryParameter),
@@ -1514,6 +1571,12 @@ mod tests {
         ] {
             assert_eq!(RoutingFilters::parse(Some(query)), Err(expected));
         }
+        assert_eq!(
+            RoutingFilters::parse(Some(
+                "filter-addrs=tcp&filter-protocols=transport-a&extra=value"
+            )),
+            Err(RoutingError::TooManyQueryParameters)
+        );
         let oversized = format!("filter-addrs={}", "a".repeat(MAX_FILTER_VALUE_BYTES + 1));
         assert_eq!(
             RoutingFilters::parse(Some(&oversized)),
@@ -1523,6 +1586,15 @@ mod tests {
         assert_eq!(
             RoutingFilters::parse(Some(&oversized_query)),
             Err(RoutingError::QueryTooLarge)
+        );
+    }
+    #[test]
+    fn query_parser_preserves_literal_plus_in_protocol_filter_terms() {
+        let filters = RoutingFilters::parse(Some("filter-protocols=transport-a+b"))
+            .expect("literal plus is part of the protocol filter grammar");
+        assert_eq!(
+            filters.protocols,
+            Some(BTreeSet::from(["transport-a+b".to_owned()]))
         );
     }
     #[test]

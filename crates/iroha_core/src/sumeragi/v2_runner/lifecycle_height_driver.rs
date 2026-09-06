@@ -89,7 +89,8 @@ pub(in crate::sumeragi) enum LifecycleProducerClaimDispositionV1 {
     },
     /// A queued worker or parked worker result must advance through Completion.
     AwaitingCompletion,
-    /// A registered Validate sidecar wait permits only its lane transport to progress.
+    /// A registered Validate sidecar wait permits only lane transport and
+    /// sealed global pacemaker Progress to run.
     AwaitingValidateSidecar,
     /// A typed Decision Apply owns the terminal barrier until Kura and LedgerV1 settle.
     AwaitingApplyCompletion,
@@ -184,6 +185,17 @@ pub(in crate::sumeragi) struct LifecycleBlockedOrdinaryLaneLocalIngressPermitV1 
 
 struct LifecycleBlockedOrdinaryLaneLocalIngressPermitSealV1;
 
+/// Sealed authority to admit only global pacemaker Progress while one
+/// unprotected Validate sidecar owns the ordinary lifecycle barrier.
+///
+/// The permit cannot be minted by Apply, generic Completion, or replay
+/// barriers, so none of those owners can reopen global fair ingress.
+pub(in crate::sumeragi) struct LifecycleValidateSidecarPacemakerEscapePermitV1 {
+    _seal: LifecycleValidateSidecarPacemakerEscapePermitSealV1,
+}
+
+struct LifecycleValidateSidecarPacemakerEscapePermitSealV1;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LifecycleProducerClaimTransitionErrorV1 {
     Completion,
@@ -248,7 +260,8 @@ impl LifecycleProducerClaimDispositionV1 {
         matches!(self, Self::AwaitingLiveApplyQueue { .. })
     }
 
-    const fn required_ready_ordinal(self) -> Option<u128> {
+    /// Return the exact Ready live-Apply child retained by this claim.
+    pub(in crate::sumeragi) const fn required_ready_ordinal(self) -> Option<u128> {
         match self {
             Self::AwaitingLiveApplyQueue { child_ordinal, .. } => Some(child_ordinal),
             Self::Eligible
@@ -291,7 +304,7 @@ impl LifecycleProducerClaimDispositionV1 {
         )
     }
 
-    /// Return whether only exact lane transport may run before Completion settles.
+    /// Return whether generic Runtime must stop before Completion settles.
     pub(super) const fn blocks_runtime(self) -> bool {
         matches!(
             self,
@@ -299,6 +312,24 @@ impl LifecycleProducerClaimDispositionV1 {
                 | Self::AwaitingApplyCompletion
                 | Self::ApplyTerminalSettled
         )
+    }
+
+    /// Mint authority for the blocked-runtime cut to service only the typed
+    /// pacemaker escape.
+    ///
+    /// A registered Validate sidecar can depend on an unavailable holder and
+    /// must not suppress the absolute view deadline. Apply barriers are
+    /// already decision-bound and therefore cannot mint this authority.
+    pub(super) const fn validate_sidecar_pacemaker_escape_permit(
+        self,
+    ) -> Option<LifecycleValidateSidecarPacemakerEscapePermitV1> {
+        if matches!(self, Self::AwaitingValidateSidecar) {
+            Some(LifecycleValidateSidecarPacemakerEscapePermitV1 {
+                _seal: LifecycleValidateSidecarPacemakerEscapePermitSealV1,
+            })
+        } else {
+            None
+        }
     }
 
     /// Return whether a Decision Apply crossed its exact terminal settlement.
@@ -451,6 +482,10 @@ impl LifecycleProducerClaimDispositionV1 {
                 Ok(Self::AwaitingValidateSuccessor { ordinal: *ordinal })
             }
             (
+                Self::AwaitingValidateSidecar,
+                Completion::LifecycleValidateSidecarSuperseded { .. },
+            ) => Ok(Self::Eligible),
+            (
                 state @ Self::AwaitingValidateSuccessor { ordinal },
                 Completion::LifecycleValidateSuccessorCapacityPending {
                     ordinal: pending_ordinal,
@@ -601,7 +636,8 @@ impl LifecycleProducerClaimDispositionV1 {
                 // Registration moved the exact Validate row to an external
                 // sidecar wait and released the coordinator lease. Keep
                 // Producer and ordinary lifecycle ingress blocked while the
-                // lane-only barrier admits its authenticated response.
+                // narrowed barrier admits its authenticated lane response and
+                // sealed global pacemaker Progress.
                 Ok(Self::AwaitingValidateSidecar)
             }
             (
@@ -767,7 +803,7 @@ impl LifecycleV2IngressDrainDispositionV1 {
     ) -> Self {
         Self {
             producer_claim,
-            retry_before_producer: false,
+            retry_before_producer: advance_executor_yield.requires_completion_retry(),
             terminal_settlement_stops_runtime: false,
             advance_executor_yield: Some(advance_executor_yield),
         }
@@ -1090,9 +1126,9 @@ pub(in crate::sumeragi) fn drain_lifecycle_v2_ingress(
                 );
                 if producer_claim.blocks_runtime() {
                     // A typed Apply or registered Validate sidecar wait can
-                    // advance outside this batch. Its exact Completion owner
-                    // is the sole progress target; ordinary runtime ingress
-                    // remains inert until that barrier settles.
+                    // advance outside this batch. Ordinary Runtime and Ingress
+                    // remain inert; run_inner separately admits only the
+                    // sidecar claim's sealed pacemaker Progress escape.
                     return Ok(blocked_runtime_drain_disposition(producer_claim));
                 }
                 let (pre_timeout_cut, pre_timeout_advanced) = activated.with_runner_runtime(
@@ -1213,8 +1249,14 @@ pub(in crate::sumeragi) fn drain_lifecycle_v2_ingress(
                             .local_proposal_directive()?
                             .decided_subject()
                             .is_some();
-                        let executor_slice =
-                            advance_executor(receiver, owner, executor, services, 1)?;
+                        let executor_slice = advance_executor(
+                            receiver,
+                            owner,
+                            executor,
+                            services,
+                            producer_claim.required_ready_ordinal(),
+                            1,
+                        )?;
                         let is_terminal = executor
                             .local_proposal_directive()?
                             .decided_subject()
@@ -1399,6 +1441,32 @@ mod tests {
         assert_eq!(disposition.advance_executor_yield(), Some(reason));
         assert_eq!(disposition.producer_claim(), claim);
         assert!(!disposition.requires_yield());
+
+        let completion_cut = AdvanceExecutorYieldV1::new(
+            AdvanceExecutorYieldCheckpointV1::BeforeStep,
+            AdvanceExecutorYieldCauseV1::CompletionPendingAtRuntimeCut,
+        );
+        let completion_disposition =
+            LifecycleV2IngressDrainDispositionV1::after_advance_executor_yield(
+                claim,
+                completion_cut,
+            );
+        assert_eq!(
+            completion_disposition.advance_executor_yield(),
+            Some(completion_cut)
+        );
+        assert!(completion_disposition.requires_yield());
+        let capacity_relief = AdvanceExecutorYieldV1::new(
+            AdvanceExecutorYieldCheckpointV1::AfterStep,
+            AdvanceExecutorYieldCauseV1::CompletionCapacityReliefStepped,
+        );
+        assert!(
+            LifecycleV2IngressDrainDispositionV1::after_advance_executor_yield(
+                claim,
+                capacity_relief,
+            )
+            .requires_yield()
+        );
     }
 
     #[test]
@@ -1843,6 +1911,41 @@ mod tests {
                 .observe_completion(&Completion::LifecycleValidateSidecarWoken { ordinal: 41 }),
             Err(LifecycleProducerClaimTransitionErrorV1::Completion),
             "an unrelated non-Producer owner still fails closed"
+        );
+    }
+
+    #[test]
+    fn registered_validate_sidecar_mints_only_the_pacemaker_escape_until_superseded() {
+        use super::super::super::v2_lifecycle_coordinator::ProductionLifecycleCompletionSelectionV1 as Completion;
+
+        let sidecar = LifecycleProducerClaimDispositionV1::AwaitingValidateSidecar;
+        assert!(sidecar.blocks_runtime());
+        assert!(sidecar.validate_sidecar_pacemaker_escape_permit().is_some());
+        for claim in [
+            LifecycleProducerClaimDispositionV1::Eligible,
+            LifecycleProducerClaimDispositionV1::AwaitingValidateSuccessor { ordinal: 1 },
+            LifecycleProducerClaimDispositionV1::AwaitingCompletion,
+            LifecycleProducerClaimDispositionV1::AwaitingApplyCompletion,
+            LifecycleProducerClaimDispositionV1::ApplyTerminalSettled,
+            LifecycleProducerClaimDispositionV1::AwaitingReplayCompletion,
+        ] {
+            assert!(
+                claim.validate_sidecar_pacemaker_escape_permit().is_none(),
+                "only the registered missing-sidecar barrier may service the pacemaker"
+            );
+        }
+
+        assert_eq!(
+            sidecar
+                .observe_completion(&Completion::LifecycleValidateSidecarSuperseded)
+                .expect("durable supersession releases the missing-sidecar barrier"),
+            LifecycleProducerClaimDispositionV1::Eligible
+        );
+        assert_eq!(
+            LifecycleProducerClaimDispositionV1::AwaitingApplyCompletion
+                .observe_completion(&Completion::LifecycleValidateSidecarSuperseded,),
+            Err(LifecycleProducerClaimTransitionErrorV1::Completion),
+            "supersession cannot clear a Decision-bound Apply barrier"
         );
     }
 

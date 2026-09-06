@@ -3,6 +3,7 @@
 //! Feature-gated behind `app_api`:
 //! - Stores attachments (proof envelopes or JSON DTOs) under `./storage/torii/zk_attachments/`.
 //!   Base directory is configured via `torii.data_dir`; tests may use `data_dir::OverrideGuard`.
+//!   The configured directory must be exclusively writable by the Torii process owner.
 //! - Deterministic id: Blake2b-32 of the sanitized request bytes (lowercase hex).
 //! - Multi-tenant: attachments are isolated per signed Iroha account. API tokens, when enabled,
 //!   are an additional access-control requirement but do not define tenant identity.
@@ -26,6 +27,7 @@ use axum::{extract::Path as AxumPath, http::StatusCode, response::IntoResponse};
 use flate2::read::GzDecoder;
 use iroha_config::parameters::actual::AttachmentSanitizerMode;
 use iroha_data_model::{account::AccountId, proof::PROOF_ATTACHMENT_LIST_MAX_ATTACHMENTS_V1};
+use iroha_futures::supervisor::ShutdownSignal;
 use iroha_logger::prelude::*;
 use norito::json;
 use parking_lot::{Mutex as SyncMutex, RwLock};
@@ -40,11 +42,15 @@ use std::{
     io::{Read as _, Write as _},
     path::{Path, PathBuf},
     process::{Command, Stdio},
-    sync::{OnceLock, mpsc},
+    sync::{
+        OnceLock,
+        atomic::{AtomicBool, Ordering as AtomicOrdering},
+        mpsc,
+    },
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-use tokio::{sync::Mutex, task};
+use tokio::sync::Mutex;
 use zstd::stream::read::Decoder as ZstdDecoder;
 const MAX_ATTACHMENT_BYTES_FALLBACK: usize = 4 * 1024 * 1024; // fallback 4 MiB
 const ATTACHMENT_TTL_SECS_FALLBACK: u64 = 7 * 24 * 60 * 60; // fallback 7 days
@@ -63,16 +69,24 @@ const SANITIZER_RESPONSE_OVERHEAD_BYTES: usize = 64 * 1024;
 const ATTACHMENT_META_SCAN_MAX_FILES: u64 =
     iroha_config::parameters::defaults::torii::ATTACHMENTS_GLOBAL_MAX_COUNT_MAX;
 const ATTACHMENT_TENANT_SCAN_MAX_ENTRIES: u64 = ATTACHMENT_META_SCAN_MAX_FILES * 2;
+const ATTACHMENT_ROOT_RECOVERY_MAX_ENTRIES: u64 = ATTACHMENT_META_SCAN_MAX_FILES + 1_024;
+const ATTACHMENT_CHILD_RECOVERY_MAX_ENTRIES: u64 = ATTACHMENT_TENANT_SCAN_MAX_ENTRIES + 1_024;
+const ATTACHMENT_TRANSACTION_RECOVERY_MAX_ENTRIES: u64 = 1_024;
+const PROVER_PROCESSING_RECOVERY_MAX_ENTRIES: u64 = ATTACHMENT_META_SCAN_MAX_FILES * 4 + 1_024;
 const ATTACHMENT_QUOTA_TRANSACTION_VERSION: u16 = 1;
-const ATTACHMENT_QUOTA_TRANSACTION_MAX_BYTES: u64 = 2 * 1024 * 1024;
-const ATTACHMENT_QUOTA_TRANSACTION_DIR: &str = "zk_attachment_quota";
-const ATTACHMENT_QUOTA_TRANSACTION_FILE: &str = "pending_v1.json";
-const ATTACHMENT_QUOTA_TRANSACTION_TEMP_PREFIX: &str = ".tmp";
+const ATTACHMENT_DELETE_TRANSACTION_VERSION: u16 = 1;
+const ATTACHMENT_MUTATION_TRANSACTION_MAX_BYTES: u64 = 2 * 1024 * 1024;
+const ATTACHMENT_MUTATION_TRANSACTION_DIR: &str = "zk_attachment_mutation";
+const ATTACHMENT_MUTATION_TRANSACTION_FILE: &str = "pending_v1.json";
+const ATTACHMENT_MUTATION_TRANSACTION_TEMP_PREFIX: &str = ".tmp";
 pub(super) const ZK_PROVER_PROCESSING_STATE_VERSION: u16 = 1;
 const ZK_PROVER_PROCESSING_REFERENCE_MARKER: &[u8] = b"iroha-torii-zk-prover-live-reference-v1\n";
 const ZK_PROVER_PROCESSING_RECEIPT_MAX_BYTES: u64 = 16 * 1024;
 const ZK_PROVER_PROCESSING_TEMP_PREFIX: &str = ".tmp";
 static ZK_PROVER_PROCESSING_STATE_LOCK: OnceLock<SyncMutex<()>> = OnceLock::new();
+static ATTACHMENT_ENTRY_PAIRS_DIRTY: AtomicBool = AtomicBool::new(false);
+static ATTACHMENT_MUTATION_DIRECTORY_DIRTY: AtomicBool = AtomicBool::new(true);
+static ATTACHMENT_STORE_GATE: OnceLock<RwLock<()>> = OnceLock::new();
 /// Maximum encoded size of one persisted attachment metadata record.
 pub(super) const ATTACHMENT_META_FILE_MAX_BYTES: u64 = 64 * 1024;
 /// Tenant namespace for the attachments store.
@@ -211,6 +225,34 @@ struct AttachmentQuotaTransaction {
     crate::json_macros::JsonDeserialize,
 )]
 #[norito(deny_unknown_fields)]
+struct AttachmentDeleteTransaction {
+    version: u16,
+    tenant: String,
+    id: String,
+}
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+)]
+#[norito(tag = "kind", content = "value", rename_all = "snake_case")]
+#[norito(deny_unknown_fields)]
+enum AttachmentMutationTransaction {
+    Write(AttachmentQuotaTransaction),
+    Delete(AttachmentDeleteTransaction),
+}
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 pub(super) struct ProverProcessingReceipt {
     pub(super) version: u16,
     pub(super) id: String,
@@ -306,19 +348,175 @@ fn attachments_root_dir() -> PathBuf {
 fn attachments_dir(tenant: &AttachmentTenant) -> PathBuf {
     attachments_root_dir().join(tenant.as_str())
 }
-fn ensure_root_dir() {
-    if cfg!(test) {
-        let _ = fs::create_dir_all(attachments_root_dir());
-        return;
-    }
-    static INIT: OnceLock<()> = OnceLock::new();
-    INIT.get_or_init(|| {
-        let _ = fs::create_dir_all(attachments_root_dir());
-    });
+fn direct_directory_type_error(path: &Path) -> std::io::Error {
+    invalid_attachment_file(format!(
+        "persistence path is not a direct directory: {}",
+        path.display()
+    ))
 }
-fn ensure_dirs(tenant: &AttachmentTenant) {
-    ensure_root_dir();
-    let _ = fs::create_dir_all(attachments_dir(tenant));
+fn map_direct_directory_open_error(path: &Path, error: std::io::Error) -> std::io::Error {
+    #[cfg(unix)]
+    if error.raw_os_error() == Some(libc::ELOOP) {
+        return direct_directory_type_error(path);
+    }
+    error
+}
+pub(super) fn verify_direct_directory(path: &Path) -> std::io::Result<()> {
+    let named_before = fs::symlink_metadata(path)?;
+    if named_before.file_type().is_symlink() || !named_before.is_dir() {
+        return Err(direct_directory_type_error(path));
+    }
+    let directory = open_pinned_direct_directory(path)
+        .map_err(|error| map_direct_directory_open_error(path, error))?
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("persistence directory is missing: {}", path.display()),
+            )
+        })?;
+    let metadata = crate::secure_file_metadata::from_file(&directory)?;
+    let named_after = crate::secure_file_metadata::from_path(path)
+        .map_err(|error| map_direct_directory_open_error(path, error))?;
+    if !crate::secure_file_metadata::is_direct_directory(&metadata)
+        || !crate::secure_file_metadata::is_direct_directory(&named_after)
+        || !crate::secure_file_metadata::same_file(&metadata, &named_after)
+    {
+        return Err(direct_directory_type_error(path));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+
+        if metadata.uid() != rustix::process::geteuid().as_raw() || metadata.mode() & 0o022 != 0 {
+            return Err(invalid_attachment_file(format!(
+                "persistence directory must be owned by the Torii process user and deny group/world writes: {}",
+                path.display()
+            )));
+        }
+    }
+    sorafs_node::validate_private_local_storage_acl(&directory, path)?;
+    Ok(())
+}
+pub(super) fn ensure_direct_directory(path: &Path) -> std::io::Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => {
+            #[cfg(windows)]
+            if let Err(error) = verify_direct_directory(path)
+                && error.kind() == std::io::ErrorKind::PermissionDenied
+            {
+                protect_existing_windows_directory(path)?;
+            }
+            return verify_direct_directory(path);
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt as _;
+
+        fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(path)?;
+    }
+    #[cfg(windows)]
+    create_private_windows_directories(path)?;
+    #[cfg(not(any(unix, windows)))]
+    return Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "secure attachment directory creation is unsupported on this platform",
+    ));
+    verify_direct_directory(path)
+}
+#[cfg(windows)]
+fn protect_existing_windows_directory(path: &Path) -> std::io::Result<()> {
+    use std::os::windows::fs::OpenOptionsExt as _;
+
+    use crate::secure_file_metadata::{from_file, from_path, is_direct_directory, same_file};
+
+    const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    const FILE_SHARE_READ_WRITE: u32 = 0x0000_0001 | 0x0000_0002;
+    const GENERIC_READ: u32 = 0x8000_0000;
+    const WRITE_DAC: u32 = 0x0004_0000;
+
+    let before = from_path(path)?;
+    if !is_direct_directory(&before) {
+        return Err(direct_directory_type_error(path));
+    }
+    let directory = fs::OpenOptions::new()
+        .access_mode(GENERIC_READ | WRITE_DAC)
+        .share_mode(FILE_SHARE_READ_WRITE)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)?;
+    let opened = from_file(&directory)?;
+    let named = from_path(path)?;
+    if !is_direct_directory(&opened)
+        || !is_direct_directory(&named)
+        || !same_file(&before, &opened)
+        || !same_file(&opened, &named)
+    {
+        return Err(invalid_attachment_file(
+            "persistence directory changed before ACL protection",
+        ));
+    }
+    sorafs_node::protect_private_local_storage_acl(&directory, path)?;
+    let protected = from_file(&directory)?;
+    let named_after = from_path(path)?;
+    if !same_file(&opened, &protected) || !same_file(&protected, &named_after) {
+        return Err(invalid_attachment_file(
+            "persistence directory changed during ACL protection",
+        ));
+    }
+    Ok(())
+}
+#[cfg(windows)]
+fn create_private_windows_directories(path: &Path) -> std::io::Result<()> {
+    if !path.is_absolute() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Windows attachment persistence path must be absolute",
+        ));
+    }
+    let mut missing = Vec::new();
+    let mut current = path;
+    loop {
+        match fs::symlink_metadata(current) {
+            Ok(metadata) => {
+                if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                    return Err(direct_directory_type_error(current));
+                }
+                break;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                missing.push(current.to_path_buf());
+                current = current.parent().ok_or_else(|| {
+                    invalid_attachment_file("Windows persistence path has no existing ancestor")
+                })?;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    for directory in missing.into_iter().rev() {
+        match sorafs_node::create_private_local_storage_directory(&directory) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error),
+        }
+        verify_direct_directory(&directory)?;
+    }
+    Ok(())
+}
+fn ensure_root_dir() -> std::io::Result<()> {
+    let base = base_dir();
+    ensure_direct_directory(&base)?;
+    ensure_direct_directory(&base.join("zk_attachments"))
+}
+#[cfg(test)]
+fn ensure_dirs(tenant: &AttachmentTenant) -> std::io::Result<()> {
+    ensure_root_dir()?;
+    ensure_direct_directory(&attachments_dir(tenant))
 }
 fn meta_path(tenant: &AttachmentTenant, id: &str) -> PathBuf {
     attachments_dir(tenant).join(format!("{}.json", id))
@@ -326,21 +524,72 @@ fn meta_path(tenant: &AttachmentTenant, id: &str) -> PathBuf {
 fn bin_path(tenant: &AttachmentTenant, id: &str) -> PathBuf {
     attachments_dir(tenant).join(format!("{}.bin", id))
 }
-fn attachment_quota_transaction_dir() -> PathBuf {
-    base_dir().join(ATTACHMENT_QUOTA_TRANSACTION_DIR)
+fn attachment_mutation_transaction_dir() -> PathBuf {
+    base_dir().join(ATTACHMENT_MUTATION_TRANSACTION_DIR)
 }
-fn attachment_quota_transaction_path() -> PathBuf {
-    attachment_quota_transaction_dir().join(ATTACHMENT_QUOTA_TRANSACTION_FILE)
+fn attachment_mutation_transaction_path() -> PathBuf {
+    attachment_mutation_transaction_dir().join(ATTACHMENT_MUTATION_TRANSACTION_FILE)
+}
+#[cfg(test)]
+fn test_directory_sync_failure_path() -> &'static SyncMutex<Option<PathBuf>> {
+    static PATH: OnceLock<SyncMutex<Option<PathBuf>>> = OnceLock::new();
+    PATH.get_or_init(|| SyncMutex::new(None))
+}
+#[cfg(test)]
+struct TestDirectorySyncFailureGuard;
+#[cfg(test)]
+impl Drop for TestDirectorySyncFailureGuard {
+    fn drop(&mut self) {
+        test_directory_sync_failure_path().lock().take();
+    }
+}
+#[cfg(test)]
+fn fail_next_directory_sync(path: &Path) -> TestDirectorySyncFailureGuard {
+    let mut failure = test_directory_sync_failure_path().lock();
+    assert!(failure.is_none(), "directory-sync failure already armed");
+    *failure = Some(path.to_path_buf());
+    TestDirectorySyncFailureGuard
+}
+#[cfg(test)]
+fn maybe_fail_directory_sync(path: &Path) -> std::io::Result<()> {
+    let mut failure = test_directory_sync_failure_path().lock();
+    if failure.as_deref() == Some(path) {
+        failure.take();
+        return Err(std::io::Error::other(
+            "injected attachment directory-sync failure",
+        ));
+    }
+    Ok(())
+}
+fn sync_directory(path: &Path) -> std::io::Result<()> {
+    #[cfg(test)]
+    maybe_fail_directory_sync(path)?;
+    crate::durable_fs::sync_direct_directory(path)
 }
 #[cfg(unix)]
-fn sync_directory(path: &Path) -> std::io::Result<()> {
-    fs::File::open(path)?.sync_all()
-}
-#[cfg(not(unix))]
-fn sync_directory(_path: &Path) -> std::io::Result<()> {
-    // Rust does not expose a portable directory-sync primitive. File data is
-    // still synchronized before rename on these targets.
-    Ok(())
+pub(super) fn sync_open_directory(directory: &fs::File) -> std::io::Result<()> {
+    #[cfg(test)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+
+        let mut failure = test_directory_sync_failure_path().lock();
+        if let Some(path) = failure.as_deref()
+            && let Ok(named) = fs::symlink_metadata(path)
+        {
+            let opened = directory.metadata()?;
+            if named.is_dir()
+                && opened.is_dir()
+                && named.dev() == opened.dev()
+                && named.ino() == opened.ino()
+            {
+                failure.take();
+                return Err(std::io::Error::other(
+                    "injected attachment directory-sync failure",
+                ));
+            }
+        }
+    }
+    directory.sync_all()
 }
 fn sync_parent_directory(path: &Path) -> std::io::Result<()> {
     let parent = path
@@ -348,29 +597,177 @@ fn sync_parent_directory(path: &Path) -> std::io::Result<()> {
         .ok_or_else(|| invalid_attachment_file("persisted path has no containing directory"))?;
     sync_directory(parent)
 }
-fn persist_bytes_atomically(path: &Path, body: &[u8], prefix: &str) -> std::io::Result<()> {
+fn sync_nearest_existing_parent(path: &Path) -> std::io::Result<()> {
+    let base = base_dir();
+    let mut current = path
+        .parent()
+        .ok_or_else(|| invalid_attachment_file("persisted path has no containing directory"))?;
+    if !current.starts_with(&base) {
+        return Err(invalid_attachment_file(
+            "persisted path is outside the configured Torii data directory",
+        ));
+    }
+    loop {
+        match verify_direct_directory(current) {
+            Ok(()) => return sync_directory(current),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                if current == base {
+                    return Err(invalid_attachment_file(
+                        "Torii data directory is missing during durability recovery",
+                    ));
+                }
+                current = current.parent().ok_or_else(|| {
+                    invalid_attachment_file("persisted path has no existing data-dir ancestor")
+                })?;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+/// Atomically publish bytes and durably flush the containing directory.
+///
+/// # Errors
+///
+/// Returns an error if the temporary file cannot be written and synced, the
+/// rename cannot commit, or the containing directory cannot be flushed.
+pub(super) fn persist_bytes_atomically(
+    path: &Path,
+    body: &[u8],
+    prefix: &str,
+) -> std::io::Result<()> {
     let parent = path
         .parent()
         .ok_or_else(|| invalid_attachment_file("persisted path has no containing directory"))?;
-    fs::create_dir_all(parent)?;
-    let mut temporary = tempfile::Builder::new()
-        .prefix(prefix)
-        .tempfile_in(parent)?;
+    ensure_direct_directory(parent)?;
+    #[cfg(unix)]
+    {
+        let mut temporary = tempfile::Builder::new()
+            .prefix(prefix)
+            .tempfile_in(parent)?;
+        temporary.write_all(body)?;
+        temporary.flush()?;
+        temporary.as_file().sync_all()?;
+        temporary.persist(path).map_err(|error| error.error)?;
+        drop(open_attachment_regular_file(path)?);
+        return sync_directory(parent);
+    }
+    #[cfg(windows)]
+    {
+        return persist_bytes_atomically_windows(path, body, prefix, parent);
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (body, prefix);
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "secure atomic attachment persistence is unsupported on this platform",
+        ))
+    }
+}
+#[cfg(windows)]
+fn persist_bytes_atomically_windows(
+    path: &Path,
+    body: &[u8],
+    prefix: &str,
+    parent: &Path,
+) -> std::io::Result<()> {
+    use crate::secure_file_metadata::{
+        from_file, from_path, is_direct_file, number_of_links, same_file, unchanged,
+    };
+
+    const RETRIES: usize = 32;
+    const ALPHANUMERIC: &[u8; 62] =
+        b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+    if prefix != ".tmp" {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Windows attachment temporary prefix must be canonical",
+        ));
+    }
+    let (mut temporary, temporary_path) = (0..RETRIES)
+        .find_map(|_| {
+            let random: [u8; 6] = rand::random();
+            let suffix = random.map(|byte| ALPHANUMERIC[usize::from(byte) % ALPHANUMERIC.len()]);
+            let suffix = std::str::from_utf8(&suffix).expect("temporary alphabet is ASCII");
+            let temporary_path = parent.join(format!("{prefix}{suffix}"));
+            match sorafs_node::create_private_local_storage_file(
+                &temporary_path,
+                sorafs_node::PrivateLocalFileSharing::ReadDelete,
+            ) {
+                Ok(file) => Some(Ok((file, temporary_path))),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => None,
+                Err(error) => Some(Err(error)),
+            }
+        })
+        .transpose()?
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                "could not allocate a unique attachment temporary file",
+            )
+        })?;
+    sorafs_node::validate_private_local_storage_acl(&temporary, &temporary_path)?;
+    let created = from_file(&temporary)?;
     temporary.write_all(body)?;
     temporary.flush()?;
-    temporary.as_file().sync_all()?;
-    temporary.persist(path).map_err(|error| error.error)?;
-    sync_directory(parent)
+    temporary.sync_all()?;
+    let written = from_file(&temporary)?;
+    let named_written = from_path(&temporary_path)?;
+    if !is_direct_file(&created)
+        || !is_direct_file(&written)
+        || !is_direct_file(&named_written)
+        || number_of_links(&created) != Some(1)
+        || number_of_links(&written) != Some(1)
+        || number_of_links(&named_written) != Some(1)
+        || !same_file(&created, &written)
+        || !unchanged(&written, &named_written)
+        || u64::try_from(body.len()).ok() != Some(written.len())
+    {
+        drop((created, written, named_written, temporary));
+        let _ = remove_direct_regular_file_if_present(&temporary_path);
+        return Err(invalid_attachment_file(
+            "attachment temporary file changed during atomic persistence",
+        ));
+    }
+    match open_attachment_regular_file(path) {
+        Ok(existing) => drop(existing),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            drop((created, written, named_written, temporary));
+            let _ = remove_direct_regular_file_if_present(&temporary_path);
+            return Err(error);
+        }
+    }
+    if let Err(error) = fs::rename(&temporary_path, path) {
+        drop((created, written, named_written, temporary));
+        let _ = remove_direct_regular_file_if_present(&temporary_path);
+        return Err(error);
+    }
+    // The rename is the commit point; make its namespace mutation durable before any
+    // postcondition can return an error.
+    sync_directory(parent)?;
+    let published = from_path(path)?;
+    if !is_direct_file(&published)
+        || number_of_links(&published) != Some(1)
+        || !same_file(&written, &published)
+    {
+        return Err(invalid_attachment_file(
+            "attachment destination changed during atomic publication",
+        ));
+    }
+    drop((created, written, named_written, published, temporary));
+    drop(open_attachment_regular_file(path)?);
+    Ok(())
 }
 fn ensure_attachment_dirs_durable(tenant: &AttachmentTenant) -> std::io::Result<()> {
     let root = attachments_root_dir();
-    fs::create_dir_all(&root)?;
+    ensure_direct_directory(&root)?;
     sync_directory(&base_dir())?;
-    fs::create_dir_all(attachments_dir(tenant))?;
+    ensure_direct_directory(&attachments_dir(tenant))?;
     sync_directory(&root)
 }
-fn ensure_attachment_quota_transaction_dir_durable() -> std::io::Result<()> {
-    fs::create_dir_all(attachment_quota_transaction_dir())?;
+fn ensure_attachment_mutation_transaction_dir_durable() -> std::io::Result<()> {
+    ensure_direct_directory(&attachment_mutation_transaction_dir())?;
     sync_directory(&base_dir())
 }
 fn prover_processing_state_dir() -> PathBuf {
@@ -390,6 +787,33 @@ fn prover_processing_reference_path(tenant_key: &str, id: &str) -> PathBuf {
 fn prover_processing_state_lock() -> &'static SyncMutex<()> {
     ZK_PROVER_PROCESSING_STATE_LOCK.get_or_init(|| SyncMutex::new(()))
 }
+/// Hold a stable attachment namespace while a synchronous reader snapshots it.
+pub(super) fn attachment_store_read_lock() -> parking_lot::RwLockReadGuard<'static, ()> {
+    ATTACHMENT_STORE_GATE.get_or_init(|| RwLock::new(())).read()
+}
+fn attachment_store_write_lock() -> parking_lot::RwLockWriteGuard<'static, ()> {
+    ATTACHMENT_STORE_GATE
+        .get_or_init(|| RwLock::new(()))
+        .write()
+}
+fn ensure_prover_processing_dirs_durable(id: &str, include_live: bool) -> std::io::Result<()> {
+    let base = base_dir();
+    ensure_direct_directory(&base)?;
+    let prover = base.join("zk_prover");
+    ensure_direct_directory(&prover)?;
+    sync_directory(&base)?;
+    let state = prover_processing_state_dir();
+    ensure_direct_directory(&state)?;
+    sync_directory(&prover)?;
+    let entry = state.join(id);
+    ensure_direct_directory(&entry)?;
+    sync_directory(&state)?;
+    if include_live {
+        ensure_direct_directory(&entry.join("live"))?;
+        sync_directory(&entry)?;
+    }
+    Ok(())
+}
 fn persist_processing_marker(path: &Path) -> std::io::Result<()> {
     persist_bytes_atomically(
         path,
@@ -397,8 +821,17 @@ fn persist_processing_marker(path: &Path) -> std::io::Result<()> {
         ZK_PROVER_PROCESSING_TEMP_PREFIX,
     )
 }
-fn is_regular_processing_marker(path: &Path) -> bool {
-    fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_file())
+fn processing_marker_exists(path: &Path) -> std::io::Result<bool> {
+    let max_bytes = u64::try_from(ZK_PROVER_PROCESSING_REFERENCE_MARKER.len())
+        .expect("processing-reference marker length fits u64");
+    match read_bounded_attachment_regular_file(path, max_bytes) {
+        Ok(bytes) if bytes == ZK_PROVER_PROCESSING_REFERENCE_MARKER => Ok(true),
+        Ok(_) => Err(invalid_attachment_file(
+            "invalid ZK prover processing-reference marker",
+        )),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error),
+    }
 }
 /// Ensure the global processing receipt for `id` remains referenced by one live tenant copy.
 pub(super) fn ensure_prover_processing_reference(
@@ -411,78 +844,678 @@ pub(super) fn ensure_prover_processing_reference(
         .ok_or_else(|| invalid_attachment_file("invalid processing-reference attachment id"))?;
     let _guard = prover_processing_state_lock().lock();
     let tenant = AttachmentTenant(tenant_key.clone());
-    if fs::symlink_metadata(meta_path(&tenant, &id)).is_err()
-        || fs::symlink_metadata(bin_path(&tenant, &id)).is_err()
-    {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            "processing-reference attachment files are not both live",
-        ));
-    }
+    drop(open_attachment_regular_file(&meta_path(&tenant, &id))?);
+    drop(open_attachment_regular_file(&bin_path(&tenant, &id))?);
+    ensure_prover_processing_dirs_durable(&id, true)?;
     let path = prover_processing_reference_path(&tenant_key, &id);
-    if is_regular_processing_marker(&path) {
+    if processing_marker_exists(&path)? {
+        sync_parent_directory(&path)?;
         return Ok(());
     }
     persist_processing_marker(&path)
 }
-fn load_prover_processing_receipt_locked(id: &str) -> Option<ProverProcessingReceipt> {
+fn try_load_prover_processing_receipt_locked(
+    id: &str,
+) -> std::io::Result<Option<ProverProcessingReceipt>> {
     let path = prover_processing_receipt_path(id);
     let bytes =
-        read_bounded_attachment_regular_file(&path, ZK_PROVER_PROCESSING_RECEIPT_MAX_BYTES).ok()?;
-    let text = std::str::from_utf8(&bytes).ok()?;
-    let receipt = json::from_json::<ProverProcessingReceipt>(text).ok()?;
-    (receipt.version == ZK_PROVER_PROCESSING_STATE_VERSION
-        && receipt.id == id
-        && receipt.disposition_is_valid())
-    .then_some(receipt)
+        match read_bounded_attachment_regular_file(&path, ZK_PROVER_PROCESSING_RECEIPT_MAX_BYTES) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error),
+        };
+    let text = std::str::from_utf8(&bytes).map_err(|error| {
+        invalid_attachment_file(format!(
+            "ZK prover processing receipt is not UTF-8: {error}"
+        ))
+    })?;
+    let receipt = json::from_json::<ProverProcessingReceipt>(text).map_err(|error| {
+        invalid_attachment_file(format!("decode ZK prover processing receipt: {error}"))
+    })?;
+    if receipt.version != ZK_PROVER_PROCESSING_STATE_VERSION
+        || receipt.id != id
+        || !receipt.disposition_is_valid()
+    {
+        return Err(invalid_attachment_file(
+            "invalid ZK prover processing receipt contract",
+        ));
+    }
+    Ok(Some(receipt))
 }
 /// Load a validated processing receipt for one content ID.
-pub(super) fn load_prover_processing_receipt(id: &str) -> Option<ProverProcessingReceipt> {
-    let id = sanitize_attachment_id(id)?;
+pub(super) fn try_load_prover_processing_receipt(
+    id: &str,
+) -> std::io::Result<Option<ProverProcessingReceipt>> {
+    let id = sanitize_attachment_id(id)
+        .filter(|clean| clean == id)
+        .ok_or_else(|| invalid_attachment_file("invalid processing-receipt attachment id"))?;
     let _guard = prover_processing_state_lock().lock();
-    load_prover_processing_receipt_locked(&id)
+    try_load_prover_processing_receipt_locked(&id)
 }
 /// Resolve whether a durable content-ID receipt suppresses work at `now_ms`.
-pub(super) fn prover_processing_decision(id: &str, now_ms: u64) -> ProverProcessingDecision {
-    let Some(id) = sanitize_attachment_id(id) else {
-        return ProverProcessingDecision::Missing;
-    };
+pub(super) fn try_prover_processing_decision(
+    id: &str,
+    now_ms: u64,
+) -> std::io::Result<ProverProcessingDecision> {
+    let id = sanitize_attachment_id(id)
+        .filter(|clean| clean == id)
+        .ok_or_else(|| invalid_attachment_file("invalid processing-receipt attachment id"))?;
     let _guard = prover_processing_state_lock().lock();
-    let Some(receipt) = load_prover_processing_receipt_locked(&id) else {
-        return ProverProcessingDecision::Missing;
+    let Some(receipt) = try_load_prover_processing_receipt_locked(&id)? else {
+        return Ok(ProverProcessingDecision::Missing);
     };
     if receipt.terminal
         || receipt
             .retry_not_before_ms
             .is_some_and(|retry_at| now_ms < retry_at)
     {
-        ProverProcessingDecision::Suppress
+        Ok(ProverProcessingDecision::Suppress)
     } else {
-        ProverProcessingDecision::Due {
+        Ok(ProverProcessingDecision::Due {
             retry_count: receipt.retry_count,
-        }
+        })
     }
 }
-fn processing_reference_dir_has_shards(id: &str) -> std::io::Result<bool> {
-    let entries = match fs::read_dir(prover_processing_reference_dir(id)) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+#[cfg(test)]
+pub(super) fn load_prover_processing_receipt(id: &str) -> Option<ProverProcessingReceipt> {
+    try_load_prover_processing_receipt(id).expect("load ZK prover processing receipt")
+}
+#[cfg(test)]
+pub(super) fn prover_processing_decision(id: &str, now_ms: u64) -> ProverProcessingDecision {
+    try_prover_processing_decision(id, now_ms).expect("resolve ZK prover processing decision")
+}
+#[cfg(unix)]
+pub(super) fn open_pinned_direct_directory(path: &Path) -> std::io::Result<Option<fs::File>> {
+    use std::os::unix::fs::MetadataExt as _;
+
+    use crate::secure_file_metadata::{from_file, from_path, is_direct_directory, same_file};
+
+    let named_before = match from_path(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(map_direct_directory_open_error(path, error)),
+    };
+    if !is_direct_directory(&named_before) {
+        return Err(direct_directory_type_error(path));
+    }
+    let directory = match rustix::fs::open(
+        path,
+        rustix::fs::OFlags::RDONLY
+            | rustix::fs::OFlags::DIRECTORY
+            | rustix::fs::OFlags::NOFOLLOW
+            | rustix::fs::OFlags::NONBLOCK
+            | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    ) {
+        Ok(directory) => fs::File::from(directory),
+        Err(rustix::io::Errno::NOENT) => return Ok(None),
+        Err(error) => return Err(std::io::Error::from(error)),
+    };
+    let opened = from_file(&directory)?;
+    let named_after =
+        from_path(path).map_err(|error| map_direct_directory_open_error(path, error))?;
+    if !is_direct_directory(&opened)
+        || !is_direct_directory(&named_after)
+        || !same_file(&named_before, &opened)
+        || !same_file(&opened, &named_after)
+    {
+        return Err(invalid_attachment_file(
+            "attachment persistence directory changed while it was pinned",
+        ));
+    }
+    if opened.uid() != rustix::process::geteuid().as_raw() || opened.mode() & 0o022 != 0 {
+        return Err(invalid_attachment_file(format!(
+            "persistence directory must be owned by the Torii process user and deny group/world writes: {}",
+            path.display()
+        )));
+    }
+    sorafs_node::validate_private_local_storage_acl(&directory, path)?;
+    Ok(Some(directory))
+}
+#[cfg(windows)]
+pub(super) fn open_pinned_direct_directory(path: &Path) -> std::io::Result<Option<fs::File>> {
+    use std::os::windows::fs::OpenOptionsExt as _;
+
+    use crate::secure_file_metadata::{from_file, from_path, is_direct_directory, same_file};
+
+    const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    const FILE_SHARE_READ_WRITE: u32 = 0x0000_0001 | 0x0000_0002;
+    const GENERIC_READ: u32 = 0x8000_0000;
+    let named_before = match from_path(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error),
     };
-    for entry in entries {
-        let entry = entry?;
-        if entry.file_type()?.is_file()
-            && entry
-                .file_name()
-                .to_str()
-                .and_then(|name| name.strip_suffix(".ref"))
-                .and_then(sanitize_tenant_key)
-                .is_some()
-        {
-            return Ok(true);
+    if !is_direct_directory(&named_before) {
+        return Err(invalid_attachment_file(
+            "attachment persistence ancestor is not a direct directory",
+        ));
+    }
+    let directory = fs::OpenOptions::new()
+        .access_mode(GENERIC_READ)
+        // Retaining this handle prevents the directory pathname from being renamed or deleted
+        // while a Windows pathname-based iterator or unlink is in progress.
+        .share_mode(FILE_SHARE_READ_WRITE)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)?;
+    let opened = from_file(&directory)?;
+    let named_after = from_path(path)?;
+    if !is_direct_directory(&opened)
+        || !is_direct_directory(&named_after)
+        || !same_file(&named_before, &opened)
+        || !same_file(&opened, &named_after)
+    {
+        return Err(invalid_attachment_file(
+            "attachment persistence directory changed while it was pinned",
+        ));
+    }
+    sorafs_node::validate_private_local_storage_acl(&directory, path)?;
+    Ok(Some(directory))
+}
+#[cfg(not(any(unix, windows)))]
+pub(super) fn open_pinned_direct_directory(_path: &Path) -> std::io::Result<Option<fs::File>> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "pinned attachment directories are unsupported on this platform",
+    ))
+}
+#[cfg(unix)]
+fn open_pinned_direct_child_directory(
+    parent: &fs::File,
+    name: &str,
+) -> std::io::Result<Option<fs::File>> {
+    use std::os::unix::fs::MetadataExt as _;
+
+    let directory = match rustix::fs::openat(
+        parent,
+        name,
+        rustix::fs::OFlags::RDONLY
+            | rustix::fs::OFlags::DIRECTORY
+            | rustix::fs::OFlags::NOFOLLOW
+            | rustix::fs::OFlags::NONBLOCK
+            | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    ) {
+        Ok(directory) => fs::File::from(directory),
+        Err(rustix::io::Errno::NOENT) => return Ok(None),
+        Err(error) => return Err(std::io::Error::from(error)),
+    };
+    let metadata = directory.metadata()?;
+    if !metadata.is_dir()
+        || metadata.uid() != rustix::process::geteuid().as_raw()
+        || metadata.mode() & 0o022 != 0
+    {
+        return Err(invalid_attachment_file(
+            "attachment persistence child is not an owner-controlled direct directory",
+        ));
+    }
+    sorafs_node::validate_private_local_storage_acl(&directory, Path::new(name))?;
+    Ok(Some(directory))
+}
+#[cfg(unix)]
+pub(super) fn open_pinned_direct_regular_file(
+    parent: &fs::File,
+    name: &str,
+) -> std::io::Result<Option<fs::File>> {
+    use std::os::unix::fs::MetadataExt as _;
+
+    let file = match rustix::fs::openat(
+        parent,
+        name,
+        rustix::fs::OFlags::RDONLY
+            | rustix::fs::OFlags::NOFOLLOW
+            | rustix::fs::OFlags::NONBLOCK
+            | rustix::fs::OFlags::NOCTTY
+            | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    ) {
+        Ok(file) => fs::File::from(file),
+        Err(rustix::io::Errno::NOENT) => return Ok(None),
+        Err(error) => return Err(std::io::Error::from(error)),
+    };
+    let metadata = file.metadata()?;
+    if !metadata.is_file()
+        || metadata.nlink() != 1
+        || metadata.uid() != rustix::process::geteuid().as_raw()
+        || metadata.mode() & 0o022 != 0
+    {
+        return Err(invalid_attachment_file(
+            "attachment persistence entry is not an owner-controlled direct single-link regular file",
+        ));
+    }
+    sorafs_node::validate_private_local_storage_acl(&file, Path::new(name))?;
+    Ok(Some(file))
+}
+#[cfg(unix)]
+pub(super) fn pinned_directory_names(
+    directory: &fs::File,
+    limit: u64,
+) -> std::io::Result<Vec<String>> {
+    let mut names = Vec::new();
+    let mut entries = rustix::fs::Dir::read_from(directory).map_err(std::io::Error::from)?;
+    for entry in &mut entries {
+        let entry = entry.map_err(std::io::Error::from)?;
+        let bytes = entry.file_name().to_bytes();
+        if matches!(bytes, b"." | b"..") {
+            continue;
+        }
+        if u64::try_from(names.len()).unwrap_or(u64::MAX) >= limit {
+            return Err(invalid_attachment_file(format!(
+                "attachment persistence scan exceeds {limit} entries"
+            )));
+        }
+        names.push(
+            std::str::from_utf8(bytes)
+                .map_err(|_| {
+                    invalid_attachment_file(
+                        "attachment persistence directory contains a non-UTF-8 entry",
+                    )
+                })?
+                .to_owned(),
+        );
+    }
+    Ok(names)
+}
+#[cfg(unix)]
+pub(super) fn pinned_directory_names_at(
+    _path: &Path,
+    directory: &fs::File,
+    limit: u64,
+) -> std::io::Result<Vec<String>> {
+    pinned_directory_names(directory, limit)
+}
+#[cfg(windows)]
+pub(super) fn pinned_directory_names_at(
+    path: &Path,
+    _directory: &fs::File,
+    limit: u64,
+) -> std::io::Result<Vec<String>> {
+    let mut names = Vec::new();
+    let mut entries = crate::secure_file_metadata::DirectDirectoryEntryStream::open(path)?;
+    while let Some(name) = entries.next_name()? {
+        if u64::try_from(names.len()).unwrap_or(u64::MAX) >= limit {
+            return Err(invalid_attachment_file(format!(
+                "attachment persistence scan exceeds {limit} entries"
+            )));
+        }
+        names.push(name.into_string().map_err(|_| {
+            invalid_attachment_file("attachment persistence directory contains a non-UTF-8 entry")
+        })?);
+    }
+    Ok(names)
+}
+#[cfg(not(any(unix, windows)))]
+pub(super) fn pinned_directory_names_at(
+    _path: &Path,
+    _directory: &fs::File,
+    _limit: u64,
+) -> std::io::Result<Vec<String>> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "secure attachment directory enumeration is unsupported on this platform",
+    ))
+}
+fn open_pinned_directory_names(
+    path: &Path,
+    limit: u64,
+) -> std::io::Result<Option<(fs::File, Vec<String>)>> {
+    let Some(directory) = open_pinned_direct_directory(path)? else {
+        return Ok(None);
+    };
+    let names = pinned_directory_names_at(path, &directory, limit)?;
+    verify_pinned_direct_directory(path, &directory)?;
+    Ok(Some((directory, names)))
+}
+fn verify_pinned_direct_directory(path: &Path, directory: &fs::File) -> std::io::Result<()> {
+    use crate::secure_file_metadata::{from_file, from_path, is_direct_directory, same_file};
+
+    let opened = from_file(directory)?;
+    let named = from_path(path).map_err(|error| map_direct_directory_open_error(path, error))?;
+    if !is_direct_directory(&opened) || !is_direct_directory(&named) || !same_file(&opened, &named)
+    {
+        return Err(invalid_attachment_file(
+            "attachment persistence directory changed during retained-handle enumeration",
+        ));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+
+        if opened.uid() != rustix::process::geteuid().as_raw() || opened.mode() & 0o022 != 0 {
+            return Err(invalid_attachment_file(format!(
+                "persistence directory must be owned by the Torii process user and deny group/world writes: {}",
+                path.display()
+            )));
         }
     }
-    Ok(false)
+    sorafs_node::validate_private_local_storage_acl(directory, path)
+}
+#[cfg(unix)]
+pub(super) fn open_direct_regular_file_in_pinned_directory(
+    _directory_path: &Path,
+    directory: &fs::File,
+    name: &str,
+) -> std::io::Result<Option<fs::File>> {
+    open_pinned_direct_regular_file(directory, name)
+}
+#[cfg(windows)]
+pub(super) fn open_direct_regular_file_in_pinned_directory(
+    directory_path: &Path,
+    _directory: &fs::File,
+    name: &str,
+) -> std::io::Result<Option<fs::File>> {
+    match open_attachment_regular_file(&directory_path.join(name)) {
+        Ok((file, _)) => Ok(Some(file)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+#[cfg(not(any(unix, windows)))]
+pub(super) fn open_direct_regular_file_in_pinned_directory(
+    _directory_path: &Path,
+    _directory: &fs::File,
+    _name: &str,
+) -> std::io::Result<Option<fs::File>> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "secure attachment child-file opening is unsupported on this platform",
+    ))
+}
+#[cfg(unix)]
+fn open_direct_directory_in_pinned_directory(
+    _directory_path: &Path,
+    directory: &fs::File,
+    name: &str,
+) -> std::io::Result<Option<fs::File>> {
+    open_pinned_direct_child_directory(directory, name)
+}
+#[cfg(windows)]
+fn open_direct_directory_in_pinned_directory(
+    directory_path: &Path,
+    _directory: &fs::File,
+    name: &str,
+) -> std::io::Result<Option<fs::File>> {
+    open_pinned_direct_directory(&directory_path.join(name))
+}
+#[cfg(not(any(unix, windows)))]
+fn open_direct_directory_in_pinned_directory(
+    _directory_path: &Path,
+    _directory: &fs::File,
+    _name: &str,
+) -> std::io::Result<Option<fs::File>> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "secure attachment child-directory opening is unsupported on this platform",
+    ))
+}
+#[cfg(unix)]
+fn remove_direct_regular_file_in_pinned_directory(
+    _directory_path: &Path,
+    directory: &fs::File,
+    name: &str,
+) -> std::io::Result<bool> {
+    unlink_pinned_regular_file_if_present(directory, name)
+}
+#[cfg(windows)]
+fn remove_direct_regular_file_in_pinned_directory(
+    directory_path: &Path,
+    _directory: &fs::File,
+    name: &str,
+) -> std::io::Result<bool> {
+    remove_direct_regular_file_if_present(&directory_path.join(name))
+}
+#[cfg(not(any(unix, windows)))]
+fn remove_direct_regular_file_in_pinned_directory(
+    _directory_path: &Path,
+    _directory: &fs::File,
+    _name: &str,
+) -> std::io::Result<bool> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "secure attachment child-file removal is unsupported on this platform",
+    ))
+}
+#[cfg(unix)]
+fn processing_marker_exists_at(directory: &fs::File, name: &str) -> std::io::Result<bool> {
+    use std::os::unix::fs::MetadataExt as _;
+
+    let Some(file) = open_pinned_direct_regular_file(directory, name)? else {
+        return Ok(false);
+    };
+    let opened = file.metadata()?;
+    let maximum = u64::try_from(ZK_PROVER_PROCESSING_REFERENCE_MARKER.len())
+        .expect("processing marker length fits u64");
+    if opened.len() > maximum {
+        return Err(invalid_attachment_file(
+            "invalid ZK prover processing-reference marker",
+        ));
+    }
+    let mut bytes = Vec::with_capacity(
+        usize::try_from(opened.len())
+            .map_err(|_| invalid_attachment_file("processing marker length is not addressable"))?,
+    );
+    let mut reader = file.take(maximum.saturating_add(1));
+    reader.read_to_end(&mut bytes)?;
+    let after = reader.get_ref().metadata()?;
+    if opened.dev() != after.dev()
+        || opened.ino() != after.ino()
+        || opened.len() != after.len()
+        || bytes != ZK_PROVER_PROCESSING_REFERENCE_MARKER
+    {
+        return Err(invalid_attachment_file(
+            "invalid ZK prover processing-reference marker",
+        ));
+    }
+    Ok(true)
+}
+#[cfg(unix)]
+fn processing_marker_exists_in_pinned_directory(
+    _directory_path: &Path,
+    directory: &fs::File,
+    name: &str,
+) -> std::io::Result<bool> {
+    processing_marker_exists_at(directory, name)
+}
+#[cfg(not(unix))]
+fn processing_marker_exists_in_pinned_directory(
+    directory_path: &Path,
+    _directory: &fs::File,
+    name: &str,
+) -> std::io::Result<bool> {
+    processing_marker_exists(&directory_path.join(name))
+}
+#[cfg(unix)]
+fn pinned_attachment_tenant_directory(
+    tenant_key: &str,
+) -> std::io::Result<(fs::File, Option<fs::File>)> {
+    let base = open_pinned_direct_directory(&base_dir())?.ok_or_else(|| {
+        invalid_attachment_file("attachment persistence base directory is missing")
+    })?;
+    let root = open_pinned_direct_child_directory(&base, "zk_attachments")?.ok_or_else(|| {
+        invalid_attachment_file("attachment persistence root directory is missing")
+    })?;
+    let tenant = open_pinned_direct_child_directory(&root, tenant_key)?;
+    Ok((root, tenant))
+}
+#[cfg(unix)]
+fn delete_target_pair_is_complete(tenant_key: &str, id: &str) -> std::io::Result<bool> {
+    let (_root, Some(tenant)) = pinned_attachment_tenant_directory(tenant_key)? else {
+        return Ok(false);
+    };
+    let metadata = open_pinned_direct_regular_file(&tenant, &format!("{id}.json"))?;
+    let body = open_pinned_direct_regular_file(&tenant, &format!("{id}.bin"))?;
+    Ok(metadata.is_some() && body.is_some())
+}
+#[cfg(not(unix))]
+fn delete_target_pair_is_complete(tenant_key: &str, id: &str) -> std::io::Result<bool> {
+    let tenant = AttachmentTenant(tenant_key.to_owned());
+    let metadata_path = meta_path(&tenant, id);
+    let body_path = bin_path(&tenant, id);
+    if !path_entry_exists(&metadata_path)? || !path_entry_exists(&body_path)? {
+        return Ok(false);
+    }
+    drop(open_attachment_regular_file(&metadata_path)?);
+    drop(open_attachment_regular_file(&body_path)?);
+    Ok(true)
+}
+#[cfg(unix)]
+fn validate_attachment_pair_pinned(tenant_key: &str, id: &str) -> std::io::Result<()> {
+    let (_root, Some(tenant)) = pinned_attachment_tenant_directory(tenant_key)? else {
+        return Err(invalid_attachment_file(
+            "processing reference points to a missing attachment tenant",
+        ));
+    };
+    for name in [format!("{id}.json"), format!("{id}.bin")] {
+        if open_pinned_direct_regular_file(&tenant, &name)?.is_none() {
+            return Err(invalid_attachment_file(
+                "processing reference points to a missing attachment pair",
+            ));
+        }
+    }
+    Ok(())
+}
+#[cfg(unix)]
+enum PinnedProcessingEntry {
+    Missing {
+        parent: fs::File,
+    },
+    Present {
+        state: fs::File,
+        entry: fs::File,
+        live: Option<fs::File>,
+    },
+}
+#[cfg(unix)]
+fn pinned_processing_entry(id: &str) -> std::io::Result<PinnedProcessingEntry> {
+    let base = open_pinned_direct_directory(&base_dir())?.ok_or_else(|| {
+        invalid_attachment_file("attachment persistence base directory is missing")
+    })?;
+    let Some(prover) = open_pinned_direct_child_directory(&base, "zk_prover")? else {
+        return Ok(PinnedProcessingEntry::Missing { parent: base });
+    };
+    let state_name = format!("processing_{ZK_PROVER_PROCESSING_STATE_VERSION}");
+    let Some(state) = open_pinned_direct_child_directory(&prover, &state_name)? else {
+        return Ok(PinnedProcessingEntry::Missing { parent: prover });
+    };
+    let Some(entry) = open_pinned_direct_child_directory(&state, id)? else {
+        return Ok(PinnedProcessingEntry::Missing { parent: state });
+    };
+    let live = open_pinned_direct_child_directory(&entry, "live")?;
+    Ok(PinnedProcessingEntry::Present { state, entry, live })
+}
+#[cfg(unix)]
+fn delete_target_processing_reference_exists(tenant_key: &str, id: &str) -> std::io::Result<bool> {
+    let PinnedProcessingEntry::Present {
+        live: Some(live), ..
+    } = pinned_processing_entry(id)?
+    else {
+        return Ok(false);
+    };
+    processing_marker_exists_at(&live, &format!("{tenant_key}.ref"))
+}
+#[cfg(not(unix))]
+fn delete_target_processing_reference_exists(tenant_key: &str, id: &str) -> std::io::Result<bool> {
+    processing_marker_exists(&prover_processing_reference_path(tenant_key, id))
+}
+fn processing_reference_dir_has_shards(id: &str) -> std::io::Result<bool> {
+    processing_reference_dir_has_shards_except(id, None)
+}
+#[cfg(unix)]
+fn processing_reference_dir_has_shards_pinned(
+    live: &fs::File,
+    id: &str,
+    excluded_tenant: Option<&str>,
+) -> std::io::Result<bool> {
+    let mut has_shard = false;
+    for name in pinned_directory_names(live, ATTACHMENT_ROOT_RECOVERY_MAX_ENTRIES)? {
+        if is_attachment_writer_temp_name(&name) {
+            if open_pinned_direct_regular_file(live, &name)?.is_none() {
+                return Err(invalid_attachment_file(
+                    "processing-reference temporary entry disappeared during validation",
+                ));
+            }
+            continue;
+        }
+        let tenant_key = name
+            .strip_suffix(".ref")
+            .and_then(sanitize_tenant_key)
+            .filter(|tenant| format!("{tenant}.ref") == name)
+            .ok_or_else(|| {
+                invalid_attachment_file(format!(
+                    "processing-reference directory has an unexpected entry: {name}"
+                ))
+            })?;
+        if !processing_marker_exists_at(live, &name)? {
+            return Err(invalid_attachment_file(
+                "processing-reference marker disappeared during validation",
+            ));
+        }
+        if excluded_tenant != Some(tenant_key.as_str()) {
+            validate_attachment_pair_pinned(&tenant_key, id)?;
+        }
+        has_shard = true;
+    }
+    Ok(has_shard)
+}
+#[cfg(unix)]
+fn processing_reference_dir_has_shards_except(
+    id: &str,
+    excluded_tenant: Option<&str>,
+) -> std::io::Result<bool> {
+    let PinnedProcessingEntry::Present {
+        live: Some(live), ..
+    } = pinned_processing_entry(id)?
+    else {
+        return Ok(false);
+    };
+    processing_reference_dir_has_shards_pinned(&live, id, excluded_tenant)
+}
+#[cfg(not(unix))]
+fn processing_reference_dir_has_shards_except(
+    id: &str,
+    excluded_tenant: Option<&str>,
+) -> std::io::Result<bool> {
+    let reference_dir = prover_processing_reference_dir(id);
+    let Some((directory, names)) =
+        open_pinned_directory_names(&reference_dir, ATTACHMENT_ROOT_RECOVERY_MAX_ENTRIES)?
+    else {
+        return Ok(false);
+    };
+    let mut has_shard = false;
+    for name in names {
+        let path = reference_dir.join(&name);
+        if open_direct_regular_file_in_pinned_directory(&reference_dir, &directory, &name)?
+            .is_none()
+        {
+            return Err(invalid_attachment_file(format!(
+                "processing-reference entry disappeared during validation: {}",
+                path.display()
+            )));
+        }
+        if is_attachment_writer_temp_name(&name) {
+            continue;
+        }
+        let tenant_key = name
+            .strip_suffix(".ref")
+            .and_then(sanitize_tenant_key)
+            .filter(|tenant| format!("{tenant}.ref") == name)
+            .ok_or_else(|| {
+                invalid_attachment_file(format!(
+                    "processing-reference directory has an unexpected entry: {name}"
+                ))
+            })?;
+        if processing_marker_exists(&path)? {
+            if excluded_tenant != Some(tenant_key.as_str()) {
+                let tenant = AttachmentTenant(tenant_key);
+                drop(open_attachment_regular_file(&meta_path(&tenant, id))?);
+                drop(open_attachment_regular_file(&bin_path(&tenant, id))?);
+            }
+            has_shard = true;
+        }
+    }
+    verify_pinned_direct_directory(&reference_dir, &directory)?;
+    Ok(has_shard)
 }
 /// Persist a completed content-ID receipt only while at least one attachment copy is live.
 pub(super) fn persist_prover_processing_receipt_if_referenced(
@@ -508,6 +1541,7 @@ fn persist_prover_processing_receipt_if_referenced_locked(
     if !processing_reference_dir_has_shards(id)? {
         return Ok(false);
     }
+    ensure_prover_processing_dirs_durable(id, false)?;
     let body = json::to_json(receipt).map_err(|error| {
         invalid_attachment_file(format!("encode ZK prover processing receipt: {error}"))
     })?;
@@ -538,46 +1572,488 @@ pub(super) fn reconcile_prover_processing_receipt_if_referenced(
         ));
     }
     let _guard = prover_processing_state_lock().lock();
-    let durable = load_prover_processing_receipt_locked(&id);
+    let durable = try_load_prover_processing_receipt_locked(&id)?;
     let selected = ProverProcessingReceipt::reconcile_committed(durable.clone(), committed.clone());
     if durable.as_ref() != Some(&selected) {
         let _ = persist_prover_processing_receipt_if_referenced_locked(&selected, &id)?;
     }
     Ok(selected)
 }
+#[cfg(unix)]
 fn remove_file_if_present(path: &Path) -> std::io::Result<()> {
-    match fs::remove_file(path) {
-        Ok(()) => sync_parent_directory(path),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+    let parent_path = path
+        .parent()
+        .ok_or_else(|| invalid_attachment_file("persisted path has no containing directory"))?;
+    let name = path
+        .file_name()
+        .and_then(OsStr::to_str)
+        .ok_or_else(|| invalid_attachment_file("persisted path has no UTF-8 file name"))?;
+    let Some(parent) = open_pinned_direct_directory(parent_path)? else {
+        return sync_nearest_existing_parent(path);
+    };
+    let _ = unlink_pinned_regular_file_if_present(&parent, name)?;
+    verify_pinned_direct_directory(parent_path, &parent)
+}
+#[cfg(windows)]
+fn remove_file_if_present(path: &Path) -> std::io::Result<()> {
+    remove_direct_regular_file_if_present(path).map(drop)
+}
+#[cfg(not(any(unix, windows)))]
+fn remove_file_if_present(_path: &Path) -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "secure attachment file removal is unsupported on this platform",
+    ))
+}
+fn path_entry_exists(path: &Path) -> std::io::Result<bool> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
         Err(error) => Err(error),
     }
 }
+/// Validate whether one canonical attachment pair is present.
+pub(super) fn attachment_pair_exists(tenant_key: &str, id: &str) -> std::io::Result<bool> {
+    let tenant_key = sanitize_tenant_key(tenant_key)
+        .filter(|clean| clean == tenant_key)
+        .ok_or_else(|| invalid_attachment_file("invalid attachment tenant key"))?;
+    let id = sanitize_attachment_id(id)
+        .filter(|clean| clean == id)
+        .ok_or_else(|| invalid_attachment_file("invalid attachment id"))?;
+    let tenant = AttachmentTenant(tenant_key);
+    if attachment_mutation_hides_attachment(&tenant, &id)? {
+        return Ok(false);
+    }
+    let metadata_path = meta_path(&tenant, &id);
+    let body_path = bin_path(&tenant, &id);
+    match (
+        path_entry_exists(&metadata_path)?,
+        path_entry_exists(&body_path)?,
+    ) {
+        (false, false) => Ok(false),
+        (true, true) => {
+            drop(open_attachment_regular_file(&metadata_path)?);
+            drop(open_attachment_regular_file(&body_path)?);
+            Ok(true)
+        }
+        (true, false) => Err(invalid_attachment_file(format!(
+            "attachment metadata has no body: {id}"
+        ))),
+        (false, true) => Err(invalid_attachment_file(format!(
+            "attachment body has no metadata: {id}"
+        ))),
+    }
+}
+#[cfg(unix)]
 fn remove_dir_if_present(path: &Path) -> std::io::Result<()> {
-    match fs::remove_dir(path) {
-        Ok(()) => sync_parent_directory(path),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error),
+    let parent_path = path.parent().ok_or_else(|| {
+        invalid_attachment_file("persisted directory has no containing directory")
+    })?;
+    let name = path
+        .file_name()
+        .and_then(OsStr::to_str)
+        .ok_or_else(|| invalid_attachment_file("persisted directory has no UTF-8 file name"))?;
+    let Some(parent) = open_pinned_direct_directory(parent_path)? else {
+        return sync_nearest_existing_parent(path);
+    };
+    let Some(directory) = open_pinned_direct_child_directory(&parent, name)? else {
+        sync_open_directory(&parent)?;
+        return verify_pinned_direct_directory(parent_path, &parent);
+    };
+    if !remove_pinned_directory_if_empty(&parent, name, &directory)? {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::DirectoryNotEmpty,
+            format!(
+                "attachment persistence directory is not empty: {}",
+                path.display()
+            ),
+        ));
+    }
+    verify_pinned_direct_directory(parent_path, &parent)
+}
+#[cfg(windows)]
+fn remove_dir_if_present(path: &Path) -> std::io::Result<()> {
+    remove_direct_empty_directory_if_present(path).map(drop)
+}
+#[cfg(not(any(unix, windows)))]
+fn remove_dir_if_present(_path: &Path) -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "secure attachment directory removal is unsupported on this platform",
+    ))
+}
+#[cfg(unix)]
+fn unlink_pinned_file_if_present(parent: &fs::File, name: &str) -> std::io::Result<()> {
+    unlink_pinned_regular_file_if_present(parent, name).map(drop)
+}
+#[cfg(unix)]
+pub(super) fn unlink_pinned_regular_file_if_present(
+    parent: &fs::File,
+    name: &str,
+) -> std::io::Result<bool> {
+    let Some(file) = open_pinned_direct_regular_file(parent, name)? else {
+        sync_open_directory(parent)?;
+        return Ok(false);
+    };
+    let opened = rustix::fs::fstat(&file).map_err(std::io::Error::from)?;
+    let named = rustix::fs::statat(parent, name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)
+        .map_err(std::io::Error::from)?;
+    if rustix::fs::FileType::from_raw_mode(named.st_mode) != rustix::fs::FileType::RegularFile
+        || named.st_nlink != 1
+        || named.st_dev != opened.st_dev
+        || named.st_ino != opened.st_ino
+    {
+        return Err(invalid_attachment_file(
+            "attachment persistence entry changed before removal",
+        ));
+    }
+    match rustix::fs::unlinkat(parent, name, rustix::fs::AtFlags::empty()) {
+        Ok(()) => {
+            sync_open_directory(parent)?;
+            Ok(true)
+        }
+        Err(error) => Err(std::io::Error::from(error)),
     }
 }
-fn remove_processing_temp_files(dir: &Path) -> std::io::Result<()> {
-    let entries = match fs::read_dir(dir) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+#[cfg(windows)]
+#[allow(unsafe_code)]
+mod windows_exact_delete {
+    use std::{
+        ffi::c_void,
+        fs, io,
+        mem::{align_of, size_of},
+        os::windows::io::AsRawHandle as _,
+        ptr,
+    };
+
+    const FILE_DISPOSITION_INFO_EX_CLASS: u32 = 21;
+    const FILE_DISPOSITION_DELETE: u32 = 0x0000_0001;
+    const FILE_DISPOSITION_POSIX_SEMANTICS: u32 = 0x0000_0002;
+    const FILE_DISPOSITION_IGNORE_READONLY_ATTRIBUTE: u32 = 0x0000_0010;
+
+    #[repr(C)]
+    struct FileDispositionInfoEx {
+        flags: u32,
+    }
+
+    const _: () = assert!(size_of::<FileDispositionInfoEx>() == size_of::<u32>());
+    const _: () = assert!(align_of::<FileDispositionInfoEx>() == align_of::<u32>());
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        #[link_name = "SetFileInformationByHandle"]
+        fn set_file_information_by_handle(
+            file: *mut c_void,
+            information_class: u32,
+            information: *const c_void,
+            buffer_size: u32,
+        ) -> i32;
+    }
+
+    pub(super) fn remove(file: &fs::File) -> io::Result<()> {
+        let information = FileDispositionInfoEx {
+            flags: FILE_DISPOSITION_DELETE
+                | FILE_DISPOSITION_POSIX_SEMANTICS
+                | FILE_DISPOSITION_IGNORE_READONLY_ATTRIBUTE,
+        };
+        // SAFETY: `file` is a live DELETE-capable handle opened with delete sharing and
+        // `information` has the documented fixed-size `FILE_DISPOSITION_INFO_EX` layout for the
+        // duration of the call. POSIX semantics remove the name immediately even while other
+        // delete-sharing identity handles retain the underlying object.
+        let succeeded = unsafe {
+            set_file_information_by_handle(
+                file.as_raw_handle().cast(),
+                FILE_DISPOSITION_INFO_EX_CLASS,
+                ptr::from_ref(&information).cast(),
+                u32::try_from(size_of::<FileDispositionInfoEx>())
+                    .expect("FILE_DISPOSITION_INFO_EX size fits u32"),
+            )
+        };
+        if succeeded == 0 {
+            Err(io::Error::last_os_error())
+        } else {
+            Ok(())
+        }
+    }
+}
+#[cfg(windows)]
+pub(super) fn remove_direct_regular_file_if_present(path: &Path) -> std::io::Result<bool> {
+    use std::os::windows::fs::OpenOptionsExt as _;
+
+    use crate::secure_file_metadata::{
+        from_file, from_path, is_direct_directory, is_direct_file, number_of_links, same_file,
+    };
+
+    const DELETE_ACCESS: u32 = 0x0001_0000;
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    const FILE_SHARE_READ: u32 = 0x0000_0001;
+    const FILE_SHARE_DELETE: u32 = 0x0000_0004;
+    const GENERIC_READ: u32 = 0x8000_0000;
+
+    let parent_path = path
+        .parent()
+        .ok_or_else(|| invalid_attachment_file("persisted path has no containing directory"))?;
+    let Some(parent) = open_pinned_direct_directory(parent_path)? else {
+        sync_nearest_existing_parent(path)?;
+        return Ok(false);
+    };
+    let parent_identity = from_file(&parent)?;
+    let file = match fs::OpenOptions::new()
+        .access_mode(GENERIC_READ | DELETE_ACCESS)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_DELETE)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)
+    {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            crate::durable_fs::sync_direct_directory(parent_path)?;
+            return Ok(false);
+        }
         Err(error) => return Err(error),
     };
-    for entry in entries {
-        let entry = entry?;
-        if entry.file_type()?.is_file()
-            && entry
-                .file_name()
-                .to_str()
-                .is_some_and(|name| name.starts_with(ZK_PROVER_PROCESSING_TEMP_PREFIX))
-        {
-            remove_file_if_present(&entry.path())?;
+    sorafs_node::validate_private_local_storage_acl(&file, path)?;
+    let opened = from_file(&file)?;
+    let named = from_path(path)?;
+    if !is_direct_file(&opened)
+        || !is_direct_file(&named)
+        || number_of_links(&opened) != Some(1)
+        || number_of_links(&named) != Some(1)
+        || !same_file(&opened, &named)
+    {
+        return Err(invalid_attachment_file(
+            "persisted entry changed identity before exact removal",
+        ));
+    }
+    // Release transient metadata handles before mutating the namespace. Any independently
+    // retained identity handles share deletion and therefore do not delay POSIX name removal.
+    drop((opened, named));
+    let disposition = windows_exact_delete::remove(&file);
+    drop(file);
+    // A successful disposition is a namespace mutation even if a later postcondition fails.
+    // Always attempt the durability barrier before reporting either outcome.
+    let synced = crate::durable_fs::sync_direct_directory(parent_path);
+    disposition?;
+    synced?;
+
+    let parent_after = from_file(&parent)?;
+    let named_parent = from_path(parent_path)?;
+    if !is_direct_directory(&parent_identity)
+        || !is_direct_directory(&parent_after)
+        || !is_direct_directory(&named_parent)
+        || !same_file(&parent_identity, &parent_after)
+        || !same_file(&parent_after, &named_parent)
+    {
+        return Err(invalid_attachment_file(
+            "persistence directory changed during exact removal",
+        ));
+    }
+    match from_path(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(true),
+        Ok(_) => Err(invalid_attachment_file(
+            "a replacement appeared at the removed persistence path",
+        )),
+        Err(error) => Err(error),
+    }
+}
+#[cfg(windows)]
+fn remove_direct_empty_directory_if_present(path: &Path) -> std::io::Result<bool> {
+    use std::os::windows::fs::OpenOptionsExt as _;
+
+    use crate::secure_file_metadata::{from_file, from_path, is_direct_directory, same_file};
+
+    const DELETE_ACCESS: u32 = 0x0001_0000;
+    const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    const FILE_SHARE_READ_WRITE_DELETE: u32 = 0x0000_0001 | 0x0000_0002 | 0x0000_0004;
+    const GENERIC_READ: u32 = 0x8000_0000;
+
+    let parent_path = path
+        .parent()
+        .ok_or_else(|| invalid_attachment_file("persisted path has no containing directory"))?;
+    let Some(parent) = open_pinned_direct_directory(parent_path)? else {
+        sync_nearest_existing_parent(path)?;
+        return Ok(false);
+    };
+    let parent_identity = from_file(&parent)?;
+    let directory = match fs::OpenOptions::new()
+        .access_mode(GENERIC_READ | DELETE_ACCESS)
+        .share_mode(FILE_SHARE_READ_WRITE_DELETE)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)
+    {
+        Ok(directory) => directory,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            crate::durable_fs::sync_direct_directory(parent_path)?;
+            return Ok(false);
         }
+        Err(error) => return Err(error),
+    };
+    sorafs_node::validate_private_local_storage_acl(&directory, path)?;
+    let opened = from_file(&directory)?;
+    let named = from_path(path)?;
+    if !is_direct_directory(&opened) || !is_direct_directory(&named) || !same_file(&opened, &named)
+    {
+        return Err(invalid_attachment_file(
+            "persisted directory changed identity before exact removal",
+        ));
+    }
+    // Release transient metadata handles before mutating the namespace. Any independently
+    // retained identity handles share deletion and therefore do not delay POSIX name removal.
+    drop((opened, named));
+    let disposition = windows_exact_delete::remove(&directory);
+    drop(directory);
+    // A successful disposition is a namespace mutation even if a later postcondition fails.
+    // Always attempt the durability barrier before reporting either outcome.
+    let synced = crate::durable_fs::sync_direct_directory(parent_path);
+    disposition?;
+    synced?;
+
+    let parent_after = from_file(&parent)?;
+    let named_parent = from_path(parent_path)?;
+    if !is_direct_directory(&parent_identity)
+        || !is_direct_directory(&parent_after)
+        || !is_direct_directory(&named_parent)
+        || !same_file(&parent_identity, &parent_after)
+        || !same_file(&parent_after, &named_parent)
+    {
+        return Err(invalid_attachment_file(
+            "persistence parent directory changed during exact removal",
+        ));
+    }
+    match from_path(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(true),
+        Ok(_) => Err(invalid_attachment_file(
+            "a replacement appeared at the removed persistence directory path",
+        )),
+        Err(error) => Err(error),
+    }
+}
+#[cfg(unix)]
+fn pinned_directory_name_matches(
+    parent: &fs::File,
+    name: &str,
+    opened: &fs::File,
+) -> std::io::Result<bool> {
+    let named = match rustix::fs::statat(parent, name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW) {
+        Ok(named) => named,
+        Err(rustix::io::Errno::NOENT) => return Ok(false),
+        Err(error) => return Err(std::io::Error::from(error)),
+    };
+    let opened = rustix::fs::fstat(opened).map_err(std::io::Error::from)?;
+    Ok(
+        rustix::fs::FileType::from_raw_mode(named.st_mode) == rustix::fs::FileType::Directory
+            && named.st_dev == opened.st_dev
+            && named.st_ino == opened.st_ino,
+    )
+}
+#[cfg(unix)]
+fn remove_pinned_directory_if_empty(
+    parent: &fs::File,
+    name: &str,
+    opened: &fs::File,
+) -> std::io::Result<bool> {
+    if !pinned_directory_name_matches(parent, name, opened)? {
+        return Err(invalid_attachment_file(
+            "attachment persistence directory changed before removal",
+        ));
+    }
+    match rustix::fs::unlinkat(parent, name, rustix::fs::AtFlags::REMOVEDIR) {
+        Ok(()) => {
+            sync_open_directory(parent)?;
+            Ok(true)
+        }
+        Err(rustix::io::Errno::NOTEMPTY | rustix::io::Errno::EXIST) => Ok(false),
+        Err(error) => Err(std::io::Error::from(error)),
+    }
+}
+#[cfg(unix)]
+fn remove_processing_temp_files_pinned(directory: &fs::File) -> std::io::Result<()> {
+    let names = pinned_directory_names(directory, PROVER_PROCESSING_RECOVERY_MAX_ENTRIES)?;
+    for name in names {
+        if !is_attachment_writer_temp_name(&name) {
+            continue;
+        }
+        if open_pinned_direct_regular_file(directory, &name)?.is_none() {
+            return Err(invalid_attachment_file(
+                "processing temporary entry disappeared during cleanup",
+            ));
+        }
+        unlink_pinned_file_if_present(directory, &name)?;
     }
     Ok(())
 }
+#[cfg(unix)]
+fn remove_attachment_pair_pinned(tenant_key: &str, id: &str) -> std::io::Result<()> {
+    let (root, tenant) = pinned_attachment_tenant_directory(tenant_key)?;
+    let Some(tenant) = tenant else {
+        sync_open_directory(&root)?;
+        return Ok(());
+    };
+    let metadata_name = format!("{id}.json");
+    let body_name = format!("{id}.bin");
+    // Validate both entries before the first unlink so an unsafe half does not
+    // convert an otherwise complete pair into a partial deletion.
+    drop(open_pinned_direct_regular_file(&tenant, &metadata_name)?);
+    drop(open_pinned_direct_regular_file(&tenant, &body_name)?);
+    let _ = unlink_pinned_regular_file_if_present(&tenant, &metadata_name)?;
+    let _ = unlink_pinned_regular_file_if_present(&tenant, &body_name)?;
+    let _ = remove_pinned_directory_if_empty(&root, tenant_key, &tenant)?;
+    Ok(())
+}
+#[cfg(not(unix))]
+fn remove_processing_temp_files(dir: &Path) -> std::io::Result<()> {
+    let Some((directory, names)) =
+        open_pinned_directory_names(dir, PROVER_PROCESSING_RECOVERY_MAX_ENTRIES)?
+    else {
+        return Ok(());
+    };
+    for name in names {
+        if !is_attachment_writer_temp_name(&name) {
+            continue;
+        }
+        if open_direct_regular_file_in_pinned_directory(dir, &directory, &name)?.is_none() {
+            return Err(invalid_attachment_file(
+                "processing temporary entry disappeared during cleanup",
+            ));
+        }
+        remove_direct_regular_file_in_pinned_directory(dir, &directory, &name)?;
+    }
+    verify_pinned_direct_directory(dir, &directory)
+}
+#[cfg(unix)]
+fn remove_prover_processing_reference_locked(tenant_key: &str, id: &str) -> std::io::Result<()> {
+    let (state, entry, live) = match pinned_processing_entry(id)? {
+        PinnedProcessingEntry::Missing { parent } => {
+            sync_open_directory(&parent)?;
+            return Ok(());
+        }
+        PinnedProcessingEntry::Present { state, entry, live } => (state, entry, live),
+    };
+    if let Some(live) = live {
+        unlink_pinned_file_if_present(&live, &format!("{tenant_key}.ref"))?;
+        if processing_reference_dir_has_shards_pinned(&live, id, None)? {
+            return Ok(());
+        }
+        remove_processing_temp_files_pinned(&live)?;
+        remove_processing_temp_files_pinned(&entry)?;
+        if !remove_pinned_directory_if_empty(&entry, "live", &live)? {
+            return Err(invalid_attachment_file(
+                "ZK prover live-reference directory is not empty after cleanup",
+            ));
+        }
+    } else {
+        sync_open_directory(&entry)?;
+        remove_processing_temp_files_pinned(&entry)?;
+    }
+    unlink_pinned_file_if_present(&entry, "receipt.json")?;
+    if !remove_pinned_directory_if_empty(&state, id, &entry)? {
+        return Err(invalid_attachment_file(
+            "ZK prover processing-state entry is not empty after cleanup",
+        ));
+    }
+    Ok(())
+}
+#[cfg(not(unix))]
 fn remove_prover_processing_reference_locked(tenant_key: &str, id: &str) -> std::io::Result<()> {
     remove_file_if_present(&prover_processing_reference_path(tenant_key, id))?;
     if processing_reference_dir_has_shards(id)? {
@@ -623,17 +2099,12 @@ fn open_attachment_regular_file_platform(path: &Path) -> std::io::Result<(fs::Fi
     let file_name = path
         .file_name()
         .ok_or_else(|| invalid_attachment_file("attachment path has no file name"))?;
-    let parent = fs::File::from(
-        rustix::fs::open(
-            parent_path,
-            rustix::fs::OFlags::RDONLY
-                | rustix::fs::OFlags::DIRECTORY
-                | rustix::fs::OFlags::NOFOLLOW
-                | rustix::fs::OFlags::CLOEXEC,
-            rustix::fs::Mode::empty(),
+    let parent = open_pinned_direct_directory(parent_path)?.ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "attachment containing directory is missing",
         )
-        .map_err(std::io::Error::from)?,
-    );
+    })?;
     let file = fs::File::from(
         rustix::fs::openat(
             &parent,
@@ -648,53 +2119,47 @@ fn open_attachment_regular_file_platform(path: &Path) -> std::io::Result<(fs::Fi
         .map_err(std::io::Error::from)?,
     );
     let metadata = file.metadata()?;
-    if !metadata.is_file() || metadata.nlink() != 1 {
+    if !metadata.is_file()
+        || metadata.nlink() != 1
+        || metadata.uid() != rustix::process::geteuid().as_raw()
+        || metadata.mode() & 0o022 != 0
+    {
         return Err(invalid_attachment_file(
-            "attachment entry is not a direct single-link regular file",
+            "attachment entry is not an owner-controlled direct single-link regular file",
         ));
     }
+    sorafs_node::validate_private_local_storage_acl(&file, path)?;
     Ok((file, metadata))
 }
 #[cfg(windows)]
 fn open_attachment_regular_file_platform(path: &Path) -> std::io::Result<(fs::File, fs::Metadata)> {
-    use std::os::windows::fs::{MetadataExt as _, OpenOptionsExt as _};
-    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
-    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
-    let before = fs::symlink_metadata(path)?;
-    let before_identity = (before.volume_serial_number(), before.file_index());
-    if !before.is_file()
-        || before.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
-        || before.number_of_links() != Some(1)
-        || before_identity.0.is_none()
-        || before_identity.1.is_none()
-    {
+    use crate::secure_file_metadata::{
+        from_file, from_path, is_direct_file, number_of_links, open_direct_file, same_file,
+    };
+
+    let before = from_path(path)?;
+    if !is_direct_file(&before) || number_of_links(&before) != Some(1) {
         return Err(invalid_attachment_file(
             "attachment entry is not a direct single-link regular file",
         ));
     }
-    let mut options = fs::OpenOptions::new();
-    let file = options
-        .read(true)
-        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
-        .open(path)?;
-    let opened = file.metadata()?;
-    let after = fs::symlink_metadata(path)?;
-    let opened_identity = (opened.volume_serial_number(), opened.file_index());
-    let after_identity = (after.volume_serial_number(), after.file_index());
-    if !opened.is_file()
-        || !after.is_file()
-        || opened.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
-        || after.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
-        || opened.number_of_links() != Some(1)
-        || after.number_of_links() != Some(1)
-        || opened_identity != before_identity
-        || after_identity != before_identity
+    let file = open_direct_file(path)?;
+    sorafs_node::validate_private_local_storage_acl(&file, path)?;
+    let opened = from_file(&file)?;
+    let named = from_path(path)?;
+    if !is_direct_file(&opened)
+        || !is_direct_file(&named)
+        || number_of_links(&opened) != Some(1)
+        || number_of_links(&named) != Some(1)
+        || !same_file(&before, &opened)
+        || !same_file(&opened, &named)
     {
         return Err(invalid_attachment_file(
             "attachment entry changed identity while being opened",
         ));
     }
-    Ok((file, opened))
+    let metadata = file.metadata()?;
+    Ok((file, metadata))
 }
 #[cfg(not(any(unix, windows)))]
 fn open_attachment_regular_file_platform(
@@ -740,20 +2205,448 @@ pub(super) fn read_bounded_attachment_regular_file(
     }
     Ok(bytes)
 }
-/// Initialize on-disk directories and recover any pending quota transaction.
-///
-/// Returns `true` when recovery completed or no transaction was pending. A
-/// `false` result must prevent consumers such as the prover from observing the
-/// attachment store until a later recovery attempt succeeds.
-pub fn init_persistence() -> bool {
-    ensure_root_dir();
-    match recover_attachment_quota_transaction() {
-        Ok(_) => true,
-        Err(error) => {
-            warn!(%error, "failed to recover a pending attachment quota transaction at startup");
-            false
+fn is_attachment_writer_temp_name(name: &str) -> bool {
+    name.strip_prefix(".tmp").is_some_and(|suffix| {
+        suffix.len() == 6 && suffix.bytes().all(|byte| byte.is_ascii_alphanumeric())
+    })
+}
+fn remove_attachment_writer_temps_in(
+    directory: &Path,
+    directory_handle: &fs::File,
+    scanned: &mut u64,
+    scan_limit: u64,
+) -> std::io::Result<()> {
+    let names = pinned_directory_names_at(
+        directory,
+        directory_handle,
+        scan_limit.saturating_sub(*scanned),
+    )?;
+    for name in names {
+        *scanned = (*scanned).saturating_add(1);
+        if *scanned > scan_limit {
+            return Err(invalid_attachment_file(format!(
+                "attachment temporary-file recovery exceeds {scan_limit} entries"
+            )));
+        }
+        if open_direct_regular_file_in_pinned_directory(directory, directory_handle, &name)?
+            .is_none()
+        {
+            return Err(invalid_attachment_file(format!(
+                "attachment entry disappeared during temporary-file recovery: {}",
+                directory.join(&name).display()
+            )));
+        }
+        if !is_attachment_writer_temp_name(&name) {
+            continue;
+        }
+        remove_direct_regular_file_in_pinned_directory(directory, directory_handle, &name)?;
+    }
+    verify_pinned_direct_directory(directory, directory_handle)
+}
+fn recover_attachment_mutation_writer_temps() -> std::io::Result<()> {
+    let directory = attachment_mutation_transaction_dir();
+    let Some((directory_handle, names)) =
+        open_pinned_directory_names(&directory, ATTACHMENT_TRANSACTION_RECOVERY_MAX_ENTRIES)?
+    else {
+        return Ok(());
+    };
+    let mut scanned = 0_u64;
+    for name in names {
+        scanned = scanned.saturating_add(1);
+        if scanned > ATTACHMENT_TRANSACTION_RECOVERY_MAX_ENTRIES {
+            return Err(invalid_attachment_file(format!(
+                "attachment mutation recovery exceeds {ATTACHMENT_TRANSACTION_RECOVERY_MAX_ENTRIES} entries"
+            )));
+        }
+        if name != ATTACHMENT_MUTATION_TRANSACTION_FILE && !is_attachment_writer_temp_name(&name) {
+            return Err(invalid_attachment_file(format!(
+                "attachment mutation directory contains an unexpected entry: {name}"
+            )));
+        }
+        if open_direct_regular_file_in_pinned_directory(&directory, &directory_handle, &name)?
+            .is_none()
+        {
+            return Err(invalid_attachment_file(format!(
+                "attachment mutation entry disappeared during recovery: {}",
+                directory.join(&name).display()
+            )));
+        }
+        if is_attachment_writer_temp_name(&name) {
+            remove_direct_regular_file_in_pinned_directory(&directory, &directory_handle, &name)?;
         }
     }
+    verify_pinned_direct_directory(&directory, &directory_handle)
+}
+fn recover_attachment_writer_temps() -> std::io::Result<()> {
+    let root = attachments_root_dir();
+    let (root_handle, names) =
+        open_pinned_directory_names(&root, ATTACHMENT_ROOT_RECOVERY_MAX_ENTRIES)?.ok_or_else(
+            || {
+                std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "attachment persistence root directory is missing",
+                )
+            },
+        )?;
+    let mut root_entries = 0_u64;
+    let mut child_entries = 0_u64;
+    for raw_tenant in names {
+        root_entries = root_entries.saturating_add(1);
+        if root_entries > ATTACHMENT_ROOT_RECOVERY_MAX_ENTRIES {
+            return Err(invalid_attachment_file(format!(
+                "attachment temporary-file recovery exceeds {ATTACHMENT_ROOT_RECOVERY_MAX_ENTRIES} tenant entries"
+            )));
+        }
+        let tenant = sanitize_tenant_key(&raw_tenant)
+            .filter(|tenant| tenant == &raw_tenant)
+            .ok_or_else(|| {
+                invalid_attachment_file(format!(
+                    "attachment root contains a non-canonical tenant entry: {raw_tenant}"
+                ))
+            })?;
+        let tenant_path = attachments_dir(&AttachmentTenant(tenant));
+        let Some(tenant_handle) =
+            open_direct_directory_in_pinned_directory(&root, &root_handle, &raw_tenant)?
+        else {
+            return Err(invalid_attachment_file(format!(
+                "attachment tenant directory disappeared during recovery: {}",
+                tenant_path.display()
+            )));
+        };
+        remove_attachment_writer_temps_in(
+            &tenant_path,
+            &tenant_handle,
+            &mut child_entries,
+            ATTACHMENT_CHILD_RECOVERY_MAX_ENTRIES,
+        )?;
+    }
+    verify_pinned_direct_directory(&root, &root_handle)?;
+    recover_attachment_mutation_writer_temps()
+}
+fn recover_prover_processing_writer_temps() -> std::io::Result<()> {
+    let base = base_dir();
+    let base_handle = open_pinned_direct_directory(&base)?.ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "attachment persistence base directory is missing",
+        )
+    })?;
+    let prover = base.join("zk_prover");
+    let Some(prover_handle) =
+        open_direct_directory_in_pinned_directory(&base, &base_handle, "zk_prover")?
+    else {
+        return Ok(());
+    };
+    let state = prover_processing_state_dir();
+    let state_name = format!("processing_{ZK_PROVER_PROCESSING_STATE_VERSION}");
+    let Some(state_handle) =
+        open_direct_directory_in_pinned_directory(&prover, &prover_handle, &state_name)?
+    else {
+        return Ok(());
+    };
+    let state_names = pinned_directory_names_at(
+        &state,
+        &state_handle,
+        PROVER_PROCESSING_RECOVERY_MAX_ENTRIES,
+    )?;
+    let mut scanned = 0_u64;
+    for raw_id in state_names {
+        scanned = scanned.saturating_add(1);
+        if scanned > PROVER_PROCESSING_RECOVERY_MAX_ENTRIES {
+            return Err(invalid_attachment_file(format!(
+                "ZK prover processing-state recovery exceeds {PROVER_PROCESSING_RECOVERY_MAX_ENTRIES} entries"
+            )));
+        }
+        let id = sanitize_attachment_id(&raw_id)
+            .filter(|id| id == &raw_id)
+            .ok_or_else(|| {
+                invalid_attachment_file(format!(
+                    "ZK prover processing state contains a non-canonical entry: {raw_id}"
+                ))
+            })?;
+        let Some(state_entry_handle) =
+            open_direct_directory_in_pinned_directory(&state, &state_handle, &raw_id)?
+        else {
+            return Err(invalid_attachment_file(format!(
+                "ZK prover processing-state entry disappeared during recovery: {raw_id}"
+            )));
+        };
+        let state_entry = state.join(&id);
+        let child_names = pinned_directory_names_at(
+            &state_entry,
+            &state_entry_handle,
+            PROVER_PROCESSING_RECOVERY_MAX_ENTRIES.saturating_sub(scanned),
+        )?;
+        let mut has_receipt = false;
+        let mut live_handle = None;
+        for name in child_names {
+            scanned = scanned.saturating_add(1);
+            if scanned > PROVER_PROCESSING_RECOVERY_MAX_ENTRIES {
+                return Err(invalid_attachment_file(format!(
+                    "ZK prover processing-state recovery exceeds {PROVER_PROCESSING_RECOVERY_MAX_ENTRIES} entries"
+                )));
+            }
+            if is_attachment_writer_temp_name(&name) {
+                if open_direct_regular_file_in_pinned_directory(
+                    &state_entry,
+                    &state_entry_handle,
+                    &name,
+                )?
+                .is_none()
+                {
+                    return Err(invalid_attachment_file(format!(
+                        "ZK prover processing temporary entry disappeared during recovery: {}",
+                        state_entry.join(&name).display()
+                    )));
+                }
+                remove_direct_regular_file_in_pinned_directory(
+                    &state_entry,
+                    &state_entry_handle,
+                    &name,
+                )?;
+                continue;
+            }
+            match name.as_str() {
+                "receipt.json" => {
+                    if open_direct_regular_file_in_pinned_directory(
+                        &state_entry,
+                        &state_entry_handle,
+                        &name,
+                    )?
+                    .is_none()
+                    {
+                        return Err(invalid_attachment_file(format!(
+                            "ZK prover processing receipt disappeared during recovery: {}",
+                            state_entry.join(&name).display()
+                        )));
+                    }
+                    has_receipt = true;
+                }
+                "live" => {
+                    let Some(opened) = open_direct_directory_in_pinned_directory(
+                        &state_entry,
+                        &state_entry_handle,
+                        &name,
+                    )?
+                    else {
+                        return Err(invalid_attachment_file(format!(
+                            "ZK prover live-reference directory disappeared during recovery: {}",
+                            state_entry.join(&name).display()
+                        )));
+                    };
+                    live_handle = Some(opened);
+                }
+                _ => {
+                    return Err(invalid_attachment_file(format!(
+                        "ZK prover processing-state entry contains an unexpected path: {name}"
+                    )));
+                }
+            }
+        }
+        verify_pinned_direct_directory(&state_entry, &state_entry_handle)?;
+        if has_receipt && try_load_prover_processing_receipt_locked(&id)?.is_none() {
+            return Err(invalid_attachment_file(
+                "ZK prover processing receipt disappeared during startup recovery",
+            ));
+        }
+        let live = prover_processing_reference_dir(&id);
+        let mut has_live_reference = false;
+        let had_live_dir = live_handle.is_some();
+        if let Some(live_directory) = live_handle.as_ref() {
+            let reference_names = pinned_directory_names_at(
+                &live,
+                live_directory,
+                PROVER_PROCESSING_RECOVERY_MAX_ENTRIES.saturating_sub(scanned),
+            )?;
+            for name in reference_names {
+                scanned = scanned.saturating_add(1);
+                if scanned > PROVER_PROCESSING_RECOVERY_MAX_ENTRIES {
+                    return Err(invalid_attachment_file(format!(
+                        "ZK prover processing-state recovery exceeds {PROVER_PROCESSING_RECOVERY_MAX_ENTRIES} entries"
+                    )));
+                }
+                if open_direct_regular_file_in_pinned_directory(&live, live_directory, &name)?
+                    .is_none()
+                {
+                    return Err(invalid_attachment_file(format!(
+                        "ZK prover live-reference entry disappeared during recovery: {}",
+                        live.join(&name).display()
+                    )));
+                }
+                if is_attachment_writer_temp_name(&name) {
+                    if !remove_direct_regular_file_in_pinned_directory(
+                        &live,
+                        live_directory,
+                        &name,
+                    )? {
+                        return Err(invalid_attachment_file(format!(
+                            "ZK prover live-reference temporary entry disappeared during cleanup: {}",
+                            live.join(&name).display()
+                        )));
+                    }
+                    continue;
+                }
+                let tenant_key = name
+                    .strip_suffix(".ref")
+                    .and_then(sanitize_tenant_key)
+                    .filter(|tenant| format!("{tenant}.ref") == name)
+                    .ok_or_else(|| {
+                        invalid_attachment_file(format!(
+                            "ZK prover live-reference directory contains an unexpected path: {name}"
+                        ))
+                    })?;
+                if !processing_marker_exists_in_pinned_directory(&live, live_directory, &name)? {
+                    return Err(invalid_attachment_file(format!(
+                        "invalid ZK prover live-reference marker: {}",
+                        live.join(&name).display()
+                    )));
+                }
+                let tenant = AttachmentTenant(tenant_key);
+                drop(open_attachment_regular_file(&meta_path(&tenant, &id))?);
+                drop(open_attachment_regular_file(&bin_path(&tenant, &id))?);
+                has_live_reference = true;
+            }
+            verify_pinned_direct_directory(&live, live_directory)?;
+        }
+        drop(live_handle);
+        if !has_live_reference {
+            if had_live_dir {
+                remove_dir_if_present(&live)?;
+            }
+            remove_file_if_present(&prover_processing_receipt_path(&id))?;
+            drop(state_entry_handle);
+            remove_dir_if_present(&state_entry)?;
+        }
+    }
+    verify_pinned_direct_directory(&state, &state_handle)?;
+    verify_pinned_direct_directory(&prover, &prover_handle)?;
+    verify_pinned_direct_directory(&base, &base_handle)
+}
+fn reconcile_attachment_entry_pairs() -> std::io::Result<()> {
+    let root = attachments_root_dir();
+    let (root_handle, root_names) =
+        open_pinned_directory_names(&root, ATTACHMENT_ROOT_RECOVERY_MAX_ENTRIES)?.ok_or_else(
+            || {
+                std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "attachment persistence root directory is missing",
+                )
+            },
+        )?;
+    let mut root_entries = 0_u64;
+    let mut child_entries = 0_u64;
+    for raw_tenant in root_names {
+        root_entries = root_entries.saturating_add(1);
+        if root_entries > ATTACHMENT_ROOT_RECOVERY_MAX_ENTRIES {
+            return Err(invalid_attachment_file(format!(
+                "attachment entry reconciliation exceeds {ATTACHMENT_ROOT_RECOVERY_MAX_ENTRIES} tenant entries"
+            )));
+        }
+        let tenant_key = sanitize_tenant_key(&raw_tenant)
+            .filter(|tenant| tenant == &raw_tenant)
+            .ok_or_else(|| {
+                invalid_attachment_file(format!(
+                    "attachment root contains a non-canonical tenant entry: {raw_tenant}"
+                ))
+            })?;
+        let tenant = AttachmentTenant(tenant_key);
+        let directory = attachments_dir(&tenant);
+        let Some(directory_handle) =
+            open_direct_directory_in_pinned_directory(&root, &root_handle, &raw_tenant)?
+        else {
+            return Err(invalid_attachment_file(format!(
+                "attachment tenant directory disappeared during reconciliation: {}",
+                directory.display()
+            )));
+        };
+        let child_names = pinned_directory_names_at(
+            &directory,
+            &directory_handle,
+            ATTACHMENT_CHILD_RECOVERY_MAX_ENTRIES.saturating_sub(child_entries),
+        )?;
+        let mut metadata_ids = BTreeSet::new();
+        let mut body_ids = BTreeSet::new();
+        for name in child_names {
+            child_entries = child_entries.saturating_add(1);
+            if child_entries > ATTACHMENT_CHILD_RECOVERY_MAX_ENTRIES {
+                return Err(invalid_attachment_file(format!(
+                    "attachment entry reconciliation exceeds {ATTACHMENT_CHILD_RECOVERY_MAX_ENTRIES} child entries"
+                )));
+            }
+            let (raw_id, ids) = if let Some(raw_id) = name.strip_suffix(".json") {
+                (raw_id, &mut metadata_ids)
+            } else if let Some(raw_id) = name.strip_suffix(".bin") {
+                (raw_id, &mut body_ids)
+            } else {
+                return Err(invalid_attachment_file(format!(
+                    "attachment store contains an unexpected entry: {name}"
+                )));
+            };
+            let id = sanitize_attachment_id(raw_id)
+                .filter(|id| id == raw_id)
+                .ok_or_else(|| {
+                    invalid_attachment_file(format!(
+                        "attachment store contains a non-canonical entry: {name}"
+                    ))
+                })?;
+            if open_direct_regular_file_in_pinned_directory(&directory, &directory_handle, &name)?
+                .is_none()
+            {
+                return Err(invalid_attachment_file(format!(
+                    "attachment entry disappeared during reconciliation: {}",
+                    directory.join(&name).display()
+                )));
+            }
+            if !ids.insert(id) {
+                return Err(invalid_attachment_file(format!(
+                    "attachment store contains a duplicate entry: {name}"
+                )));
+            }
+        }
+        verify_pinned_direct_directory(&directory, &directory_handle)?;
+        if let Some(id) = metadata_ids.difference(&body_ids).next() {
+            return Err(invalid_attachment_file(format!(
+                "attachment metadata has no body: {id}"
+            )));
+        }
+        for id in body_ids.difference(&metadata_ids) {
+            let name = format!("{id}.bin");
+            remove_direct_regular_file_in_pinned_directory(&directory, &directory_handle, &name)?;
+        }
+        for id in &metadata_ids {
+            ensure_prover_processing_reference(tenant.as_str(), id)?;
+        }
+        drop(directory_handle);
+        if metadata_ids.is_empty() {
+            remove_empty_tenant_dir_if_present(&tenant)?;
+        }
+    }
+    verify_pinned_direct_directory(&root, &root_handle)
+}
+fn reconcile_attachment_entry_pairs_if_dirty() -> std::io::Result<()> {
+    if !ATTACHMENT_ENTRY_PAIRS_DIRTY.load(AtomicOrdering::Acquire) {
+        return Ok(());
+    }
+    reconcile_attachment_entry_pairs()?;
+    ATTACHMENT_ENTRY_PAIRS_DIRTY.store(false, AtomicOrdering::Release);
+    Ok(())
+}
+/// Initialize on-disk directories and recover any pending attachment mutation.
+///
+/// A failure must prevent consumers such as the prover from observing the
+/// attachment store until a later recovery attempt succeeds.
+pub fn init_persistence() -> std::io::Result<()> {
+    let _store_guard = attachment_store_write_lock();
+    ensure_root_dir()?;
+    recover_attachment_writer_temps()?;
+    recover_attachment_mutation_transaction()?;
+    reconcile_attachment_entry_pairs()?;
+    ATTACHMENT_ENTRY_PAIRS_DIRTY.store(false, AtomicOrdering::Release);
+    {
+        let _guard = prover_processing_state_lock().lock();
+        recover_prover_processing_writer_temps()?;
+    }
+    Ok(())
 }
 fn now_ms() -> u64 {
     SystemTime::now()
@@ -761,29 +2654,129 @@ fn now_ms() -> u64 {
         .unwrap_or_default()
         .as_millis() as u64
 }
-fn list_all_ids(tenant: &AttachmentTenant) -> Vec<String> {
-    let mut ids = Vec::new();
-    if let Ok(rd) = fs::read_dir(attachments_dir(tenant)) {
-        for e in rd.flatten() {
-            if let Some(name) = e.file_name().to_str() {
-                if let Some(id) = name.strip_suffix(".json") {
-                    if let Some(sanitized) = sanitize_attachment_id(id) {
-                        ids.push(sanitized);
-                    }
-                }
+fn try_list_all_ids(tenant: &AttachmentTenant) -> std::io::Result<Vec<String>> {
+    let directory = attachments_dir(tenant);
+    let Some((directory_handle, names)) =
+        open_pinned_directory_names(&directory, ATTACHMENT_TENANT_SCAN_MAX_ENTRIES)?
+    else {
+        return Ok(Vec::new());
+    };
+    let mut metadata_ids = BTreeSet::new();
+    let mut body_ids = BTreeSet::new();
+    let mut scanned = 0_u64;
+    for name in names {
+        scanned = scanned.saturating_add(1);
+        if scanned > ATTACHMENT_TENANT_SCAN_MAX_ENTRIES {
+            return Err(invalid_attachment_file(format!(
+                "attachment listing exceeds {ATTACHMENT_TENANT_SCAN_MAX_ENTRIES} tenant entries"
+            )));
+        }
+        if is_attachment_writer_temp_name(&name) {
+            if open_direct_regular_file_in_pinned_directory(&directory, &directory_handle, &name)?
+                .is_none()
+            {
+                return Err(invalid_attachment_file(format!(
+                    "attachment temporary entry disappeared during listing: {}",
+                    directory.join(&name).display()
+                )));
             }
+            continue;
+        }
+        let (raw_id, ids) = if let Some(raw_id) = name.strip_suffix(".json") {
+            (raw_id, &mut metadata_ids)
+        } else if let Some(raw_id) = name.strip_suffix(".bin") {
+            (raw_id, &mut body_ids)
+        } else {
+            return Err(invalid_attachment_file(format!(
+                "attachment store contains an unexpected entry: {name}"
+            )));
+        };
+        let Some(sanitized) =
+            sanitize_attachment_id(raw_id).filter(|sanitized| sanitized == raw_id)
+        else {
+            return Err(invalid_attachment_file(format!(
+                "attachment store contains a non-canonical entry: {name}"
+            )));
+        };
+        if open_direct_regular_file_in_pinned_directory(&directory, &directory_handle, &name)?
+            .is_none()
+        {
+            return Err(invalid_attachment_file(format!(
+                "attachment entry disappeared during listing: {}",
+                directory.join(&name).display()
+            )));
+        }
+        if !ids.insert(sanitized) {
+            return Err(invalid_attachment_file(format!(
+                "attachment store contains a duplicate entry: {name}"
+            )));
         }
     }
-    ids
+    verify_pinned_direct_directory(&directory, &directory_handle)?;
+    if let Some(id) = metadata_ids.difference(&body_ids).next() {
+        return Err(invalid_attachment_file(format!(
+            "attachment metadata has no body: {id}"
+        )));
+    }
+    if let Some(id) = body_ids.difference(&metadata_ids).next() {
+        return Err(invalid_attachment_file(format!(
+            "attachment body has no metadata: {id}"
+        )));
+    }
+    Ok(metadata_ids.into_iter().collect())
 }
-fn load_meta(tenant: &AttachmentTenant, id: &str) -> Option<AttachmentMeta> {
-    let id = sanitize_attachment_id(id)?;
+#[cfg(test)]
+fn list_all_ids(tenant: &AttachmentTenant) -> Vec<String> {
+    try_list_all_ids(tenant).expect("list attachment metadata ids")
+}
+fn try_load_meta_raw(
+    tenant: &AttachmentTenant,
+    id: &str,
+) -> std::io::Result<Option<AttachmentMeta>> {
+    let Some(id) = sanitize_attachment_id(id) else {
+        return Ok(None);
+    };
     let path = meta_path(tenant, &id);
-    let buf = read_bounded_attachment_regular_file(&path, ATTACHMENT_META_FILE_MAX_BYTES).ok()?;
-    let s = std::str::from_utf8(&buf).ok()?;
-    let meta = json::from_json::<AttachmentMeta>(s).ok()?;
-    validate_attachment_metadata_contract(&meta, tenant.as_str(), &id).ok()?;
-    Some(meta)
+    let buf = match read_bounded_attachment_regular_file(&path, ATTACHMENT_META_FILE_MAX_BYTES) {
+        Ok(buf) => buf,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    let s = std::str::from_utf8(&buf).map_err(|error| {
+        invalid_attachment_file(format!("attachment metadata is not UTF-8: {error}"))
+    })?;
+    let meta = json::from_json::<AttachmentMeta>(s)
+        .map_err(|error| invalid_attachment_file(format!("decode attachment metadata: {error}")))?;
+    validate_attachment_metadata_contract(&meta, tenant.as_str(), &id)
+        .map_err(invalid_attachment_file)?;
+    Ok(Some(meta))
+}
+fn try_load_meta(tenant: &AttachmentTenant, id: &str) -> std::io::Result<Option<AttachmentMeta>> {
+    let Some(id) = sanitize_attachment_id(id) else {
+        return Ok(None);
+    };
+    if attachment_mutation_hides_attachment(tenant, &id)? {
+        return Ok(None);
+    }
+    try_load_meta_raw(tenant, &id)
+}
+/// Load validated attachment metadata from one canonical tenant namespace.
+///
+/// # Errors
+///
+/// Returns an error for invalid identities, unsafe or unreadable storage, or
+/// metadata that violates the persisted attachment contract.
+pub(super) fn try_load_meta_for_tenant_key(
+    tenant_key: &str,
+    id: &str,
+) -> std::io::Result<Option<AttachmentMeta>> {
+    let tenant_key = sanitize_tenant_key(tenant_key)
+        .filter(|clean| clean == tenant_key)
+        .ok_or_else(|| invalid_attachment_file("invalid attachment tenant key"))?;
+    let id = sanitize_attachment_id(id)
+        .filter(|clean| clean == id)
+        .ok_or_else(|| invalid_attachment_file("invalid attachment id"))?;
+    try_load_meta(&AttachmentTenant(tenant_key), &id)
 }
 fn save_meta(tenant: &AttachmentTenant, meta: &AttachmentMeta) -> std::io::Result<()> {
     let id = sanitize_attachment_id(&meta.id).ok_or_else(|| {
@@ -817,34 +2810,198 @@ fn persist_body(tenant: &AttachmentTenant, id: &str, body: &[u8]) -> std::io::Re
     ensure_attachment_dirs_durable(tenant)?;
     persist_bytes_atomically(&path, body, ".tmp")
 }
+#[cfg(unix)]
 fn remove_empty_tenant_dir_if_present(tenant: &AttachmentTenant) -> std::io::Result<()> {
-    match fs::remove_dir(attachments_dir(tenant)) {
-        Ok(()) => sync_directory(&attachments_root_dir()),
-        Err(error)
-            if matches!(
-                error.kind(),
-                std::io::ErrorKind::NotFound | std::io::ErrorKind::DirectoryNotEmpty
-            ) =>
-        {
-            Ok(())
-        }
+    match remove_dir_if_present(&attachments_dir(tenant)) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::DirectoryNotEmpty => Ok(()),
         Err(error) => Err(error),
     }
 }
-fn delete_attachment_files(tenant: &AttachmentTenant, id: &str) -> std::io::Result<()> {
-    if let Some(clean) = sanitize_attachment_id(id) {
-        let _guard = prover_processing_state_lock().lock();
-        // Drop the live reference first. If the process stops before deleting
-        // the attachment files, discovery can safely recreate the reference;
-        // the inverse order could leave a ghost reference after a crash.
-        remove_prover_processing_reference_locked(tenant.as_str(), &clean)?;
-        let meta = meta_path(tenant, &clean);
-        let body = bin_path(tenant, &clean);
-        remove_file_if_present(&meta)?;
-        remove_file_if_present(&body)?;
-        remove_empty_tenant_dir_if_present(tenant)?;
+#[cfg(windows)]
+fn remove_empty_tenant_dir_if_present(tenant: &AttachmentTenant) -> std::io::Result<()> {
+    match remove_direct_empty_directory_if_present(&attachments_dir(tenant)) {
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::DirectoryNotEmpty => Ok(()),
+        Err(error) => Err(error),
     }
+}
+#[cfg(not(any(unix, windows)))]
+fn remove_empty_tenant_dir_if_present(_tenant: &AttachmentTenant) -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "secure attachment tenant-directory removal is unsupported on this platform",
+    ))
+}
+fn validate_attachment_delete_transaction(
+    transaction: &AttachmentDeleteTransaction,
+) -> std::io::Result<()> {
+    if transaction.version != ATTACHMENT_DELETE_TRANSACTION_VERSION {
+        return Err(invalid_attachment_file(
+            "unsupported attachment delete transaction version",
+        ));
+    }
+    sanitize_tenant_key(&transaction.tenant)
+        .filter(|tenant| tenant == &transaction.tenant)
+        .ok_or_else(|| invalid_attachment_file("invalid attachment delete transaction tenant"))?;
+    sanitize_attachment_id(&transaction.id)
+        .filter(|id| id == &transaction.id)
+        .ok_or_else(|| invalid_attachment_file("invalid attachment delete transaction id"))?;
     Ok(())
+}
+fn validate_attachment_mutation_transaction(
+    transaction: &AttachmentMutationTransaction,
+) -> std::io::Result<()> {
+    match transaction {
+        AttachmentMutationTransaction::Write(transaction) => {
+            validate_attachment_quota_transaction(transaction)
+        }
+        AttachmentMutationTransaction::Delete(transaction) => {
+            validate_attachment_delete_transaction(transaction)
+        }
+    }
+}
+fn persist_attachment_mutation_transaction(
+    transaction: &AttachmentMutationTransaction,
+) -> std::io::Result<()> {
+    validate_attachment_mutation_transaction(transaction)?;
+    let body = json::to_json_pretty(transaction).map_err(|error| {
+        invalid_attachment_file(format!("encode attachment mutation transaction: {error}"))
+    })?;
+    if u64::try_from(body.len()).unwrap_or(u64::MAX) > ATTACHMENT_MUTATION_TRANSACTION_MAX_BYTES {
+        return Err(invalid_attachment_file(format!(
+            "attachment mutation transaction exceeds the {ATTACHMENT_MUTATION_TRANSACTION_MAX_BYTES}-byte persistence limit"
+        )));
+    }
+    let path = attachment_mutation_transaction_path();
+    ATTACHMENT_MUTATION_DIRECTORY_DIRTY.store(true, AtomicOrdering::Release);
+    match fs::symlink_metadata(&path) {
+        Ok(_) => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                "an attachment mutation transaction is already pending",
+            ));
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    ensure_attachment_mutation_transaction_dir_durable()?;
+    persist_bytes_atomically(
+        &path,
+        body.as_bytes(),
+        ATTACHMENT_MUTATION_TRANSACTION_TEMP_PREFIX,
+    )
+}
+fn load_attachment_mutation_transaction() -> std::io::Result<Option<AttachmentMutationTransaction>>
+{
+    let path = attachment_mutation_transaction_path();
+    let body = match read_bounded_attachment_regular_file(
+        &path,
+        ATTACHMENT_MUTATION_TRANSACTION_MAX_BYTES,
+    ) {
+        Ok(body) => body,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            if ATTACHMENT_MUTATION_DIRECTORY_DIRTY.load(AtomicOrdering::Acquire) {
+                sync_nearest_existing_parent(&path)?;
+                ATTACHMENT_MUTATION_DIRECTORY_DIRTY.store(false, AtomicOrdering::Release);
+            }
+            return Ok(None);
+        }
+        Err(error) => return Err(error),
+    };
+    let text = std::str::from_utf8(&body).map_err(|error| {
+        invalid_attachment_file(format!(
+            "decode attachment mutation transaction UTF-8: {error}"
+        ))
+    })?;
+    let transaction = json::from_json::<AttachmentMutationTransaction>(text).map_err(|error| {
+        invalid_attachment_file(format!("decode attachment mutation transaction: {error}"))
+    })?;
+    validate_attachment_mutation_transaction(&transaction)?;
+    Ok(Some(transaction))
+}
+fn clear_attachment_mutation_transaction() -> std::io::Result<()> {
+    ATTACHMENT_MUTATION_DIRECTORY_DIRTY.store(true, AtomicOrdering::Release);
+    remove_file_if_present(&attachment_mutation_transaction_path())?;
+    ATTACHMENT_MUTATION_DIRECTORY_DIRTY.store(false, AtomicOrdering::Release);
+    Ok(())
+}
+fn persist_attachment_delete_transaction(
+    transaction: &AttachmentDeleteTransaction,
+) -> std::io::Result<()> {
+    persist_attachment_mutation_transaction(&AttachmentMutationTransaction::Delete(
+        transaction.clone(),
+    ))
+}
+fn attachment_mutation_hides_attachment(
+    tenant: &AttachmentTenant,
+    id: &str,
+) -> std::io::Result<bool> {
+    Ok(match load_attachment_mutation_transaction()? {
+        Some(AttachmentMutationTransaction::Delete(transaction)) => {
+            transaction.tenant == tenant.as_str() && transaction.id == id
+        }
+        Some(AttachmentMutationTransaction::Write(transaction)) => {
+            transaction.tenant == tenant.as_str() && transaction.incoming_meta.id == id
+        }
+        None => false,
+    })
+}
+fn apply_attachment_delete_transaction(
+    transaction: &AttachmentDeleteTransaction,
+) -> std::io::Result<()> {
+    validate_attachment_delete_transaction(transaction)?;
+    let _guard = prover_processing_state_lock().lock();
+    if delete_target_pair_is_complete(&transaction.tenant, &transaction.id)?
+        && !delete_target_processing_reference_exists(&transaction.tenant, &transaction.id)?
+    {
+        return Err(invalid_attachment_file(
+            "complete attachment pair has no durable processing reference",
+        ));
+    }
+    // Validate the complete processing namespace while the attachment pair is
+    // still present. If cleanup later fails, the durable delete intent keeps
+    // this attachment invisible until recovery finishes the transaction.
+    processing_reference_dir_has_shards_except(&transaction.id, Some(transaction.tenant.as_str()))?;
+    #[cfg(unix)]
+    remove_attachment_pair_pinned(&transaction.tenant, &transaction.id)?;
+    #[cfg(not(unix))]
+    {
+        let tenant = AttachmentTenant(transaction.tenant.clone());
+        verify_direct_directory(&attachments_root_dir())?;
+        match verify_direct_directory(&attachments_dir(&tenant)) {
+            Ok(()) => {
+                remove_file_if_present(&meta_path(&tenant, &transaction.id))?;
+                remove_file_if_present(&bin_path(&tenant, &transaction.id))?;
+                remove_empty_tenant_dir_if_present(&tenant)?;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                sync_directory(&attachments_root_dir())?;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    remove_prover_processing_reference_locked(&transaction.tenant, &transaction.id)
+}
+fn delete_attachment_files(tenant: &AttachmentTenant, id: &str) -> std::io::Result<()> {
+    let clean = sanitize_attachment_id(id)
+        .filter(|clean| clean == id)
+        .ok_or_else(|| invalid_attachment_file("invalid attachment id for deletion"))?;
+    let transaction = AttachmentDeleteTransaction {
+        version: ATTACHMENT_DELETE_TRANSACTION_VERSION,
+        tenant: tenant.as_str().to_owned(),
+        id: clean,
+    };
+    persist_attachment_delete_transaction(&transaction)?;
+    ATTACHMENT_ENTRY_PAIRS_DIRTY.store(true, AtomicOrdering::Release);
+    let result = (|| {
+        apply_attachment_delete_transaction(&transaction)?;
+        clear_attachment_mutation_transaction()
+    })();
+    if result.is_ok() {
+        ATTACHMENT_ENTRY_PAIRS_DIRTY.store(false, AtomicOrdering::Release);
+    }
+    result
 }
 fn validate_attachment_quota_transaction(
     transaction: &AttachmentQuotaTransaction,
@@ -869,9 +3026,9 @@ fn validate_attachment_quota_transaction(
             .map_err(invalid_attachment_file)?;
     }
     let victim_count = u64::try_from(transaction.victim_ids.len()).unwrap_or(u64::MAX);
-    if victim_count == 0 || victim_count > ATTACHMENT_META_SCAN_MAX_FILES {
+    if victim_count > ATTACHMENT_META_SCAN_MAX_FILES {
         return Err(invalid_attachment_file(format!(
-            "attachment quota transaction must contain 1..={ATTACHMENT_META_SCAN_MAX_FILES} victims"
+            "attachment write transaction exceeds {ATTACHMENT_META_SCAN_MAX_FILES} victims"
         )));
     }
     let mut unique_victims = BTreeSet::new();
@@ -897,58 +3054,24 @@ fn validate_attachment_quota_transaction(
 fn persist_attachment_quota_transaction(
     transaction: &AttachmentQuotaTransaction,
 ) -> std::io::Result<()> {
-    validate_attachment_quota_transaction(transaction)?;
-    let body = json::to_json_pretty(transaction).map_err(|error| {
-        invalid_attachment_file(format!("encode attachment quota transaction: {error}"))
-    })?;
-    if u64::try_from(body.len()).unwrap_or(u64::MAX) > ATTACHMENT_QUOTA_TRANSACTION_MAX_BYTES {
-        return Err(invalid_attachment_file(format!(
-            "attachment quota transaction exceeds the {ATTACHMENT_QUOTA_TRANSACTION_MAX_BYTES}-byte persistence limit"
-        )));
-    }
-    let path = attachment_quota_transaction_path();
-    match fs::symlink_metadata(&path) {
-        Ok(_) => {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::AlreadyExists,
-                "an attachment quota transaction is already pending",
-            ));
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error),
-    }
-    ensure_attachment_quota_transaction_dir_durable()?;
-    persist_bytes_atomically(
-        &path,
-        body.as_bytes(),
-        ATTACHMENT_QUOTA_TRANSACTION_TEMP_PREFIX,
-    )
+    persist_attachment_mutation_transaction(&AttachmentMutationTransaction::Write(
+        transaction.clone(),
+    ))
 }
 fn load_attachment_quota_transaction() -> std::io::Result<Option<AttachmentQuotaTransaction>> {
-    let path = attachment_quota_transaction_path();
-    let body =
-        match read_bounded_attachment_regular_file(&path, ATTACHMENT_QUOTA_TRANSACTION_MAX_BYTES) {
-            Ok(body) => body,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(error) => return Err(error),
-        };
-    let text = std::str::from_utf8(&body).map_err(|error| {
-        invalid_attachment_file(format!("decode quota transaction UTF-8: {error}"))
-    })?;
-    let transaction = json::from_json::<AttachmentQuotaTransaction>(text).map_err(|error| {
-        invalid_attachment_file(format!("decode attachment quota transaction: {error}"))
-    })?;
-    validate_attachment_quota_transaction(&transaction)?;
-    Ok(Some(transaction))
-}
-fn clear_attachment_quota_transaction() -> std::io::Result<()> {
-    remove_file_if_present(&attachment_quota_transaction_path())
+    match load_attachment_mutation_transaction()? {
+        None => Ok(None),
+        Some(AttachmentMutationTransaction::Write(transaction)) => Ok(Some(transaction)),
+        Some(AttachmentMutationTransaction::Delete(_)) => Err(invalid_attachment_file(
+            "pending attachment mutation is not a write transaction",
+        )),
+    }
 }
 fn attachment_quota_incoming_is_complete(
     transaction: &AttachmentQuotaTransaction,
 ) -> std::io::Result<bool> {
     let tenant = AttachmentTenant(transaction.tenant.clone());
-    let Some(current_meta) = load_meta(&tenant, &transaction.incoming_meta.id) else {
+    let Some(current_meta) = try_load_meta_raw(&tenant, &transaction.incoming_meta.id)? else {
         return Ok(false);
     };
     if current_meta != transaction.incoming_meta {
@@ -959,11 +3082,15 @@ fn attachment_quota_incoming_is_complete(
         transaction.incoming_meta.size,
     ) {
         Ok(body) => body,
-        Err(_) => return Ok(false),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error),
     };
-    if validate_attachment_body_contract(&transaction.incoming_meta, &body).is_err() {
-        return Ok(false);
-    }
+    validate_attachment_body_contract(&transaction.incoming_meta, &body)
+        .map_err(invalid_attachment_file)?;
+    // A previous metadata rename may have succeeded while its directory flush
+    // failed. Re-flush the complete pair's tenant directory before treating
+    // the write as committed during journal replay.
+    sync_directory(&attachments_dir(&tenant))?;
     // A metadata rename can complete before its live-reference marker. Repair
     // that final durable side effect before any quota victim is removed.
     ensure_prover_processing_reference(&transaction.tenant, &transaction.incoming_meta.id)?;
@@ -981,18 +3108,25 @@ fn rollback_attachment_quota_transaction(
         validate_attachment_body_contract(previous_meta, &body).map_err(invalid_attachment_file)?;
         save_meta(&tenant, previous_meta)?;
     } else {
-        delete_attachment_files(&tenant, &transaction.incoming_meta.id)?;
+        apply_attachment_delete_transaction(&AttachmentDeleteTransaction {
+            version: ATTACHMENT_DELETE_TRANSACTION_VERSION,
+            tenant: transaction.tenant.clone(),
+            id: transaction.incoming_meta.id.clone(),
+        })?;
     }
-    clear_attachment_quota_transaction()
+    Ok(())
 }
 fn finalize_attachment_quota_transaction(
     transaction: &AttachmentQuotaTransaction,
 ) -> std::io::Result<()> {
-    let tenant = AttachmentTenant(transaction.tenant.clone());
     for victim_id in &transaction.victim_ids {
-        delete_attachment_files(&tenant, victim_id)?;
+        apply_attachment_delete_transaction(&AttachmentDeleteTransaction {
+            version: ATTACHMENT_DELETE_TRANSACTION_VERSION,
+            tenant: transaction.tenant.clone(),
+            id: victim_id.clone(),
+        })?;
     }
-    clear_attachment_quota_transaction()
+    Ok(())
 }
 /// Recover one quota transaction while the caller holds the attachment quota mutex.
 fn recover_attachment_quota_transaction() -> std::io::Result<bool> {
@@ -1004,7 +3138,31 @@ fn recover_attachment_quota_transaction() -> std::io::Result<bool> {
     } else {
         rollback_attachment_quota_transaction(&transaction)?;
     }
+    clear_attachment_mutation_transaction()?;
     Ok(true)
+}
+fn recover_attachment_mutation_transaction() -> std::io::Result<bool> {
+    let Some(transaction) = load_attachment_mutation_transaction()? else {
+        return Ok(false);
+    };
+    match transaction {
+        AttachmentMutationTransaction::Write(transaction) => {
+            if attachment_quota_incoming_is_complete(&transaction)? {
+                finalize_attachment_quota_transaction(&transaction)?;
+            } else {
+                rollback_attachment_quota_transaction(&transaction)?;
+            }
+        }
+        AttachmentMutationTransaction::Delete(transaction) => {
+            apply_attachment_delete_transaction(&transaction)?;
+        }
+    }
+    clear_attachment_mutation_transaction()?;
+    Ok(true)
+}
+fn prepare_attachment_mutation_locked() -> std::io::Result<()> {
+    recover_attachment_mutation_transaction()?;
+    reconcile_attachment_entry_pairs_if_dirty()
 }
 fn hash_identity_hex(label: &str, value: &str) -> String {
     let mut buf = Vec::with_capacity(label.len() + 1 + value.len());
@@ -1556,13 +3714,15 @@ async fn sanitize_attachment_in_process(
     admission: Option<crate::ProofBodyAdmissionLease>,
 ) -> Result<SanitizerOutcome, SanitizeError> {
     let declared = declared_type.clone();
-    let mut outcome = task::spawn_blocking(move || {
-        #[cfg(test)]
-        wait_for_sanitizer_worker_test_gate();
-        let outcome = sanitize_attachment_sync(declared.as_deref(), body.as_ref(), &cfg);
-        drop(admission);
-        outcome
-    })
+    let mut outcome = crate::panic_recovery::join_recoverable(
+        crate::panic_recovery::spawn_blocking_recoverable(move || {
+            #[cfg(test)]
+            wait_for_sanitizer_worker_test_gate();
+            let outcome = sanitize_attachment_sync(declared.as_deref(), body.as_ref(), &cfg);
+            drop(admission);
+            outcome
+        }),
+    )
     .await
     .map_err(|err| {
         SanitizeError::new(
@@ -1587,13 +3747,15 @@ async fn sanitize_attachment_subprocess(
         max_archive_depth: cfg.max_archive_depth,
         timeout_ms: cfg.timeout.as_millis().max(1) as u64,
     };
-    let outcome = task::spawn_blocking(move || {
-        #[cfg(test)]
-        wait_for_sanitizer_worker_test_gate();
-        let outcome = run_sanitizer_subprocess(request, cfg.timeout, admission.clone());
-        drop(admission);
-        outcome
-    })
+    let outcome = crate::panic_recovery::join_recoverable(
+        crate::panic_recovery::spawn_blocking_recoverable(move || {
+            #[cfg(test)]
+            wait_for_sanitizer_worker_test_gate();
+            let outcome = run_sanitizer_subprocess(request, cfg.timeout, admission.clone());
+            drop(admission);
+            outcome
+        }),
+    )
     .await
     .map_err(|err| {
         SanitizeError::new(
@@ -1714,7 +3876,12 @@ fn spawn_sanitizer_stdout_reader(
         // Keep physical admission for as long as this reader can remain blocked
         // so detached pipe readers cannot accumulate outside the semaphore.
         let admission = admission;
-        let result = read_sanitizer_stdout_limited(&mut stdout, max_output_bytes);
+        let result = match iroha_core::panic_hook::catch_unwind_suppressed(|| {
+            read_sanitizer_stdout_limited(&mut stdout, max_output_bytes)
+        }) {
+            Ok(result) => result,
+            Err(_) => Err("attachment sanitizer stdout reader panicked".to_owned()),
+        };
         drop(admission);
         let _ = tx.send(result);
     });
@@ -2031,84 +4198,112 @@ fn quota_metas_for_tenant(
     tenant: &AttachmentTenant,
     scan: &mut AttachmentQuotaScanBudget,
 ) -> std::io::Result<Vec<AttachmentMeta>> {
-    let entries = match fs::read_dir(attachments_dir(tenant)) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(error) => return Err(error),
+    let directory = attachments_dir(tenant);
+    let Some(directory_handle) = open_pinned_direct_directory(&directory)? else {
+        return Ok(Vec::new());
     };
+    quota_metas_for_tenant_in(tenant, &directory, &directory_handle, scan)
+}
+fn quota_metas_for_tenant_in(
+    tenant: &AttachmentTenant,
+    directory: &Path,
+    directory_handle: &fs::File,
+    scan: &mut AttachmentQuotaScanBudget,
+) -> std::io::Result<Vec<AttachmentMeta>> {
+    let names = pinned_directory_names_at(
+        directory,
+        directory_handle,
+        scan.child_entry_limit.saturating_sub(scan.child_entries),
+    )?;
     let mut metas = Vec::new();
-    for entry in entries {
-        let entry = entry?;
+    for name in names {
         if !quota_scan_entry_within_limit(&mut scan.child_entries, scan.child_entry_limit) {
             return Err(invalid_attachment_file(format!(
                 "attachment quota scan exceeds {} aggregate tenant child entries",
                 scan.child_entry_limit
             )));
         }
-        if !entry.file_type()?.is_file() {
-            continue;
+        if open_direct_regular_file_in_pinned_directory(directory, directory_handle, &name)?
+            .is_none()
+        {
+            return Err(invalid_attachment_file(format!(
+                "attachment entry disappeared during quota scan: {}",
+                directory.join(&name).display()
+            )));
         }
-        let file_name = entry.file_name();
-        let Some(id) = file_name
-            .to_str()
-            .and_then(|name| name.strip_suffix(".json"))
-        else {
+        let Some(raw_id) = name.strip_suffix(".json") else {
             continue;
         };
-        let Some(id) = sanitize_attachment_id(id) else {
-            continue;
-        };
+        let id = sanitize_attachment_id(raw_id)
+            .filter(|id| id == raw_id)
+            .ok_or_else(|| {
+                invalid_attachment_file(format!(
+                    "attachment quota scan found a non-canonical metadata entry: {name}"
+                ))
+            })?;
         scan.metadata_records = scan.metadata_records.saturating_add(1);
         if scan.metadata_records > ATTACHMENT_META_SCAN_MAX_FILES {
             return Err(invalid_attachment_file(format!(
                 "attachment quota scan exceeds {ATTACHMENT_META_SCAN_MAX_FILES} metadata records"
             )));
         }
-        let meta = load_meta(tenant, &id).ok_or_else(|| {
+        let meta = try_load_meta(tenant, &id)?.ok_or_else(|| {
             invalid_attachment_file(format!(
                 "attachment quota scan found invalid metadata for {id}"
             ))
         })?;
         metas.push(meta);
     }
+    verify_pinned_direct_directory(directory, directory_handle)?;
     Ok(metas)
 }
 fn other_tenants_quota_usage(
     submitting_tenant: &AttachmentTenant,
     scan: &mut AttachmentQuotaScanBudget,
 ) -> std::io::Result<(u64, u64)> {
-    let entries = match fs::read_dir(attachments_root_dir()) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok((0, 0)),
-        Err(error) => return Err(error),
+    let root = attachments_root_dir();
+    let Some((root_handle, root_names)) =
+        open_pinned_directory_names(&root, ATTACHMENT_META_SCAN_MAX_FILES)?
+    else {
+        return Ok((0, 0));
     };
     let mut count = 0_u64;
     let mut bytes = 0_u64;
     let mut root_entries_scanned = 0_u64;
-    for entry in entries {
-        let entry = entry?;
+    for raw_tenant in root_names {
         if !quota_scan_entry_within_limit(&mut root_entries_scanned, ATTACHMENT_META_SCAN_MAX_FILES)
         {
             return Err(invalid_attachment_file(format!(
                 "attachment quota root scan exceeds {ATTACHMENT_META_SCAN_MAX_FILES} entries"
             )));
         }
-        if !entry.file_type()?.is_dir() {
-            continue;
-        }
-        let file_name = entry.file_name();
-        let Some(tenant_key) = file_name.to_str().and_then(sanitize_tenant_key) else {
-            continue;
-        };
-        if tenant_key == submitting_tenant.as_str() {
-            continue;
-        }
+        let tenant_key = sanitize_tenant_key(&raw_tenant)
+            .filter(|tenant| tenant == &raw_tenant)
+            .ok_or_else(|| {
+                invalid_attachment_file(format!(
+                    "attachment root contains a non-canonical tenant entry: {raw_tenant}"
+                ))
+            })?;
         let tenant = AttachmentTenant(tenant_key);
-        for meta in quota_metas_for_tenant(&tenant, scan)? {
+        let directory = attachments_dir(&tenant);
+        let Some(directory_handle) =
+            open_direct_directory_in_pinned_directory(&root, &root_handle, &raw_tenant)?
+        else {
+            return Err(invalid_attachment_file(format!(
+                "attachment tenant directory disappeared during quota scan: {}",
+                directory.display()
+            )));
+        };
+        if tenant.as_str() == submitting_tenant.as_str() {
+            verify_pinned_direct_directory(&directory, &directory_handle)?;
+            continue;
+        }
+        for meta in quota_metas_for_tenant_in(&tenant, &directory, &directory_handle, scan)? {
             count = count.saturating_add(1);
             bytes = bytes.saturating_add(meta.size);
         }
     }
+    verify_pinned_direct_directory(&root, &root_handle)?;
     Ok((count, bytes))
 }
 fn plan_attachment_quota_admission(
@@ -2338,20 +4533,35 @@ async fn handle_post_attachment_inner(
         hex::encode::<[u8; 32]>(h.into())
     };
     let _guard = quota_lock().lock().await;
-    if let Err(error) = recover_attachment_quota_transaction() {
+    let _store_guard = attachment_store_write_lock();
+    if let Err(error) = prepare_attachment_mutation_locked() {
         warn!(
             tenant = tenant.as_str(),
             %error,
-            "rejecting attachment: pending quota transaction recovery failed"
+            "rejecting attachment: persistence recovery failed"
         );
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
-            "attachment quota recovery failed".to_string(),
+            "attachment persistence recovery failed".to_string(),
         )
             .into_response();
     }
-    let previous_meta = load_meta(&tenant, &id);
-    let replacing_existing = previous_meta.is_some();
+    let previous_meta = match try_load_meta(&tenant, &id) {
+        Ok(previous_meta) => previous_meta,
+        Err(error) => {
+            warn!(
+                tenant = tenant.as_str(),
+                attachment_id = %id,
+                %error,
+                "rejecting attachment: existing metadata could not be loaded"
+            );
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "attachment storage is unavailable".to_string(),
+            )
+                .into_response();
+        }
+    };
     let eviction_ids = match plan_attachment_quota_admission(&tenant, &id, stored_size) {
         Ok(Some(eviction_ids)) => eviction_ids,
         Ok(None) => {
@@ -2404,14 +4614,10 @@ async fn handle_post_attachment_inner(
         }),
         zk1_tags,
     };
-    let quota_transaction = if eviction_ids.is_empty() {
-        None
-    } else {
-        if let Some(previous_meta) = &previous_meta {
-            let previous_body = match read_bounded_attachment_regular_file(
-                &bin_path(&tenant, &id),
-                previous_meta.size,
-            ) {
+    if let Some(previous_meta) = &previous_meta {
+        let previous_body =
+            match read_bounded_attachment_regular_file(&bin_path(&tenant, &id), previous_meta.size)
+            {
                 Ok(body) => body,
                 Err(error) => {
                     warn!(
@@ -2427,56 +4633,47 @@ async fn handle_post_attachment_inner(
                         .into_response();
                 }
             };
-            if let Err(error) = validate_attachment_body_contract(previous_meta, &previous_body) {
-                warn!(
-                    tenant = tenant.as_str(),
-                    attachment_id = %id,
-                    %error,
-                    "rejecting attachment: existing replacement body failed validation"
-                );
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "existing attachment is not recoverable".to_string(),
-                )
-                    .into_response();
-            }
-        }
-        let transaction = AttachmentQuotaTransaction {
-            version: ATTACHMENT_QUOTA_TRANSACTION_VERSION,
-            tenant: tenant.as_str().to_owned(),
-            incoming_meta: meta.clone(),
-            previous_meta: previous_meta.clone(),
-            victim_ids: eviction_ids.clone(),
-        };
-        if let Err(error) = persist_attachment_quota_transaction(&transaction) {
+        if let Err(error) = validate_attachment_body_contract(previous_meta, &previous_body) {
             warn!(
                 tenant = tenant.as_str(),
                 attachment_id = %id,
                 %error,
-                "rejecting attachment: failed to persist quota transaction"
+                "rejecting attachment: existing replacement body failed validation"
             );
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                "failed to persist attachment quota transaction".to_string(),
+                "existing attachment is not recoverable".to_string(),
             )
                 .into_response();
         }
-        Some(transaction)
+    }
+    let write_transaction = AttachmentQuotaTransaction {
+        version: ATTACHMENT_QUOTA_TRANSACTION_VERSION,
+        tenant: tenant.as_str().to_owned(),
+        incoming_meta: meta.clone(),
+        previous_meta: previous_meta.clone(),
+        victim_ids: eviction_ids.clone(),
     };
+    if let Err(error) = persist_attachment_quota_transaction(&write_transaction) {
+        warn!(
+            tenant = tenant.as_str(),
+            attachment_id = %id,
+            %error,
+            "rejecting attachment: failed to persist write transaction"
+        );
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to persist attachment write transaction".to_string(),
+        )
+            .into_response();
+    }
     if let Err(e) = persist_body(&tenant, &id, &sanitized_body) {
-        let rollback = if quota_transaction.is_some() {
-            recover_attachment_quota_transaction().map(|_| ())
-        } else if replacing_existing {
-            Ok(())
-        } else {
-            delete_attachment_files(&tenant, &id)
-        };
-        if let Err(error) = rollback {
+        if let Err(error) = recover_attachment_quota_transaction() {
             warn!(
                 tenant = tenant.as_str(),
                 attachment_id = %id,
                 %error,
-                "failed to roll back attachment quota transaction after body persistence failure"
+                "failed to roll back attachment write transaction after body persistence failure"
             );
         }
         return (
@@ -2486,19 +4683,12 @@ async fn handle_post_attachment_inner(
             .into_response();
     }
     if let Err(e) = save_meta(&tenant, &meta) {
-        let rollback = if quota_transaction.is_some() {
-            recover_attachment_quota_transaction().map(|_| ())
-        } else if replacing_existing {
-            Ok(())
-        } else {
-            delete_attachment_files(&tenant, &id)
-        };
-        if let Err(error) = rollback {
+        if let Err(error) = recover_attachment_quota_transaction() {
             warn!(
                 tenant = tenant.as_str(),
                 attachment_id = %id,
                 %error,
-                "failed to roll back attachment quota transaction after metadata persistence failure"
+                "failed to roll back attachment write transaction after metadata persistence failure"
             );
         }
         return (
@@ -2507,43 +4697,52 @@ async fn handle_post_attachment_inner(
         )
             .into_response();
     }
-    if quota_transaction.is_some() {
-        match recover_attachment_quota_transaction() {
-            Ok(true) => {
-                info!(
-                    tenant = tenant.as_str(),
-                    planned = eviction_ids.len(),
-                    "completed durable tenant-local attachment quota transaction"
-                );
-            }
-            Ok(false) => {
-                error!(
-                    tenant = tenant.as_str(),
-                    attachment_id = %id,
-                    "durable quota transaction disappeared before eviction"
-                );
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "attachment quota transaction was lost".to_string(),
-                )
-                    .into_response();
-            }
-            Err(error) => {
-                warn!(
-                    tenant = tenant.as_str(),
-                    attachment_id = %id,
-                    %error,
-                    "durable attachment committed but quota eviction recovery failed"
-                );
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "attachment quota eviction failed".to_string(),
-                )
-                    .into_response();
-            }
+    match recover_attachment_quota_transaction() {
+        Ok(true) => {
+            info!(
+                tenant = tenant.as_str(),
+                planned_evictions = eviction_ids.len(),
+                "completed durable tenant-local attachment write transaction"
+            );
+        }
+        Ok(false) => {
+            error!(
+                tenant = tenant.as_str(),
+                attachment_id = %id,
+                "durable attachment write transaction disappeared before completion"
+            );
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "attachment write transaction was lost".to_string(),
+            )
+                .into_response();
+        }
+        Err(error) => {
+            warn!(
+                tenant = tenant.as_str(),
+                attachment_id = %id,
+                %error,
+                "durable attachment committed but write transaction recovery failed"
+            );
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "attachment write transaction completion failed".to_string(),
+            )
+                .into_response();
         }
     }
-    let body = json::to_json_pretty(&meta).unwrap_or_else(|_| "{}".into());
+    let body = match json::to_json_pretty(&meta) {
+        Ok(body) => body,
+        Err(error) => {
+            error!(
+                tenant = tenant.as_str(),
+                attachment_id = %id,
+                %error,
+                "attachment committed but its response could not be encoded"
+            );
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
     (
         StatusCode::CREATED,
         [(axum::http::header::CONTENT_TYPE, "application/json")],
@@ -2584,6 +4783,7 @@ pub async fn handle_list_attachments_filtered(
     tenant: AttachmentTenant,
     NoritoQuery(q): NoritoQuery<AttachmentListQuery>,
 ) -> impl IntoResponse {
+    let _store_guard = attachment_store_read_lock();
     let mut metas: Vec<AttachmentMeta> = Vec::new();
     let mut scanned = 0_u64;
     let ids = if let Some(id) = q.id.as_deref() {
@@ -2596,7 +4796,21 @@ pub async fn handle_list_attachments_filtered(
         };
         vec![clean]
     } else {
-        list_all_ids(&tenant)
+        match try_list_all_ids(&tenant) {
+            Ok(ids) => ids,
+            Err(error) => {
+                warn!(
+                    tenant = tenant.as_str(),
+                    %error,
+                    "failed to enumerate attachment metadata"
+                );
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "attachment storage is unavailable",
+                )
+                    .into_response();
+            }
+        }
     };
     for id in ids {
         scanned = scanned.saturating_add(1);
@@ -2609,8 +4823,22 @@ pub async fn handle_list_attachments_filtered(
             )
                 .into_response();
         }
-        let Some(meta) = load_meta(&tenant, &id) else {
-            continue;
+        let meta = match try_load_meta(&tenant, &id) {
+            Ok(Some(meta)) => meta,
+            Ok(None) => continue,
+            Err(error) => {
+                warn!(
+                    tenant = tenant.as_str(),
+                    attachment_id = %id,
+                    %error,
+                    "failed to load attachment metadata while listing"
+                );
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "attachment storage is unavailable",
+                )
+                    .into_response();
+            }
         };
         if let Some(ct) = q.content_type.as_deref() {
             if !meta.content_type.contains(ct) {
@@ -2642,13 +4870,20 @@ pub async fn handle_list_attachments_filtered(
         (start + cap).min(metas.len())
     });
     let slice = &metas[start..end];
-    let body = if q.ids_only.unwrap_or(false) {
+    let body_result = if q.ids_only.unwrap_or(false) {
         let ids: Vec<String> = slice.iter().map(|m| m.id.clone()).collect();
-        json::to_json_pretty(&ids).unwrap_or_else(|_| "[]".into())
+        json::to_json_pretty(&ids)
     } else {
         // norito::json requires a sized type; serialize a Vec copy of the slice
         let owned: Vec<AttachmentMeta> = slice.to_vec();
-        json::to_json_pretty(&owned).unwrap_or_else(|_| "[]".into())
+        json::to_json_pretty(&owned)
+    };
+    let body = match body_result {
+        Ok(body) => body,
+        Err(error) => {
+            error!(%error, "failed to encode attachment listing response");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
     };
     axum::response::Response::builder()
         .header(axum::http::header::CONTENT_TYPE, "application/json")
@@ -2660,6 +4895,7 @@ pub async fn handle_count_attachments(
     tenant: AttachmentTenant,
     NoritoQuery(q): NoritoQuery<AttachmentListQuery>,
 ) -> impl IntoResponse {
+    let _store_guard = attachment_store_read_lock();
     let mut count = 0u64;
     let mut scanned = 0_u64;
     let ids = if let Some(id) = q.id.as_deref() {
@@ -2672,7 +4908,21 @@ pub async fn handle_count_attachments(
         };
         vec![clean]
     } else {
-        list_all_ids(&tenant)
+        match try_list_all_ids(&tenant) {
+            Ok(ids) => ids,
+            Err(error) => {
+                warn!(
+                    tenant = tenant.as_str(),
+                    %error,
+                    "failed to enumerate attachment metadata for count"
+                );
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "attachment storage is unavailable",
+                )
+                    .into_response();
+            }
+        }
     };
     for id in ids {
         scanned = scanned.saturating_add(1);
@@ -2685,8 +4935,22 @@ pub async fn handle_count_attachments(
             )
                 .into_response();
         }
-        let Some(meta) = load_meta(&tenant, &id) else {
-            continue;
+        let meta = match try_load_meta(&tenant, &id) {
+            Ok(Some(meta)) => meta,
+            Ok(None) => continue,
+            Err(error) => {
+                warn!(
+                    tenant = tenant.as_str(),
+                    attachment_id = %id,
+                    %error,
+                    "failed to load attachment metadata while counting"
+                );
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "attachment storage is unavailable",
+                )
+                    .into_response();
+            }
         };
         if let Some(ct) = q.content_type.as_deref() {
             if !meta.content_type.contains(ct) {
@@ -2706,8 +4970,13 @@ pub async fn handle_count_attachments(
         }
         count = count.saturating_add(1);
     }
-    let s = norito::json::to_json_pretty(&crate::json_object(vec![("count", count)]))
-        .unwrap_or_else(|_| "{}".into());
+    let s = match norito::json::to_json_pretty(&crate::json_object(vec![("count", count)])) {
+        Ok(body) => body,
+        Err(error) => {
+            error!(%error, "failed to encode attachment count response");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
     axum::response::Response::builder()
         .header(axum::http::header::CONTENT_TYPE, "application/json")
         .body(axum::body::Body::from(s))
@@ -2749,18 +5018,43 @@ async fn handle_get_attachment_inner(
         )
             .into_response();
     };
-    let Some(meta) = load_meta(&tenant, &clean) else {
-        return StatusCode::NOT_FOUND.into_response();
+    let store_guard = attachment_store_read_lock();
+    let meta = match try_load_meta(&tenant, &clean) {
+        Ok(Some(meta)) => meta,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(error) => {
+            warn!(
+                tenant = tenant.as_str(),
+                attachment_id = %clean,
+                %error,
+                "failed to load attachment metadata"
+            );
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
     };
     let max_bytes = u64::try_from(max_bytes_cfg()).unwrap_or(u64::MAX);
-    let Ok(bytes) = read_bounded_attachment_regular_file(&bin_path(&tenant, &clean), max_bytes)
-    else {
-        return StatusCode::NOT_FOUND.into_response();
+    let bytes = match read_bounded_attachment_regular_file(&bin_path(&tenant, &clean), max_bytes) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            warn!(
+                tenant = tenant.as_str(),
+                attachment_id = %clean,
+                %error,
+                "failed to load attachment body referenced by persisted metadata"
+            );
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
     };
     if let Err(error) = validate_attachment_body_contract(&meta, &bytes) {
-        warn!(attachment_id = %clean, %error, "rejecting attachment export with invalid persisted provenance");
-        return StatusCode::NOT_FOUND.into_response();
+        warn!(
+            tenant = tenant.as_str(),
+            attachment_id = %clean,
+            %error,
+            "attachment body does not match persisted metadata"
+        );
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
+    drop(store_guard);
     if !needs_export_sanitization(&meta) {
         return axum::response::Response::builder()
             .header(axum::http::header::CONTENT_TYPE, meta.content_type)
@@ -2777,25 +5071,29 @@ async fn handle_get_attachment_inner(
         Ok(outcome) => outcome,
         Err(err) => {
             warn!(
+                tenant = tenant.as_str(),
                 attachment_id = %clean,
                 reason = err.reason.label(),
-                "rejecting attachment export after sanitization"
+                error = %err.message,
+                "persisted attachment could not be re-sanitized for export"
             );
-            return (err.reason.status_code(), err.message).into_response();
+            let status = if err.reason == SanitizeRejectReason::Sandbox {
+                StatusCode::SERVICE_UNAVAILABLE
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR
+            };
+            return status.into_response();
         }
     };
     if sanitized.summary.sniffed_type != meta.content_type {
         warn!(
+            tenant = tenant.as_str(),
             attachment_id = %clean,
             declared = %meta.content_type,
             sniffed = %sanitized.summary.sniffed_type,
-            "attachment export content-type mismatch"
+            "persisted attachment export content-type changed during sanitization"
         );
-        return (
-            StatusCode::BAD_REQUEST,
-            "attachment export content-type mismatch".to_string(),
-        )
-            .into_response();
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
     axum::response::Response::builder()
         .header(axum::http::header::CONTENT_TYPE, meta.content_type)
@@ -2815,20 +5113,39 @@ pub async fn handle_delete_attachment(
             .into_response();
     };
     let _guard = quota_lock().lock().await;
-    if let Err(error) = recover_attachment_quota_transaction() {
+    let _store_guard = attachment_store_write_lock();
+    if let Err(error) = prepare_attachment_mutation_locked() {
         warn!(
             tenant = tenant.as_str(),
             attachment_id = %clean,
             %error,
-            "failed to recover attachment quota transaction before deletion"
+            "failed to recover attachment persistence before deletion"
         );
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
-            "attachment quota recovery failed".to_string(),
+            "attachment persistence recovery failed".to_string(),
         )
             .into_response();
     }
-    let existed = meta_path(&tenant, &clean).exists() || bin_path(&tenant, &clean).exists();
+    let existed = match path_entry_exists(&meta_path(&tenant, &clean)).and_then(|metadata_exists| {
+        path_entry_exists(&bin_path(&tenant, &clean))
+            .map(|body_exists| metadata_exists || body_exists)
+    }) {
+        Ok(existed) => existed,
+        Err(error) => {
+            warn!(
+                tenant = tenant.as_str(),
+                attachment_id = %clean,
+                %error,
+                "failed to inspect attachment before deletion"
+            );
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to inspect attachment".to_string(),
+            )
+                .into_response();
+        }
+    };
     if let Err(error) = delete_attachment_files(&tenant, &clean) {
         warn!(
             tenant = tenant.as_str(),
@@ -2848,29 +5165,30 @@ pub async fn handle_delete_attachment(
         StatusCode::NOT_FOUND.into_response()
     }
 }
-async fn delete_attachment_if_expired(
-    tenant: &AttachmentTenant,
-    id: &str,
-    ttl: Duration,
-) -> std::io::Result<bool> {
-    delete_attachment_if_expired_with_before_lock(tenant, id, ttl, || {}).await
-}
 async fn delete_attachment_if_expired_with_before_lock(
     tenant: &AttachmentTenant,
     id: &str,
     ttl: Duration,
     before_lock: impl FnOnce(),
 ) -> std::io::Result<bool> {
-    let Some(id) = sanitize_attachment_id(id) else {
-        return Ok(false);
-    };
+    let id = sanitize_attachment_id(id)
+        .filter(|clean| clean == id)
+        .ok_or_else(|| invalid_attachment_file("invalid attachment id for TTL collection"))?;
     // POST, explicit DELETE, quota eviction, and TTL collection all mutate the
     // same content-addressed entry. Re-read its timestamp after acquiring the
     // common lock so an old GC observation cannot delete a successful repost.
     before_lock();
     let _guard = quota_lock().lock().await;
-    recover_attachment_quota_transaction()?;
-    let Some(meta) = load_meta(tenant, &id) else {
+    let _store_guard = attachment_store_write_lock();
+    prepare_attachment_mutation_locked()?;
+    delete_attachment_if_expired_locked(tenant, &id, ttl)
+}
+fn delete_attachment_if_expired_locked(
+    tenant: &AttachmentTenant,
+    id: &str,
+    ttl: Duration,
+) -> std::io::Result<bool> {
+    let Some(meta) = try_load_meta(tenant, &id)? else {
         return Ok(false);
     };
     let meta_time = UNIX_EPOCH + Duration::from_millis(meta.created_ms);
@@ -2884,54 +5202,163 @@ async fn delete_attachment_if_expired_with_before_lock(
     delete_attachment_files(tenant, &id)?;
     Ok(true)
 }
+async fn collect_expired_attachments_once(
+    shutdown: &ShutdownSignal,
+    ttl: Duration,
+) -> std::io::Result<()> {
+    let _guard = tokio::select! {
+        () = shutdown.receive() => return Ok(()),
+        guard = quota_lock().lock() => guard,
+    };
+    let _store_guard = attachment_store_write_lock();
+    prepare_attachment_mutation_locked()?;
+    let root = attachments_root_dir();
+    let (root_handle, root_names) =
+        open_pinned_directory_names(&root, ATTACHMENT_ROOT_RECOVERY_MAX_ENTRIES)?.ok_or_else(
+            || {
+                std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "attachment persistence root directory is missing",
+                )
+            },
+        )?;
+    let mut root_entries = 0_u64;
+    let mut child_entries = 0_u64;
+    for name in root_names {
+        if shutdown.is_sent() {
+            verify_pinned_direct_directory(&root, &root_handle)?;
+            return Ok(());
+        }
+        root_entries = root_entries.saturating_add(1);
+        if root_entries > ATTACHMENT_ROOT_RECOVERY_MAX_ENTRIES {
+            return Err(invalid_attachment_file(format!(
+                "attachment TTL scan exceeds {ATTACHMENT_ROOT_RECOVERY_MAX_ENTRIES} tenant entries"
+            )));
+        }
+        let tenant_key = sanitize_tenant_key(&name)
+            .filter(|clean| clean == &name)
+            .ok_or_else(|| {
+                invalid_attachment_file(format!(
+                    "attachment TTL scan found a non-canonical tenant entry: {name}"
+                ))
+            })?;
+        let tenant = AttachmentTenant(tenant_key);
+        let tenant_dir = attachments_dir(&tenant);
+        let Some(tenant_handle) =
+            open_direct_directory_in_pinned_directory(&root, &root_handle, &name)?
+        else {
+            return Err(invalid_attachment_file(format!(
+                "attachment tenant directory disappeared during TTL scan: {}",
+                tenant_dir.display()
+            )));
+        };
+        let tenant_names = pinned_directory_names_at(
+            &tenant_dir,
+            &tenant_handle,
+            ATTACHMENT_CHILD_RECOVERY_MAX_ENTRIES.saturating_sub(child_entries),
+        )?;
+        let mut metadata_ids = BTreeSet::new();
+        let mut body_ids = BTreeSet::new();
+        for name in tenant_names {
+            if shutdown.is_sent() {
+                verify_pinned_direct_directory(&tenant_dir, &tenant_handle)?;
+                verify_pinned_direct_directory(&root, &root_handle)?;
+                return Ok(());
+            }
+            child_entries = child_entries.saturating_add(1);
+            if child_entries > ATTACHMENT_CHILD_RECOVERY_MAX_ENTRIES {
+                return Err(invalid_attachment_file(format!(
+                    "attachment TTL scan exceeds {ATTACHMENT_CHILD_RECOVERY_MAX_ENTRIES} child entries"
+                )));
+            }
+            if is_attachment_writer_temp_name(&name) {
+                if open_direct_regular_file_in_pinned_directory(&tenant_dir, &tenant_handle, &name)?
+                    .is_none()
+                {
+                    return Err(invalid_attachment_file(format!(
+                        "attachment TTL temporary entry disappeared during scan: {}",
+                        tenant_dir.join(&name).display()
+                    )));
+                }
+                continue;
+            }
+            let (raw_id, is_metadata) = if let Some(raw_id) = name.strip_suffix(".json") {
+                (raw_id, true)
+            } else if let Some(raw_id) = name.strip_suffix(".bin") {
+                (raw_id, false)
+            } else {
+                return Err(invalid_attachment_file(format!(
+                    "attachment TTL scan found an unexpected entry: {name}"
+                )));
+            };
+            let id = sanitize_attachment_id(raw_id)
+                .filter(|clean| clean == raw_id)
+                .ok_or_else(|| {
+                    invalid_attachment_file(format!(
+                        "attachment TTL scan found a non-canonical entry: {name}"
+                    ))
+                })?;
+            if open_direct_regular_file_in_pinned_directory(&tenant_dir, &tenant_handle, &name)?
+                .is_none()
+            {
+                return Err(invalid_attachment_file(format!(
+                    "attachment entry disappeared during TTL scan: {}",
+                    tenant_dir.join(&name).display()
+                )));
+            }
+            if is_metadata {
+                metadata_ids.insert(id);
+            } else {
+                body_ids.insert(id);
+            }
+        }
+        verify_pinned_direct_directory(&tenant_dir, &tenant_handle)?;
+        if let Some(id) = metadata_ids.difference(&body_ids).next() {
+            return Err(invalid_attachment_file(format!(
+                "attachment metadata has no body during TTL scan: {id}"
+            )));
+        }
+        drop(tenant_handle);
+        for id in body_ids.difference(&metadata_ids) {
+            delete_attachment_files(&tenant, id)?;
+        }
+        for id in metadata_ids {
+            if shutdown.is_sent() {
+                verify_pinned_direct_directory(&root, &root_handle)?;
+                return Ok(());
+            }
+            delete_attachment_if_expired_locked(&tenant, &id, ttl)?;
+        }
+    }
+    verify_pinned_direct_directory(&root, &root_handle)
+}
 /// Start a background GC worker that removes expired attachments.
-pub fn start_gc_worker() {
-    ensure_root_dir();
-    tokio::spawn(async move {
+pub(crate) fn start_gc_worker(
+    shutdown: ShutdownSignal,
+) -> std::io::Result<tokio::task::JoinHandle<crate::ToriiCriticalWorkerExit>> {
+    ensure_root_dir()?;
+    Ok(tokio::spawn(async move {
         let ttl = Duration::from_secs(ttl_secs_cfg());
         let interval = Duration::from_secs(GC_INTERVAL_SECS);
         loop {
-            if let Ok(rd) = fs::read_dir(attachments_root_dir()) {
-                for e in rd.flatten() {
-                    let Ok(file_type) = e.file_type() else {
-                        continue;
-                    };
-                    if !file_type.is_dir() {
-                        continue;
-                    }
-                    let file_name = e.file_name();
-                    let Some(name) = file_name.to_str() else {
-                        continue;
-                    };
-                    let Some(tenant_key) = sanitize_tenant_key(name) else {
-                        continue;
-                    };
-                    let tenant = AttachmentTenant(tenant_key);
-                    if let Ok(trd) = fs::read_dir(attachments_dir(&tenant)) {
-                        for te in trd.flatten() {
-                            let te_file_name = te.file_name();
-                            let Some(tname) = te_file_name.to_str() else {
-                                continue;
-                            };
-                            let Some(id) = tname.strip_suffix(".json") else {
-                                continue;
-                            };
-                            if let Err(error) = delete_attachment_if_expired(&tenant, id, ttl).await
-                            {
-                                warn!(
-                                    tenant = tenant.as_str(),
-                                    attachment_id = %id,
-                                    %error,
-                                    "failed to garbage-collect an expired attachment safely"
-                                );
-                            }
-                        }
-                    }
+            let result = tokio::select! {
+                () = shutdown.receive() => {
+                    return crate::ToriiCriticalWorkerExit::StoppedByShutdown;
                 }
+                result = collect_expired_attachments_once(&shutdown, ttl) => result,
+            };
+            if let Err(error) = result {
+                error!(%error, "attachment garbage-collection worker stopped after a storage failure");
+                return crate::ToriiCriticalWorkerExit::UnexpectedExit;
             }
-            tokio::time::sleep(interval).await;
+            tokio::select! {
+                () = shutdown.receive() => {
+                    return crate::ToriiCriticalWorkerExit::StoppedByShutdown;
+                }
+                () = tokio::time::sleep(interval) => {}
+            }
         }
-    });
+    }))
 }
 #[derive(Debug, Clone)]
 struct AttachConfig {
@@ -3301,6 +5728,307 @@ mod tests {
         assert!(panic.is_err());
         let _guard = super::attach_cfg().read();
     }
+    #[cfg(windows)]
+    #[test]
+    fn exact_file_removal_unlinks_read_only_name_while_identity_handle_is_retained() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let path = tmp.path().join("retained-read-only.bin");
+        fs::write(&path, b"attachment").expect("write attachment");
+        let mut permissions = fs::metadata(&path)
+            .expect("attachment metadata")
+            .permissions();
+        permissions.set_readonly(true);
+        fs::set_permissions(&path, permissions).expect("mark attachment read-only");
+        let retained = crate::secure_file_metadata::from_path(&path)
+            .expect("retain delete-sharing identity handle");
+
+        assert!(
+            super::remove_direct_regular_file_if_present(&path)
+                .expect("remove exact read-only attachment")
+        );
+        let error = crate::secure_file_metadata::from_path(&path)
+            .expect_err("POSIX disposition must immediately unlink the file name");
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
+
+        drop(retained);
+    }
+    #[cfg(windows)]
+    #[test]
+    fn exact_directory_removal_unlinks_name_while_identity_handle_is_retained() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let path = tmp.path().join("retained-empty-directory");
+        fs::create_dir(&path).expect("create empty directory");
+        let retained = crate::secure_file_metadata::from_path(&path)
+            .expect("retain delete-sharing identity handle");
+
+        assert!(
+            super::remove_direct_empty_directory_if_present(&path)
+                .expect("remove exact empty directory")
+        );
+        let error = crate::secure_file_metadata::from_path(&path)
+            .expect_err("POSIX disposition must immediately unlink the directory name");
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
+
+        drop(retained);
+    }
+    #[cfg(windows)]
+    #[test]
+    fn exact_directory_removal_preserves_nonempty_directory() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let path = tmp.path().join("nonempty-directory");
+        fs::create_dir(&path).expect("create directory");
+        fs::write(path.join("entry"), b"attachment").expect("write directory entry");
+
+        let error = super::remove_direct_empty_directory_if_present(&path)
+            .expect_err("nonempty directory must not be removed");
+        assert_eq!(error.kind(), io::ErrorKind::DirectoryNotEmpty);
+        assert_eq!(
+            fs::read(path.join("entry")).expect("nonempty directory remains readable"),
+            b"attachment"
+        );
+    }
+    #[test]
+    fn persistence_preflight_retries_after_directory_creation_failure() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let _guard = crate::data_dir::OverrideGuard::new(tmp.path());
+        let root = super::attachments_root_dir();
+        fs::write(&root, b"blocks attachment directory").expect("write root blocker");
+
+        assert!(super::init_persistence().is_err());
+
+        fs::remove_file(&root).expect("remove root blocker");
+        super::init_persistence().expect("preflight must retry instead of caching failure");
+        super::verify_direct_directory(&root).expect("verified direct attachment root");
+    }
+    #[test]
+    fn persistence_preflight_removes_crash_temps_and_unaccounted_orphan_bodies() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let _guard = crate::data_dir::OverrideGuard::new(tmp.path());
+        let tenant = super::AttachmentTenant::anonymous();
+        super::ensure_dirs(&tenant).expect("create tenant directory");
+        let orphan_id = "a".repeat(super::ATTACHMENT_ID_HEX_LEN);
+        let tenant_temp = super::attachments_dir(&tenant).join(".tmpABC123");
+        fs::write(&tenant_temp, b"partial attachment").expect("write attachment temp");
+        let orphan_body = super::bin_path(&tenant, &orphan_id);
+        fs::write(&orphan_body, b"unaccounted body").expect("write orphan body");
+        super::ensure_attachment_mutation_transaction_dir_durable()
+            .expect("create transaction directory");
+        let transaction_temp = super::attachment_mutation_transaction_dir().join(".tmpXYZ789");
+        fs::write(&transaction_temp, b"partial journal").expect("write journal temp");
+        let processing_temp = super::prover_processing_state_dir()
+            .join(&orphan_id)
+            .join(".tmpRST456");
+        fs::create_dir_all(processing_temp.parent().expect("processing temp parent"))
+            .expect("create processing state directory");
+        fs::write(&processing_temp, b"partial receipt").expect("write processing temp");
+
+        super::init_persistence().expect("recover attachment persistence");
+
+        assert!(!tenant_temp.exists());
+        assert!(!orphan_body.exists());
+        assert!(!transaction_temp.exists());
+        assert!(!processing_temp.exists());
+    }
+    #[test]
+    fn persistence_preflight_rejects_metadata_without_a_body() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let _guard = crate::data_dir::OverrideGuard::new(tmp.path());
+        let tenant = super::AttachmentTenant::anonymous();
+        let body = br#"{"missing":"body"}"#;
+        let meta = canonical_test_meta(&tenant, body);
+        super::ensure_dirs(&tenant).expect("create tenant directory");
+        fs::write(
+            super::meta_path(&tenant, &meta.id),
+            json::to_json_pretty(&meta).expect("encode metadata"),
+        )
+        .expect("write orphan metadata");
+
+        let error = super::init_persistence()
+            .expect_err("metadata without its body must fail startup recovery");
+        assert!(error.to_string().contains("metadata has no body"));
+    }
+    #[test]
+    fn persistence_preflight_rejects_unknown_mutation_namespace_entries() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let _guard = crate::data_dir::OverrideGuard::new(tmp.path());
+        super::ensure_root_dir().expect("create attachment root");
+        super::ensure_attachment_mutation_transaction_dir_durable()
+            .expect("create mutation transaction directory");
+        fs::write(
+            super::attachment_mutation_transaction_dir().join("unexpected.json"),
+            b"{}",
+        )
+        .expect("write unexpected mutation entry");
+
+        let error = super::init_persistence()
+            .expect_err("unknown mutation namespace entries must fail startup recovery");
+        assert!(error.to_string().contains("unexpected entry"));
+    }
+    #[test]
+    fn persistence_preflight_rejects_corrupt_processing_receipts() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let _guard = crate::data_dir::OverrideGuard::new(tmp.path());
+        let tenant = super::AttachmentTenant::anonymous();
+        let meta = persist_canonical_test_attachment(&tenant, br#"{"processing":true}"#, 1);
+        fs::write(
+            super::prover_processing_receipt_path(&meta.id),
+            b"{not json",
+        )
+        .expect("write corrupt processing receipt");
+
+        let error = super::init_persistence()
+            .expect_err("corrupt processing receipts must fail startup recovery");
+        assert!(
+            error
+                .to_string()
+                .contains("decode ZK prover processing receipt")
+        );
+    }
+    #[cfg(unix)]
+    #[test]
+    fn persistence_preflight_rejects_symlinked_attachment_root() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let target = tempfile::tempdir().expect("symlink target");
+        let _guard = crate::data_dir::OverrideGuard::new(tmp.path());
+        let root = super::attachments_root_dir();
+        std::os::unix::fs::symlink(target.path(), &root).expect("symlink attachment root");
+
+        let error = super::init_persistence().expect_err("symlinked root must fail preflight");
+
+        assert!(error.to_string().contains("not a direct directory"));
+    }
+    #[cfg(unix)]
+    #[test]
+    fn persistence_preflight_rejects_symlinked_prover_ancestor_before_cleanup() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let target = tempfile::tempdir().expect("symlink target");
+        let _guard = crate::data_dir::OverrideGuard::new(tmp.path());
+        super::ensure_root_dir().expect("create attachment root");
+        let id = "a".repeat(super::ATTACHMENT_ID_HEX_LEN);
+        let external_entry = target
+            .path()
+            .join(format!(
+                "processing_{}",
+                super::ZK_PROVER_PROCESSING_STATE_VERSION
+            ))
+            .join(id);
+        fs::create_dir_all(&external_entry).expect("create external processing entry");
+        let external_temp = external_entry.join(".tmpABC123");
+        fs::write(&external_temp, b"external data").expect("write external temp-shaped file");
+        std::os::unix::fs::symlink(target.path(), super::base_dir().join("zk_prover"))
+            .expect("symlink prover ancestor");
+
+        let error = super::init_persistence()
+            .expect_err("a symlinked prover ancestor must fail before cleanup");
+        assert!(error.to_string().contains("not a direct directory"));
+        assert!(
+            external_temp.exists(),
+            "preflight must not delete through a symlinked ancestor"
+        );
+    }
+    #[tokio::test]
+    async fn gc_worker_reports_shutdown_and_storage_failure() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let _guard = crate::data_dir::OverrideGuard::new(tmp.path());
+        super::init_persistence().expect("attachment preflight");
+
+        let clean_shutdown = super::ShutdownSignal::new();
+        let clean_worker = super::start_gc_worker(clean_shutdown.clone()).expect("start GC worker");
+        clean_shutdown.send();
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(1), clean_worker)
+                .await
+                .expect("GC worker observes shutdown")
+                .expect("GC worker joins"),
+            crate::ToriiCriticalWorkerExit::StoppedByShutdown
+        );
+
+        let invalid_tenant =
+            super::attachments_root_dir().join("a".repeat(super::TENANT_KEY_HEX_LEN));
+        fs::write(&invalid_tenant, b"not a tenant directory").expect("write tenant blocker");
+        let failure_shutdown = super::ShutdownSignal::new();
+        let failed_worker =
+            super::start_gc_worker(failure_shutdown).expect("root preflight still succeeds");
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(1), failed_worker)
+                .await
+                .expect("GC storage failure is visible")
+                .expect("GC worker joins"),
+            crate::ToriiCriticalWorkerExit::UnexpectedExit
+        );
+
+        fs::remove_file(invalid_tenant).expect("remove tenant blocker");
+        let tenant_dir = super::attachments_root_dir().join("b".repeat(super::TENANT_KEY_HEX_LEN));
+        fs::create_dir(&tenant_dir).expect("create tenant directory");
+        fs::write(
+            tenant_dir.join(format!("{}.json", "c".repeat(super::ATTACHMENT_ID_HEX_LEN))),
+            b"{not valid metadata",
+        )
+        .expect("write malformed canonical metadata");
+        let failure_shutdown = super::ShutdownSignal::new();
+        let failed_worker =
+            super::start_gc_worker(failure_shutdown).expect("root preflight still succeeds");
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(1), failed_worker)
+                .await
+                .expect("GC metadata failure is visible")
+                .expect("GC worker joins"),
+            crate::ToriiCriticalWorkerExit::UnexpectedExit
+        );
+    }
+    #[tokio::test]
+    async fn ttl_collection_fails_closed_on_fresh_metadata_without_a_body() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let _guard = crate::data_dir::OverrideGuard::new(tmp.path());
+        let tenant = super::AttachmentTenant::anonymous();
+        let meta = persist_canonical_test_attachment(&tenant, br#"{"fresh":true}"#, 1);
+        super::init_persistence().expect("initialize attachment persistence");
+        fs::remove_file(super::bin_path(&tenant, &meta.id)).expect("remove persisted body");
+
+        let error =
+            super::collect_expired_attachments_once(&super::ShutdownSignal::new(), Duration::MAX)
+                .await
+                .expect_err("a metadata-only pair must stop TTL collection");
+        assert!(error.to_string().contains("metadata has no body"));
+    }
+    #[tokio::test]
+    async fn ttl_collection_reconciles_unaccounted_body_only_entries() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let _guard = crate::data_dir::OverrideGuard::new(tmp.path());
+        super::init_persistence().expect("initialize attachment persistence");
+        let tenant = super::AttachmentTenant::anonymous();
+        super::ensure_dirs(&tenant).expect("create tenant directory");
+        let id = "a".repeat(super::ATTACHMENT_ID_HEX_LEN);
+        let body_path = super::bin_path(&tenant, &id);
+        fs::write(&body_path, b"unaccounted body").expect("write body-only entry");
+
+        super::collect_expired_attachments_once(&super::ShutdownSignal::new(), Duration::MAX)
+            .await
+            .expect("body-only entries are durably reconciled");
+        assert!(!body_path.exists());
+        assert!(!super::attachments_dir(&tenant).exists());
+    }
+    #[cfg(any(unix, windows))]
+    #[tokio::test]
+    async fn ttl_collection_rejects_hard_linked_attachment_entries() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let _guard = crate::data_dir::OverrideGuard::new(tmp.path());
+        super::init_persistence().expect("initialize attachment persistence");
+        let tenant = super::AttachmentTenant::anonymous();
+        let body = br#"{"hard_link":"rejected"}"#;
+        let meta = persist_canonical_test_attachment(&tenant, body, 1);
+        let body_path = super::bin_path(&tenant, &meta.id);
+        let hard_link_source = tmp.path().join("hard-link-source");
+        fs::write(&hard_link_source, body).expect("write hard-link source");
+        fs::remove_file(&body_path).expect("remove canonical body before replacement");
+        fs::hard_link(&hard_link_source, &body_path).expect("install hard-linked body");
+
+        let error =
+            super::collect_expired_attachments_once(&super::ShutdownSignal::new(), Duration::MAX)
+                .await
+                .expect_err("hard-linked bodies must stop TTL collection");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    }
     #[test]
     fn quota_scan_entry_bound_counts_every_raw_entry() {
         let mut scanned = 0_u64;
@@ -3364,13 +6092,69 @@ mod tests {
         assert_eq!(semaphore.available_permits(), 1);
     }
     #[test]
+    fn attachment_sanitizer_stdout_reader_contains_panic_and_releases_admission() {
+        struct PanickingReader {
+            dropped: Option<std::sync::mpsc::Sender<bool>>,
+        }
+        impl std::io::Read for PanickingReader {
+            fn read(&mut self, _buffer: &mut [u8]) -> std::io::Result<usize> {
+                assert!(
+                    iroha_core::panic_hook::is_suppressed(),
+                    "the physical stdout-reader thread must suppress the shutdown hook"
+                );
+                panic!("injected sanitizer stdout-reader panic");
+            }
+        }
+        impl Drop for PanickingReader {
+            fn drop(&mut self) {
+                if let Some(dropped) = self.dropped.take() {
+                    let _ = dropped.send(iroha_core::panic_hook::is_suppressed());
+                }
+            }
+        }
+
+        let semaphore = Arc::new(tokio::sync::Semaphore::new(1));
+        let permit = semaphore
+            .clone()
+            .try_acquire_owned()
+            .expect("acquire sanitizer admission");
+        let admission = crate::ProofBodyAdmissionLease::new(permit);
+        let (dropped_tx, dropped_rx) = std::sync::mpsc::channel();
+        let result = super::spawn_sanitizer_stdout_reader(
+            PanickingReader {
+                dropped: Some(dropped_tx),
+            },
+            16,
+            Some(admission),
+        );
+
+        assert_eq!(
+            result
+                .recv_timeout(Duration::from_secs(1))
+                .expect("panicking sanitizer reader must report a terminal result")
+                .expect_err("reader panic must become an opaque sanitizer error"),
+            "attachment sanitizer stdout reader panicked"
+        );
+        assert_eq!(
+            semaphore.available_permits(),
+            1,
+            "the physical reader must release admission after a panic"
+        );
+        assert!(
+            !dropped_rx
+                .recv_timeout(Duration::from_secs(1))
+                .expect("panicking reader must be dropped on its physical thread"),
+            "thread-local shutdown-hook suppression must clear after recovery"
+        );
+    }
+    #[test]
     fn quota_child_entry_budget_is_aggregate_across_tenants() {
         let tmp = tempfile::tempdir().expect("temp dir");
         let _guard = crate::data_dir::OverrideGuard::new(tmp.path());
         let first = super::AttachmentTenant("a".repeat(super::TENANT_KEY_HEX_LEN));
         let second = super::AttachmentTenant("b".repeat(super::TENANT_KEY_HEX_LEN));
-        super::ensure_dirs(&first);
-        super::ensure_dirs(&second);
+        super::ensure_dirs(&first).expect("create first tenant directory");
+        super::ensure_dirs(&second).expect("create second tenant directory");
         for (tenant, prefix) in [(&first, "first"), (&second, "second")] {
             for index in 0..2 {
                 fs::write(
@@ -3390,7 +6174,49 @@ mod tests {
         let error = super::quota_metas_for_tenant(&second, &mut scan)
             .expect_err("second tenant must share the first tenant's scan budget");
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
-        assert_eq!(scan.child_entries, 4);
+        assert_eq!(
+            scan.child_entries, 2,
+            "the remaining aggregate budget must bound enumeration before a whole extra directory is admitted"
+        );
+    }
+    #[cfg(unix)]
+    #[test]
+    fn quota_scan_rejects_canonical_metadata_symlink() {
+        use std::os::unix::fs::symlink;
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let _guard = crate::data_dir::OverrideGuard::new(tmp.path());
+        let tenant = super::AttachmentTenant::anonymous();
+        super::ensure_dirs(&tenant).expect("create tenant directory");
+        let id = "a".repeat(super::ATTACHMENT_ID_HEX_LEN);
+        let target = tmp.path().join("outside-metadata.json");
+        fs::write(&target, b"{}").expect("write symlink target");
+        symlink(&target, super::meta_path(&tenant, &id)).expect("create metadata symlink");
+        let mut scan = super::AttachmentQuotaScanBudget::new(10);
+
+        let error = super::quota_metas_for_tenant(&tenant, &mut scan)
+            .expect_err("canonical metadata symlink must not be skipped");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    }
+    #[cfg(unix)]
+    #[test]
+    fn global_quota_scan_rejects_canonical_tenant_symlink() {
+        use std::os::unix::fs::symlink;
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let outside = tempfile::tempdir().expect("outside tenant");
+        let _guard = crate::data_dir::OverrideGuard::new(tmp.path());
+        super::ensure_root_dir().expect("create attachment root");
+        let tenant_key = "a".repeat(super::TENANT_KEY_HEX_LEN);
+        symlink(
+            outside.path(),
+            super::attachments_root_dir().join(&tenant_key),
+        )
+        .expect("create tenant symlink");
+        let submitting = super::AttachmentTenant("b".repeat(super::TENANT_KEY_HEX_LEN));
+        let mut scan = super::AttachmentQuotaScanBudget::new(10);
+
+        let error = super::other_tenants_quota_usage(&submitting, &mut scan)
+            .expect_err("canonical tenant symlink must not be skipped");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
     }
     fn test_sanitizer_config(max_expanded_bytes: u64, max_archive_depth: u32) -> SanitizerConfig {
         SanitizerConfig {
@@ -3447,6 +6273,16 @@ mod tests {
             incoming_meta,
             previous_meta,
             victim_ids,
+        }
+    }
+    fn delete_transaction(
+        tenant: &super::AttachmentTenant,
+        id: impl Into<String>,
+    ) -> super::AttachmentDeleteTransaction {
+        super::AttachmentDeleteTransaction {
+            version: super::ATTACHMENT_DELETE_TRANSACTION_VERSION,
+            tenant: tenant.as_str().to_owned(),
+            id: id.into(),
         }
     }
     fn persist_canonical_test_attachment(
@@ -3556,17 +6392,15 @@ mod tests {
         let tmp = tempfile::tempdir().expect("temp dir");
         let _guard = crate::data_dir::OverrideGuard::new(tmp.path());
         let tenant = super::AttachmentTenant::anonymous();
-        super::ensure_dirs(&tenant);
+        super::ensure_dirs(&tenant).expect("create tenant directory");
         let id = "a".repeat(super::ATTACHMENT_ID_HEX_LEN);
         fs::write(
             super::meta_path(&tenant, &id),
             vec![b' '; super::ATTACHMENT_META_FILE_MAX_BYTES as usize + 1],
         )
         .expect("write oversized persisted metadata");
-        assert!(
-            super::load_meta(&tenant, &id).is_none(),
-            "metadata beyond the 64-KiB persistence contract must not be read or parsed"
-        );
+        super::try_load_meta(&tenant, &id)
+            .expect_err("metadata beyond the 64-KiB persistence contract must be rejected");
     }
     #[test]
     fn save_meta_rejects_records_beyond_the_persistence_contract() {
@@ -3598,7 +6432,7 @@ mod tests {
         super::persist_body(&tenant, &meta.id, body).expect("persist canonical body");
         super::save_meta(&tenant, &meta).expect("persist canonical metadata");
         assert_eq!(
-            super::load_meta(&tenant, &meta.id),
+            super::try_load_meta(&tenant, &meta.id).expect("load canonical metadata"),
             Some(meta.clone()),
             "canonical metadata must round-trip"
         );
@@ -3644,15 +6478,13 @@ mod tests {
         let tmp = tempfile::tempdir().expect("temp dir");
         let _guard = crate::data_dir::OverrideGuard::new(tmp.path());
         let tenant = super::AttachmentTenant::anonymous();
-        super::ensure_dirs(&tenant);
+        super::ensure_dirs(&tenant).expect("create tenant directory");
         let id = "b".repeat(super::ATTACHMENT_ID_HEX_LEN);
         let target = tmp.path().join("outside-metadata.json");
         fs::write(&target, b"{}").expect("write symlink target");
         symlink(&target, super::meta_path(&tenant, &id)).expect("create metadata symlink");
-        assert!(
-            super::load_meta(&tenant, &id).is_none(),
-            "metadata readers must not follow attachment-store symlinks"
-        );
+        super::try_load_meta(&tenant, &id)
+            .expect_err("metadata readers must not follow attachment-store symlinks");
     }
     #[test]
     fn attachment_tenant_is_derived_from_signed_account() {
@@ -3726,6 +6558,31 @@ mod tests {
         }
     }
     #[test]
+    fn corrupt_prover_processing_receipt_is_not_treated_as_missing() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let _guard = crate::data_dir::OverrideGuard::new(tmp.path());
+        let tenant = super::AttachmentTenant::anonymous();
+        let meta = persist_canonical_test_attachment(&tenant, br#"{"receipt":true}"#, 1);
+        fs::write(
+            super::prover_processing_receipt_path(&meta.id),
+            b"{not json",
+        )
+        .expect("write corrupt processing receipt");
+
+        assert_eq!(
+            super::try_load_prover_processing_receipt(&meta.id)
+                .expect_err("corrupt receipt must be a storage failure")
+                .kind(),
+            io::ErrorKind::InvalidData
+        );
+        assert_eq!(
+            super::try_prover_processing_decision(&meta.id, u64::MAX)
+                .expect_err("corrupt receipt must not become Missing")
+                .kind(),
+            io::ErrorKind::InvalidData
+        );
+    }
+    #[test]
     fn prover_processing_receipt_lives_until_the_last_attachment_reference_is_deleted() {
         let tmp = tempfile::tempdir().expect("temp dir");
         let _guard = crate::data_dir::OverrideGuard::new(tmp.path());
@@ -3733,7 +6590,7 @@ mod tests {
         let second = super::AttachmentTenant("2".repeat(super::TENANT_KEY_HEX_LEN));
         let id = "a".repeat(super::ATTACHMENT_ID_HEX_LEN);
         for tenant in [&first, &second] {
-            super::ensure_dirs(tenant);
+            super::ensure_dirs(tenant).expect("create tenant directory");
             fs::write(super::meta_path(tenant, &id), b"metadata").expect("write metadata marker");
             fs::write(super::bin_path(tenant, &id), b"body").expect("write body marker");
             super::ensure_prover_processing_reference(tenant.as_str(), &id)
@@ -3775,12 +6632,383 @@ mod tests {
         );
     }
     #[test]
+    fn startup_replays_every_durable_attachment_delete_boundary() {
+        for boundary in 0_u8..5 {
+            let tmp = tempfile::tempdir().expect("temp dir");
+            let _guard = crate::data_dir::OverrideGuard::new(tmp.path());
+            let tenant = super::AttachmentTenant::anonymous();
+            let body = format!(r#"{{"delete_boundary":{boundary}}}"#).into_bytes();
+            let meta = persist_canonical_test_attachment(&tenant, &body, 1);
+            let receipt = super::ProverProcessingReceipt {
+                version: super::ZK_PROVER_PROCESSING_STATE_VERSION,
+                id: meta.id.clone(),
+                processed_ms: 1,
+                terminal: true,
+                retry_not_before_ms: None,
+                retry_count: 0,
+                completed_proof_indices: Vec::new(),
+                processing_context_hash: None,
+            };
+            assert!(
+                super::persist_prover_processing_receipt_if_referenced(&receipt)
+                    .expect("persist terminal receipt")
+            );
+            super::persist_attachment_delete_transaction(&delete_transaction(&tenant, &meta.id))
+                .expect("persist delete intent");
+            match boundary {
+                0 => {}
+                1 => {
+                    fs::remove_file(super::meta_path(&tenant, &meta.id))
+                        .expect("simulate crash after metadata unlink");
+                }
+                2 => {
+                    fs::remove_file(super::meta_path(&tenant, &meta.id))
+                        .expect("simulate crash after metadata unlink");
+                    fs::remove_file(super::bin_path(&tenant, &meta.id))
+                        .expect("simulate crash after body unlink");
+                }
+                3 => {
+                    fs::remove_file(super::meta_path(&tenant, &meta.id))
+                        .expect("simulate crash after metadata unlink");
+                    fs::remove_file(super::bin_path(&tenant, &meta.id))
+                        .expect("simulate crash after body unlink");
+                    let _processing_guard = super::prover_processing_state_lock().lock();
+                    super::remove_prover_processing_reference_locked(tenant.as_str(), &meta.id)
+                        .expect("simulate crash after reference reclamation");
+                }
+                4 => {
+                    super::apply_attachment_delete_transaction(&delete_transaction(
+                        &tenant, &meta.id,
+                    ))
+                    .expect("simulate crash after delete application but before journal clear");
+                }
+                _ => unreachable!(),
+            }
+
+            assert!(super::attachment_mutation_transaction_path().is_file());
+            assert!(
+                super::try_load_meta(&tenant, &meta.id)
+                    .expect("pending delete lookup")
+                    .is_none(),
+                "a pending delete must be invisible before replay"
+            );
+            super::init_persistence().expect("replay durable delete intent at startup");
+
+            assert!(!super::meta_path(&tenant, &meta.id).exists());
+            assert!(!super::bin_path(&tenant, &meta.id).exists());
+            assert!(!super::attachment_mutation_transaction_path().exists());
+            assert_eq!(
+                super::prover_processing_decision(&meta.id, 1),
+                super::ProverProcessingDecision::Missing
+            );
+        }
+    }
+    #[test]
+    fn delete_replay_recovers_after_a_malformed_sibling_reference_is_repaired() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let _guard = crate::data_dir::OverrideGuard::new(tmp.path());
+        let first = super::AttachmentTenant("7".repeat(super::TENANT_KEY_HEX_LEN));
+        let second = super::AttachmentTenant("8".repeat(super::TENANT_KEY_HEX_LEN));
+        let body = br#"{"shared":"delete-replay"}"#;
+        let first_meta = persist_canonical_test_attachment(&first, body, 1);
+        let second_meta = persist_canonical_test_attachment(&second, body, 1);
+        assert_eq!(first_meta.id, second_meta.id);
+        let receipt = super::ProverProcessingReceipt {
+            version: super::ZK_PROVER_PROCESSING_STATE_VERSION,
+            id: first_meta.id.clone(),
+            processed_ms: 1,
+            terminal: true,
+            retry_not_before_ms: None,
+            retry_count: 0,
+            completed_proof_indices: Vec::new(),
+            processing_context_hash: None,
+        };
+        assert!(
+            super::persist_prover_processing_receipt_if_referenced(&receipt)
+                .expect("persist shared terminal receipt")
+        );
+        super::persist_attachment_delete_transaction(&delete_transaction(&first, &first_meta.id))
+            .expect("persist delete intent");
+        let malformed = super::prover_processing_reference_dir(&first_meta.id).join("malformed");
+        fs::write(&malformed, b"not a reference").expect("write malformed sibling reference");
+
+        super::recover_attachment_mutation_transaction()
+            .expect_err("malformed sibling must keep delete recovery fail-closed");
+        assert!(super::attachment_mutation_transaction_path().is_file());
+        assert!(super::meta_path(&first, &first_meta.id).is_file());
+        assert!(
+            !super::attachment_pair_exists(first.as_str(), &first_meta.id)
+                .expect("pending delete visibility"),
+            "the durable delete intent must hide a physically complete pair"
+        );
+
+        fs::remove_file(malformed).expect("repair malformed sibling reference");
+        assert!(super::recover_attachment_mutation_transaction().expect("replay repaired delete"));
+        assert!(!super::meta_path(&first, &first_meta.id).exists());
+        assert!(!super::bin_path(&first, &first_meta.id).exists());
+        assert!(super::meta_path(&second, &second_meta.id).is_file());
+        assert!(super::bin_path(&second, &second_meta.id).is_file());
+        assert_eq!(
+            super::prover_processing_decision(&first_meta.id, 1),
+            super::ProverProcessingDecision::Suppress,
+            "the surviving tenant reference must retain the shared receipt"
+        );
+        assert!(!super::attachment_mutation_transaction_path().exists());
+    }
+    #[cfg(unix)]
+    #[test]
+    fn delete_replay_rejects_symlinked_processing_entry_without_touching_target() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let external = tempfile::tempdir().expect("external processing target");
+        let _guard = crate::data_dir::OverrideGuard::new(tmp.path());
+        let tenant = super::AttachmentTenant::anonymous();
+        let meta = persist_canonical_test_attachment(&tenant, br#"{"delete":"symlink"}"#, 1);
+        super::persist_attachment_delete_transaction(&delete_transaction(&tenant, &meta.id))
+            .expect("persist delete intent");
+        let processing_entry = super::prover_processing_state_dir().join(&meta.id);
+        fs::remove_dir_all(&processing_entry).expect("remove real processing entry");
+        let sentinel = external.path().join("sentinel");
+        fs::write(&sentinel, b"must remain").expect("write external sentinel");
+        std::os::unix::fs::symlink(external.path(), &processing_entry)
+            .expect("replace processing entry with symlink");
+
+        super::recover_attachment_mutation_transaction()
+            .expect_err("delete replay must reject a symlinked processing entry");
+        assert_eq!(fs::read(&sentinel).expect("read sentinel"), b"must remain");
+        assert!(super::meta_path(&tenant, &meta.id).is_file());
+        assert!(super::bin_path(&tenant, &meta.id).is_file());
+        assert!(super::attachment_mutation_transaction_path().is_file());
+    }
+    #[cfg(unix)]
+    #[test]
+    fn delete_replay_rejects_a_missing_attachment_root_until_it_is_restored() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let _guard = crate::data_dir::OverrideGuard::new(tmp.path());
+        let tenant = super::AttachmentTenant::anonymous();
+        let meta = persist_canonical_test_attachment(&tenant, br#"{"delete":"root-move"}"#, 1);
+        super::persist_attachment_delete_transaction(&delete_transaction(&tenant, &meta.id))
+            .expect("persist delete intent");
+        let root = super::attachments_root_dir();
+        let detached = super::base_dir().join("zk_attachments.detached");
+        fs::rename(&root, &detached).expect("detach attachment root");
+
+        super::recover_attachment_mutation_transaction()
+            .expect_err("delete replay must reject a missing attachment root");
+        assert!(
+            detached
+                .join(tenant.as_str())
+                .join(format!("{}.json", meta.id))
+                .is_file()
+        );
+        assert!(
+            detached
+                .join(tenant.as_str())
+                .join(format!("{}.bin", meta.id))
+                .is_file()
+        );
+        assert!(super::attachment_mutation_transaction_path().is_file());
+
+        fs::rename(&detached, &root).expect("restore attachment root");
+        assert!(super::recover_attachment_mutation_transaction().expect("replay restored delete"));
+        assert!(!super::meta_path(&tenant, &meta.id).exists());
+        assert!(!super::bin_path(&tenant, &meta.id).exists());
+        assert!(!super::attachment_mutation_transaction_path().exists());
+    }
+    #[test]
+    fn delete_replay_rejects_a_missing_processing_root_for_a_complete_pair() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let _guard = crate::data_dir::OverrideGuard::new(tmp.path());
+        let tenant = super::AttachmentTenant::anonymous();
+        let meta =
+            persist_canonical_test_attachment(&tenant, br#"{"delete":"processing-move"}"#, 1);
+        super::persist_attachment_delete_transaction(&delete_transaction(&tenant, &meta.id))
+            .expect("persist delete intent");
+        let root = super::base_dir().join("zk_prover");
+        let detached = super::base_dir().join("zk_prover.detached");
+        fs::rename(&root, &detached).expect("detach processing root");
+
+        super::recover_attachment_mutation_transaction()
+            .expect_err("a complete pair must retain its processing reference until deletion");
+        assert!(super::meta_path(&tenant, &meta.id).is_file());
+        assert!(super::bin_path(&tenant, &meta.id).is_file());
+        assert!(super::attachment_mutation_transaction_path().is_file());
+
+        fs::rename(&detached, &root).expect("restore processing root");
+        assert!(super::recover_attachment_mutation_transaction().expect("replay restored delete"));
+        assert!(!super::meta_path(&tenant, &meta.id).exists());
+        assert!(!super::bin_path(&tenant, &meta.id).exists());
+        assert!(!super::attachment_mutation_transaction_path().exists());
+    }
+    #[cfg(unix)]
+    #[test]
+    fn delete_replay_resyncs_an_already_unlinked_file_in_a_nonempty_tenant() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let _guard = crate::data_dir::OverrideGuard::new(tmp.path());
+        let tenant = super::AttachmentTenant::anonymous();
+        let target = persist_canonical_test_attachment(&tenant, br#"{"delete":"target"}"#, 1);
+        let sibling = persist_canonical_test_attachment(&tenant, br#"{"delete":"sibling"}"#, 2);
+        super::persist_attachment_delete_transaction(&delete_transaction(&tenant, &target.id))
+            .expect("persist delete intent");
+        let _failure = super::fail_next_directory_sync(&super::attachments_dir(&tenant));
+
+        super::recover_attachment_mutation_transaction()
+            .expect_err("injected metadata-unlink sync failure must retain the delete intent");
+        assert!(!super::meta_path(&tenant, &target.id).exists());
+        assert!(super::bin_path(&tenant, &target.id).is_file());
+        assert!(super::meta_path(&tenant, &sibling.id).is_file());
+        assert!(super::attachment_mutation_transaction_path().is_file());
+
+        let _replay_failure = super::fail_next_directory_sync(&super::attachments_dir(&tenant));
+        super::recover_attachment_mutation_transaction()
+            .expect_err("replay must resync the absent metadata entry before unlinking the body");
+        assert!(
+            super::bin_path(&tenant, &target.id).is_file(),
+            "the replay sync must precede the remaining body unlink"
+        );
+        assert!(super::attachment_mutation_transaction_path().is_file());
+
+        assert!(super::recover_attachment_mutation_transaction().expect("replay file unlink"));
+        assert!(!super::meta_path(&tenant, &target.id).exists());
+        assert!(!super::bin_path(&tenant, &target.id).exists());
+        assert!(super::meta_path(&tenant, &sibling.id).is_file());
+        assert!(super::bin_path(&tenant, &sibling.id).is_file());
+        assert!(!super::attachment_mutation_transaction_path().exists());
+    }
+    #[cfg(unix)]
+    #[test]
+    fn delete_replay_resyncs_an_already_unlinked_reference_with_a_sibling() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let _guard = crate::data_dir::OverrideGuard::new(tmp.path());
+        let first = super::AttachmentTenant("3".repeat(super::TENANT_KEY_HEX_LEN));
+        let second = super::AttachmentTenant("4".repeat(super::TENANT_KEY_HEX_LEN));
+        let body = br#"{"delete":"shared-reference"}"#;
+        let first_meta = persist_canonical_test_attachment(&first, body, 1);
+        let second_meta = persist_canonical_test_attachment(&second, body, 2);
+        assert_eq!(first_meta.id, second_meta.id);
+        super::persist_attachment_delete_transaction(&delete_transaction(&first, &first_meta.id))
+            .expect("persist delete intent");
+        let reference_dir = super::prover_processing_reference_dir(&first_meta.id);
+        let _failure = super::fail_next_directory_sync(&reference_dir);
+
+        super::recover_attachment_mutation_transaction()
+            .expect_err("injected reference-unlink sync failure must retain the delete intent");
+        assert!(!super::prover_processing_reference_path(first.as_str(), &first_meta.id).exists());
+        assert!(
+            super::prover_processing_reference_path(second.as_str(), &second_meta.id).is_file()
+        );
+        assert!(super::attachment_mutation_transaction_path().is_file());
+
+        let _replay_failure = super::fail_next_directory_sync(&reference_dir);
+        super::recover_attachment_mutation_transaction()
+            .expect_err("replay must resync the absent target reference");
+        assert!(super::attachment_mutation_transaction_path().is_file());
+
+        assert!(super::recover_attachment_mutation_transaction().expect("replay reference unlink"));
+        assert!(super::meta_path(&second, &second_meta.id).is_file());
+        assert!(super::bin_path(&second, &second_meta.id).is_file());
+        assert!(
+            super::prover_processing_reference_path(second.as_str(), &second_meta.id).is_file()
+        );
+        assert!(!super::attachment_mutation_transaction_path().exists());
+    }
+    #[cfg(unix)]
+    #[test]
+    fn delete_replay_resyncs_an_already_removed_tenant_directory() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let _guard = crate::data_dir::OverrideGuard::new(tmp.path());
+        let tenant = super::AttachmentTenant::anonymous();
+        let meta = persist_canonical_test_attachment(&tenant, br#"{"delete":"tenant"}"#, 1);
+        super::persist_attachment_delete_transaction(&delete_transaction(&tenant, &meta.id))
+            .expect("persist delete intent");
+        let _failure = super::fail_next_directory_sync(&super::attachments_root_dir());
+
+        super::recover_attachment_mutation_transaction()
+            .expect_err("injected tenant-removal sync failure must retain the delete intent");
+        assert!(!super::attachments_dir(&tenant).exists());
+        assert!(super::attachment_mutation_transaction_path().is_file());
+
+        let _replay_failure = super::fail_next_directory_sync(&super::attachments_root_dir());
+        super::recover_attachment_mutation_transaction()
+            .expect_err("replay must resync the absent tenant entry");
+        assert!(super::attachment_mutation_transaction_path().is_file());
+
+        assert!(super::recover_attachment_mutation_transaction().expect("replay tenant removal"));
+        assert!(!super::attachments_dir(&tenant).exists());
+        assert!(!super::attachment_mutation_transaction_path().exists());
+    }
+    #[test]
+    fn journal_absence_is_resynced_before_it_is_trusted_after_clear_failure() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let _guard = crate::data_dir::OverrideGuard::new(tmp.path());
+        let tenant = super::AttachmentTenant::anonymous();
+        let meta = persist_canonical_test_attachment(&tenant, br#"{"delete":"journal"}"#, 1);
+        super::persist_attachment_delete_transaction(&delete_transaction(&tenant, &meta.id))
+            .expect("persist delete intent");
+        let _failure =
+            super::fail_next_directory_sync(&super::attachment_mutation_transaction_dir());
+
+        super::recover_attachment_mutation_transaction()
+            .expect_err("injected journal-clear sync failure must remain observable");
+        assert!(!super::attachment_mutation_transaction_path().exists());
+        assert!(
+            super::ATTACHMENT_MUTATION_DIRECTORY_DIRTY.load(std::sync::atomic::Ordering::Acquire)
+        );
+
+        let _replay_failure =
+            super::fail_next_directory_sync(&super::attachment_mutation_transaction_dir());
+        super::load_attachment_mutation_transaction()
+            .expect_err("absent journal must be resynced before it is trusted");
+        assert!(
+            super::ATTACHMENT_MUTATION_DIRECTORY_DIRTY.load(std::sync::atomic::Ordering::Acquire)
+        );
+
+        assert!(
+            super::load_attachment_mutation_transaction()
+                .expect("resync absent journal")
+                .is_none()
+        );
+        assert!(
+            !super::ATTACHMENT_MUTATION_DIRECTORY_DIRTY.load(std::sync::atomic::Ordering::Acquire)
+        );
+    }
+    #[cfg(unix)]
+    #[test]
+    fn delete_replay_rejects_symlinked_tenant_without_touching_target() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let external = tempfile::tempdir().expect("external tenant target");
+        let _guard = crate::data_dir::OverrideGuard::new(tmp.path());
+        let tenant = super::AttachmentTenant::anonymous();
+        let meta = persist_canonical_test_attachment(&tenant, br#"{"delete":"tenant-link"}"#, 1);
+        super::persist_attachment_delete_transaction(&delete_transaction(&tenant, &meta.id))
+            .expect("persist delete intent");
+        let tenant_dir = super::attachments_dir(&tenant);
+        fs::remove_dir_all(&tenant_dir).expect("remove real tenant directory");
+        let external_meta = external.path().join(format!("{}.json", meta.id));
+        let external_body = external.path().join(format!("{}.bin", meta.id));
+        fs::write(&external_meta, b"external metadata").expect("write external metadata");
+        fs::write(&external_body, b"external body").expect("write external body");
+        std::os::unix::fs::symlink(external.path(), &tenant_dir)
+            .expect("replace tenant with symlink");
+
+        super::recover_attachment_mutation_transaction()
+            .expect_err("delete replay must reject a symlinked tenant");
+        assert_eq!(
+            fs::read(&external_meta).expect("read external metadata"),
+            b"external metadata"
+        );
+        assert_eq!(
+            fs::read(&external_body).expect("read external body"),
+            b"external body"
+        );
+        assert!(super::attachment_mutation_transaction_path().is_file());
+    }
+    #[test]
     fn attachment_deletion_preserves_files_when_reference_unlink_fails() {
         let tmp = tempfile::tempdir().expect("temp dir");
         let _guard = crate::data_dir::OverrideGuard::new(tmp.path());
         let tenant = super::AttachmentTenant("4".repeat(super::TENANT_KEY_HEX_LEN));
         let id = "c".repeat(super::ATTACHMENT_ID_HEX_LEN);
-        super::ensure_dirs(&tenant);
+        super::ensure_dirs(&tenant).expect("create tenant directory");
         let meta_path = super::meta_path(&tenant, &id);
         let body_path = super::bin_path(&tenant, &id);
         fs::write(&meta_path, b"metadata").expect("write metadata marker");
@@ -3821,7 +7049,7 @@ mod tests {
         let _guard = crate::data_dir::OverrideGuard::new(tmp.path());
         let tenant = super::AttachmentTenant("5".repeat(super::TENANT_KEY_HEX_LEN));
         let id = "d".repeat(super::ATTACHMENT_ID_HEX_LEN);
-        super::ensure_dirs(&tenant);
+        super::ensure_dirs(&tenant).expect("create tenant directory");
         let meta_path = super::meta_path(&tenant, &id);
         let body_path = super::bin_path(&tenant, &id);
         fs::write(&meta_path, b"metadata").expect("write metadata marker");
@@ -3867,7 +7095,7 @@ mod tests {
         let _guard = crate::data_dir::OverrideGuard::new(tmp.path());
         let tenant = super::AttachmentTenant("6".repeat(super::TENANT_KEY_HEX_LEN));
         let id = "e".repeat(super::ATTACHMENT_ID_HEX_LEN);
-        super::ensure_dirs(&tenant);
+        super::ensure_dirs(&tenant).expect("create tenant directory");
         let meta_path = super::meta_path(&tenant, &id);
         let body_path = super::bin_path(&tenant, &id);
         fs::write(&meta_path, b"metadata").expect("write metadata marker");
@@ -3891,18 +7119,12 @@ mod tests {
         let state_entry_dir = super::prover_processing_state_dir().join(&id);
         let reference_dir = super::prover_processing_reference_dir(&id);
         fs::write(
-            reference_dir.join(format!(
-                "{}crashed-reference",
-                super::ZK_PROVER_PROCESSING_TEMP_PREFIX
-            )),
+            reference_dir.join(format!("{}ABC123", super::ZK_PROVER_PROCESSING_TEMP_PREFIX)),
             b"partial reference",
         )
         .expect("write crash-left reference temporary file");
         fs::write(
-            state_entry_dir.join(format!(
-                "{}crashed-receipt",
-                super::ZK_PROVER_PROCESSING_TEMP_PREFIX
-            )),
+            state_entry_dir.join(format!("{}DEF456", super::ZK_PROVER_PROCESSING_TEMP_PREFIX)),
             b"partial receipt",
         )
         .expect("write crash-left receipt temporary file");
@@ -3923,7 +7145,7 @@ mod tests {
         let _guard = crate::data_dir::OverrideGuard::new(tmp.path());
         let tenant = super::AttachmentTenant("3".repeat(super::TENANT_KEY_HEX_LEN));
         let id = "b".repeat(super::ATTACHMENT_ID_HEX_LEN);
-        super::ensure_dirs(&tenant);
+        super::ensure_dirs(&tenant).expect("create tenant directory");
         fs::write(super::meta_path(&tenant, &id), b"metadata").expect("write metadata marker");
         fs::write(super::bin_path(&tenant, &id), b"body").expect("write body marker");
         super::ensure_prover_processing_reference(tenant.as_str(), &id)
@@ -3973,6 +7195,34 @@ mod tests {
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
     #[tokio::test]
+    async fn attachment_read_apis_report_corrupt_metadata_as_storage_failure() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let _guard = crate::data_dir::OverrideGuard::new(tmp.path());
+        let tenant = super::AttachmentTenant::anonymous();
+        super::ensure_dirs(&tenant).expect("create tenant directory");
+        let id = "a".repeat(super::ATTACHMENT_ID_HEX_LEN);
+        fs::write(super::meta_path(&tenant, &id), b"{not valid metadata")
+            .expect("write corrupt metadata");
+
+        let list = super::handle_list_attachments(tenant.clone())
+            .await
+            .into_response();
+        assert_eq!(list.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        let count = super::handle_count_attachments(
+            tenant.clone(),
+            crate::NoritoQuery(super::AttachmentListQuery::default()),
+        )
+        .await
+        .into_response();
+        assert_eq!(count.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        let get = super::handle_get_attachment(tenant, axum::extract::Path(id))
+            .await
+            .into_response();
+        assert_eq!(get.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+    #[tokio::test]
     async fn get_attachment_rejects_same_size_body_substitution() {
         let tmp = tempfile::tempdir().expect("temp dir");
         let _guard = crate::data_dir::OverrideGuard::new(tmp.path());
@@ -3989,7 +7239,7 @@ mod tests {
         let response = super::handle_get_attachment(tenant, axum::extract::Path(meta.id))
             .await
             .into_response();
-        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
     #[test]
     fn sanitizer_accepts_norito_magic() {
@@ -4531,6 +7781,9 @@ mod tests {
         let tenant = super::AttachmentTenant("a".repeat(super::TENANT_KEY_HEX_LEN));
         let incoming = canonical_test_meta(&tenant, br#"{"incoming":true}"#);
         let victim = "b".repeat(super::ATTACHMENT_ID_HEX_LEN);
+        let no_eviction = quota_transaction(&tenant, incoming.clone(), None, Vec::new());
+        super::validate_attachment_quota_transaction(&no_eviction)
+            .expect("every write is journaled even when it has no eviction victims");
         let duplicate = quota_transaction(
             &tenant,
             incoming.clone(),
@@ -4563,19 +7816,181 @@ mod tests {
         );
     }
     #[test]
+    fn mutation_journal_rejects_a_second_operation_kind() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let _guard = crate::data_dir::OverrideGuard::new(tmp.path());
+        let tenant = super::AttachmentTenant::anonymous();
+        let incoming = canonical_test_meta(&tenant, br#"{"journal":"write"}"#);
+        let write = quota_transaction(&tenant, incoming.clone(), None, Vec::new());
+        super::persist_attachment_quota_transaction(&write).expect("persist write mutation");
+
+        let error =
+            super::persist_attachment_delete_transaction(&delete_transaction(&tenant, incoming.id))
+                .expect_err("one mutation journal cannot contain an ambiguous second operation");
+        assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+        assert!(matches!(
+            super::load_attachment_mutation_transaction().expect("load retained mutation"),
+            Some(super::AttachmentMutationTransaction::Write(retained)) if retained == write
+        ));
+        super::clear_attachment_mutation_transaction().expect("clear test mutation");
+    }
+    #[tokio::test]
+    async fn pending_write_is_hidden_until_processing_reference_publication_completes() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let _guard = crate::data_dir::OverrideGuard::new(tmp.path());
+        let tenant = super::AttachmentTenant::anonymous();
+        let body = br#"{"journal":"hidden-write"}"#;
+        let incoming = canonical_test_meta(&tenant, body);
+        let write = quota_transaction(&tenant, incoming.clone(), None, Vec::new());
+        super::persist_attachment_quota_transaction(&write).expect("persist write mutation");
+        super::persist_body(&tenant, &incoming.id, body).expect("persist incoming body");
+        super::ensure_direct_directory(&super::prover_processing_state_dir())
+            .expect("create processing state directory");
+        let reference_obstruction = super::prover_processing_state_dir().join(&incoming.id);
+        fs::write(&reference_obstruction, b"blocks processing entry")
+            .expect("obstruct reference publication");
+
+        super::save_meta(&tenant, &incoming)
+            .expect_err("processing-reference failure must retain the write mutation");
+        assert_eq!(
+            super::try_load_meta_raw(&tenant, &incoming.id).expect("load raw committed metadata"),
+            Some(incoming.clone())
+        );
+        assert!(
+            super::try_load_meta(&tenant, &incoming.id)
+                .expect("load public metadata")
+                .is_none(),
+            "the uncommitted write must not be publicly visible"
+        );
+        assert!(
+            !super::attachment_pair_exists(tenant.as_str(), &incoming.id)
+                .expect("resolve prover visibility"),
+            "the prover must not discover an uncommitted write"
+        );
+        assert!(super::attachment_mutation_transaction_path().is_file());
+
+        let list = super::handle_list_attachments(tenant.clone())
+            .await
+            .into_response();
+        assert_eq!(list.status(), StatusCode::OK);
+        let list_body = list
+            .into_body()
+            .collect()
+            .await
+            .expect("collect attachment list")
+            .to_bytes();
+        let listed: Vec<AttachmentMeta> =
+            json::from_slice(&list_body).expect("decode attachment list");
+        assert!(listed.is_empty(), "list must hide the pending write");
+
+        let count = super::handle_count_attachments(
+            tenant.clone(),
+            crate::NoritoQuery(super::AttachmentListQuery::default()),
+        )
+        .await
+        .into_response();
+        assert_eq!(count.status(), StatusCode::OK);
+        let count_body = count
+            .into_body()
+            .collect()
+            .await
+            .expect("collect attachment count")
+            .to_bytes();
+        let counted: json::Value = json::from_slice(&count_body).expect("decode attachment count");
+        assert_eq!(counted.get("count").and_then(json::Value::as_u64), Some(0));
+
+        let get =
+            super::handle_get_attachment(tenant.clone(), axum::extract::Path(incoming.id.clone()))
+                .await
+                .into_response();
+        assert_eq!(get.status(), StatusCode::NOT_FOUND);
+
+        fs::remove_file(reference_obstruction).expect("repair reference publication");
+        assert!(super::recover_attachment_quota_transaction().expect("complete repaired write"));
+        assert_eq!(
+            super::try_load_meta(&tenant, &incoming.id).expect("load committed metadata"),
+            Some(incoming)
+        );
+        assert!(
+            super::attachment_pair_exists(tenant.as_str(), &write.incoming_meta.id)
+                .expect("resolve committed prover visibility")
+        );
+        assert!(!super::attachment_mutation_transaction_path().exists());
+    }
+    #[test]
+    fn write_replay_resyncs_metadata_publication_before_clearing_the_journal() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let _guard = crate::data_dir::OverrideGuard::new(tmp.path());
+        let tenant = super::AttachmentTenant::anonymous();
+        let body = br#"{"journal":"metadata-sync"}"#;
+        let incoming = canonical_test_meta(&tenant, body);
+        let write = quota_transaction(&tenant, incoming.clone(), None, Vec::new());
+        super::persist_attachment_quota_transaction(&write).expect("persist write mutation");
+        super::persist_body(&tenant, &incoming.id, body).expect("persist incoming body");
+        let _failure = super::fail_next_directory_sync(&super::attachments_dir(&tenant));
+
+        super::save_meta(&tenant, &incoming)
+            .expect_err("injected metadata-publication sync failure must retain the journal");
+        assert!(super::meta_path(&tenant, &incoming.id).is_file());
+        assert!(super::attachment_mutation_transaction_path().is_file());
+
+        let _replay_failure = super::fail_next_directory_sync(&super::attachments_dir(&tenant));
+        super::recover_attachment_quota_transaction()
+            .expect_err("replay must resync the complete incoming pair");
+        assert!(super::attachment_mutation_transaction_path().is_file());
+
+        assert!(super::recover_attachment_quota_transaction().expect("replay metadata publish"));
+        assert_eq!(
+            super::try_load_meta(&tenant, &incoming.id).expect("load committed metadata"),
+            Some(incoming)
+        );
+        assert!(!super::attachment_mutation_transaction_path().exists());
+    }
+    #[test]
+    fn write_replay_resyncs_existing_processing_marker_before_clearing_the_journal() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let _guard = crate::data_dir::OverrideGuard::new(tmp.path());
+        let tenant = super::AttachmentTenant::anonymous();
+        let body = br#"{"journal":"reference-sync"}"#;
+        let incoming = canonical_test_meta(&tenant, body);
+        let write = quota_transaction(&tenant, incoming.clone(), None, Vec::new());
+        super::persist_attachment_quota_transaction(&write).expect("persist write mutation");
+        super::persist_body(&tenant, &incoming.id, body).expect("persist incoming body");
+        let _failure =
+            super::fail_next_directory_sync(&super::prover_processing_reference_dir(&incoming.id));
+
+        super::save_meta(&tenant, &incoming)
+            .expect_err("injected reference-publication sync failure must retain the journal");
+        assert!(super::prover_processing_reference_path(tenant.as_str(), &incoming.id).is_file());
+        assert!(super::attachment_mutation_transaction_path().is_file());
+
+        let _replay_failure =
+            super::fail_next_directory_sync(&super::prover_processing_reference_dir(&incoming.id));
+        super::recover_attachment_quota_transaction()
+            .expect_err("replay must resync the existing processing marker");
+        assert!(super::attachment_mutation_transaction_path().is_file());
+
+        assert!(super::recover_attachment_quota_transaction().expect("replay reference publish"));
+        assert_eq!(
+            super::try_load_meta(&tenant, &incoming.id).expect("load committed metadata"),
+            Some(incoming)
+        );
+        assert!(!super::attachment_mutation_transaction_path().exists());
+    }
+    #[test]
     fn quota_recovery_rejects_oversized_journal_without_mutating_attachments() {
         let tmp = tempfile::tempdir().expect("temp dir");
         let _guard = crate::data_dir::OverrideGuard::new(tmp.path());
         ensure_test_config();
         let tenant = super::AttachmentTenant::from_account(&checked_attachment_account(0x57));
         let victim = persist_canonical_test_attachment(&tenant, br#"{"victim":"untouched"}"#, 1);
-        super::ensure_attachment_quota_transaction_dir_durable()
+        super::ensure_attachment_mutation_transaction_dir_durable()
             .expect("create durable transaction directory");
         fs::write(
-            super::attachment_quota_transaction_path(),
+            super::attachment_mutation_transaction_path(),
             vec![
                 b'x';
-                usize::try_from(super::ATTACHMENT_QUOTA_TRANSACTION_MAX_BYTES)
+                usize::try_from(super::ATTACHMENT_MUTATION_TRANSACTION_MAX_BYTES)
                     .expect("test journal bound fits usize")
                     + 1
             ],
@@ -4584,12 +7999,12 @@ mod tests {
 
         assert!(super::recover_attachment_quota_transaction().is_err());
         assert!(
-            !super::init_persistence(),
+            super::init_persistence().is_err(),
             "startup recovery failure must be visible to worker orchestration"
         );
         assert!(super::meta_path(&tenant, &victim.id).is_file());
         assert!(super::bin_path(&tenant, &victim.id).is_file());
-        assert!(super::attachment_quota_transaction_path().is_file());
+        assert!(super::attachment_mutation_transaction_path().is_file());
     }
     #[test]
     fn quota_recovery_rolls_back_partial_incoming_and_preserves_victims() {
@@ -4615,7 +8030,26 @@ mod tests {
         assert!(super::bin_path(&tenant, &victim.id).is_file());
         assert!(!super::meta_path(&tenant, &incoming.id).exists());
         assert!(!super::bin_path(&tenant, &incoming.id).exists());
-        assert!(!super::attachment_quota_transaction_path().exists());
+        assert!(!super::attachment_mutation_transaction_path().exists());
+    }
+    #[test]
+    fn write_recovery_removes_partial_body_without_eviction_victims() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let _guard = crate::data_dir::OverrideGuard::new(tmp.path());
+        let tenant = super::AttachmentTenant::anonymous();
+        let body = br#"{"ordinary":"partial-write"}"#;
+        let incoming = canonical_test_meta(&tenant, body);
+        let transaction = quota_transaction(&tenant, incoming.clone(), None, Vec::new());
+        super::persist_attachment_quota_transaction(&transaction)
+            .expect("persist ordinary write intent");
+        super::persist_body(&tenant, &incoming.id, body).expect("persist body phase only");
+
+        assert!(
+            super::recover_attachment_quota_transaction().expect("recover ordinary partial write")
+        );
+        assert!(!super::meta_path(&tenant, &incoming.id).exists());
+        assert!(!super::bin_path(&tenant, &incoming.id).exists());
+        assert!(!super::attachment_mutation_transaction_path().exists());
     }
     #[test]
     fn quota_recovery_restores_previous_metadata_for_partial_repost() {
@@ -4641,10 +8075,13 @@ mod tests {
             .expect("persist repost body phase only");
 
         assert!(super::recover_attachment_quota_transaction().expect("recover partial repost"));
-        assert_eq!(super::load_meta(&tenant, &previous.id), Some(previous));
+        assert_eq!(
+            super::try_load_meta(&tenant, &previous.id).expect("load restored metadata"),
+            Some(previous)
+        );
         assert!(super::meta_path(&tenant, &victim.id).is_file());
         assert!(super::bin_path(&tenant, &victim.id).is_file());
-        assert!(!super::attachment_quota_transaction_path().exists());
+        assert!(!super::attachment_mutation_transaction_path().exists());
     }
     #[test]
     fn quota_recovery_finalizes_evictions_after_complete_incoming_commit() {
@@ -4669,7 +8106,28 @@ mod tests {
         assert!(super::bin_path(&tenant, &incoming.id).is_file());
         assert!(!super::meta_path(&tenant, &victim.id).exists());
         assert!(!super::bin_path(&tenant, &victim.id).exists());
-        assert!(!super::attachment_quota_transaction_path().exists());
+        assert!(!super::attachment_mutation_transaction_path().exists());
+    }
+    #[test]
+    fn write_recovery_retains_intent_when_committed_body_is_corrupt() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let _guard = crate::data_dir::OverrideGuard::new(tmp.path());
+        let tenant = super::AttachmentTenant::anonymous();
+        let body = br#"{"incoming":"complete"}"#;
+        let incoming = canonical_test_meta(&tenant, body);
+        let transaction = quota_transaction(&tenant, incoming.clone(), None, Vec::new());
+        super::persist_attachment_quota_transaction(&transaction).expect("persist write intent");
+        super::persist_body(&tenant, &incoming.id, body).expect("persist body");
+        super::save_meta(&tenant, &incoming).expect("persist metadata");
+        let mut corrupt = body.to_vec();
+        corrupt[0] ^= 1;
+        fs::write(super::bin_path(&tenant, &incoming.id), corrupt).expect("corrupt body");
+
+        assert!(super::recover_attachment_quota_transaction().is_err());
+        assert!(
+            super::attachment_mutation_transaction_path().is_file(),
+            "corruption must leave the durable recovery intent pending"
+        );
     }
     #[tokio::test]
     async fn global_count_quota_evicts_only_the_submitting_tenant() {
@@ -4847,7 +8305,7 @@ mod tests {
         assert!(super::meta_path(&tenant, &incoming_id).is_file());
         assert!(super::bin_path(&tenant, &incoming_id).is_file());
         assert!(
-            super::attachment_quota_transaction_path().is_file(),
+            super::attachment_mutation_transaction_path().is_file(),
             "failed eviction must retain its durable recovery intent"
         );
 
@@ -4857,7 +8315,7 @@ mod tests {
             super::recover_attachment_quota_transaction()
                 .expect("retry durable quota eviction after fault repair")
         );
-        assert!(!super::attachment_quota_transaction_path().exists());
+        assert!(!super::attachment_mutation_transaction_path().exists());
         assert!(!super::meta_path(&tenant, &oldest).exists());
         assert!(!super::bin_path(&tenant, &oldest).exists());
         assert_eq!(super::list_all_ids(&tenant).len(), 10);
@@ -4915,6 +8373,54 @@ mod tests {
                 .collect::<BTreeSet<_>>(),
             second_before
         );
+    }
+    #[tokio::test]
+    async fn obstructed_delete_latches_mutations_until_recovery_succeeds() {
+        let _data_dir = crate::test_utils::TestDataDirGuard::new();
+        ensure_test_config();
+        let tenant = super::AttachmentTenant::anonymous();
+        let original = br#"{"delete":"partial"}"#;
+        let original_meta = persist_canonical_test_attachment(&tenant, original, 1);
+        let body_path = super::bin_path(&tenant, &original_meta.id);
+        fs::remove_file(&body_path).expect("replace body with deletion obstruction");
+        fs::create_dir(&body_path).expect("create body deletion obstruction");
+        let obstruction = body_path.join("still-present");
+        fs::write(&obstruction, b"block deletion").expect("populate deletion obstruction");
+
+        let response = super::handle_delete_attachment(
+            tenant.clone(),
+            axum::extract::Path(original_meta.id.clone()),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(
+            super::meta_path(&tenant, &original_meta.id).is_file(),
+            "prevalidation must retain the safe half of an obstructed pair"
+        );
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::CONTENT_TYPE,
+            axum::http::HeaderValue::from_static("application/json"),
+        );
+        let replacement = axum::body::Bytes::from_static(br#"{"delete":"recovered"}"#);
+        let blocked =
+            super::handle_post_attachment(tenant.clone(), headers.clone(), replacement.clone())
+                .await
+                .into_response();
+        assert_eq!(
+            blocked.status(),
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "an obstructed delete must keep later mutations fail-closed"
+        );
+
+        fs::remove_file(&obstruction).expect("remove obstruction contents");
+        fs::remove_dir(&body_path).expect("remove obstruction directory");
+        let recovered = super::handle_post_attachment(tenant, headers, replacement)
+            .await
+            .into_response();
+        assert_eq!(recovered.status(), StatusCode::CREATED);
     }
     #[tokio::test]
     async fn attachment_tenant_churn_does_not_leave_empty_quota_directories() {
@@ -5145,7 +8651,7 @@ mod tests {
         let tmp = tempfile::tempdir().expect("temp dir");
         let _guard = crate::data_dir::OverrideGuard::new(tmp.path());
         ensure_test_config();
-        super::init_persistence();
+        super::init_persistence().expect("attachment persistence preflight");
         let payload = br#"{"hello":"world"}"#;
         let compressed = gzip_compress(payload);
         let mut headers = HeaderMap::new();

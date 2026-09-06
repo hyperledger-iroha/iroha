@@ -9,7 +9,9 @@
 - **Total estimated budget:** $1,218 USD + local tax and shipping.
 
 ## Justification
-- Ensures coverage of the mandatory StrongBox lane documented in `specs/swift_xcframework_device_matrix.md`.
+- Expands optional StrongBox integration coverage documented in
+  `specs/swift_xcframework_device_matrix.md`; simulator/software build and
+  release corridors do not depend on this purchase.
 - Mitigates CI downtime caused by battery wear, OS reinstallation, or hardware failure.
 - Allows parallel smoke runs if the harness needs to scale during release weeks.
 

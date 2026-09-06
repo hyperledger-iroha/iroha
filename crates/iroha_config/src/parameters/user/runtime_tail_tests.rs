@@ -349,6 +349,27 @@ fn sumeragi_requires_bls_allowed_algorithms() {
     );
     assert!(actual::Root::from_toml_source(TomlSource::inline(table)).is_err());
 }
+
+#[test]
+fn sumeragi_rejects_unknown_key_policy_fields() {
+    let mut table = base_table();
+    let sumeragi = table
+        .entry("sumeragi")
+        .or_insert_with(|| Value::Table(Table::new()))
+        .as_table_mut()
+        .expect("sumeragi table");
+    let keys = sumeragi
+        .entry("keys")
+        .or_insert_with(|| Value::Table(Table::new()))
+        .as_table_mut()
+        .expect("sumeragi.keys table");
+    keys.insert("unsupported_key_policy".into(), Value::Boolean(true));
+    assert!(
+        actual::Root::from_toml_source(TomlSource::inline(table)).is_err(),
+        "unknown sumeragi.keys fields must be rejected",
+    );
+}
+
 #[test]
 fn retired_sumeragi_npos_config_is_rejected() {
     let mut table = base_table();
@@ -441,6 +462,23 @@ fn telemetry_rejects_retired_enabled_switch() {
         report.contains("telemetry_enabled")
             && (report.contains("unknown") || report.contains("unexpected")),
         "retired switch must be reported as an unknown field: {report}"
+    );
+}
+
+#[test]
+fn sumeragi_rejects_removed_require_hsm_field() {
+    let mut table = base_table();
+    let mut sumeragi = Table::new();
+    sumeragi.insert("require_hsm".into(), Value::Boolean(true));
+    table.insert("sumeragi".into(), Value::Table(sumeragi));
+
+    let error = actual::Root::from_toml_source(TomlSource::inline(table))
+        .expect_err("Iroha has no HSM-specific consensus configuration");
+    let report = format!("{error:?}");
+    assert!(
+        report.contains("require_hsm")
+            && (report.contains("unknown") || report.contains("unexpected")),
+        "removed HSM requirement must be reported as an unknown field: {report}"
     );
 }
 

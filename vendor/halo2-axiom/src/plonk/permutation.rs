@@ -8,7 +8,7 @@ use crate::{
         SerdeCurveAffine, SerdePrimeField, polynomial_slice_byte_length, read_polynomial_vec,
         write_polynomial_slice, write_polynomial_slice_streaming,
     },
-    poly::{Coeff, LagrangeCoeff, Polynomial},
+    poly::{Coeff, LagrangeCoeff, Polynomial, read_polynomial_vec_checked},
 };
 
 pub(crate) mod keygen;
@@ -133,6 +133,23 @@ impl<C: SerdeCurveAffine> ProvingKey<C>
 where
     C::Scalar: SerdePrimeField,
 {
+    /// Read the two exact configured permutation vectors without unchecked lengths or fields.
+    pub(super) fn read_checked<R: io::Read>(
+        reader: &mut R,
+        format: SerdeFormat,
+        expected_columns: usize,
+        expected_poly_len: usize,
+    ) -> io::Result<Self> {
+        let permutations =
+            read_polynomial_vec_checked(reader, format, expected_columns, expected_poly_len)?;
+        let polys =
+            read_polynomial_vec_checked(reader, format, expected_columns, expected_poly_len)?;
+        Ok(Self {
+            permutations,
+            polys,
+        })
+    }
+
     /// Reads proving key for a single permutation argument from buffer using `Polynomial::read`.
     pub(super) fn read<R: io::Read>(reader: &mut R, format: SerdeFormat) -> Self {
         let permutations = read_polynomial_vec(reader, format);

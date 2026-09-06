@@ -30,6 +30,281 @@ pub const ALIAS_LIFECYCLE_TRANSACTION_PLAN_HASH_DOMAIN_V1: &[u8] =
     b"iroha:alias-lifecycle-transaction-plan-body:v1\0";
 /// Deterministic duration of one SNS lease year in milliseconds (365 days).
 pub const ALIAS_LEASE_YEAR_MS: u64 = 31_536_000_000;
+/// One-way, consensus-replayed activation of universal SNS registry routing.
+///
+/// Before this parameter is installed and its height is reached, native alias lease instructions
+/// retain their historical target-dataspace routing. At and after the activation height,
+/// `EnsureAlias` and `RenewAliasLease` use the universal registry. The immutable height also lets
+/// delayed execution and cold replay select the semantics committed by historical routing plans.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::alias_setup::AliasRegistryRoutingActivationV1")]
+pub struct AliasRegistryRoutingActivationV1 {
+    /// Payload layout version, which must be [`Self::VERSION`].
+    pub version: u16,
+    /// First global carrier height using universal alias-registry routing.
+    pub activation_height: u64,
+}
+impl AliasRegistryRoutingActivationV1 {
+    /// Supported payload layout version.
+    pub const VERSION: u16 = 1;
+    /// Reserved custom parameter identifier for this one-way routing transition.
+    pub const PARAMETER_ID_STR: &'static str = "alias_registry_routing_activation_v1";
+
+    /// Construct an activation request; consensus validates its installation height.
+    #[must_use]
+    pub const fn new(activation_height: u64) -> Self {
+        Self {
+            version: Self::VERSION,
+            activation_height,
+        }
+    }
+
+    /// Return the on-chain custom parameter identifier.
+    #[must_use]
+    pub fn parameter_id() -> crate::parameter::CustomParameterId {
+        Self::PARAMETER_ID_STR
+            .parse()
+            .expect("valid alias registry routing activation parameter identifier")
+    }
+
+    /// Validate the versioned activation payload.
+    ///
+    /// # Errors
+    /// Returns an error for an unsupported version or height zero.
+    pub const fn validate(&self) -> Result<(), &'static str> {
+        if self.version != Self::VERSION {
+            return Err("unsupported alias registry routing activation version");
+        }
+        if self.activation_height == 0 {
+            return Err("alias registry routing activation height must be positive");
+        }
+        Ok(())
+    }
+
+    /// Validate an immutable installation against the exact executing carrier height.
+    ///
+    /// An identical retry is allowed. A first installation must activate no earlier than the next
+    /// height, so it cannot change routing semantics partway through its own carrier.
+    ///
+    /// # Errors
+    /// Returns an error for malformed state, any changed installed activation, a non-future first
+    /// activation, or a carrier height without a representable successor.
+    pub fn validate_installation(
+        &self,
+        previous: Option<&Self>,
+        current_height: u64,
+    ) -> Result<(), &'static str> {
+        self.validate()?;
+        if let Some(previous) = previous {
+            previous.validate()?;
+            return if previous == self {
+                Ok(())
+            } else {
+                Err("alias registry routing activation is immutable once installed")
+            };
+        }
+        let minimum_height = current_height
+            .checked_add(1)
+            .ok_or("alias registry routing activation requires a successor carrier height")?;
+        if self.activation_height < minimum_height {
+            return Err(
+                "alias registry routing activation must start after its installation height",
+            );
+        }
+        Ok(())
+    }
+
+    /// Convert this request into the custom parameter accepted by `SetParameter`.
+    #[cfg(feature = "json")]
+    #[must_use]
+    pub fn into_custom_parameter(self) -> crate::parameter::CustomParameter {
+        crate::parameter::CustomParameter::new(
+            Self::parameter_id(),
+            iroha_primitives::json::Json::new(self),
+        )
+    }
+
+    /// Decode and validate a matching activation parameter without accepting unknown fields.
+    ///
+    /// Unrelated custom parameter identifiers return `Ok(None)`.
+    ///
+    /// # Errors
+    /// Returns an error for a malformed matching payload, unsupported version, or height zero.
+    #[cfg(feature = "json")]
+    pub fn from_custom_parameter(
+        custom: &crate::parameter::CustomParameter,
+    ) -> Result<Option<Self>, norito::json::Error> {
+        if custom.id() != &Self::parameter_id() {
+            return Ok(None);
+        }
+        let activation = norito::json::from_str::<Self>(custom.payload().get())?;
+        activation
+            .validate()
+            .map_err(|error| norito::json::Error::Message(error.to_owned()))?;
+        Ok(Some(activation))
+    }
+}
+/// Immutable, exact-owner authorization to bootstrap one deterministic dataspace name.
+///
+/// Parameter governance installs this grant before the first SNS record. It lets the same paid
+/// native `EnsureAlias` creation replay after operators add the matching dataspace to their static
+/// catalogs, without making ungranted catalogued names publicly claimable.
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::alias_setup::AliasDataspaceBootstrapGrantV1")]
+pub struct AliasDataspaceBootstrapGrantV1 {
+    /// Payload layout version, which must be [`Self::VERSION`].
+    pub version: u16,
+    /// Exact canonical name and deterministic numeric identifier being authorized.
+    pub dataspace: ResolvedDataSpaceV1,
+    /// Existing account allowed to become the initial lease owner.
+    pub owner: AccountId,
+    /// Full native SNS selector hash, whose low bytes derive the dataspace identifier.
+    pub name_hash: [u8; 32],
+}
+impl AliasDataspaceBootstrapGrantV1 {
+    /// Supported grant payload version.
+    pub const VERSION: u16 = 1;
+    /// Reserved prefix for immutable per-name governance grants.
+    pub const PARAMETER_ID_PREFIX: &'static str = "alias_dataspace_bootstrap_grant_v1_";
+
+    /// Derive one grant from its canonicalized name and explicit owner.
+    ///
+    /// # Errors
+    /// Returns an error for an invalid name or the reserved universal dataspace.
+    pub fn try_new(name: &str, owner: AccountId) -> Result<Self, ParseError> {
+        let canonical_name = canonical_alias_segment(name, AliasSegment::Dataspace)?;
+        let selector = crate::sns::NameSelectorV1::new(
+            crate::sns::DATASPACE_ALIAS_SUFFIX_ID,
+            canonical_name.to_string(),
+        )
+        .map_err(|_| ParseError::new("invalid dataspace bootstrap grant name"))?;
+        let name_hash = selector.name_hash();
+        let grant = Self {
+            version: Self::VERSION,
+            dataspace: ResolvedDataSpaceV1::new(canonical_name, DataSpaceId::from_hash(&name_hash)),
+            owner,
+            name_hash,
+        };
+        grant.validate()?;
+        Ok(grant)
+    }
+
+    /// Validate the exact canonical selector hash and derived numeric identity.
+    ///
+    /// # Errors
+    /// Returns an error for unsupported, non-canonical, reserved, or mismatched identity fields.
+    pub fn validate(&self) -> Result<(), ParseError> {
+        if self.version != Self::VERSION {
+            return Err(ParseError::new(
+                "unsupported dataspace bootstrap grant version",
+            ));
+        }
+        let name = &self.dataspace.canonical_name;
+        let canonical = canonical_alias_segment(name.as_ref(), AliasSegment::Dataspace)?;
+        if &canonical != name {
+            return Err(ParseError::new(
+                "dataspace bootstrap grant name must be canonical",
+            ));
+        }
+        if name.as_ref() == "universal" || self.dataspace.dataspace_id == DataSpaceId::UNIVERSAL {
+            return Err(ParseError::new(
+                "bootstrap grants cannot claim the universal dataspace",
+            ));
+        }
+        let selector = crate::sns::NameSelectorV1::new(
+            crate::sns::DATASPACE_ALIAS_SUFFIX_ID,
+            name.to_string(),
+        )
+        .map_err(|_| ParseError::new("invalid dataspace bootstrap grant name"))?;
+        if selector.name_hash() != self.name_hash
+            || DataSpaceId::from_hash(&self.name_hash) != self.dataspace.dataspace_id
+        {
+            return Err(ParseError::new(
+                "dataspace bootstrap grant name, hash, and id must match",
+            ));
+        }
+        Self::parameter_id_for(name)?;
+        Ok(())
+    }
+
+    /// Return whether an identifier belongs to the reserved grant namespace.
+    #[must_use]
+    pub fn is_parameter_id(id: &crate::parameter::CustomParameterId) -> bool {
+        id.name().as_ref().starts_with(Self::PARAMETER_ID_PREFIX)
+    }
+
+    /// Derive the only allowed governance key for a canonical dataspace name.
+    ///
+    /// # Errors
+    /// Returns an error for a non-canonical name or an unrepresentable parameter identifier.
+    pub fn parameter_id_for(
+        name: &Name,
+    ) -> Result<crate::parameter::CustomParameterId, ParseError> {
+        if canonical_alias_segment(name.as_ref(), AliasSegment::Dataspace)? != *name {
+            return Err(ParseError::new(
+                "dataspace bootstrap grant key requires a canonical name",
+            ));
+        }
+        format!("{}{name}", Self::PARAMETER_ID_PREFIX)
+            .parse()
+            .map_err(|_| ParseError::new("dataspace bootstrap grant parameter key is invalid"))
+    }
+
+    /// Derive this grant's canonical per-name governance key.
+    ///
+    /// # Errors
+    /// Returns an error when the grant name cannot form a canonical key.
+    pub fn parameter_id(&self) -> Result<crate::parameter::CustomParameterId, ParseError> {
+        Self::parameter_id_for(&self.dataspace.canonical_name)
+    }
+
+    /// Encode a validated grant for the existing `SetParameter` authority surface.
+    ///
+    /// # Errors
+    /// Returns an error for any malformed grant identity or parameter key.
+    #[cfg(feature = "json")]
+    pub fn into_custom_parameter(self) -> Result<crate::parameter::CustomParameter, ParseError> {
+        self.validate()?;
+        Ok(crate::parameter::CustomParameter::new(
+            self.parameter_id()?,
+            iroha_primitives::json::Json::new(self),
+        ))
+    }
+
+    /// Decode a reserved grant and require its key to match the exact payload name.
+    ///
+    /// Unrelated parameter identifiers return `Ok(None)`.
+    ///
+    /// # Errors
+    /// Returns an error for malformed payloads, unknown fields, or any key/identity mismatch.
+    #[cfg(feature = "json")]
+    pub fn from_custom_parameter(
+        custom: &crate::parameter::CustomParameter,
+    ) -> Result<Option<Self>, norito::json::Error> {
+        if !Self::is_parameter_id(custom.id()) {
+            return Ok(None);
+        }
+        let grant = norito::json::from_str::<Self>(custom.payload().get())?;
+        grant
+            .validate()
+            .map_err(|error| norito::json::Error::Message(error.to_string()))?;
+        let expected_key = grant
+            .parameter_id()
+            .map_err(|error| norito::json::Error::Message(error.to_string()))?;
+        if custom.id() != &expected_key {
+            return Err(norito::json::Error::Message(
+                "dataspace bootstrap grant parameter key does not match its name".to_owned(),
+            ));
+        }
+        Ok(Some(grant))
+    }
+}
 /// Catalog-free textual account alias.
 ///
 /// `merchant@banka.paynet` has label `merchant`, domain `banka`, and
@@ -38,6 +313,8 @@ pub const ALIAS_LEASE_YEAR_MS: u64 = 31_536_000_000;
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 #[norito(decode_from_slice)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::alias_setup::AccountAliasName")]
 pub struct AccountAliasName {
     /// Canonical alias label.
     pub label: Name,
@@ -184,6 +461,8 @@ fn canonical_alias_segment(raw: &str, segment: AliasSegment) -> Result<Name, Par
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::alias_setup::ResolvedDataSpaceV1")]
 pub struct ResolvedDataSpaceV1 {
     /// Canonical textual dataspace name.
     pub canonical_name: Name,
@@ -234,6 +513,8 @@ impl fmt::Display for ResolvedDataSpaceV1 {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::alias_setup::ResolvedDomainV1")]
 pub struct ResolvedDomainV1 {
     /// Canonical `domain.dataspace` text.
     pub canonical_name: DomainId,
@@ -289,6 +570,8 @@ impl fmt::Display for ResolvedDomainV1 {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::alias_setup::ResolvedAccountAliasV1")]
 pub struct ResolvedAccountAliasV1 {
     /// Canonical account alias text.
     pub canonical_name: AccountAliasName,
@@ -377,6 +660,8 @@ impl From<ResolvedAccountAliasV1> for AccountAlias {
     )
 )]
 #[repr(u8)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::alias_setup::AccountProvisionV1")]
 pub enum AccountProvisionV1 {
     /// The target account must already exist.
     #[codec(index = 0)]
@@ -398,6 +683,8 @@ pub enum AccountProvisionV1 {
     )
 )]
 #[repr(u8)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::alias_setup::AccountAliasRoleV1")]
 pub enum AccountAliasRoleV1 {
     /// Make the exact alias the account's primary alias.
     #[codec(index = 0)]
@@ -410,6 +697,8 @@ pub enum AccountAliasRoleV1 {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::alias_setup::AliasDataSpaceIntentV1")]
 pub struct AliasDataSpaceIntentV1 {
     /// Resolved dataspace name.
     pub dataspace: ResolvedDataSpaceV1,
@@ -420,6 +709,8 @@ pub struct AliasDataSpaceIntentV1 {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::alias_setup::AliasDomainIntentV1")]
 pub struct AliasDomainIntentV1 {
     /// Resolved domain name, including its parent dataspace.
     pub domain: ResolvedDomainV1,
@@ -430,6 +721,8 @@ pub struct AliasDomainIntentV1 {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::alias_setup::AliasAccountIntentV1")]
 pub struct AliasAccountIntentV1 {
     /// Resolved account alias.
     pub alias: ResolvedAccountAliasV1,
@@ -452,6 +745,8 @@ pub struct AliasAccountIntentV1 {
         deny_unknown_fields
     )
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::alias_setup::AliasIntentV1")]
 pub enum AliasIntentV1 {
     /// Ensure a dataspace alias and its exact owner.
     #[codec(index = 0)]
@@ -478,6 +773,8 @@ impl AliasIntentV1 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::alias_setup::AliasLeaseAcquisitionV1")]
 pub struct AliasLeaseAcquisitionV1 {
     /// Requested lease term in whole years.
     pub term_years: u8,
@@ -502,6 +799,8 @@ impl AliasLeaseAcquisitionV1 {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::alias_setup::AliasQuoteGuardV1")]
 pub struct AliasQuoteGuardV1 {
     /// Policy version that consensus must observe.
     pub expected_policy_version: u16,
@@ -519,6 +818,8 @@ pub struct AliasQuoteGuardV1 {
 /// reclassifies them against live state, and returns the canonical framed instruction vector.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::alias_setup::AliasSetupPlanRequestV1")]
 pub struct AliasSetupPlanRequestV1 {
     /// Request layout version. The only supported value is [`Self::VERSION`].
     pub schema_version: u8,
@@ -549,6 +850,8 @@ impl AliasSetupPlanRequestV1 {
         deny_unknown_fields
     )
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::alias_setup::AliasTargetV1")]
 pub enum AliasTargetV1 {
     /// Dataspace alias resource.
     #[codec(index = 0)]
@@ -583,6 +886,8 @@ impl fmt::Display for AliasTargetV1 {
 /// Owner-configured deterministic auto-renew policy.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::alias_setup::AliasAutoRenewConfigV1")]
 pub struct AliasAutoRenewConfigV1 {
     /// Renewal term in whole years.
     pub term_years: u8,
@@ -602,6 +907,8 @@ pub struct AliasAutoRenewConfigV1 {
 /// Persisted compare-and-set state for native deterministic alias auto-renew.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::alias_setup::AliasAutoRenewStateV1")]
 pub struct AliasAutoRenewStateV1 {
     /// State layout version, currently `1`.
     pub version: u8,
@@ -649,6 +956,8 @@ impl AliasAutoRenewStateV1 {
 /// Canonical signed request body for planning one lease renewal.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::alias_setup::AliasLeaseRenewPlanRequestV1")]
 pub struct AliasLeaseRenewPlanRequestV1 {
     /// Request layout version. The only supported value is [`Self::VERSION`].
     pub schema_version: u8,
@@ -670,6 +979,8 @@ impl AliasLeaseRenewPlanRequestV1 {
 /// Canonical signed request body for planning one auto-renew configuration CAS.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::alias_setup::AliasAutoRenewPlanRequestV1")]
 pub struct AliasAutoRenewPlanRequestV1 {
     /// Request layout version. The only supported value is [`Self::VERSION`].
     pub schema_version: u8,
@@ -695,6 +1006,8 @@ impl AliasAutoRenewPlanRequestV1 {
     feature = "json",
     norito(tag = "kind", content = "operation", rename_all = "snake_case")
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::alias_setup::AliasLifecycleOperationV1")]
 pub enum AliasLifecycleOperationV1 {
     /// Absolute-expiry lease renewal with an expected-current-expiry CAS.
     #[codec(index = 0)]
@@ -721,6 +1034,8 @@ impl AliasLifecycleOperationV1 {
     norito(tag = "kind", content = "value", rename_all = "snake_case")
 )]
 #[repr(u8)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::alias_setup::AliasLifecyclePlanDispositionV1")]
 pub enum AliasLifecyclePlanDispositionV1 {
     /// Exact desired configuration already exists; no instruction or charge is required.
     #[codec(index = 0)]
@@ -742,6 +1057,8 @@ pub enum AliasLifecyclePlanDispositionV1 {
     )
 )]
 #[repr(u8)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::alias_setup::AliasPlanDispositionV1")]
 pub enum AliasPlanDispositionV1 {
     /// Exact desired state already exists and incurs no charge.
     #[codec(index = 0)]
@@ -760,6 +1077,8 @@ pub enum AliasPlanDispositionV1 {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::alias_setup::AliasLeaseQuoteV1")]
 pub struct AliasLeaseQuoteV1 {
     /// Resource to which the quote applies.
     pub target: AliasTargetV1,
@@ -780,6 +1099,8 @@ pub struct AliasLeaseQuoteV1 {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::alias_setup::AliasPlanResourceV1")]
 pub struct AliasPlanResourceV1 {
     /// Canonically resolved desired state.
     pub intent: AliasIntentV1,
@@ -802,6 +1123,8 @@ pub struct AliasPlanResourceV1 {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::alias_setup::AliasFramedInstructionV1")]
 pub struct AliasFramedInstructionV1 {
     /// Stable instruction wire identifier.
     pub wire_id: String,
@@ -811,6 +1134,8 @@ pub struct AliasFramedInstructionV1 {
 /// Exact total charge for one payment asset.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::alias_setup::AliasAssetTotalV1")]
 pub struct AliasAssetTotalV1 {
     /// Payment asset.
     pub payment_asset: AssetDefinitionId,
@@ -825,6 +1150,8 @@ pub struct AliasAssetTotalV1 {
     norito(tag = "status", content = "value", rename_all = "snake_case")
 )]
 #[repr(u8)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::alias_setup::AliasSetupStatusV1")]
 pub enum AliasSetupStatusV1 {
     /// Validation succeeded and the operation is ready.
     #[codec(index = 0)]
@@ -844,6 +1171,8 @@ pub enum AliasSetupStatusV1 {
     norito(tag = "phase", content = "value", rename_all = "snake_case")
 )]
 #[repr(u8)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::alias_setup::AliasSetupValidationPhaseV1")]
 pub enum AliasSetupValidationPhaseV1 {
     /// Static configuration validation.
     #[codec(index = 0)]
@@ -869,6 +1198,8 @@ pub enum AliasSetupValidationPhaseV1 {
     norito(tag = "severity", content = "value", rename_all = "snake_case")
 )]
 #[repr(u8)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::alias_setup::AliasSetupSeverityV1")]
 pub enum AliasSetupSeverityV1 {
     /// Informational observation.
     #[codec(index = 0)]
@@ -883,6 +1214,8 @@ pub enum AliasSetupSeverityV1 {
 /// One stable, secret-free setup/readiness diagnostic.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::alias_setup::AliasSetupDiagnosticV1")]
 pub struct AliasSetupDiagnosticV1 {
     /// Validation phase.
     pub phase: AliasSetupValidationPhaseV1,
@@ -908,6 +1241,8 @@ pub struct AliasSetupDiagnosticV1 {
 /// Deterministically ordered setup/readiness diagnostics.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::alias_setup::AliasSetupReportV1")]
 pub struct AliasSetupReportV1 {
     /// Report layout version. The only supported value is [`Self::VERSION`].
     pub version: u8,
@@ -934,6 +1269,8 @@ impl AliasSetupReportV1 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::alias_setup::AliasPlanAnchorV1")]
 pub struct AliasPlanAnchorV1 {
     /// Height of the anchored block.
     pub block_height: u64,
@@ -943,6 +1280,8 @@ pub struct AliasPlanAnchorV1 {
 /// Canonical body committed by an alias transaction plan hash.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::alias_setup::AliasTransactionPlanBodyV1")]
 pub struct AliasTransactionPlanBodyV1 {
     /// Layout version. The only supported value is [`Self::VERSION`].
     pub version: u8,
@@ -987,6 +1326,8 @@ impl AliasTransactionPlanBodyV1 {
 /// Alias transaction plan and its canonical body commitment.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::alias_setup::AliasTransactionPlanV1")]
 pub struct AliasTransactionPlanV1 {
     /// Canonical plan body.
     pub body: AliasTransactionPlanBodyV1,
@@ -1010,6 +1351,8 @@ impl AliasTransactionPlanV1 {
 /// Canonical body committed by an alias lifecycle transaction plan hash.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::alias_setup::AliasLifecycleTransactionPlanBodyV1")]
 pub struct AliasLifecycleTransactionPlanBodyV1 {
     /// Layout version. The only supported value is [`Self::VERSION`].
     pub version: u8,
@@ -1060,6 +1403,8 @@ impl AliasLifecycleTransactionPlanBodyV1 {
 /// Alias lifecycle transaction plan and its canonical body commitment.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::alias_setup::AliasLifecycleTransactionPlanV1")]
 pub struct AliasLifecycleTransactionPlanV1 {
     /// Canonical lifecycle plan body.
     pub body: AliasLifecycleTransactionPlanBodyV1,
@@ -1086,6 +1431,178 @@ mod tests {
     use crate::nexus::DataSpaceMetadata;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use iroha_primitives::numeric::Numeric;
+
+    #[test]
+    fn alias_registry_routing_activation_roundtrips_and_rejects_invalid_payloads() {
+        let activation = AliasRegistryRoutingActivationV1::new(8_648_377_547_929_788_715);
+        let encoded = norito::to_bytes(&activation).expect("encode activation Norito frame");
+        let decoded: AliasRegistryRoutingActivationV1 =
+            norito::decode_from_bytes(&encoded).expect("activation Norito roundtrip");
+        assert_eq!(decoded, activation);
+        let custom = activation.into_custom_parameter();
+        assert_eq!(
+            AliasRegistryRoutingActivationV1::from_custom_parameter(&custom)
+                .expect("valid activation custom parameter"),
+            Some(activation)
+        );
+        for payload in [
+            norito::json!({"version": 2, "activation_height": 8}),
+            norito::json!({"version": 1, "activation_height": 0}),
+            norito::json!({"version": 1, "activation_height": 8, "enabled": true}),
+            norito::json!({"version": 1}),
+            norito::json!({"version": 1, "activation_height": (-1)}),
+        ] {
+            let invalid = crate::parameter::CustomParameter::new(
+                AliasRegistryRoutingActivationV1::parameter_id(),
+                iroha_primitives::json::Json::from(payload),
+            );
+            assert!(AliasRegistryRoutingActivationV1::from_custom_parameter(&invalid).is_err());
+        }
+        let unrelated = crate::parameter::CustomParameter::new(
+            "unrelated_parameter".parse().expect("custom parameter id"),
+            iroha_primitives::json::Json::from(norito::json!(null)),
+        );
+        assert_eq!(
+            AliasRegistryRoutingActivationV1::from_custom_parameter(&unrelated)
+                .expect("unrelated parameter is ignored"),
+            None
+        );
+    }
+
+    #[test]
+    fn alias_registry_routing_activation_installation_is_future_and_immutable() {
+        let activation = AliasRegistryRoutingActivationV1::new(8);
+        assert!(activation.validate_installation(None, 7).is_ok());
+        assert!(activation.validate_installation(None, 8).is_err());
+        assert!(activation.validate_installation(None, 9).is_err());
+        assert!(
+            AliasRegistryRoutingActivationV1::new(0)
+                .validate_installation(None, 0)
+                .is_err()
+        );
+        assert!(
+            AliasRegistryRoutingActivationV1::new(u64::MAX)
+                .validate_installation(None, u64::MAX - 1)
+                .is_ok()
+        );
+        assert!(
+            AliasRegistryRoutingActivationV1::new(u64::MAX)
+                .validate_installation(None, u64::MAX)
+                .is_err()
+        );
+        assert!(
+            activation
+                .validate_installation(Some(&activation), 20)
+                .is_ok()
+        );
+        for changed in [7, 9] {
+            assert!(
+                AliasRegistryRoutingActivationV1::new(changed)
+                    .validate_installation(Some(&activation), 7)
+                    .is_err()
+            );
+        }
+        assert!(
+            activation
+                .validate_installation(Some(&AliasRegistryRoutingActivationV1::new(0)), 7)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn alias_dataspace_bootstrap_grant_roundtrip_binds_exact_bpng_identity() {
+        let key = KeyPair::from_seed(vec![0xB3; 32], Algorithm::Ed25519);
+        let owner = AccountId::new(key.public_key().clone());
+        let grant = AliasDataspaceBootstrapGrantV1::try_new("bpng", owner.clone())
+            .expect("canonical BPNG grant");
+        assert_eq!(grant.owner, owner);
+        assert_eq!(
+            grant.dataspace.dataspace_id.as_u64(),
+            8_648_377_547_929_788_715
+        );
+        assert_eq!(
+            hex::encode(grant.name_hash),
+            "2ba1d10b8f3505785f8fbeab47ff6d701d6134f62cd959a00d401d06e0727192"
+        );
+        assert_eq!(
+            grant.parameter_id().expect("canonical key").to_string(),
+            "alias_dataspace_bootstrap_grant_v1_bpng"
+        );
+        let encoded = norito::to_bytes(&grant).expect("encode grant Norito frame");
+        let decoded: AliasDataspaceBootstrapGrantV1 =
+            norito::decode_from_bytes(&encoded).expect("decode grant Norito frame");
+        assert_eq!(decoded, grant);
+        let custom = grant
+            .clone()
+            .into_custom_parameter()
+            .expect("grant parameter");
+        assert_eq!(
+            AliasDataspaceBootstrapGrantV1::from_custom_parameter(&custom)
+                .expect("strict custom grant decode"),
+            Some(grant)
+        );
+    }
+
+    #[test]
+    fn alias_dataspace_bootstrap_grant_rejects_identity_key_and_schema_drift() {
+        let key = KeyPair::from_seed(vec![0xB4; 32], Algorithm::Ed25519);
+        let owner = AccountId::new(key.public_key().clone());
+        let grant = AliasDataspaceBootstrapGrantV1::try_new("bpng", owner.clone())
+            .expect("canonical BPNG grant");
+        assert!(AliasDataspaceBootstrapGrantV1::try_new("universal", owner).is_err());
+        let mut invalid_payloads = Vec::new();
+        let mut invalid = grant.clone();
+        invalid.version += 1;
+        invalid_payloads.push(invalid);
+        let mut invalid = grant.clone();
+        invalid.name_hash[31] ^= 1;
+        invalid_payloads.push(invalid);
+        let mut invalid = grant.clone();
+        invalid.dataspace.dataspace_id = DataSpaceId::new(10);
+        invalid_payloads.push(invalid);
+        let mut invalid = grant.clone();
+        invalid.dataspace.canonical_name = "BPNG".parse().expect("syntactic uppercase name");
+        invalid_payloads.push(invalid);
+        for invalid in invalid_payloads {
+            assert!(invalid.clone().into_custom_parameter().is_err());
+            let custom = crate::parameter::CustomParameter::new(
+                grant.parameter_id().expect("grant key"),
+                iroha_primitives::json::Json::new(invalid),
+            );
+            assert!(AliasDataspaceBootstrapGrantV1::from_custom_parameter(&custom).is_err());
+        }
+        let custom = grant
+            .clone()
+            .into_custom_parameter()
+            .expect("grant parameter");
+        let mismatched_key = crate::parameter::CustomParameter::new(
+            AliasDataspaceBootstrapGrantV1::parameter_id_for(&"mibank".parse().expect("name"))
+                .expect("canonical foreign key"),
+            custom.payload().clone(),
+        );
+        assert!(AliasDataspaceBootstrapGrantV1::from_custom_parameter(&mismatched_key).is_err());
+        let mut extra_field: norito::json::Value =
+            norito::json::from_str(custom.payload().get()).expect("grant JSON object");
+        let norito::json::Value::Object(ref mut fields) = extra_field else {
+            panic!("grant payload must be an object");
+        };
+        fields.insert("public_claim".to_owned(), norito::json::Value::Bool(true));
+        let unknown_field = crate::parameter::CustomParameter::new(
+            grant.parameter_id().expect("grant key"),
+            iroha_primitives::json::Json::from(extra_field),
+        );
+        assert!(AliasDataspaceBootstrapGrantV1::from_custom_parameter(&unknown_field).is_err());
+        let unrelated = crate::parameter::CustomParameter::new(
+            "unrelated_parameter".parse().expect("unrelated key"),
+            custom.payload().clone(),
+        );
+        assert_eq!(
+            AliasDataspaceBootstrapGrantV1::from_custom_parameter(&unrelated)
+                .expect("unrelated parameters are ignored"),
+            None
+        );
+    }
+
     fn plan_network_id(seed: u8) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<crate::block::BlockHeader>::from_untyped_unchecked(
             Hash::new([seed]),
@@ -2023,3 +2540,6 @@ mod tests {
         assert_eq!(report.diagnostics[0].code, "a.code");
     }
 }
+
+#[cfg(test)]
+mod captured_alias_setup_schema_tests;

@@ -28,10 +28,10 @@ pub mod isi {
             curve::{CurveId, CurveRegistryError},
         },
         alias_setup::{AccountAliasRoleV1, AliasAccountIntentV1},
-        asset::AssetBalancePolicy,
         asset::definition::{
             validate_asset_alias_against_names, validate_asset_description, validate_asset_name,
         },
+        asset::{ASSET_TRANSFER_CONTROL_METADATA_KEY, AssetBalancePolicy},
         isi::error::{InstructionExecutionError, InvalidParameterError, RepetitionError},
         metadata::Metadata,
         name::Name,
@@ -607,24 +607,27 @@ pub mod isi {
         }
         Ok(())
     }
-    /// Derive the deterministic offline escrow account for an asset definition.
-    pub(crate) fn offline_escrow_account_id(
+    /// Derive the deterministic Kagemusha V1 reserve custody account for an asset definition.
+    pub(crate) fn kagemusha_reserve_account_id(
         network_id: &NetworkId,
         definition_id: &AssetDefinitionId,
     ) -> AccountId {
-        iroha_data_model::offline::offline_escrow_account_id(network_id, definition_id)
+        AccountId::new(iroha_crypto::derive_non_signing_ed25519_public_key(
+            b"iroha.kagemusha.v1.reserve-custody",
+            &[network_id.as_bytes(), definition_id.to_string().as_bytes()],
+        ))
     }
-    pub(crate) fn ensure_offline_escrow_account(
+    pub(crate) fn ensure_kagemusha_reserve_account(
         asset_definition: &AssetDefinition,
         _authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
         let definition_id = asset_definition.id();
-        let derived = offline_escrow_account_id(state_transaction.network_id(), definition_id);
-        let escrow_account = match state_transaction
+        let derived = kagemusha_reserve_account_id(state_transaction.network_id(), definition_id);
+        let reserve_account = match state_transaction
             .settlement
-            .offline
-            .escrow_accounts
+            .kagemusha
+            .reserve_accounts
             .entry(definition_id.clone())
         {
             Entry::Vacant(entry) => entry.insert(derived.clone()).clone(),
@@ -634,7 +637,7 @@ pub mod isi {
                         definition = %definition_id,
                         configured = %entry.get(),
                         derived = %derived,
-                        "offline escrow account overridden by deterministic derivation"
+                        "Kagemusha reserve account overridden by deterministic derivation"
                     );
                     entry.insert(derived.clone());
                 }
@@ -642,15 +645,15 @@ pub mod isi {
             }
         };
         ensure_controller_capabilities(
-            escrow_account.controller(),
+            reserve_account.controller(),
             &state_transaction.crypto.allowed_signing,
             &state_transaction.crypto.allowed_curve_ids,
         )?;
-        if state_transaction.world.account(&escrow_account).is_ok() {
+        if state_transaction.world.account(&reserve_account).is_ok() {
             return Ok(());
         }
         let account = Account {
-            id: escrow_account.clone(),
+            id: reserve_account.clone(),
             metadata: Metadata::default(),
             label: None,
             uaid: None,
@@ -740,6 +743,13 @@ pub mod isi {
             return account_subject_matches(&permission.authority, account_id);
         }
         if let Ok(permission) =
+            iroha_executor_data_model::permission::trigger::CanRegisterGlobalDataTrigger::try_from(
+                permission,
+            )
+        {
+            return account_subject_matches(&permission.authority, account_id);
+        }
+        if let Ok(permission) =
             iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint::try_from(
                 permission,
             )
@@ -766,13 +776,6 @@ pub mod isi {
             )
         {
             return account_subject_matches(permission.debited_asset.account(), account_id);
-        }
-        if let Ok(permission) =
-            iroha_executor_data_model::permission::governance::CanRecordCitizenService::try_from(
-                permission,
-            )
-        {
-            return account_subject_matches(&permission.owner, account_id);
         }
         false
     }
@@ -1063,6 +1066,25 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let account: Account = self.object().clone().build(authority);
+            if let Some(reserved_key) = [
+                ASSET_TRANSFER_CONTROL_METADATA_KEY,
+                iroha_data_model::smart_contract::CONTRACT_DEPLOY_NONCE_METADATA_KEY,
+            ]
+            .into_iter()
+            .find(|key| account.metadata().get(*key).is_some())
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "account metadata key `{reserved_key}` is reserved for native state; register the account without it and use the dedicated lifecycle instruction"
+                    )
+                    .into(),
+                )
+                .into());
+            }
+            crate::smartcontracts::limits::enforce_metadata_value_sizes(
+                state_transaction,
+                account.metadata(),
+            )?;
             ensure_controller_capabilities(
                 account.controller(),
                 &state_transaction.crypto.allowed_signing,
@@ -1247,6 +1269,46 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let account_id = self.object().clone();
+            if let Some(contract) = crate::smartcontracts::code::historical_contract_for_subject(
+                &state_transaction.world,
+                &account_id,
+            ) {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "cannot unregister account {account_id}: it is the retained subject of contract `{contract}`"
+                    )
+                    .into(),
+                )
+                .into());
+            }
+            if let Some(contract) =
+                crate::smartcontracts::code::contract_owned_or_pending_for_account(
+                    &state_transaction.world,
+                    &account_id,
+                )
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "cannot unregister account {account_id}: transfer or cancel its lifecycle ownership of contract `{contract}` first"
+                    )
+                    .into(),
+                )
+                .into());
+            }
+            if let Some(reference) =
+                crate::smartcontracts::isi::sorafs_moderation::retained_moderation_account_reference(
+                    state_transaction.world(),
+                    &account_id,
+                )?
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "cannot unregister account {account_id}: it is retained by moderation {reference}"
+                    )
+                    .into(),
+                )
+                .into());
+            }
             crate::smartcontracts::isi::kaigi::ensure_kaigi_account_can_unregister(
                 state_transaction,
                 &account_id,
@@ -1358,6 +1420,21 @@ pub mod isi {
                 return Err(InstructionExecutionError::InvariantViolation(
                     format!(
                         "cannot unregister account {account_id}: it has native contract deployment nonce state; retain the account to preserve deployment address monotonicity and audit history"
+                    )
+                    .into(),
+                )
+                .into());
+            }
+            if state_transaction
+                .world
+                .account(&account_id)?
+                .metadata()
+                .get(ASSET_TRANSFER_CONTROL_METADATA_KEY)
+                .is_some()
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "cannot unregister account {account_id}: it has native asset transfer-control state; clear every control through dedicated instructions first"
                     )
                     .into(),
                 )
@@ -1558,15 +1635,15 @@ pub mod isi {
                 )
                 .into());
             }
-            for (definition_id, escrow_account) in
-                &state_transaction.settlement.offline.escrow_accounts
+            for (definition_id, reserve_account) in
+                &state_transaction.settlement.kagemusha.reserve_accounts
             {
-                if escrow_account != &account_id {
+                if reserve_account != &account_id {
                     continue;
                 }
                 return Err(InstructionExecutionError::InvariantViolation(
                     format!(
-                        "cannot unregister account {account_id}: it is the lazily derived offline escrow account for asset definition {definition_id}"
+                        "cannot unregister account {account_id}: it is the lazily derived Kagemusha reserve account for asset definition {definition_id}"
                     )
                     .into(),
                 )
@@ -1578,13 +1655,13 @@ pub mod isi {
                 .assets_in_account_iter(&account_id)
                 .find_map(|asset| {
                     let definition_id = asset.id().definition();
-                    (offline_escrow_account_id(&network_id, definition_id) == account_id)
+                    (kagemusha_reserve_account_id(&network_id, definition_id) == account_id)
                         .then(|| definition_id.clone())
                 })
             {
                 return Err(InstructionExecutionError::InvariantViolation(
                     format!(
-                        "cannot unregister account {account_id}: it is the deterministic offline escrow account holding live assets for asset definition {definition_id}"
+                        "cannot unregister account {account_id}: it is the deterministic Kagemusha reserve account holding live assets for asset definition {definition_id}"
                     )
                     .into(),
                 )
@@ -1955,37 +2032,6 @@ pub mod isi {
                 )
                 .into());
             }
-            if let Some((epoch, _)) = state_transaction.world.council.iter().find(|(_, term)| {
-                term.members.contains(&account_id) || term.alternates.contains(&account_id)
-            }) {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    format!(
-                        "cannot unregister account {account_id}: it is present in governance council roster state (epoch {epoch}); rotate roster first"
-                    )
-                    .into(),
-                )
-                .into());
-            }
-            if let Some((epoch, _)) =
-                state_transaction
-                    .world
-                    .parliament_bodies
-                    .iter()
-                    .find(|(_, bodies)| {
-                        bodies.rosters.values().any(|roster| {
-                            roster.members.contains(&account_id)
-                                || roster.alternates.contains(&account_id)
-                        })
-                    })
-            {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    format!(
-                        "cannot unregister account {account_id}: it is present in governance parliament roster state (epoch {epoch}); rotate roster first"
-                    )
-                    .into(),
-                )
-                .into());
-            }
             if let Some((bundle_id, _)) = state_transaction
                 .world
                 .content_bundles
@@ -2105,15 +2151,16 @@ pub mod isi {
                 )
                 .into());
             }
-            if let Some((attempt_id, _)) = state_transaction
+            if state_transaction
                 .world
-                .parliament_attempts
-                .iter()
-                .find(|(_, attempt)| attempt.references_parliament_member(&account_id))
+                .parliament_member_reference_counts
+                .get(&account_id)
+                .copied()
+                .is_some_and(crate::state::ParliamentMemberReferenceCountsV1::has_references)
             {
                 return Err(InstructionExecutionError::InvariantViolation(
                     format!(
-                        "cannot unregister account {account_id}: it is present in Parliament attempt state (attempt {attempt_id}); retain account for governance audit references"
+                        "cannot unregister account {account_id}: it is present in Parliament attempt state; retain account for governance audit references"
                     )
                     .into(),
                 )
@@ -2231,6 +2278,10 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let asset_definition = self.object().clone().build(authority);
+            crate::smartcontracts::limits::enforce_metadata_value_sizes(
+                state_transaction,
+                asset_definition.metadata(),
+            )?;
             ensure_asset_definition_human_fields(&asset_definition)?;
             validate_asset_definition_alias_route(
                 state_transaction,
@@ -2329,6 +2380,80 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let asset_definition_id = self.object().clone();
+            crate::smartcontracts::isi::asset::isi::ensure_asset_definitions_not_retained_by_transfer_controls(
+                state_transaction,
+                &BTreeSet::from([asset_definition_id.clone()]),
+                &format!("unregister asset definition {asset_definition_id}"),
+            )?;
+            for (storage_key, pool) in state_transaction.world.kagemusha_reserve_pools.iter() {
+                if pool.key.asset != asset_definition_id {
+                    continue;
+                }
+                if storage_key != &pool.key.liability_pool_id {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister asset definition {asset_definition_id}: its Kagemusha V1 reserve pool has a non-canonical storage key"
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+                pool.validate().map_err(|error| {
+                    InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister asset definition {asset_definition_id}: its Kagemusha V1 reserve pool is invalid: {error}"
+                        )
+                        .into(),
+                    )
+                })?;
+                let outstanding = pool.available().map_err(|error| {
+                    InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister asset definition {asset_definition_id}: its Kagemusha V1 reserve liability is invalid: {error}"
+                        )
+                        .into(),
+                    )
+                })?;
+                if outstanding != 0 {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister asset definition {asset_definition_id}: its Kagemusha V1 reserve has {outstanding} outstanding atomic units"
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+            }
+            for (_, operation) in state_transaction.world.kagemusha_reserve_operations.iter() {
+                let pool = operation.pool();
+                if pool.asset == asset_definition_id
+                    && state_transaction
+                        .world
+                        .kagemusha_reserve_pools
+                        .get(&pool.liability_pool_id)
+                        .is_none()
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister asset definition {asset_definition_id}: an Kagemusha V1 operation references a missing reserve pool"
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+            }
+            if let Some(reference) = crate::smartcontracts::isi::sorafs_moderation::retained_moderation_asset_definition_reference(
+                state_transaction.world(),
+                &asset_definition_id,
+            )? {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "cannot unregister asset definition {asset_definition_id}: it is retained by moderation {reference}"
+                    )
+                    .into(),
+                )
+                .into());
+            }
             if let Some((proposal_id, reference_kind)) =
                 crate::validation_fee::retained_enacted_validation_fee_asset_reference(
                     state_transaction,
@@ -2438,15 +2563,6 @@ pub mod isi {
                 return Err(InstructionExecutionError::InvariantViolation(
                     format!(
                         "cannot unregister asset definition {asset_definition_id}: it is configured as governance citizenship asset definition (`gov.citizenship_asset_id`); update governance config first"
-                    )
-                    .into(),
-                )
-                .into());
-            }
-            if asset_definition_id == state_transaction.gov.parliament_eligibility_asset_id {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    format!(
-                        "cannot unregister asset definition {asset_definition_id}: it is configured as governance parliament eligibility asset definition (`gov.parliament_eligibility_asset_id`); update governance config first"
                     )
                     .into(),
                 )
@@ -2638,8 +2754,8 @@ pub mod isi {
                 .remove(asset_definition_id.clone());
             state_transaction
                 .settlement
-                .offline
-                .escrow_accounts
+                .kagemusha
+                .reserve_accounts
                 .remove(&asset_definition_id);
             events.push(DataEvent::asset_definition(
                 AssetDefinitionEvent::Deleted(asset_definition_id),
@@ -3490,14 +3606,16 @@ mod tests {
             AliasIntentV1, AliasLeaseAcquisitionV1, AliasQuoteGuardV1, ResolvedAccountAliasV1,
         },
         asset::{
-            Asset, AssetDefinition, AssetDefinitionAlias, AssetDefinitionId, AssetId, Mintable,
-            NewAssetDefinition, ResolvedAssetDefinitionAliasV1,
+            ASSET_TRANSFER_CONTROL_METADATA_KEY, Asset, AssetDefinition, AssetDefinitionAlias,
+            AssetDefinitionId, AssetId, AssetTransferControlRecord, AssetTransferControlStoreV1,
+            Mintable, NewAssetDefinition, ResolvedAssetDefinitionAliasV1,
         },
         block::BlockHeader,
         events::data::space_directory::{
             SpaceDirectoryEvent, SpaceDirectoryManifestActivated, SpaceDirectoryManifestRevoked,
         },
         isi::{
+            SetAssetTransferBlacklist,
             alias_setup::{CompareAndSetPrimaryAccountAlias, EnsureAlias, RebindAccountAlias},
             error::{InstructionExecutionError, InvalidParameterError, RepetitionError},
         },
@@ -3542,6 +3660,131 @@ mod tests {
     }
     fn checked_keypair() -> KeyPair {
         KeyPair::try_random().expect("domain ISI fixture key generation should succeed")
+    }
+
+    #[test]
+    fn account_registration_rejects_reserved_native_metadata() {
+        let state = test_state();
+        let authority = (*ALICE_ID).clone();
+        let asset_definition_id = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("transfer", "controls").expect("domain id"),
+            "rose".parse().expect("asset name"),
+        );
+        let mut record = AssetTransferControlRecord::new(asset_definition_id);
+        record.blacklisted = true;
+        let duplicate_store = AssetTransferControlStoreV1 {
+            controls: vec![record.clone(), record],
+        };
+        let reserved_values = [
+            (
+                ASSET_TRANSFER_CONTROL_METADATA_KEY,
+                Json::new(duplicate_store),
+            ),
+            (
+                iroha_data_model::smart_contract::CONTRACT_DEPLOY_NONCE_METADATA_KEY,
+                Json::new(7_u64),
+            ),
+        ];
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut transaction = block.transaction();
+        for (key, value) in reserved_values {
+            let account_id = AccountId::new(checked_keypair().public_key().clone());
+            let mut metadata = Metadata::default();
+            metadata.insert(key.parse().expect("reserved metadata key"), value);
+            let error =
+                Register::account(NewAccount::new(account_id.clone()).with_metadata(metadata))
+                    .execute(&authority, &mut transaction)
+                    .expect_err("public registration must not seed reserved native metadata");
+            assert!(
+                error.to_string().contains("reserved for native state"),
+                "unexpected registration rejection: {error}"
+            );
+            assert!(
+                transaction.world.account(&account_id).is_err(),
+                "rejected account registration must not mutate world state"
+            );
+        }
+    }
+
+    #[test]
+    fn account_unregistration_requires_dedicated_transfer_control_clear() {
+        let mut state = test_state();
+        let authority = (*ALICE_ID).clone();
+        let domain_id = DomainId::try_new("transfer", "controls").expect("domain id");
+        seed_domain(&mut state, &domain_id, &authority);
+        let asset_definition_id = AssetDefinitionId::derive_from_components(
+            domain_id,
+            "rose".parse().expect("asset name"),
+        );
+        let account_id = AccountId::new(checked_keypair().public_key().clone());
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut transaction = block.transaction();
+        Register::asset_definition(AssetDefinition::numeric(
+            asset_definition_id.clone(),
+            "rose".to_owned(),
+            AssetBalancePolicy::Global,
+            None,
+        ))
+        .execute(&authority, &mut transaction)
+        .expect("register controlled asset definition");
+        Register::account(NewAccount::new(account_id.clone()))
+            .execute(&authority, &mut transaction)
+            .expect("register controlled account");
+        let mut record = AssetTransferControlRecord::new(asset_definition_id.clone());
+        record.blacklisted = true;
+        record.updated_at_ms = Some(1);
+        let metadata_key: Name = ASSET_TRANSFER_CONTROL_METADATA_KEY
+            .parse()
+            .expect("asset transfer-control metadata key");
+        transaction
+            .world
+            .account_mut(&account_id)
+            .expect("registered account")
+            .insert(
+                metadata_key.clone(),
+                Json::new(AssetTransferControlStoreV1 {
+                    controls: vec![record],
+                }),
+            );
+
+        let error = Unregister::account(account_id.clone())
+            .execute(&authority, &mut transaction)
+            .expect_err("native transfer-control history must survive generic account removal");
+        assert!(
+            error.to_string().contains("dedicated instructions"),
+            "unexpected account-removal rejection: {error}"
+        );
+        assert!(transaction.world.account(&account_id).is_ok());
+
+        let asset_error = Unregister::asset_definition(asset_definition_id.clone())
+            .execute(&authority, &mut transaction)
+            .expect_err("asset definition must remain while native controls reference it");
+        assert!(
+            asset_error.to_string().contains("dedicated instructions"),
+            "unexpected asset-definition removal rejection: {asset_error}"
+        );
+
+        SetAssetTransferBlacklist::new(account_id.clone(), asset_definition_id.clone(), false)
+            .execute(&authority, &mut transaction)
+            .expect("dedicated instruction clears the last native transfer control");
+        assert!(
+            transaction
+                .world
+                .account(&account_id)
+                .expect("account remains until explicit removal")
+                .metadata()
+                .get(&metadata_key)
+                .is_none()
+        );
+        Unregister::asset_definition(asset_definition_id)
+            .execute(&authority, &mut transaction)
+            .expect("asset definition can be removed after dedicated control clearance");
+        Unregister::account(account_id.clone())
+            .execute(&authority, &mut transaction)
+            .expect("account can be removed after dedicated control clearance");
+        assert!(transaction.world.account(&account_id).is_err());
     }
     fn checked_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
         KeyPair::try_random_with_algorithm(algorithm)
@@ -6262,6 +6505,11 @@ mod tests {
                 },
             ),
             Permission::from(
+                iroha_executor_data_model::permission::trigger::CanRegisterGlobalDataTrigger {
+                    authority: target.clone(),
+                },
+            ),
+            Permission::from(
                 iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint {
                     contract,
                     entrypoint: "main".to_owned(),
@@ -7450,73 +7698,6 @@ mod tests {
         );
     }
     #[test]
-    fn unregister_account_removes_citizen_service_permissions_from_accounts_and_roles() {
-        let mut state = test_state();
-        let domain_id: DomainId = DomainId::try_new("cleanup", "world").expect("domain id");
-        let authority = (*ALICE_ID).clone();
-        seed_domain(&mut state, &domain_id, &authority);
-        let holder_domain: DomainId = DomainId::try_new("holders", "world").expect("domain id");
-        seed_domain(&mut state, &holder_domain, &authority);
-        let keypair = checked_keypair();
-        let account_id = AccountId::new(keypair.public_key().clone());
-        let holder_id = AccountId::new(checked_keypair().public_key().clone());
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
-        let mut tx = block.transaction();
-        Register::account(NewAccount::new(account_id.clone()))
-            .execute(&authority, &mut tx)
-            .expect("register target account");
-        Register::account(NewAccount::new(holder_id.clone()))
-            .execute(&authority, &mut tx)
-            .expect("register holder account");
-        let permission: Permission =
-            iroha_executor_data_model::permission::governance::CanRecordCitizenService {
-                owner: account_id.clone(),
-            }
-            .into();
-        Grant::account_permission(permission.clone(), holder_id.clone())
-            .execute(&authority, &mut tx)
-            .expect("grant permission to holder");
-        let role_id: RoleId = "CITIZEN_SERVICE_CLEANUP".parse().expect("role id");
-        Register::role(Role::new(role_id.clone(), holder_id.clone()))
-            .execute(&authority, &mut tx)
-            .expect("register role");
-        Grant::role_permission(permission.clone(), role_id.clone())
-            .execute(&authority, &mut tx)
-            .expect("grant permission to role");
-        assert!(
-            tx.world
-                .account_permissions
-                .get(&holder_id)
-                .is_some_and(|perms| perms.contains(&permission)),
-            "holder should have permission before unregister"
-        );
-        let role = tx.world.roles.get(&role_id).expect("role should exist");
-        assert!(
-            role.permissions().any(|perm| perm == &permission),
-            "role should include permission before unregister"
-        );
-        Unregister::account(account_id.clone())
-            .execute(&authority, &mut tx)
-            .expect("unregister account");
-        assert!(
-            !tx.world
-                .account_permissions
-                .get(&holder_id)
-                .is_some_and(|perms| perms.contains(&permission)),
-            "holder permission should be removed"
-        );
-        let role = tx.world.roles.get(&role_id).expect("role should exist");
-        assert!(
-            !role.permissions().any(|perm| perm == &permission),
-            "role permission should be removed"
-        );
-        assert!(
-            !role.permission_epochs().contains_key(&permission),
-            "permission epochs should be pruned"
-        );
-    }
-    #[test]
     fn unregister_account_removes_permissions_for_deleted_account() {
         let mut state = test_state();
         let domain_id: DomainId = DomainId::try_new("cleanup", "world").expect("domain id");
@@ -7614,6 +7795,67 @@ mod tests {
         .expect("register asset definition");
         test(authority, asset_definition_id, &mut transaction);
     }
+    fn install_kagemusha_reserve_pool(
+        transaction: &mut crate::state::StateTransaction<'_, '_>,
+        asset_definition_id: &AssetDefinitionId,
+        outstanding: bool,
+    ) -> [u8; 32] {
+        use crate::smartcontracts::isi::kagemusha::kagemusha_v1_reserve::{
+            KAGEMUSHA_RESERVE_VERSION_V1, KagemushaReservePoolKeyV1, KagemushaReservePoolV1,
+        };
+        use iroha_data_model::isi::{KagemushaOperationKindV1, KagemushaReserveReceiptV1};
+
+        let network_id = *transaction.network_id();
+        let asset_incarnation = *transaction
+            .world
+            .axt_asset_incarnations
+            .get(asset_definition_id)
+            .expect("registered asset definition incarnation");
+        let key = KagemushaReservePoolKeyV1::new(
+            network_id,
+            asset_definition_id.clone(),
+            asset_incarnation,
+        )
+        .expect("canonical Kagemusha reserve key");
+        let kind = if outstanding {
+            KagemushaOperationKindV1::TopUp
+        } else {
+            KagemushaOperationKindV1::Redemption
+        };
+        let receipt = KagemushaReserveReceiptV1 {
+            version: KAGEMUSHA_RESERVE_VERSION_V1,
+            operation_id: [0x41; 32],
+            kind,
+            request_digest: [0x42; 32],
+            mint_statement_digest: if outstanding { [0x43; 32] } else { [0; 32] },
+            network_id,
+            asset: asset_definition_id.clone(),
+            asset_incarnation,
+            scale: 0,
+            liability_pool_id: key.liability_pool_id,
+            amount: 1,
+            previous_pool_receipt_digest: if outstanding { [0; 32] } else { [0x44; 32] },
+            total_topups: 1,
+            total_redemptions: if outstanding { 0 } else { 1 },
+            transaction_hash: [0x45; 32],
+            committed_at_ms: 1,
+        };
+        let pool = KagemushaReservePoolV1 {
+            version: KAGEMUSHA_RESERVE_VERSION_V1,
+            key,
+            scale: 0,
+            total_topups: 1,
+            total_redemptions: if outstanding { 0 } else { 1 },
+            latest_receipt: Some(receipt),
+        };
+        pool.validate().expect("valid Kagemusha reserve pool");
+        let pool_id = pool.key.liability_pool_id;
+        transaction
+            .world
+            .kagemusha_reserve_pools
+            .insert(pool_id, pool);
+        pool_id
+    }
     #[test]
     fn unregister_account_rejects_when_account_owns_asset_definition() {
         with_registered_account_unregistration_candidate(|authority, domain_id, account_id, tx| {
@@ -7650,6 +7892,126 @@ mod tests {
                 tx.world.accounts.get(&account_id).is_some(),
                 "account should remain after rejected unregister"
             );
+        });
+    }
+    #[test]
+    fn unregister_account_rejects_active_and_inactive_retained_contract_subjects() {
+        for (nonce, active) in [(31_u64, false), (32_u64, true)] {
+            let state = test_state();
+            let authority = (*ALICE_ID).clone();
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut tx = block.transaction();
+            let contract =
+                ContractAddress::derive(tx.network_id(), &authority, nonce, DataSpaceId::UNIVERSAL)
+                    .expect("contract address");
+            tx.world.bind_inactive_contract_subject_for_testing(
+                contract.clone(),
+                contract.subject_id(),
+            );
+            let subject = contract.subject_id();
+            if active {
+                let code_hash = Hash::new(b"retained-contract-subject-unregister");
+                tx.world
+                    .contract_instances
+                    .insert(contract.clone(), code_hash);
+                tx.world
+                    .contract_subject_bindings
+                    .get_mut(&contract)
+                    .expect("retained contract binding")
+                    .lifecycle
+                    .active_code_hash = Some(code_hash);
+            }
+
+            let error = Unregister::account(subject.clone())
+                .execute(&authority, &mut tx)
+                .expect_err("retained contract subject must never be unregistered");
+            assert!(
+                error
+                    .to_string()
+                    .contains(&format!("retained subject of contract `{contract}`")),
+                "error must identify the exact retained contract: {error}"
+            );
+            assert!(
+                tx.world.accounts.get(&subject).is_some(),
+                "rejected {active:?} contract-subject removal must preserve the account"
+            );
+        }
+    }
+    #[test]
+    fn unregister_account_rejects_contract_owner_and_pending_recipient_until_cleared() {
+        with_registered_account_unregistration_candidate(|authority, _, account_id, tx| {
+            let contract =
+                ContractAddress::derive(tx.network_id(), &authority, 17, DataSpaceId::UNIVERSAL)
+                    .expect("contract address");
+            let subject = contract.subject_id();
+            Register::account(NewAccount::new(subject.clone()))
+                .execute(&authority, tx)
+                .expect("register contract subject");
+            let mut binding = crate::smartcontracts::code::ContractSubjectBinding::new_direct(
+                &contract,
+                authority.clone(),
+            );
+            binding.lifecycle.owner =
+                iroha_data_model::smart_contract::ContractLifecycleOwnerV1::Account(
+                    account_id.clone(),
+                );
+            tx.world
+                .contract_subject_bindings
+                .insert(contract.clone(), binding);
+            tx.world
+                .contract_subject_addresses
+                .insert(subject, contract.clone());
+
+            let owned = Unregister::account(account_id.clone())
+                .execute(&authority, tx)
+                .expect_err("current contract owner must not be unregistered");
+            assert!(
+                owned.to_string().contains(&format!(
+                    "transfer or cancel its lifecycle ownership of contract `{contract}` first"
+                )),
+                "error should identify the retained owned contract: {owned}"
+            );
+            assert!(tx.world.accounts.get(&account_id).is_some());
+
+            let lifecycle = &mut tx
+                .world
+                .contract_subject_bindings
+                .get_mut(&contract)
+                .expect("contract lifecycle binding")
+                .lifecycle;
+            lifecycle.owner =
+                iroha_data_model::smart_contract::ContractLifecycleOwnerV1::Parliament;
+            lifecycle.pending_owner = Some(
+                iroha_data_model::smart_contract::ContractLifecycleOwnerV1::Account(
+                    account_id.clone(),
+                ),
+            );
+            lifecycle.revision += 1;
+
+            let pending = Unregister::account(account_id.clone())
+                .execute(&authority, tx)
+                .expect_err("pending contract owner must not be unregistered");
+            assert!(
+                pending.to_string().contains(&format!(
+                    "transfer or cancel its lifecycle ownership of contract `{contract}` first"
+                )),
+                "error should identify the retained pending contract: {pending}"
+            );
+            assert!(tx.world.accounts.get(&account_id).is_some());
+
+            let lifecycle = &mut tx
+                .world
+                .contract_subject_bindings
+                .get_mut(&contract)
+                .expect("contract lifecycle binding")
+                .lifecycle;
+            lifecycle.pending_owner = None;
+            lifecycle.revision += 1;
+            Unregister::account(account_id.clone())
+                .execute(&authority, tx)
+                .expect("account removal succeeds after lifecycle references are cleared");
+            assert!(tx.world.accounts.get(&account_id).is_none());
         });
     }
     #[test]
@@ -7891,7 +8253,7 @@ mod tests {
         );
     }
     #[test]
-    fn unregister_account_rejects_when_account_is_offline_escrow_account() {
+    fn unregister_account_rejects_when_account_is_kagemusha_reserve_account() {
         with_registered_account_unregistration_candidate(|authority, domain_id, account_id, tx| {
             let asset_definition_id = AssetDefinitionId::derive_from_components(
                 domain_id.clone(),
@@ -7909,16 +8271,16 @@ mod tests {
             .execute(&authority, tx)
             .expect("register asset definition");
             tx.settlement
-                .offline
-                .escrow_accounts
+                .kagemusha
+                .reserve_accounts
                 .insert(asset_definition_id, account_id.clone());
             let err = Unregister::account(account_id.clone())
                 .execute(&authority, tx)
-                .expect_err("offline escrow account must not be unregistered");
+                .expect_err("Kagemusha reserve account must not be unregistered");
             let err_string = err.to_string();
             assert!(
-                err_string.contains("offline escrow account"),
-                "error should explain offline escrow conflict: {err_string}"
+                err_string.contains("Kagemusha reserve account"),
+                "error should explain Kagemusha reserve conflict: {err_string}"
             );
             assert!(
                 tx.world.accounts.get(&account_id).is_some(),
@@ -7927,7 +8289,7 @@ mod tests {
         });
     }
     #[test]
-    fn unregister_account_rejects_live_offline_escrow_after_transaction_boundary() {
+    fn unregister_account_rejects_live_kagemusha_reserve_after_transaction_boundary() {
         let mut state = test_state();
         let domain_id: DomainId = DomainId::try_new("owner", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
@@ -7938,8 +8300,8 @@ mod tests {
         );
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
-        let escrow_account_id;
-        let escrow_asset_id;
+        let reserve_account_id;
+        let reserve_asset_id;
         {
             let mut first_tx = block.transaction();
             Register::asset_definition({
@@ -7957,38 +8319,45 @@ mod tests {
                 .world
                 .asset_definition(&asset_definition_id)
                 .expect("registered asset definition");
-            super::isi::ensure_offline_escrow_account(&asset_definition, &authority, &mut first_tx)
-                .expect("materialize deterministic offline escrow account");
-            escrow_account_id =
-                super::isi::offline_escrow_account_id(first_tx.network_id(), &asset_definition_id);
-            escrow_asset_id = AssetId::new(asset_definition_id.clone(), escrow_account_id.clone());
-            Mint::asset_quantity(5_u32, escrow_asset_id.clone())
+            super::isi::ensure_kagemusha_reserve_account(
+                &asset_definition,
+                &authority,
+                &mut first_tx,
+            )
+            .expect("materialize deterministic Kagemusha reserve account");
+            reserve_account_id = super::isi::kagemusha_reserve_account_id(
+                first_tx.network_id(),
+                &asset_definition_id,
+            );
+            reserve_asset_id =
+                AssetId::new(asset_definition_id.clone(), reserve_account_id.clone());
+            Mint::asset_quantity(5_u32, reserve_asset_id.clone())
                 .execute(&authority, &mut first_tx)
-                .expect("mint live offline escrow backing");
+                .expect("mint live Kagemusha reserve backing");
             first_tx.apply();
         }
         let mut second_tx = block.transaction();
         assert!(
-            second_tx.settlement.offline.escrow_accounts.is_empty(),
-            "transaction-local escrow bindings must not be required for protection"
+            second_tx.settlement.kagemusha.reserve_accounts.is_empty(),
+            "transaction-local reserve bindings must not be required for protection"
         );
-        let err = Unregister::account(escrow_account_id.clone())
+        let err = Unregister::account(reserve_account_id.clone())
             .execute(&authority, &mut second_tx)
-            .expect_err("live offline escrow backing must survive account unregistration");
+            .expect_err("live Kagemusha reserve backing must survive account unregistration");
         let err_string = err.to_string();
         assert!(
-            err_string.contains("offline escrow account"),
-            "error should explain the live offline escrow conflict: {err_string}"
+            err_string.contains("Kagemusha reserve account"),
+            "error should explain the live Kagemusha reserve conflict: {err_string}"
         );
         assert!(
-            second_tx.world.accounts.get(&escrow_account_id).is_some(),
-            "offline escrow account should remain after rejected unregister"
+            second_tx.world.accounts.get(&reserve_account_id).is_some(),
+            "Kagemusha reserve account should remain after rejected unregister"
         );
         assert_eq!(
             second_tx
                 .world
-                .asset(&escrow_asset_id)
-                .expect("offline escrow backing should remain")
+                .asset(&reserve_asset_id)
+                .expect("Kagemusha reserve backing should remain")
                 .value()
                 .as_ref()
                 .clone(),
@@ -7996,21 +8365,21 @@ mod tests {
         );
     }
     #[test]
-    fn ordinary_metadata_does_not_reserve_an_offline_escrow_account() {
-        let chain_id = ChainId::from("offline-escrow-testnet");
+    fn ordinary_metadata_does_not_reserve_a_kagemusha_reserve_account() {
+        let chain_id = ChainId::from("kagemusha-reserve-testnet");
         let network_id = iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
             iroha_data_model::block::BlockHeader,
         >::from_untyped_unchecked(
-            iroha_crypto::Hash::new(b"offline-escrow-test-network"),
+            iroha_crypto::Hash::new(b"kagemusha-reserve-test-network"),
         ));
-        let domain_id: DomainId = DomainId::try_new("offline", "world").expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("kagemusha", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         let asset_definition_id = AssetDefinitionId::derive_from_components(
             domain_id.clone(),
             "usd".parse().expect("asset definition name"),
         );
-        let escrow_account_id =
-            iroha_data_model::offline::offline_escrow_account_id(&network_id, &asset_definition_id);
+        let reserve_account_id =
+            super::isi::kagemusha_reserve_account_id(&network_id, &asset_definition_id);
         let mut metadata = Metadata::default();
         metadata.insert(
             "offline.enabled".parse().expect("legacy metadata key"),
@@ -8026,7 +8395,7 @@ mod tests {
         asset_definition.metadata = metadata;
         let world = World::with_assets(
             [Domain::new(domain_id).build(&authority)],
-            [Account::new(escrow_account_id.clone()).build(&authority)],
+            [Account::new(reserve_account_id.clone()).build(&authority)],
             [asset_definition],
             [],
             [],
@@ -8040,14 +8409,14 @@ mod tests {
         let mut block = state.block(header);
         let mut tx = block.transaction();
         assert!(
-            tx.settlement.offline.escrow_accounts.is_empty(),
-            "ordinary asset metadata must not create an escrow binding"
+            tx.settlement.kagemusha.reserve_accounts.is_empty(),
+            "ordinary asset metadata must not create a reserve binding"
         );
-        Unregister::account(escrow_account_id.clone())
+        Unregister::account(reserve_account_id.clone())
             .execute(&authority, &mut tx)
-            .expect("legacy-looking metadata must have no offline semantics");
+            .expect("legacy-looking metadata must have no Kagemusha semantics");
         assert!(
-            tx.world.accounts.get(&escrow_account_id).is_none(),
+            tx.world.accounts.get(&reserve_account_id).is_none(),
             "ordinary unbound account should be removable"
         );
     }
@@ -8139,8 +8508,8 @@ mod tests {
                         self_stake: Quantity::from(1_u32),
                         metadata: Metadata::default(),
                         status: iroha_data_model::nexus::PublicLaneValidatorStatus::Active,
-                        activation_epoch: Some(1),
-                        activation_height: Some(1),
+                        activation_height: 1,
+                        deactivation_height: None,
                         last_reward_epoch: None,
                     },
                 );
@@ -8165,8 +8534,8 @@ mod tests {
                         self_stake: Quantity::from(1_u32),
                         metadata: Metadata::default(),
                         status: iroha_data_model::nexus::PublicLaneValidatorStatus::Active,
-                        activation_epoch: Some(1),
-                        activation_height: Some(1),
+                        activation_height: 1,
+                        deactivation_height: None,
                         last_reward_epoch: None,
                     },
                 );
@@ -8470,6 +8839,7 @@ mod tests {
                 let proposal_id = [0xA5; 32];
                 let kind = iroha_data_model::governance::types::ProposalKind::DeployContract(
                     iroha_data_model::governance::types::DeployContractProposal {
+                        proposal_operator: account_id.clone(),
                         contract_address:
                             "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
                                 .parse()
@@ -8807,10 +9177,10 @@ mod tests {
         block.commit_world_overlay_for_testing().unwrap();
     }
     #[test]
-    fn asset_registration_is_independent_of_legacy_offline_metadata() {
+    fn asset_registration_is_independent_of_pre_release_cash_metadata() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
-        let domain_id: DomainId = DomainId::try_new("offline", "universal").expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("precash", "universal").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
         let asset_name: Name = "usd".parse().expect("asset name");
         let definition_id =
@@ -8840,18 +9210,18 @@ mod tests {
             .expect("register asset definition");
         assert!(
             tx.settlement
-                .offline
-                .escrow_accounts
+                .kagemusha
+                .reserve_accounts
                 .get(&definition_id)
                 .is_none(),
-            "ordinary registration must not materialize offline state"
+            "ordinary registration must not materialize Kagemusha state"
         );
     }
     #[test]
-    fn register_asset_definition_defers_offline_state_until_offline_use() {
+    fn register_asset_definition_defers_kagemusha_state_until_kagemusha_use() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
-        let domain_id: DomainId = DomainId::try_new("offline2", "universal").expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("precash2", "universal").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
         let asset_name: Name = "eur".parse().expect("asset name");
         let definition_id =
@@ -8876,8 +9246,8 @@ mod tests {
             .expect("register asset definition");
         assert!(
             tx.settlement
-                .offline
-                .escrow_accounts
+                .kagemusha
+                .reserve_accounts
                 .get(&definition_id)
                 .is_none(),
             "escrow mapping should not be created"
@@ -10259,10 +10629,10 @@ mod tests {
         );
     }
     #[test]
-    fn legacy_offline_metadata_is_ordinary_metadata() {
+    fn pre_release_cash_metadata_is_ordinary_metadata() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
-        let domain_id: DomainId = DomainId::try_new("offline3", "universal").expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("precash3", "universal").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
         let asset_name: Name = "gbp".parse().expect("asset name");
         let definition_id =
@@ -10287,8 +10657,8 @@ mod tests {
             .expect("register asset definition");
         assert!(
             tx.settlement
-                .offline
-                .escrow_accounts
+                .kagemusha
+                .reserve_accounts
                 .get(&definition_id)
                 .is_none(),
             "escrow mapping should not be created before metadata update"
@@ -10302,18 +10672,18 @@ mod tests {
         .expect("set ordinary metadata");
         assert!(
             tx.settlement
-                .offline
-                .escrow_accounts
+                .kagemusha
+                .reserve_accounts
                 .get(&definition_id)
                 .is_none(),
-            "metadata must not create offline runtime state"
+            "metadata must not create Kagemusha runtime state"
         );
     }
     #[test]
-    fn legacy_offline_false_metadata_does_not_change_runtime_state() {
+    fn pre_release_cash_false_metadata_does_not_change_runtime_state() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
-        let domain_id = DomainId::try_new("offline-disable", "universal").expect("domain id");
+        let domain_id = DomainId::try_new("precash-disable", "universal").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
         let definition_id = AssetDefinitionId::derive_from_components(
             domain_id,
@@ -10321,7 +10691,7 @@ mod tests {
         );
         let definition = NewAssetDefinition {
             id: definition_id.clone(),
-            name: "Offline cash".to_owned(),
+            name: "Kagemusha".to_owned(),
             description: None,
             alias: None,
             spec: NumericSpec::integer(),
@@ -10354,15 +10724,15 @@ mod tests {
             Some(&Json::new(false))
         );
         assert!(
-            tx.settlement.offline.escrow_accounts.is_empty(),
-            "legacy-looking metadata must not materialize offline state"
+            tx.settlement.kagemusha.reserve_accounts.is_empty(),
+            "legacy-looking metadata must not materialize Kagemusha state"
         );
     }
     #[test]
-    fn removing_legacy_offline_metadata_does_not_change_runtime_state() {
+    fn removing_pre_release_cash_metadata_does_not_change_runtime_state() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
-        let domain_id = DomainId::try_new("offline-remove", "universal").expect("domain id");
+        let domain_id = DomainId::try_new("precash-remove", "universal").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
         let definition_id = AssetDefinitionId::derive_from_components(
             domain_id,
@@ -10370,7 +10740,7 @@ mod tests {
         );
         let definition = NewAssetDefinition {
             id: definition_id.clone(),
-            name: "Offline cash".to_owned(),
+            name: "Kagemusha".to_owned(),
             description: None,
             alias: None,
             spec: NumericSpec::integer(),
@@ -10392,7 +10762,7 @@ mod tests {
             .expect("store ordinary metadata");
         RemoveKeyValue::asset_definition(definition_id.clone(), metadata_key.clone())
             .execute(&authority, &mut tx)
-            .expect("remove offline opt-in metadata");
+            .expect("remove pre-release cash metadata");
         assert!(
             tx.world
                 .asset_definition(&definition_id)
@@ -10403,16 +10773,16 @@ mod tests {
             "metadata must be removed"
         );
         assert!(
-            tx.settlement.offline.escrow_accounts.is_empty(),
-            "metadata removal must not materialize offline state"
+            tx.settlement.kagemusha.reserve_accounts.is_empty(),
+            "metadata removal must not materialize Kagemusha state"
         );
     }
     #[test]
-    fn legacy_offline_true_metadata_does_not_change_runtime_state() {
+    fn pre_release_cash_true_metadata_does_not_change_runtime_state() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
         let domain_id: DomainId =
-            DomainId::try_new("offline-metadata-disabled", "universal").expect("domain id");
+            DomainId::try_new("precash-metadata-disabled", "universal").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
         let definition_id = AssetDefinitionId::derive_from_components(
             domain_id,
@@ -10450,8 +10820,8 @@ mod tests {
             "metadata should be stored unchanged"
         );
         assert!(
-            tx.settlement.offline.escrow_accounts.is_empty(),
-            "legacy-looking metadata must not materialize offline state"
+            tx.settlement.kagemusha.reserve_accounts.is_empty(),
+            "legacy-looking metadata must not materialize Kagemusha state"
         );
     }
     #[test]
@@ -10613,6 +10983,51 @@ mod tests {
                 .get(&asset_definition_id)
                 .is_some(),
             "custody asset definition must remain after rejected unregister"
+        );
+    }
+    #[test]
+    fn unregister_asset_definition_rejects_retained_moderation_policy_after_config_change() {
+        with_registered_asset_definition_unregistration_candidate(
+            |authority, asset_definition_id, tx| {
+                assert_ne!(
+                    tx.gov.voting_asset_id, asset_definition_id,
+                    "the candidate must not rely on the current governance config guard"
+                );
+                crate::smartcontracts::isi::sorafs_moderation::seed_moderation_policy_asset_reference_for_test(
+                    &mut tx.world,
+                    asset_definition_id.clone(),
+                    authority.clone(),
+                    authority.clone(),
+                )
+                .expect("seed a valid retained moderation policy");
+                let policy_key: iroha_data_model::state_path::StatePath =
+                    "sorafs_moderation_policy_v1"
+                        .parse()
+                        .expect("moderation policy state path");
+                let policy_before = tx.world.smart_contract_state.get(&policy_key).cloned();
+
+                let error = Unregister::asset_definition(asset_definition_id.clone())
+                    .execute(&authority, tx)
+                    .expect_err("moderation-retained asset definition must remain registered");
+                assert!(
+                    error
+                        .to_string()
+                        .contains("retained by moderation active policy challenge voting asset"),
+                    "unexpected moderation retention error: {error}"
+                );
+                assert!(
+                    tx.world
+                        .asset_definitions
+                        .get(&asset_definition_id)
+                        .is_some(),
+                    "moderation-retained definition must remain after rejected unregister"
+                );
+                assert_eq!(
+                    tx.world.smart_contract_state.get(&policy_key),
+                    policy_before.as_ref(),
+                    "rejected unregister must not mutate moderation state"
+                );
+            },
         );
     }
     #[test]
@@ -10961,17 +11376,17 @@ mod tests {
         );
     }
     #[test]
-    fn unregister_asset_definition_removes_offline_escrow_mapping() {
+    fn unregister_asset_definition_removes_kagemusha_reserve_mapping() {
         with_registered_asset_definition_unregistration_candidate(
             |authority, asset_definition_id, tx| {
                 tx.settlement
-                    .offline
-                    .escrow_accounts
+                    .kagemusha
+                    .reserve_accounts
                     .insert(asset_definition_id.clone(), ALICE_ID.clone());
                 assert!(
                     tx.settlement
-                        .offline
-                        .escrow_accounts
+                        .kagemusha
+                        .reserve_accounts
                         .get(&asset_definition_id)
                         .is_some(),
                     "escrow mapping should exist before unregister"
@@ -10981,11 +11396,61 @@ mod tests {
                     .expect("unregister asset definition");
                 assert!(
                     tx.settlement
-                        .offline
-                        .escrow_accounts
+                        .kagemusha
+                        .reserve_accounts
                         .get(&asset_definition_id)
                         .is_none(),
                     "escrow mapping should be removed with asset definition"
+                );
+            },
+        );
+    }
+    #[test]
+    fn unregister_asset_definition_rejects_outstanding_kagemusha_liability() {
+        with_registered_asset_definition_unregistration_candidate(
+            |authority, asset_definition_id, tx| {
+                let pool_id = install_kagemusha_reserve_pool(tx, &asset_definition_id, true);
+                let error = Unregister::asset_definition(asset_definition_id.clone())
+                    .execute(&authority, tx)
+                    .expect_err("outstanding Kagemusha liability must block unregistration");
+                assert!(
+                    error
+                        .to_string()
+                        .contains("Kagemusha V1 reserve has 1 outstanding atomic units"),
+                    "unexpected reserve-liability rejection: {error}"
+                );
+                assert!(
+                    tx.world
+                        .asset_definitions
+                        .get(&asset_definition_id)
+                        .is_some(),
+                    "asset definition must remain while Kagemusha is redeemable"
+                );
+                assert!(
+                    tx.world.kagemusha_reserve_pools.get(&pool_id).is_some(),
+                    "rejected unregistration must preserve the reserve pool"
+                );
+            },
+        );
+    }
+    #[test]
+    fn unregister_asset_definition_archives_fully_redeemed_kagemusha_pool() {
+        with_registered_asset_definition_unregistration_candidate(
+            |authority, asset_definition_id, tx| {
+                let pool_id = install_kagemusha_reserve_pool(tx, &asset_definition_id, false);
+                Unregister::asset_definition(asset_definition_id.clone())
+                    .execute(&authority, tx)
+                    .expect("a fully redeemed Kagemusha incarnation may be retired");
+                assert!(
+                    tx.world
+                        .asset_definitions
+                        .get(&asset_definition_id)
+                        .is_none(),
+                    "fully redeemed asset definition should be removed"
+                );
+                assert!(
+                    tx.world.kagemusha_reserve_pools.get(&pool_id).is_some(),
+                    "zeroed old-incarnation reserve state must remain archived"
                 );
             },
         );

@@ -68,6 +68,8 @@ const HIJIRI_FEE_QUOTE_DIGEST_DOMAIN_V1: &[u8] = b"iroha:hijiri:fee-quote:v1\0";
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[repr(transparent)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::hijiri::Q16")]
 pub struct Q16(pub u32);
 impl Q16 {
     /// Zero in Q16.16.
@@ -141,6 +143,8 @@ impl fmt::Display for Q16 {
 #[derive(
     Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, AsRef, Deref, derive_more::From,
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::hijiri::ObserverProfileId")]
 pub struct ObserverProfileId(Name);
 impl ObserverProfileId {
     /// Create a new profile identifier.
@@ -154,6 +158,8 @@ impl ObserverProfileId {
 }
 /// Capability advertised by an observer profile.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::hijiri::DelegatedAttestationClass")]
 pub enum DelegatedAttestationClass {
     /// Observer may issue positive attestations that boost `S_attestation`.
     Positive(PositiveAttestationIncentive),
@@ -167,6 +173,8 @@ pub enum DelegatedAttestationClass {
 }
 /// Governance-approved observer profile describing capabilities and incentives.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::hijiri::ObserverProfile")]
 pub struct ObserverProfile {
     /// Stable profile identifier.
     pub id: ObserverProfileId,
@@ -195,6 +203,8 @@ impl ObserverProfile {
 }
 /// Registry record linking an observer account to a profile version.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::hijiri::ObserverRegistryEntry")]
 pub struct ObserverRegistryEntry {
     /// Observer account authorised to emit receipts.
     pub observer: AccountId,
@@ -209,6 +219,8 @@ pub struct ObserverRegistryEntry {
 }
 /// Schedule describing how registries are compensated for positive attestations.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::hijiri::RegistryCreditSchedule")]
 pub struct RegistryCreditSchedule {
     /// Account receiving the reward.
     pub reward_account: AccountId,
@@ -230,6 +242,8 @@ impl RegistryCreditSchedule {
 }
 /// Positive attestation incentive applied to the subject account and registry.
 #[derive(Clone, Debug, PartialEq, Eq, Encode)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::hijiri::PositiveAttestationIncentive")]
 pub struct PositiveAttestationIncentive {
     /// Score boost applied per positive attestation.
     pub score_boost_per_attestation: Q16,
@@ -239,6 +253,8 @@ pub struct PositiveAttestationIncentive {
     pub registry_credit: RegistryCreditSchedule,
 }
 #[derive(Decode)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::hijiri::PositiveAttestationIncentiveWire")]
 struct PositiveAttestationIncentiveWire {
     score_boost_per_attestation: Q16,
     max_score_boost: Q16,
@@ -344,6 +360,8 @@ pub enum PositiveAttestationError {
 }
 /// Hashing algorithm identifier for privacy-preserving evidence commitments.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::hijiri::EvidenceHashAlgorithm")]
 pub enum EvidenceHashAlgorithm {
     /// Poseidon2 permutation over the Goldilocks field with 32-byte output.
     Poseidon2Goldilocks,
@@ -358,6 +376,8 @@ impl EvidenceHashAlgorithm {
 }
 /// Commitment to a redacted evidence field.
 #[derive(Clone, Debug, PartialEq, Eq, Encode)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::hijiri::EvidenceFieldCommitment")]
 pub struct EvidenceFieldCommitment {
     /// Canonical JSON pointer-like path describing the redacted field.
     pub field_path: Vec<String>,
@@ -369,6 +389,8 @@ pub struct EvidenceFieldCommitment {
     pub value_digest: Option<[u8; 32]>,
 }
 #[derive(Decode)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::hijiri::EvidenceFieldCommitmentWire")]
 struct EvidenceFieldCommitmentWire {
     field_path: Vec<String>,
     commitment: [u8; 32],
@@ -433,6 +455,8 @@ impl EvidenceFieldCommitment {
 }
 /// Envelope containing the commitments for a redacted evidence payload.
 #[derive(Clone, Debug, PartialEq, Eq, Encode)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::hijiri::EvidenceHashBundle")]
 pub struct EvidenceHashBundle {
     /// Hashing algorithm applied to each field commitment.
     pub algorithm: EvidenceHashAlgorithm,
@@ -442,6 +466,8 @@ pub struct EvidenceHashBundle {
     pub redacted_fields: Vec<EvidenceFieldCommitment>,
 }
 #[derive(Decode)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::hijiri::EvidenceHashBundleWire")]
 struct EvidenceHashBundleWire {
     algorithm: EvidenceHashAlgorithm,
     payload_commitment: [u8; 32],
@@ -582,6 +608,8 @@ pub enum EvidenceHashError {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::hijiri::FeeMultiplierBand")]
 pub struct FeeMultiplierBand {
     /// Inclusive upper bound for the risk score covered by this band.
     pub max_risk: Q16,
@@ -589,6 +617,8 @@ pub struct FeeMultiplierBand {
     pub multiplier: Q16,
 }
 #[derive(Decode)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::hijiri::FeeMultiplierBandWire")]
 struct FeeMultiplierBandWire {
     max_risk: Q16,
     multiplier: Q16,
@@ -648,6 +678,8 @@ impl FeeMultiplierBand {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::hijiri::HijiriFeePolicy")]
 pub struct HijiriFeePolicy {
     /// Ordered bands covering `[0, 1]`.
     pub bands: Vec<FeeMultiplierBand>,
@@ -655,6 +687,8 @@ pub struct HijiriFeePolicy {
     pub penalty_cap: Q16,
 }
 #[derive(Decode)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::hijiri::HijiriFeePolicyWire")]
 struct HijiriFeePolicyWire {
     bands: Vec<FeeMultiplierBand>,
     penalty_cap: Q16,
@@ -795,6 +829,8 @@ pub enum FeePolicyError {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::hijiri::HijiriParametersV1")]
 pub struct HijiriParametersV1 {
     /// Schema version. Must equal [`HIJIRI_PARAMETERS_VERSION_V1`].
     pub version: u16,
@@ -1045,6 +1081,8 @@ impl HijiriParametersV1 {
 }
 
 #[derive(Encode)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::hijiri::HijiriFeeQuotePreimageV1")]
 struct HijiriFeeQuotePreimageV1 {
     version: u16,
     parameters_digest: [u8; 32],
@@ -1085,6 +1123,8 @@ pub fn hijiri_fee_quote_hash_from_digests_v1(
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::hijiri::HijiriAccountRiskV1")]
 pub struct HijiriAccountRiskV1 {
     /// Schema version. Must equal [`HIJIRI_ACCOUNT_RISK_VERSION_V1`].
     pub version: u16,
@@ -2109,3 +2149,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod captured_hijiri_schema_tests;

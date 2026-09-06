@@ -1,6 +1,6 @@
 # Iroha Daemon (irohad)
 
-The `irohad` crate contains the `iroha3d` Iroha server (peer) binary. The binary is used to instantiate a peer and bootstrap an Iroha-based network. The capabilities of the network are determined by the feature flags used to compile the binary.
+The `irohad` crate contains the `iroha3d` Iroha server (peer) binary. The binary is used to instantiate a peer and bootstrap an Iroha-based network. Portable, release-qualified production capabilities are compiled into the default daemon; runtime configuration controls deployment policy.
 
 Pass the `--language <code>` flag to override automatic language detection for informational and error messages.
 
@@ -20,7 +20,7 @@ cargo build --release
 
 The results of the compilation can be found in `<IROHA REPO ROOT>/target/release/`, where `<IROHA REPO ROOT>` is the path to where you cloned this repository (without the angle brackets).
 
-### Add features
+### Add specialized features
 
 To add optional features, use ``--features``. For example, to add the support for _dev telemetry_, run:
 
@@ -28,14 +28,14 @@ To add optional features, use ``--features``. For example, to add the support fo
 cargo build --release --features dev-telemetry
 ```
 
-A full list of features can be found in the [cargo manifest file](Cargo.toml) for this crate.
+A full list of features can be found in the [cargo manifest file](Cargo.toml) for this crate. Explicit features are reserved for platform accelerators, preview providers, profiling/developer tooling, release evidence, and test/fault-injection lanes that cannot form one portable production build.
 
 ### Disable default features
 
-By default, the Iroha binary is compiled with the `telemetry`, and `schema-endpoint` features. If you wish to remove those features, add `--no-default-features` to the command.
+By default, the Iroha binary selects the `daemon` aggregate. It includes the portable Core and Torii production surfaces, full Halo2/STARK proof support, GOST and SM algorithms, event and metrics telemetry, schema endpoints, DAG recovery verification, HTTPS/WSS webhooks, and the bounded app/MCP API surface. To construct a deliberately reduced specialist library, disable the aggregate explicitly.
 
 ```bash
-cargo build --release --no-default-features
+cargo build -p irohad --release --no-default-features --lib
 ```
 
 This flag can be combined with the `--features` flag in order to precisely specify the feature set that you wish.
@@ -43,8 +43,8 @@ This flag can be combined with the `--features` flag in order to precisely speci
 ### Deployment runtime-provider launcher
 
 `irohad` is also a library target. A deployment-owned binary can use the same
-CLI/config/bootstrap path as the stock binary while supplying HSM, KMS,
-WebAuthn, authenticated transport, immutable-query, publication, and sealed
+CLI/config/bootstrap path as the stock binary while supplying deployment-owned
+signing, custody, authentication, transport, immutable-query, publication, and sealed
 checkpoint adapters:
 
 ```rust
@@ -185,8 +185,8 @@ Linux and macOS use the platform-fixed authenticated endpoint, while Windows
 and other platforms fail before catalog filesystem access because V1 has no
 equivalent authenticated transport.
 
-No checked-in binary or registry supplies vendor HSM, KMS, WebAuthn, sealed
-store, network, or immutable-query implementations. Under the current static
+No checked-in binary or registry supplies deployment-specific signing, custody,
+authentication, sealed-store, network, or immutable-query implementations. Under the current static
 injection architecture, a deployment must link its reviewed concrete registry
 into a thin owned binary that parses `RuntimeProviderBrokerExecutableArgsV1`
 and calls `RuntimeProviderBrokerExecutableV1`; credentials remain inside those
@@ -337,15 +337,15 @@ You may deploy Iroha as a [native binary](#native-binary) or by using [Docker](#
     mkdir -p deploy/peer
     cp target/release/iroha3d deploy/peer/
     cp defaults/nexus/config.toml deploy/peer/config.toml
-    cp defaults/nexus/genesis.json deploy/peer/genesis.json
+    cp defaults/nexus/genesis.template.json deploy/peer/genesis.template.json
     ```
 
     Adjust the file layout if you prefer another location. `irohad` resolves
     relative paths from the directory that contains `config.toml`. The checked-in
-    Nexus genesis is a schema-valid template, not a deployable public-chain
-    identity: regenerate it with the operator-approved canonical Nexus XOR asset
-    definition via `--xor-asset-definition-id` before signing. Do not substitute
-    Taira's XOR asset ID.
+    Nexus source is intentionally not a `RawGenesisTransaction` and cannot be
+    signed or selected by `[genesis]`. Materialize it with operator-provisioned
+    public mint-finality parameters for the final validator identities. Do not
+    substitute Taira authority or Taira's XOR asset ID.
 
 3. **Provision keys and network settings.**
 
@@ -365,13 +365,14 @@ You may deploy Iroha as a [native binary](#native-binary) or by using [Docker](#
 
 4. **Generate and sign the genesis block.**
 
-    - Produce a template genesis manifest and tweak it as needed (additional
-      accounts, assets, instructions, etc.):
+    - Materialize the reviewed source with the public half of the operator-owned
+      KAGEMUSHA mint-finality authority. The corresponding private authority
+      remains runtime-only:
 
       ```bash
       cargo run --release -p iroha_kagami -- \
-        genesis generate default \
-        --genesis-public-key <GENESIS_PUBLIC_KEY> \
+        genesis materialize deploy/peer/genesis.template.json \
+        --kagemusha-mint-finality-parameters <PUBLIC_AUTHORITY_PARAMETERS_JSON> \
         > deploy/peer/genesis.json
       ```
 
@@ -381,6 +382,7 @@ You may deploy Iroha as a [native binary](#native-binary) or by using [Docker](#
       ```bash
       cargo run --release -p iroha_kagami -- \
         genesis sign deploy/peer/genesis.json \
+        --topology '<FINAL_VALIDATOR_PEER_ID_JSON_ARRAY>' \
         --private-key-file <MODE_0600_GENESIS_PRIVATE_KEY_FILE> \
         --expected-public-key <GENESIS_PUBLIC_KEY> \
         --bound-manifest-out deploy/peer/genesis.json \

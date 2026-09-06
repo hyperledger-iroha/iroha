@@ -532,6 +532,110 @@ fn startup_recovers_both_abrupt_da_rewrite_boundaries() {
         vec![replacement.hash()]
     );
 }
+
+#[test]
+fn carrier_pins_reject_da_rewrite_recovery_before_mutation() {
+    for new_marker_won in [false, true] {
+        let dir = tempfile::tempdir().expect("create pinned DA rewrite root");
+        let mut block_store = BlockStore::new(dir.path());
+        block_store
+            .create_files_if_they_do_not_exist()
+            .expect("create canonical files");
+        let leader = checked_keypair();
+        let block1: Arc<SignedBlock> = Arc::new(ValidBlock::new_dummy(leader.private_key()).into());
+        let block2: Arc<SignedBlock> = Arc::new(
+            ValidBlock::new_dummy_and_modify_header(leader.private_key(), |header| {
+                header.set_prev_block_hash(Some(block1.hash()));
+            })
+            .into(),
+        );
+        let replacement: Arc<SignedBlock> = Arc::new(
+            ValidBlock::new_dummy_and_modify_header(leader.private_key(), |header| {
+                header.set_prev_block_hash(Some(block1.hash()));
+                header.set_view_change_index(header.view_change_index().saturating_add(1));
+            })
+            .into(),
+        );
+        let (block1_frame, _) = block1
+            .canonical_wire()
+            .expect("block one wire")
+            .into_parts();
+        let inline_budget = u64::try_from(block1_frame.len())
+            .expect("block one length")
+            .saturating_add(2 * (BlockIndex::SIZE + SIZE_OF_BLOCK_HASH));
+        block_store
+            .append_block_batch_at(0, std::slice::from_ref(&block1), 0)
+            .expect("append first block");
+        block_store
+            .append_block_batch_at(1, std::slice::from_ref(&block2), inline_budget)
+            .expect("append original evicted block");
+        let sidecar_path = block_store.da_block_path(2);
+        let original_sidecar = std::fs::read(&sidecar_path).expect("read original sidecar");
+        if new_marker_won {
+            block_store
+                .crash_next_da_rewrite_after_marker
+                .store(true, Ordering::Release);
+        } else {
+            block_store
+                .crash_next_da_rewrite_before_marker
+                .store(true, Ordering::Release);
+        }
+        block_store
+            .append_block_batch_at(1, std::slice::from_ref(&replacement), inline_budget)
+            .expect_err("leave a durable DA rewrite stage at the selected crash boundary");
+        let selected_marker = block_store
+            .read_commit_marker()
+            .expect("read selected marker")
+            .expect("selected marker exists");
+        let stage_path = block_store.da_block_rewrite_stage_path();
+        let stage_bytes = std::fs::read(&stage_path).expect("read staged rewrite");
+        let hashes_before = block_store
+            .read_block_hashes(1, 1)
+            .expect("read staged hash journal");
+        let conflicting_pin = if new_marker_won {
+            block2.hash()
+        } else {
+            replacement.hash()
+        };
+        let pins = BTreeMap::from([(2_u64, conflicting_pin)]);
+
+        let error = block_store
+            .recover_canonical_storage_stages_with_carrier_pins(&pins)
+            .expect_err("a carrier pin must reject the conflicting selected rewrite state");
+        assert!(
+            error
+                .to_string()
+                .contains("pinned canonical replica terminal carrier"),
+            "unexpected pin-recovery error: {error}",
+        );
+        assert_eq!(
+            block_store
+                .read_commit_marker()
+                .expect("reread selected marker")
+                .expect("selected marker remains"),
+            selected_marker,
+            "pin rejection must not change the publication marker",
+        );
+        assert_eq!(
+            block_store
+                .read_block_hashes(1, 1)
+                .expect("reread staged hash journal"),
+            hashes_before,
+            "pin rejection must not rewrite the hash journal",
+        );
+        assert_eq!(
+            std::fs::read(&sidecar_path).expect("reread original sidecar"),
+            original_sidecar,
+            "pin rejection must not replace the selected carrier sidecar",
+        );
+        assert_eq!(
+            std::fs::read(&stage_path).expect("reread staged rewrite"),
+            stage_bytes,
+            "pin rejection must leave the recovery transaction available for diagnosis",
+        );
+    }
+}
+
 #[test]
 fn append_block_batch_at_rewrites_tail() {
     let dir = tempfile::tempdir().unwrap();
@@ -746,169 +850,6 @@ fn transaction_index_completes_after_lazy_loading_reopened_blocks() {
             .expect("all reopened blocks have been indexed"),
         BTreeSet::from([nonzero!(2_usize)])
     );
-}
-#[test]
-fn offline_operation_index_distinguishes_missing_partial_and_earliest_height() {
-    let kura = Kura::blank_kura_for_testing();
-    let operation_id = [0xA5; 32];
-    assert_eq!(
-        kura.get_earliest_block_height_by_offline_operation_id(
-            &SAMPLE_GENESIS_ACCOUNT_ID,
-            operation_id,
-        ),
-        Some(None),
-        "an empty complete index reports a definite miss"
-    );
-    {
-        let mut index = kura.transaction_entrypoint_index.lock();
-        index.complete = true;
-        index.heights_by_offline_operation_id.insert(
-            (SAMPLE_GENESIS_ACCOUNT_ID.clone(), operation_id),
-            BTreeSet::from([nonzero!(3_usize), nonzero!(1_usize)]),
-        );
-        index.indexed_heights =
-            BTreeSet::from([nonzero!(1_usize), nonzero!(2_usize), nonzero!(3_usize)]);
-    }
-    assert_eq!(
-        kura.get_earliest_block_height_by_offline_operation_id(
-            &SAMPLE_GENESIS_ACCOUNT_ID,
-            operation_id,
-        ),
-        Some(Some(nonzero!(1_usize)))
-    );
-    kura.truncate_transaction_entrypoint_index(2);
-    assert_eq!(
-        kura.get_earliest_block_height_by_offline_operation_id(
-            &SAMPLE_GENESIS_ACCOUNT_ID,
-            operation_id,
-        ),
-        Some(Some(nonzero!(1_usize))),
-        "truncation retains the earliest surviving occurrence"
-    );
-    kura.transaction_entrypoint_index.lock().complete = false;
-    assert_eq!(
-        kura.get_earliest_block_height_by_offline_operation_id(
-            &SAMPLE_GENESIS_ACCOUNT_ID,
-            operation_id,
-        ),
-        None,
-        "a partial index must not turn an unknown result into a miss"
-    );
-}
-#[test]
-fn offline_operation_index_extracts_authorized_ids_and_ignores_zero_or_unrelated_entries() {
-    let operation_id = [0xA6; 32];
-    let top_level_mismatch = [0xA7; 32];
-    let entrypoint = offline_top_up_entrypoint_for_index(top_level_mismatch, operation_id);
-    let mut index = TransactionEntrypointIndex::complete_empty();
-    Kura::insert_offline_operation_id_heights(&mut index, nonzero!(3_usize), &entrypoint);
-    Kura::insert_offline_operation_id_heights(&mut index, nonzero!(1_usize), &entrypoint);
-    let operation_key = (SAMPLE_GENESIS_ACCOUNT_ID.clone(), operation_id);
-    assert_eq!(
-        index.heights_by_offline_operation_id.get(&operation_key),
-        Some(&BTreeSet::from([nonzero!(1_usize), nonzero!(3_usize)])),
-        "the signed authorization id is the canonical retry identity"
-    );
-    assert!(
-        !index
-            .heights_by_offline_operation_id
-            .contains_key(&(SAMPLE_GENESIS_ACCOUNT_ID.clone(), top_level_mismatch)),
-        "a malformed duplicate top-level id must not create a second lookup identity"
-    );
-    let zero = offline_top_up_entrypoint_for_index([0; 32], [0; 32]);
-    Kura::insert_offline_operation_id_heights(&mut index, nonzero!(2_usize), &zero);
-    assert!(
-        !index
-            .heights_by_offline_operation_id
-            .contains_key(&(SAMPLE_GENESIS_ACCOUNT_ID.clone(), [0; 32]))
-    );
-    let unrelated = TransactionBuilder::new(
-        test_network_id(b"kura-offline-operation-index"),
-        SAMPLE_GENESIS_ACCOUNT_ID.clone(),
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions([Log::new(Level::INFO, "unrelated".to_owned())])
-    .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
-    Kura::insert_offline_operation_id_heights(
-        &mut index,
-        nonzero!(2_usize),
-        &TransactionEntrypoint::External(unrelated),
-    );
-    assert_eq!(index.heights_by_offline_operation_id.len(), 1);
-    Kura::remove_transaction_entrypoint_height(&mut index, nonzero!(1_usize));
-    assert_eq!(
-        index
-            .heights_by_offline_operation_id
-            .get(&operation_key)
-            .and_then(|heights| heights.first().copied()),
-        Some(nonzero!(3_usize))
-    );
-    Kura::remove_transaction_entrypoint_height(&mut index, nonzero!(3_usize));
-    assert!(index.heights_by_offline_operation_id.is_empty());
-}
-#[test]
-fn offline_operation_index_cannot_be_shadowed_by_another_outer_authority() {
-    let operation_id = [0xA7; 32];
-    let front_runner = KeyPair::try_from_seed(vec![0xA7; 32], Algorithm::Ed25519)
-        .expect("derive unauthorized offline front-run fixture key");
-    let front_runner_id = AccountId::new(front_runner.public_key().clone());
-    let rejected_front_run = offline_top_up_entrypoint_for_index_with_outer_authority(
-        operation_id,
-        operation_id,
-        &front_runner,
-    );
-    let issuer_submission = offline_top_up_entrypoint_for_index(operation_id, operation_id);
-    let mut index = TransactionEntrypointIndex::complete_empty();
-    // The first transaction carries the observed signed request but uses an outer
-    // authority that is not the configured Torii issuer, so execution can reject it.
-    // Its earlier height must not shadow the later canonical issuer submission.
-    Kura::insert_offline_operation_id_heights(&mut index, nonzero!(1_usize), &rejected_front_run);
-    Kura::insert_offline_operation_id_heights(&mut index, nonzero!(2_usize), &issuer_submission);
-    index.indexed_heights = BTreeSet::from([nonzero!(1_usize), nonzero!(2_usize)]);
-    let kura = Kura::blank_kura_for_testing();
-    *kura.transaction_entrypoint_index.lock() = index;
-    assert_eq!(
-        kura.get_earliest_block_height_by_offline_operation_id(
-            &SAMPLE_GENESIS_ACCOUNT_ID,
-            operation_id,
-        ),
-        Some(Some(nonzero!(2_usize))),
-        "the configured issuer lookup must skip an earlier foreign-authority transaction"
-    );
-    assert_eq!(
-        kura.get_earliest_block_height_by_offline_operation_id(&front_runner_id, operation_id,),
-        Some(Some(nonzero!(1_usize))),
-        "the foreign transaction remains isolated in its own authority namespace"
-    );
-}
-#[test]
-fn transaction_index_refresh_reapplies_merge_side_entries_atomically() {
-    let kura = Kura::blank_kura_for_testing();
-    let operation_id = [0xA8; 32];
-    let merge_entry = merge_entry_with_indexed_entrypoint(offline_top_up_entrypoint_for_index(
-        operation_id,
-        operation_id,
-    ));
-    let block = DummyBlocks::new().next();
-    for _ in 0..2 {
-        kura.set_transaction_entrypoint_index_entry(1, &block, 1, Some(&merge_entry));
-        assert_eq!(
-            kura.get_earliest_block_height_by_offline_operation_id(
-                &SAMPLE_GENESIS_ACCOUNT_ID,
-                operation_id,
-            ),
-            Some(Some(nonzero!(1_usize))),
-            "ordinary-index refresh must not discard an operation carried by the merge sidecar"
-        );
-        let index = kura.transaction_entrypoint_index.lock();
-        assert!(index.complete);
-        assert_eq!(
-            index.heights_by_offline_operation_id
-                [&(SAMPLE_GENESIS_ACCOUNT_ID.clone(), operation_id)],
-            BTreeSet::from([nonzero!(1_usize)]),
-            "repeated refreshes must remain idempotent"
-        );
-    }
 }
 #[test]
 fn drop_persisted_blocks_keeps_genesis_and_recent_blocks() {

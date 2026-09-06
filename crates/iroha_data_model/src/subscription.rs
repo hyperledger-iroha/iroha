@@ -19,6 +19,8 @@ pub const SUBSCRIPTION_TRIGGER_REF_METADATA_KEY: &str = "subscription_ref";
 /// Subscription plan metadata stored on asset definitions.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::subscription::SubscriptionPlan")]
 pub struct SubscriptionPlan {
     /// Provider account issuing the plan.
     pub provider: AccountId,
@@ -30,6 +32,8 @@ pub struct SubscriptionPlan {
 /// Billing schedule and retry policy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::subscription::SubscriptionBilling")]
 pub struct SubscriptionBilling {
     /// Cadence definition.
     pub cadence: SubscriptionCadence,
@@ -45,6 +49,8 @@ pub struct SubscriptionBilling {
 /// Calendar-month cadence detail payload.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::subscription::SubscriptionMonthlyCalendarCadence")]
 pub struct SubscriptionMonthlyCalendarCadence {
     /// Anchor day for calendar-month cadence (1..=31).
     pub anchor_day: u8,
@@ -54,6 +60,8 @@ pub struct SubscriptionMonthlyCalendarCadence {
 /// Fixed-period cadence detail payload.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::subscription::SubscriptionFixedPeriodCadence")]
 pub struct SubscriptionFixedPeriodCadence {
     /// Fixed period in milliseconds for non-calendar cadence.
     pub period_ms: u64,
@@ -65,6 +73,8 @@ pub struct SubscriptionFixedPeriodCadence {
     feature = "json",
     norito(tag = "kind", content = "detail", rename_all = "snake_case")
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::subscription::SubscriptionCadence")]
 pub enum SubscriptionCadence {
     /// Calendar-month cadence with an anchor day/time (UTC).
     MonthlyCalendar(SubscriptionMonthlyCalendarCadence),
@@ -78,6 +88,8 @@ pub enum SubscriptionCadence {
     feature = "json",
     norito(tag = "period", content = "value", rename_all = "snake_case")
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::subscription::SubscriptionBillFor")]
 pub enum SubscriptionBillFor {
     /// Charge for the period that just ended.
     PreviousPeriod,
@@ -87,6 +99,8 @@ pub enum SubscriptionBillFor {
 /// Fixed-amount pricing detail payload.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::subscription::SubscriptionFixedPricing")]
 pub struct SubscriptionFixedPricing {
     /// Fixed amount for the period.
     pub amount: Quantity,
@@ -96,6 +110,8 @@ pub struct SubscriptionFixedPricing {
 /// Usage-based pricing detail payload.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::subscription::SubscriptionUsagePricing")]
 pub struct SubscriptionUsagePricing {
     /// Unit price for usage billing.
     pub unit_price: Quantity,
@@ -107,6 +123,8 @@ pub struct SubscriptionUsagePricing {
 /// Usage increment payload for subscription usage recording.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::subscription::SubscriptionUsageDelta")]
 pub struct SubscriptionUsageDelta {
     /// Subscription NFT identifier.
     pub subscription_nft_id: NftId,
@@ -122,6 +140,8 @@ pub struct SubscriptionUsageDelta {
     feature = "json",
     norito(tag = "kind", content = "detail", rename_all = "snake_case")
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::subscription::SubscriptionPricing")]
 pub enum SubscriptionPricing {
     /// Fixed-amount pricing.
     Fixed(SubscriptionFixedPricing),
@@ -131,6 +151,8 @@ pub enum SubscriptionPricing {
 /// Subscription state stored on a subscription NFT.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::subscription::SubscriptionState")]
 pub struct SubscriptionState {
     /// Asset definition ID of the plan.
     pub plan_id: AssetDefinitionId,
@@ -167,6 +189,8 @@ pub struct SubscriptionState {
     feature = "json",
     norito(tag = "status", content = "value", rename_all = "snake_case")
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::subscription::SubscriptionStatus")]
 pub enum SubscriptionStatus {
     /// Subscription is active and billing.
     Active,
@@ -182,6 +206,8 @@ pub enum SubscriptionStatus {
 /// Trigger metadata referencing the subscription NFT.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::subscription::SubscriptionTriggerRef")]
 pub struct SubscriptionTriggerRef {
     /// Subscription NFT identifier.
     pub subscription_nft_id: NftId,
@@ -189,6 +215,8 @@ pub struct SubscriptionTriggerRef {
 /// Subscription invoice metadata stored on subscription or invoice NFTs.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::subscription::SubscriptionInvoice")]
 pub struct SubscriptionInvoice {
     /// Subscription NFT identifier.
     pub subscription_nft_id: NftId,
@@ -215,6 +243,8 @@ pub struct SubscriptionInvoice {
     feature = "json",
     norito(tag = "status", content = "value", rename_all = "snake_case")
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::subscription::SubscriptionInvoiceStatus")]
 pub enum SubscriptionInvoiceStatus {
     /// Charge succeeded and funds moved.
     Paid,
@@ -295,3 +325,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod captured_subscription_schema_tests;

@@ -29,6 +29,12 @@ PROJECT = ROOT / "contracts" / "ton" / "sccp"
 EMITTER = PROJECT / "scripts" / "generate-stateinit-golden.tolk"
 FIXTURE = PROJECT / "tests" / "stateinit-golden-fixture.tolk"
 DEFAULT_OUTPUT = ROOT / "fixtures" / "sccp" / "ton_stateinit_golden_v1.json"
+ACTON_VERSION_FILE = PROJECT / ".acton" / ".version"
+GENERATED_SOURCE_PATHS = (
+    ACTON_VERSION_FILE,
+    PROJECT / "gen" / "TairaXorJettonMaster.code.tolk",
+    PROJECT / "gen" / "TairaXorJettonWallet.code.tolk",
+)
 
 SCHEMA = "iroha.sccp.ton-stateinit-golden.final-v1"
 SOURCE_CLOSURE_DOMAIN = b"iroha:sccp:ton-stateinit-source-closure:final-v1\x00"
@@ -175,11 +181,10 @@ def _sha256(data: bytes) -> str:
 def _source_paths() -> tuple[Path, ...]:
     paths = {
         PROJECT / "Acton.toml",
-        PROJECT / ".acton" / ".version",
         EMITTER,
         FIXTURE,
         *PROJECT.joinpath("contracts").glob("*.tolk"),
-        *PROJECT.joinpath("gen").glob("*.tolk"),
+        *GENERATED_SOURCE_PATHS,
     }
     ordered = tuple(sorted(paths, key=lambda path: path.relative_to(ROOT).as_posix()))
     if not ordered or EMITTER not in ordered or FIXTURE not in ordered:
@@ -187,26 +192,89 @@ def _source_paths() -> tuple[Path, ...]:
     return ordered
 
 
-def source_closure() -> tuple[list[dict[str, Any]], str]:
-    """Return the exact source inventory and its domain-separated digest."""
+def _recorded_source_inventory(value: object) -> dict[str, dict[str, Any]]:
+    expected_paths = {
+        path.relative_to(ROOT).as_posix()
+        for path in _source_paths()
+    }
+    if type(value) is not list:
+        _fail("TON StateInit golden source inventory is malformed")
+    recorded: dict[str, dict[str, Any]] = {}
+    for item in value:
+        if type(item) is not dict or set(item) != {"path", "sha256", "size_bytes"}:
+            _fail("TON StateInit golden source inventory is malformed")
+        path = item.get("path")
+        sha256 = item.get("sha256")
+        size_bytes = item.get("size_bytes")
+        if (
+            type(path) is not str
+            or path not in expected_paths
+            or path in recorded
+            or type(sha256) is not str
+            or re.fullmatch(r"[0-9a-f]{64}", sha256) is None
+            or type(size_bytes) is not int
+            or not 0 < size_bytes <= 8 * 1024 * 1024
+        ):
+            _fail("TON StateInit golden source inventory is malformed")
+        recorded[path] = item
+    if set(recorded) != expected_paths:
+        _fail("TON StateInit golden source inventory is incomplete")
+    return recorded
+
+
+def source_closure(
+    recorded_inventory: object | None = None,
+) -> tuple[list[dict[str, Any]], str]:
+    """Return the exact source inventory and its domain-separated digest.
+
+    A clean checkout does not contain Acton's ignored dependency marker or
+    emitted code. Golden validation may therefore supply their authenticated
+    recorded inventory entries; every tracked source is still read and hashed.
+    Generation calls this without a recorded inventory and requires the full
+    materialized closure.
+    """
 
     inventory: list[dict[str, Any]] = []
     digest = hashlib.sha256()
     digest.update(SOURCE_CLOSURE_DOMAIN)
+    recorded = (
+        None
+        if recorded_inventory is None
+        else _recorded_source_inventory(recorded_inventory)
+    )
     for path in _source_paths():
-        data = _read_regular(
-            path, label="TON StateInit source", maximum=8 * 1024 * 1024
-        )
         relative = path.relative_to(ROOT).as_posix()
+        generated_is_absent = False
+        if recorded is not None and path in GENERATED_SOURCE_PATHS:
+            try:
+                path.lstat()
+            except FileNotFoundError:
+                generated_is_absent = True
+            except OSError as error:
+                raise GoldenError("TON StateInit source is unavailable") from error
+        if generated_is_absent:
+            item = recorded[relative]
+            item_hash_hex = item["sha256"]
+            size_bytes = item["size_bytes"]
+        else:
+            data = _read_regular(
+                path, label="TON StateInit source", maximum=8 * 1024 * 1024
+            )
+            item_hash_hex = _sha256(data)
+            size_bytes = len(data)
+            item = {
+                "path": relative,
+                "sha256": item_hash_hex,
+                "size_bytes": size_bytes,
+            }
+            if recorded is not None and recorded[relative] != item:
+                _fail("TON StateInit golden source inventory is stale")
         encoded_path = relative.encode("utf-8")
-        item_hash = hashlib.sha256(data).digest()
         digest.update(len(encoded_path).to_bytes(4, "little"))
         digest.update(encoded_path)
-        digest.update(len(data).to_bytes(8, "little"))
-        digest.update(item_hash)
-        inventory.append(
-            {"path": relative, "sha256": item_hash.hex(), "size_bytes": len(data)}
-        )
+        digest.update(size_bytes.to_bytes(8, "little"))
+        digest.update(bytes.fromhex(item_hash_hex))
+        inventory.append(item)
     return inventory, digest.hexdigest()
 
 
@@ -610,7 +678,7 @@ def validate_checked_in_golden(data: bytes) -> dict[str, Any]:
         "source_inventory",
     }:
         _fail("TON StateInit golden lacks provenance")
-    inventory, closure_sha256 = source_closure()
+    inventory, closure_sha256 = source_closure(provenance.get("source_inventory"))
     if provenance.get("source_inventory") != inventory:
         _fail("TON StateInit golden source inventory is stale")
     if provenance.get("source_closure_sha256") != closure_sha256:

@@ -1,8 +1,8 @@
 #[cfg(feature = "bls")]
 use super::super::validate_sidecar::{
     LifecycleValidateSidecarRegistrationErrorV1, LifecycleValidateSidecarRegistrationIdentityV1,
-    RegisteredLifecycleValidateSidecarWaitV1, load_registration_for_test,
-    persist_registration_for_test, wake_registration_for_test,
+    RegisteredLifecycleValidateSidecarWaitV1, cancel_registration_for_test,
+    load_registration_for_test, persist_registration_for_test, wake_registration_for_test,
 };
 #[cfg(feature = "bls")]
 use super::super::{CausalRoot, LifecycleValidateDispatchKeyV1};
@@ -190,8 +190,66 @@ fn validate_sidecar_wake_preserves_ordinal_carrier_and_advances_one_generation()
 
 #[cfg(feature = "bls")]
 #[test]
+fn validate_sidecar_supersession_cancels_row_and_recovers_post_ledger_cleanup() {
+    let mut exact = exact_validate_sidecar_registration_fixture(0xE6);
+    persist_registration_for_test(&exact.coordinator, &exact.identity)
+        .expect("persist exact sidecar registration");
+    let ordinal = exact.identity.dispatch_key().lifecycle_ordinal();
+    let registration_path = exact
+        .coordinator
+        .ledger_store
+        .as_ref()
+        .expect("sidecar fixture retains its ledger store")
+        .validate_sidecar_registration_path()
+        .expect("sidecar fixture has a registration path");
+
+    cancel_registration_for_test(
+        &mut exact.coordinator,
+        &exact.identity,
+        &mut exact.holder,
+    )
+    .expect("cancel the superseded unprotected sidecar row");
+
+    assert_eq!(
+        exact.coordinator.records[&ordinal].state,
+        LifecycleState::Terminal(TerminalOutcome::Cancelled)
+    );
+    assert!(!exact.coordinator.ready_index.contains(&ordinal));
+    assert!(
+        !exact
+            .holder
+            .registry_for_test()
+            .entries
+            .contains_key(&exact.fixture.address)
+    );
+    assert!(!registration_path.exists());
+    assert_eq!(
+        load_registration_for_test(&exact.coordinator)
+            .expect("cancelled registration remains absent"),
+        None
+    );
+
+    // Model a crash after LedgerV1 publication but before the auxiliary
+    // registration unlink. Cold-open recovery must recognize the exact
+    // cancelled row and finish that idempotent cleanup instead of failing.
+    persist_registration_for_test(&exact.coordinator, &exact.identity)
+        .expect("restore the post-ledger registration residual");
+    assert!(registration_path.exists());
+    assert!(
+        RegisteredLifecycleValidateSidecarWaitV1::recover_at_launch(
+            &mut exact.coordinator,
+            &mut exact.holder,
+        )
+        .expect("reconcile cancelled registration residual")
+        .is_none()
+    );
+    assert!(!registration_path.exists());
+}
+
+#[cfg(feature = "bls")]
+#[test]
 fn validate_sidecar_cold_open_restores_exact_waiting_row_and_generation() {
-    let exact = exact_validate_sidecar_registration_fixture(0xE4);
+    let mut exact = exact_validate_sidecar_registration_fixture(0xE4);
     persist_registration_for_test(&exact.coordinator, &exact.identity)
         .expect("persist exact sidecar registration before restart");
     let ordinal = exact.identity.dispatch_key().lifecycle_ordinal();
@@ -242,7 +300,10 @@ fn validate_sidecar_cold_open_restores_exact_waiting_row_and_generation() {
     reopened.ledger_store = Some(store);
 
     let recovered =
-        RegisteredLifecycleValidateSidecarWaitV1::recover_at_launch(&mut reopened, &exact.holder)
+        RegisteredLifecycleValidateSidecarWaitV1::recover_at_launch(
+            &mut reopened,
+            &mut exact.holder,
+        )
             .expect("recover exact sidecar registration")
             .expect("durable sidecar registration is present");
     assert_eq!(

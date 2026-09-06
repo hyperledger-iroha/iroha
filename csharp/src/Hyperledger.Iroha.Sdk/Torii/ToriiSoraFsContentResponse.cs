@@ -6,6 +6,30 @@ public sealed record class ToriiSoraFsContentResponse
     private long? contentLength;
     private string? contentCid;
 
+    public ToriiSoraFsContentResponse()
+    {
+    }
+
+    private ToriiSoraFsContentResponse(
+        byte[] ownedBytes,
+        string? contentType,
+        long? contentLength,
+        string? contentCid)
+    {
+        ArgumentNullException.ThrowIfNull(ownedBytes);
+        bytes = ownedBytes;
+        ContentType = contentType;
+        ContentLength = contentLength;
+        ContentCid = contentCid;
+    }
+
+    internal static ToriiSoraFsContentResponse FromOwnedBuffer(
+        byte[] ownedBytes,
+        string? contentType,
+        long? contentLength,
+        string? contentCid) =>
+        new(ownedBytes, contentType, contentLength, contentCid);
+
     public byte[] Bytes
     {
         get => bytes.ToArray();

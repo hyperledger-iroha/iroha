@@ -319,7 +319,7 @@ pub(crate) fn moderation_projection_freshness_limit(worker_interval: Duration) -
 /// Fixed runtime signing failures that are safe to surface to the orchestrator.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModerationSigningFailureV1 {
-    /// The HSM or signer service is temporarily unavailable.
+    /// The signing service is temporarily unavailable.
     Unavailable,
     /// The signer queue is full and no signature was produced.
     Backpressure,
@@ -328,9 +328,9 @@ pub enum ModerationSigningFailureV1 {
 }
 /// Runtime-only signer for one exact native moderation transaction.
 ///
-/// Implementations may delegate to PKCS#11 or a remote HSM. A returned
-/// envelope is durably retained by the orchestrator before ingress; signing
-/// itself is never used as an idempotency or crash-recovery boundary.
+/// Implementations may delegate to a deployment-owned signing service. A
+/// returned envelope is durably retained by the orchestrator before ingress;
+/// signing itself is never used as an idempotency or crash-recovery boundary.
 pub trait ModerationSignedTransactionSignerV1: ModerationRuntimeProviderV1 {
     /// Sign the exact fee-quoted payload supplied by Torii.
     ///
@@ -863,18 +863,20 @@ impl ModerationStrictTransactionIngressV1 for ToriiModerationStrictTransactionIn
                     Err(ModerationStrictIngressFailureV1::Ambiguous)
                 }
                 iroha_core::queue::Error::PlanJournalDurabilityRejected { .. }
+                | iroha_core::queue::Error::KagemushaV1OperationIndexInconsistent { .. }
                 | iroha_core::queue::Error::UnresolvedRoute { .. } => {
                     Err(ModerationStrictIngressFailureV1::Unavailable)
                 }
                 iroha_core::queue::Error::Expired
+                | iroha_core::queue::Error::KagemushaV1OperationCarrierRejected { .. }
+                | iroha_core::queue::Error::KagemushaV1OperationIdConflict { .. }
                 | iroha_core::queue::Error::UnregisteredAuthority { .. }
                 | iroha_core::queue::Error::Governance(_)
                 | iroha_core::queue::Error::GovernanceNotPermitted { .. }
                 | iroha_core::queue::Error::LaneComplianceDenied { .. }
                 | iroha_core::queue::Error::LanePrivacyProofRejected { .. }
                 | iroha_core::queue::Error::NexusFeeAdmissionRejected { .. }
-                | iroha_core::queue::Error::NexusFeeAdmissionConfigInvalid { .. }
-                | iroha_core::queue::Error::ConfidentialPolicyAdmissionRejected { .. } => {
+                | iroha_core::queue::Error::NexusFeeAdmissionConfigInvalid { .. } => {
                     Err(ModerationStrictIngressFailureV1::PermanentRejection)
                 }
             },
@@ -937,10 +939,17 @@ impl ModerationStrictTransactionIngressV1 for ToriiModerationStrictTransactionIn
             .entrypoint_results()
             .take(external_entrypoint_count)
             .filter_map(|(_, entrypoint, result)| {
-                let TransactionEntrypoint::External(transaction) = entrypoint else {
+                if !crate::transaction_entrypoint_matches_indexed_identity(
+                    &entrypoint,
+                    &entrypoint_hash,
+                ) {
                     return None;
-                };
-                (transaction.hash() == transaction_hash).then_some(result.0.is_ok())
+                }
+                matches!(
+                    entrypoint,
+                    TransactionEntrypoint::External(_) | TransactionEntrypoint::SealedReveal(_)
+                )
+                .then_some(result.0.is_ok())
             });
         match (exact_results.next(), exact_results.next()) {
             (Some(true), None) => ModerationSubmissionLookupV1::Applied { transaction_id },
@@ -1679,7 +1688,7 @@ mod tests {
         },
         thread,
     };
-    const TEST_SIGNER_HANDLE: &str = "moderation-hsm-primary";
+    const TEST_SIGNER_HANDLE: &str = "moderation-provider-primary";
     const TEST_INGRESS_HANDLE: &str = "moderation-ingress-primary";
     const TEST_HANDOFF_HANDLE: &str = "moderation-handoff-primary";
     const TEST_NOTIFICATION_HANDLE: &str = "moderation-notification-primary";

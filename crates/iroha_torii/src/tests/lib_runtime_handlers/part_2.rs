@@ -4,10 +4,11 @@ async fn handler_post_transaction_entrypoint_uses_authenticated_api_token_rate_l
     {
         let app_mut = Arc::get_mut(&mut app).expect("unique app state");
         app_mut.high_load_tx_threshold = usize::MAX;
-        app_mut.tx_rate_limiter = limits::RateLimiter::new(Some(1), Some(1));
+        app_mut.tx_preauth_rate_limiter = limits::RateLimiter::new(Some(1), Some(1));
         app_mut.fee_policy = FeePolicy::Disabled;
         app_mut.require_api_token = true;
-        app_mut.api_tokens_set = Arc::new(HashSet::from(["entrypoint-token".to_owned()]));
+        app_mut.api_token_digests =
+            Arc::new(limits::ApiTokenDigestSet::from_tokens(["entrypoint-token"]));
     }
     let first_keypair =
         checked_torii_test_ed25519_keypair(0xc7, "derive first entrypoint API-token fixture key");
@@ -339,9 +340,10 @@ async fn handler_post_transactions_batch_rate_limits_api_token_as_single_key_bat
     {
         let app_mut = Arc::get_mut(&mut app).expect("unique app state");
         app_mut.high_load_tx_threshold = usize::MAX;
-        app_mut.tx_rate_limiter = limits::RateLimiter::new(Some(1), Some(2));
+        app_mut.tx_preauth_rate_limiter = limits::RateLimiter::new(Some(1), Some(2));
         app_mut.require_api_token = true;
-        app_mut.api_tokens_set = Arc::new(HashSet::from(["batch-token".to_owned()]));
+        app_mut.api_token_digests =
+            Arc::new(limits::ApiTokenDigestSet::from_tokens(["batch-token"]));
     }
     let keypair =
         checked_torii_test_ed25519_keypair(0xcb, "derive post-transaction batch token fixture key");
@@ -376,9 +378,21 @@ async fn handler_post_transactions_batch_rate_limits_api_token_as_single_key_bat
     assert_eq!(err.into_response().status(), StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(app.queue.active_len(), 0);
     assert!(
-        !app.tx_rate_limiter.allow("batch-token").await,
+        !app
+            .tx_preauth_rate_limiter
+            .allow(&transaction_api_token_preauth_key(
+                limits::ApiTokenPrincipal::from_token("batch-token"),
+            ))
+            .await,
         "failed same-key batch should consume the token prefix that would have passed"
     );
+}
+#[test]
+fn transaction_api_token_preauth_key_never_contains_raw_token_text() {
+    let raw_token = "transaction-preauth-secret-material";
+    let key = transaction_api_token_preauth_key(limits::ApiTokenPrincipal::from_token(raw_token));
+    assert!(!key.contains(raw_token));
+    assert!(key.starts_with("v1/transaction:preauth:api-token:"));
 }
 #[tokio::test]
 async fn handler_post_transactions_batch_uses_authenticated_token_for_distinct_authorities() {
@@ -386,9 +400,11 @@ async fn handler_post_transactions_batch_uses_authenticated_token_for_distinct_a
     {
         let app_mut = Arc::get_mut(&mut app).expect("unique app state");
         app_mut.high_load_tx_threshold = usize::MAX;
-        app_mut.tx_rate_limiter = limits::RateLimiter::new(Some(1), Some(2));
+        app_mut.tx_preauth_rate_limiter = limits::RateLimiter::new(Some(1), Some(2));
         app_mut.require_api_token = true;
-        app_mut.api_tokens_set = Arc::new(HashSet::from(["batch-distinct-token".to_owned()]));
+        app_mut.api_token_digests = Arc::new(limits::ApiTokenDigestSet::from_tokens([
+            "batch-distinct-token",
+        ]));
     }
     let network_id = *app.state.network_id_ref();
     let payloads = (0..3)
@@ -425,7 +441,12 @@ async fn handler_post_transactions_batch_uses_authenticated_token_for_distinct_a
     assert_eq!(err.into_response().status(), StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(app.queue.active_len(), 0);
     assert!(
-        !app.tx_rate_limiter.allow("batch-distinct-token").await,
+        !app
+            .tx_preauth_rate_limiter
+            .allow(&transaction_api_token_preauth_key(
+                limits::ApiTokenPrincipal::from_token("batch-distinct-token"),
+            ))
+            .await,
         "distinct authorities should still consume the shared API-token key"
     );
 }
@@ -478,7 +499,8 @@ async fn handler_post_transaction_rejects_unfunded_nexus_fee_tx_before_history()
     let fee_sink_keypair =
         checked_torii_test_ed25519_keypair(0xd2, "derive unfunded fee fixture sink key");
     let fee_sink = AccountId::new(fee_sink_keypair.public_key().clone());
-    let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
+    let domain_id =
+        DomainId::parse_fully_qualified("universal.universal").expect("canonical XOR domain id");
     let fee_asset_id = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
         domain_id.clone(),
         "xor".parse().expect("asset name"),
@@ -523,9 +545,14 @@ async fn handler_post_transaction_rejects_unfunded_nexus_fee_tx_before_history()
         !app.state.has_committed_entrypoint(tx.hash_as_entrypoint()),
         "ingress rejection should not create committed history"
     );
+    let explorer_uri: axum::http::Uri = format!("/v1/explorer/transactions/{tx_hash_hex}")
+        .parse()
+        .expect("valid Explorer transaction URI");
     let explorer = super::handler_explorer_transaction_detail(
         State(app),
         HeaderMap::new(),
+        axum::http::Method::GET,
+        explorer_uri,
         crate::loopback_connect_info(),
         axum::extract::Path(tx_hash_hex),
     )
@@ -559,7 +586,7 @@ async fn handler_policy_reports_required_token_even_when_configuration_is_unavai
     {
         let app_mut = Arc::get_mut(&mut app).expect("unique app state");
         app_mut.require_api_token = true;
-        app_mut.api_tokens_set = Arc::new(HashSet::new());
+        app_mut.api_token_digests = Arc::new(limits::ApiTokenDigestSet::default());
         app_mut.api_rate_limit_bypass_nets = Arc::new(vec![
             limits::parse_cidr("127.0.0.0/8").expect("loopback CIDR"),
         ]);
@@ -589,7 +616,7 @@ async fn kaigi_signal_history_rate_bypass_still_requires_heavy_query_admission()
             limits::parse_cidr("127.0.0.0/8").expect("loopback CIDR"),
         ]);
         app_mut.require_api_token = true;
-        app_mut.api_tokens_set = Arc::new(HashSet::new());
+        app_mut.api_token_digests = Arc::new(limits::ApiTokenDigestSet::default());
         app_mut.query_heavy_inflight = Arc::new(tokio::sync::Semaphore::new(0));
         app_mut.query_queue_timeout = Duration::ZERO;
     }
@@ -1723,6 +1750,7 @@ fn run_account_route_matrix_case(case: AccountRouteMatrixCase) {
             app.as_ref(),
             &ToriiFanoutRouteScopeV1::TargetAccount {
                 account_id: authority.to_string(),
+                caller_account_id: None,
             },
         )
         .expect("Nexus fanout target-account routes should resolve"),
@@ -1808,6 +1836,7 @@ fn internal_fanout_account_scopes_reject_surrounding_whitespace() {
     for scope in [
         ToriiFanoutRouteScopeV1::TargetAccount {
             account_id: format!(" {account_id}"),
+            caller_account_id: None,
         },
         ToriiFanoutRouteScopeV1::VisibleAccount {
             caller_account_id: Some(format!("{account_id} ")),
@@ -1859,7 +1888,6 @@ async fn signed_foreign_account_reads_do_not_gain_target_routes_without_a_grant(
         app.as_ref(),
         &target,
         Some(&caller),
-        false,
     ));
     let routes =
         super::torii_account_assets_read_routes(app.as_ref(), &target, Some(&caller), false)
@@ -1891,15 +1919,95 @@ async fn signed_foreign_account_reads_do_not_gain_target_routes_without_a_grant(
         app.as_ref(),
         &target,
         Some(&target),
-        false,
     ));
-    assert!(super::torii_should_use_target_account_routes(
+    assert!(!super::torii_should_use_target_account_routes(
         app.as_ref(),
         &target,
         Some(&caller),
-        true,
     ));
 }
+
+#[cfg(feature = "app_api")]
+#[tokio::test]
+async fn can_read_all_ledger_data_expands_every_dataspace_read_route() {
+    let caller = checked_torii_test_account_id(0xda, "derive global reader fixture key");
+    let mut app = mk_app_state_for_tests_with_world(world_with_account(&caller));
+    let (_, restricted_dataspace) = configure_private_ingress_routes_for_test(&mut app);
+
+    let public_only = super::torii_visible_account_read_routes(app.as_ref(), Some(&caller));
+    assert!(
+        public_only
+            .iter()
+            .all(|route| route.dataspace_id != restricted_dataspace)
+    );
+
+    grant_account_permission_for_test(&app, &caller, CanReadAllLedgerData.into());
+    let all_routes = super::torii_visible_account_read_routes(app.as_ref(), Some(&caller));
+    assert!(
+        all_routes
+            .iter()
+            .any(|route| route.dataspace_id == restricted_dataspace)
+    );
+    assert!(super::torii_dataspace_read_visibility(app.as_ref(), Some(&caller)).can_read_all());
+}
+
+#[cfg(feature = "app_api")]
+#[test]
+fn long_lived_dataspace_context_rechecks_permission_revocation() {
+    let caller = checked_torii_test_account_id(0xdb, "derive revocable stream reader fixture key");
+    let mut app = mk_app_state_for_tests_with_world(world_with_account(&caller));
+    let (_, restricted_dataspace) = configure_private_ingress_routes_for_test(&mut app);
+    let permission: Permission = CanReadRestrictedDataspace {
+        dataspace: restricted_dataspace,
+    }
+    .into();
+    grant_account_permission_for_test(&app, &caller, permission.clone());
+    let context = super::ToriiAccountReadVisibility::Signed(caller.clone())
+        .into_dataspace_context(app.clone());
+
+    assert!(
+        context
+            .current_visibility()
+            .allows_dataspace(restricted_dataspace)
+    );
+    assert!(context.authorization_is_current());
+
+    let next_height = app
+        .state
+        .latest_block_header_fast()
+        .map_or(1, |header| header.height().get().saturating_add(1));
+    let header = BlockHeader::new(
+        NonZeroU64::new(next_height).expect("non-zero height"),
+        None,
+        None,
+        None,
+        0,
+        0,
+    );
+    let mut block = app.state.block(header);
+    let mut tx = block.transaction();
+    assert!(
+        tx.world_mut_for_testing()
+            .remove_account_permission(&caller, &permission),
+        "seeded permission must be removed"
+    );
+    tx.apply();
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit permission revocation");
+
+    assert!(
+        !context
+            .current_visibility()
+            .allows_dataspace(restricted_dataspace),
+        "an established stream/read context must not retain a revoked grant"
+    );
+    assert!(
+        !context.authorization_is_current(),
+        "a long-lived stream must terminate after losing any admitted route"
+    );
+}
+
 #[cfg(feature = "app_api")]
 #[tokio::test]
 async fn handler_account_assets_fanout_reports_merged_route_headers() {
@@ -1907,6 +2015,8 @@ async fn handler_account_assets_fanout_reports_merged_route_headers() {
         0xed,
         "derive account asset handler fanout authority fixture key",
     );
+    let missing =
+        checked_torii_test_account_id(0xee, "derive missing account asset fanout fixture key");
     let restricted_dataspace = DataSpaceId::new(10);
     let uaid = UniversalAccountId::from_hash(Hash::new(b"torii::assets-known-scope"));
     let mut app = mk_app_state_for_tests_with_world(world_with_account_bound_to_dataspace(
@@ -1921,7 +2031,7 @@ async fn handler_account_assets_fanout_reports_merged_route_headers() {
         .parse()
         .expect("valid account assets uri");
     let response = super::handler_account_assets(
-        State(app),
+        State(app.clone()),
         axum::http::Method::GET,
         uri,
         HeaderMap::new(),
@@ -1944,6 +2054,38 @@ async fn handler_account_assets_fanout_reports_merged_route_headers() {
             .is_none(),
         "account asset fanout should not expose a singular dataspace",
     );
+    let restricted_json =
+        decode_torii_json(response, "restricted account assets", "account assets json").await;
+    assert!(
+        restricted_json["items"]
+            .as_array()
+            .is_some_and(Vec::is_empty)
+    );
+
+    let missing_uri: axum::http::Uri = format!("/v1/accounts/{missing}/assets")
+        .parse()
+        .expect("valid missing account assets uri");
+    let missing_response = super::handler_account_assets(
+        State(app),
+        axum::http::Method::GET,
+        missing_uri,
+        HeaderMap::new(),
+        crate::loopback_connect_info(),
+        AxPath(missing.to_string()),
+        AxQuery(crate::routing::AccountAssetsGetParams::default()),
+    )
+    .await
+    .expect("missing account assets should preserve the empty public response")
+    .into_response();
+    assert_eq!(missing_response.status(), StatusCode::OK);
+    let missing_json = decode_torii_json(
+        missing_response,
+        "missing account assets",
+        "account assets json",
+    )
+    .await;
+    assert!(missing_json["items"].as_array().is_some_and(Vec::is_empty));
+    assert_eq!(restricted_json["total"], missing_json["total"]);
 }
 #[cfg(feature = "app_api")]
 #[tokio::test]
@@ -2133,11 +2275,13 @@ async fn handler_signed_query_executes_find_active_trigger_ids_locally_with_mult
     );
 }
 #[tokio::test]
-async fn handler_accounts_list_prefers_local_restricted_routes_on_private_ingress() {
+async fn anonymous_accounts_list_excludes_restricted_private_ingress_route() {
     let mut app = mk_app_state_for_tests();
     configure_private_ingress_routes_for_test(&mut app);
     let response = super::handler_accounts_list(
         State(app),
+        axum::http::Method::GET,
+        "/v1/accounts".parse().expect("valid accounts list uri"),
         HeaderMap::new(),
         crate::loopback_connect_info(),
         AxQuery(crate::routing::ListFilterParams::default()),
@@ -2149,7 +2293,12 @@ async fn handler_accounts_list_prefers_local_restricted_routes_on_private_ingres
     assert_eq!(
         torii_response_header(&response, "x-iroha-routed-by"),
         Some("local"),
-        "private ingress account listings should stay on the local restricted lane",
+        "visible account listings should still execute locally",
+    );
+    assert_eq!(
+        torii_response_header(&response, "x-iroha-fanout-routes-attempted"),
+        Some("2"),
+        "anonymous account listings must omit the configured restricted route",
     );
 }
 #[tokio::test]
@@ -2216,6 +2365,7 @@ async fn handler_transactions_query_fan_outs_across_dataspaces() {
     };
     let response = super::handler_transactions_query(
         State(app),
+        Extension(super::ToriiAccountReadVisibility::None),
         HeaderMap::new(),
         crate::loopback_connect_info(),
         NoritoJson(env),
@@ -2285,6 +2435,7 @@ async fn public_dataspace_upstream_serves_routed_account_assets() {
             .to_string();
     let request = torii_read_request(
         ToriiReadEndpointV1::AccountAssetsGet,
+        ToriiFanoutRouteScopeV1::AllDataspaces,
         route,
         vec![account_id.clone()],
         Some("limit=500".to_owned()),
@@ -2330,6 +2481,7 @@ async fn public_dataspace_upstream_preserves_valid_reject_classification() {
     let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
     let request = torii_read_request(
         ToriiReadEndpointV1::AccountAssetsGet,
+        ToriiFanoutRouteScopeV1::AllDataspaces,
         route,
         vec![
             checked_torii_test_account_id(
@@ -2384,6 +2536,7 @@ async fn public_dataspace_upstream_drops_ambiguous_reject_classification() {
     let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
     let request = torii_read_request(
         ToriiReadEndpointV1::AccountAssetsGet,
+        ToriiFanoutRouteScopeV1::AllDataspaces,
         route,
         vec![
             checked_torii_test_account_id(
@@ -2431,6 +2584,7 @@ async fn public_dataspace_upstream_drops_reject_classification_on_success() {
     let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
     let request = torii_read_request(
         ToriiReadEndpointV1::AccountAssetsGet,
+        ToriiFanoutRouteScopeV1::AllDataspaces,
         route,
         vec![
             checked_torii_test_account_id(
@@ -2629,6 +2783,10 @@ async fn routed_uaid_handlers_reject_invalid_inputs_before_routing() {
     let app = mk_app_state_for_tests();
     let invalid_portfolio = match super::handler_accounts_portfolio(
         State(app.clone()),
+        axum::http::Method::GET,
+        "/v1/accounts/uaid:1234/portfolio"
+            .parse()
+            .expect("valid portfolio uri"),
         HeaderMap::new(),
         crate::loopback_connect_info(),
         AxPath("uaid:1234".to_owned()),
@@ -2643,6 +2801,10 @@ async fn routed_uaid_handlers_reject_invalid_inputs_before_routing() {
 
     let invalid_binding = match super::handler_space_directory_bindings(
         State(app.clone()),
+        axum::http::Method::GET,
+        "/v1/space-directory/uaids/uaid:1234"
+            .parse()
+            .expect("valid bindings uri"),
         HeaderMap::new(),
         crate::loopback_connect_info(),
         AxPath("uaid:1234".to_owned()),
@@ -2657,6 +2819,10 @@ async fn routed_uaid_handlers_reject_invalid_inputs_before_routing() {
 
     let invalid_uaid = match super::handler_space_directory_manifests(
         State(app.clone()),
+        axum::http::Method::GET,
+        "/v1/space-directory/uaids/uaid:1234/manifests"
+            .parse()
+            .expect("valid manifests uri"),
         HeaderMap::new(),
         crate::loopback_connect_info(),
         AxPath("uaid:1234".to_owned()),
@@ -2672,6 +2838,10 @@ async fn routed_uaid_handlers_reject_invalid_inputs_before_routing() {
     let uaid = UniversalAccountId::from_hash(Hash::new(b"manifest-preflight"));
     let invalid_status = match super::handler_space_directory_manifests(
         State(app),
+        axum::http::Method::GET,
+        format!("/v1/space-directory/uaids/{uaid}/manifests")
+            .parse()
+            .expect("valid manifests uri"),
         HeaderMap::new(),
         crate::loopback_connect_info(),
         AxPath(uaid.to_string()),
@@ -2689,7 +2859,7 @@ async fn routed_uaid_handlers_reject_invalid_inputs_before_routing() {
 }
 #[cfg(feature = "app_api")]
 #[tokio::test]
-async fn handler_space_directory_manifests_executes_configured_dataspace_route_locally() {
+async fn anonymous_space_directory_manifest_selector_hides_restricted_route() {
     let authority = checked_torii_test_account_id(
         0xfa,
         "derive routed space-directory manifest authority fixture key",
@@ -2703,11 +2873,17 @@ async fn handler_space_directory_manifests_executes_configured_dataspace_route_l
         .uaid_dataspaces_mut_for_testing()
         .insert(uaid, bindings);
     let mut app = mk_app_state_for_tests_with_world(world);
-    let (restricted_lane, configured_restricted_dataspace) =
+    let (_restricted_lane, configured_restricted_dataspace) =
         configure_private_ingress_routes_for_test(&mut app);
     assert_eq!(configured_restricted_dataspace, restricted_dataspace);
     let response = super::handler_space_directory_manifests(
         State(app),
+        axum::http::Method::GET,
+        format!(
+            "/v1/space-directory/uaids/{uaid}/manifests?dataspace=10&status=active&limit=1&offset=0"
+        )
+        .parse()
+        .expect("valid restricted manifest selector uri"),
         HeaderMap::new(),
         crate::loopback_connect_info(),
         AxPath(uaid.to_string()),
@@ -2728,33 +2904,25 @@ async fn handler_space_directory_manifests_executes_configured_dataspace_route_l
         Some("local"),
         "configured dataspace route should execute locally in unit tests",
     );
-    assert_eq!(
-        torii_response_header(&response, "x-iroha-route-lane-id"),
-        Some(restricted_lane.as_u32().to_string().as_str())
-    );
-    assert_eq!(
-        torii_response_header(&response, "x-iroha-route-dataspace-id"),
-        Some(restricted_dataspace.as_u64().to_string().as_str())
+    assert!(response.headers().get("x-iroha-route-lane-id").is_none());
+    assert!(
+        response
+            .headers()
+            .get("x-iroha-route-dataspace-id")
+            .is_none()
     );
     let json = decode_torii_json(response, "manifest handler body", "manifest handler json").await;
-    assert_eq!(json["total"].as_u64(), Some(1));
+    assert_eq!(json["total"].as_u64(), Some(0));
     let manifests = json["manifests"].as_array().expect("manifests array");
-    assert_eq!(manifests.len(), 1);
-    assert_eq!(
-        manifests[0]["dataspace_id"].as_u64(),
-        Some(restricted_dataspace.as_u64())
-    );
-    assert_eq!(manifests[0]["status"].as_str(), Some("Active"));
-    assert_eq!(
-        manifests[0]["accounts"][0].as_str(),
-        Some(authority.to_string().as_str())
-    );
+    assert!(manifests.is_empty());
 }
 #[cfg(feature = "app_api")]
 #[tokio::test]
-async fn handler_explorer_account_detail_uses_target_account_routes_for_internal_reads() {
+async fn anonymous_loopback_cannot_read_restricted_or_missing_explorer_accounts() {
     let authority =
         checked_torii_test_account_id(0xfb, "derive explorer account detail authority fixture key");
+    let missing =
+        checked_torii_test_account_id(0xfc, "derive missing explorer account detail fixture key");
     let restricted_dataspace = DataSpaceId::new(10);
     let uaid = UniversalAccountId::from_hash(Hash::new(b"torii::explorer-account-detail-routes"));
     let mut app = mk_app_state_for_tests_with_world(world_with_account_bound_to_dataspace(
@@ -2765,31 +2933,19 @@ async fn handler_explorer_account_detail_uses_target_account_routes_for_internal
     let (_restricted_lane, configured_restricted_dataspace) =
         configure_private_ingress_routes_for_test(&mut app);
     assert_eq!(configured_restricted_dataspace, restricted_dataspace);
-    let response = super::handler_explorer_account_detail(
-        State(app),
-        axum::http::Method::GET,
-        format!("/v1/explorer/accounts/{authority}")
-            .parse()
-            .expect("valid explorer account uri"),
-        HeaderMap::new(),
-        crate::loopback_connect_info(),
-        AxPath(authority.to_string()),
-    )
-    .await
-    .expect("explorer account detail should execute")
-    .into_response();
-    assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(
-        torii_response_header(&response, "x-iroha-routed-by"),
-        Some("local"),
-        "internal explorer account reads should use the routed target-account path",
-    );
-    let json = decode_torii_json(
-        response,
-        "explorer account detail body",
-        "explorer account detail json",
-    )
-    .await;
-    let authority_literal = authority.to_string();
-    assert_eq!(json["id"].as_str(), Some(authority_literal.as_str()));
+    for account in [&authority, &missing] {
+        let error = super::handler_explorer_account_detail(
+            State(app.clone()),
+            axum::http::Method::GET,
+            format!("/v1/explorer/accounts/{account}")
+                .parse()
+                .expect("valid explorer account uri"),
+            HeaderMap::new(),
+            crate::loopback_connect_info(),
+            AxPath(account.to_string()),
+        )
+        .await
+        .expect_err("anonymous loopback must not distinguish a restricted account from absence");
+        assert_eq!(error.into_response().status(), StatusCode::NOT_FOUND);
+    }
 }

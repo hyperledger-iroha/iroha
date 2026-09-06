@@ -50,12 +50,16 @@ fn build_torii(profile: TelemetryProfile) -> Torii {
         None,
         telemetry,
     )
+    .expect("valid Torii Sumeragi-SSE fixture")
 }
 #[tokio::test]
 async fn status_sse_allowed_under_extended_profile() {
     let torii = build_torii(TelemetryProfile::Extended);
-    let app = torii.api_router_for_tests();
-    let resp = app
+    let runtime = torii
+        .api_router_for_tests()
+        .expect("test Torii router initializes");
+    let resp = runtime
+        .router()
         .oneshot(
             Request::builder()
                 .uri("/v1/sumeragi/status/sse")
@@ -71,12 +75,16 @@ async fn status_sse_allowed_under_extended_profile() {
         .and_then(|h| h.to_str().ok())
         .unwrap_or("");
     assert!(ct.contains("text/event-stream"));
+    runtime.shutdown().await;
 }
 #[tokio::test]
 async fn status_sse_restricted_under_operator_profile() {
     let torii = build_torii(TelemetryProfile::Operator);
-    let app = torii.api_router_for_tests();
-    let resp = app
+    let runtime = torii
+        .api_router_for_tests()
+        .expect("test Torii router initializes");
+    let resp = runtime
+        .router()
         .oneshot(
             Request::builder()
                 .uri("/v1/sumeragi/status/sse")
@@ -86,4 +94,5 @@ async fn status_sse_restricted_under_operator_profile() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    runtime.shutdown().await;
 }

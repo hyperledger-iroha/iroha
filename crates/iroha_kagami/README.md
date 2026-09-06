@@ -112,9 +112,10 @@ into the output directory.
 - Supports interactive and fully flag-driven non-interactive use
 - Requires the operator-authenticated full validator peer/PoP roster encoded by
   the network's signed genesis; the generated local peer is not promoted to validator
-- Stages `config.toml`, a reference `genesis.json` manifest, and a generated
-  guide that requires the network-authoritative signed genesis block and exact
-  hash before showing the final `iroha3d` launch step
+- Stages `config.toml`, a non-signable `genesis.template.json` source, and a
+  generated guide that requires the network-authoritative complete manifest,
+  signed genesis block, and exact hash before showing the final `iroha3d`
+  launch step
 
 `kagami localnet`
 - Bare-metal local network generator
@@ -160,8 +161,8 @@ into the output directory.
   Compose is evaluated; those artifacts must match the seeded validator roster.
 
 `kagami genesis`
-- Power-user genesis generation, PoP embedding, validation, normalization, and
-  signing helpers
+- Power-user genesis generation, explicit source-template materialization, PoP
+  embedding, validation, normalization, and signing helpers
 
 `kagami verify`
 - Profile-aware genesis verification for shipped Iroha 3 profiles
@@ -172,15 +173,20 @@ into the output directory.
 
 ## Iroha 3 Profiles
 
-- Run `cargo xtask kagami-profiles` to emit sample bundles for
+- Run `cargo xtask kagami-profiles --kagemusha-mint-finality-parameters-dir <AUTHORITY_DIR>` to emit operator-owned bundles for
   `iroha3-dev` and `iroha3-nexus` under
   `defaults/kagami/<profile>/`
-- Each bundle includes:
+- Each generated bundle includes:
   - `genesis.json`
   - `verify.txt`
   - `config.toml`
   - `docker-compose.yml`
   - `README.md`
+- Checked-in `genesis.template.json` files deliberately omit mint-finality
+  authority and cannot be validated, signed, or used by a node. Materialize one
+  explicitly with `kagami genesis materialize <SOURCE.template.json>
+  --kagemusha-mint-finality-parameters <PUBLIC_PARAMETERS.json>`, or generate a
+  complete profile bundle with the command above.
 - For a disposable four-validator Taira deployment, use
   `python3 scripts/taira_devnet.py up --inrou-canary-dir <owner-only-workspace>`;
   use its `check` and `down` subcommands
@@ -214,6 +220,7 @@ target/debug/kagami genesis generate \
   --profile iroha3-dev \
   --ivm-dir ./ivm_libs \
   --genesis-public-key ed25519:... \
+  --kagemusha-mint-finality-parameters ./kagemusha-mint-finality-public.json \
   --consensus-mode permissioned \
   default
 ```

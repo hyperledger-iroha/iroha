@@ -98,7 +98,7 @@ func (c *MessageCircuit) constrainSemanticStatement(api frontend.API) error {
 
 func (c *MessageCircuit) semanticBundleCommitment(api frontend.API) ([32]uints.U8, error) {
 	commitment := []uints.U8{
-		uints.NewU8(1), uints.NewU8(5), uints.NewU8(profile.SoraNetworkTag), uints.NewU8(c.cfg.TargetNetworkTag),
+		uints.NewU8(1), uints.NewU8(profile.TransferHubMessageKind), uints.NewU8(profile.SoraNetworkTag), uints.NewU8(c.cfg.TargetNetworkTag),
 	}
 	commitment = append(commitment, c.RawSignals[8][:]...)
 	commitment = append(commitment, c.RawSignals[9][:]...)

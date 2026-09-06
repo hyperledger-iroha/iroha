@@ -5,10 +5,16 @@ use crate::{
     smartcontracts::isi::sorafs_pop_registry::{
         read_active_publications, read_pinned_publications,
     },
-    state::{StateTransaction, WorldReadOnly},
+    state::{StateBlock, StateTransaction, WorldReadOnly},
+};
+#[cfg(test)]
+use iroha_data_model::sorafs::moderation_ledger::{
+    MODERATION_CHALLENGE_BOND_AMOUNT_V1, MODERATION_CHALLENGE_REJECTED_SLASH_BPS_V1,
+    MODERATION_CHALLENGE_RESOLUTION_GRACE_MS_V1,
 };
 use iroha_data_model::{
     account::AccountId,
+    asset::{AssetDefinitionId, AssetId},
     events::data::sorafs::{
         SorafsGatewayEvent, SorafsModerationLedgerEvent, SorafsModerationLedgerEventKind,
     },
@@ -16,10 +22,10 @@ use iroha_data_model::{
         error::{InstructionExecutionError, InvalidParameterError},
         sorafs::{
             AcceptSorafsModerationJurorAssignment, ActivateSorafsModerationCase,
-            FinalizeSorafsModerationCase, FinalizeSorafsModerationSortition,
-            RaiseSorafsModerationChallenge, RegisterSorafsModerationJurorEligibility,
-            ResolveSorafsModerationChallenge, SetSorafsModerationPolicy,
-            SubmitSorafsModerationAppeal, SubmitSorafsModerationCommit,
+            ExpireSorafsModerationChallenge, FinalizeSorafsModerationCase,
+            FinalizeSorafsModerationSortition, RaiseSorafsModerationChallenge,
+            RegisterSorafsModerationJurorEligibility, ResolveSorafsModerationChallenge,
+            SetSorafsModerationPolicy, SubmitSorafsModerationAppeal, SubmitSorafsModerationCommit,
             SubmitSorafsModerationReveal,
         },
     },
@@ -41,20 +47,22 @@ use iroha_data_model::{
         },
         moderation_ledger::{
             MODERATION_FINALIZED_SNAPSHOT_VERSION_V1, MODERATION_LEDGER_MAX_NONCE_BYTES_V1,
-            MODERATION_LEDGER_MAX_PANEL_SIZE_V1, MODERATION_LEDGER_MAX_REASON_BYTES_V1,
-            MODERATION_LEDGER_MAX_WAITLIST_SIZE_V1, MODERATION_QUERY_MAX_CASES_V1,
-            MODERATION_QUERY_MAX_EVENT_PAGE_BYTES_V1, MODERATION_QUERY_MAX_EVENTS_V1,
-            MODERATION_QUERY_MAX_SNAPSHOT_BYTES_V1, ModerationAppealRecordV1,
-            ModerationAppealStatusV1, ModerationCaseRecordV1, ModerationCaseSpecV1,
-            ModerationCaseStatusV1, ModerationChallengeDecisionV1, ModerationChallengeRecordV1,
-            ModerationCommitRecordV1, ModerationFinalizedAppealViewV1,
-            ModerationFinalizedCaseViewV1, ModerationFinalizedCursorV1,
-            ModerationFinalizedEventPageV1, ModerationFinalizedEventV1,
-            ModerationFinalizedLedgerSnapshotV1, ModerationJurorEligibilityClassV1,
-            ModerationJurorEligibilityRecordV1, ModerationJurorReplacementV1,
-            ModerationLedgerPolicyRecord, ModerationLedgerStatusV1, ModerationNoShowKindV1,
-            ModerationNoShowRecordV1, ModerationOutcomeKindV1, ModerationOutcomeRecordV1,
-            ModerationPanelSelectionV1, ModerationPoPRegistrySnapshotV1, ModerationRevealRecordV1,
+            MODERATION_LEDGER_MAX_PANEL_SIZE_V1,
+            MODERATION_LEDGER_MAX_PENDING_SORTITION_ANCHORS_V1,
+            MODERATION_LEDGER_MAX_REASON_BYTES_V1, MODERATION_LEDGER_MAX_WAITLIST_SIZE_V1,
+            MODERATION_QUERY_MAX_CASES_V1, MODERATION_QUERY_MAX_EVENT_PAGE_BYTES_V1,
+            MODERATION_QUERY_MAX_EVENTS_V1, MODERATION_QUERY_MAX_SNAPSHOT_BYTES_V1,
+            ModerationAppealRecordV1, ModerationAppealStatusV1, ModerationCaseRecordV1,
+            ModerationCaseSpecV1, ModerationCaseStatusV1, ModerationChallengeBondV1,
+            ModerationChallengeDecisionV1, ModerationChallengeRecordV1, ModerationCommitRecordV1,
+            ModerationFinalizedAppealViewV1, ModerationFinalizedCaseViewV1,
+            ModerationFinalizedCursorV1, ModerationFinalizedEventPageV1,
+            ModerationFinalizedEventV1, ModerationFinalizedLedgerSnapshotV1,
+            ModerationJurorEligibilityClassV1, ModerationJurorEligibilityRecordV1,
+            ModerationJurorReplacementV1, ModerationLedgerPolicyRecord, ModerationLedgerPolicyV1,
+            ModerationLedgerStatusV1, ModerationNoShowKindV1, ModerationNoShowRecordV1,
+            ModerationOutcomeKindV1, ModerationOutcomeRecordV1, ModerationPanelSelectionV1,
+            ModerationPoPRegistrySnapshotV1, ModerationRevealRecordV1, ModerationSortitionAnchorV1,
             ModerationSortitionError, ModerationVoteCountsV1,
             is_canonical_moderation_identifier_v1, sorafs_moderation_panel_roster_hash_v1,
             sorafs_moderation_pop_challenge_v1, sorafs_moderation_pop_verifier_context_v1,
@@ -64,18 +72,20 @@ use iroha_data_model::{
     },
     state_path::StatePath,
 };
+use iroha_primitives::numeric::{Numeric, NumericSpec, Quantity, RoundingMode};
 use mv::storage::StorageReadOnly;
 use norito::{DecodeLimits, decode_canonical_with_limits, decode_from_bytes_with_limits};
 use sorafs_manifest::pop_credentials::{
     POP_MEMBERSHIP_PROOF_MAX_BYTES_V1, PopEligibilityClassV1, PopMembershipProofV1,
     verify_pop_membership_proof_v1,
 };
-use std::{str::FromStr, sync::OnceLock};
+use std::{collections::BTreeSet, str::FromStr, sync::OnceLock};
 const POLICY_STATE_KEY: &str = "sorafs_moderation_policy_v1";
 const STATUS_STATE_KEY: &str = "sorafs_moderation_status_v1";
 const APPEAL_STATE_KEY_PREFIX: &str = "sorafs_moderation_appeal_v1_";
 const APPEAL_DEPOSIT_STATE_KEY_PREFIX: &str = "sorafs_moderation_appeal_deposit_v1_";
 const APPEAL_PROOF_TOKEN_STATE_KEY_PREFIX: &str = "sorafs_moderation_appeal_proof_token_v1_";
+const SORTITION_ANCHOR_SCHEDULE_STATE_KEY: &str = "sorafs_moderation_anchor_schedule_v1";
 const ELIGIBILITY_STATE_KEY_PREFIX: &str = "sorafs_moderation_eligibility_v1_";
 const NULLIFIER_STATE_KEY_PREFIX: &str = "sorafs_moderation_pop_nullifier_v1_";
 const CASE_STATE_KEY_PREFIX: &str = "sorafs_moderation_case_v1_";
@@ -116,6 +126,113 @@ const PROOF_LIMITS: DecodeLimits = DecodeLimits::new(
 );
 const MANAGE_PERMISSION: &str = "CanManageSorafsModeration";
 const MODERATION_QUERY_MAX_SNAPSHOT_RECORDS_V1: usize = 65_536;
+const MODERATION_SORTITION_ANCHOR_SCHEDULE_VERSION_V1: u16 = 1;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// One exact leg of a retained moderation challenge bond settlement.
+pub(in crate::smartcontracts::isi) enum ModerationChallengeBondSettlementLeg {
+    /// Return bond principal to its challenger.
+    Refund,
+    /// Retain the policy-fixed slash in governance custody.
+    Slash,
+}
+#[derive(Debug)]
+/// Closed purpose carried by a one-shot moderation challenge bond movement.
+pub(in crate::smartcontracts::isi) enum VerifiedModerationChallengeBondPurpose {
+    /// Voluntarily lock the submitting challenger's bond.
+    Funding {
+        /// Exact submitting challenger.
+        authority: AccountId,
+        /// Moderation case identifier.
+        case_id: String,
+        /// Ballot round identifier.
+        round_id: String,
+        /// Challenge identifier.
+        challenge_id: String,
+    },
+    /// Settle a retained challenge bond according to its decision.
+    Settlement {
+        /// Moderation case identifier.
+        case_id: String,
+        /// Ballot round identifier.
+        round_id: String,
+        /// Challenge identifier.
+        challenge_id: String,
+        /// Decision fixing the allowed settlement split.
+        decision: ModerationChallengeDecisionV1,
+        /// Exact settlement leg.
+        leg: ModerationChallengeBondSettlementLeg,
+    },
+}
+#[derive(Debug)]
+/// Non-reusable proof that moderation admission selected one exact balance movement.
+pub(in crate::smartcontracts::isi) struct VerifiedModerationChallengeBondMovement {
+    purpose: VerifiedModerationChallengeBondPurpose,
+    source_id: AssetId,
+    destination_id: AssetId,
+    amount: Quantity,
+}
+impl VerifiedModerationChallengeBondMovement {
+    fn funding(
+        authority: AccountId,
+        case_id: String,
+        round_id: String,
+        challenge_id: String,
+        source_id: AssetId,
+        destination_id: AssetId,
+        amount: Quantity,
+    ) -> Self {
+        Self {
+            purpose: VerifiedModerationChallengeBondPurpose::Funding {
+                authority,
+                case_id,
+                round_id,
+                challenge_id,
+            },
+            source_id,
+            destination_id,
+            amount,
+        }
+    }
+    fn settlement(
+        case_id: String,
+        round_id: String,
+        challenge_id: String,
+        decision: ModerationChallengeDecisionV1,
+        leg: ModerationChallengeBondSettlementLeg,
+        source_id: AssetId,
+        destination_id: AssetId,
+        amount: Quantity,
+    ) -> Self {
+        Self {
+            purpose: VerifiedModerationChallengeBondPurpose::Settlement {
+                case_id,
+                round_id,
+                challenge_id,
+                decision,
+                leg,
+            },
+            source_id,
+            destination_id,
+            amount,
+        }
+    }
+    /// Consume this proof into its checked movement components.
+    pub(in crate::smartcontracts::isi) fn into_parts(
+        self,
+    ) -> (
+        VerifiedModerationChallengeBondPurpose,
+        AssetId,
+        AssetId,
+        Quantity,
+    ) {
+        (
+            self.purpose,
+            self.source_id,
+            self.destination_id,
+            self.amount,
+        )
+    }
+}
 #[derive(Clone, Debug, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize)]
 struct AppealDepositBindingStateV1 {
     deposit_lock_digest: [u8; 32],
@@ -129,6 +246,18 @@ struct AppealProofTokenBindingStateV1 {
     case_id: String,
     round_id: String,
     intake_digest: [u8; 32],
+}
+#[derive(Clone, Debug, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize)]
+struct ModerationSortitionAnchorScheduleEntryV1 {
+    registration_deadline_unix_ms: u64,
+    case_id: String,
+    round_id: String,
+    intake_digest: [u8; 32],
+}
+#[derive(Clone, Debug, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize)]
+struct ModerationSortitionAnchorScheduleV1 {
+    version: u16,
+    entries: Vec<ModerationSortitionAnchorScheduleEntryV1>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize)]
 struct ModerationPersistedEventV1 {
@@ -253,25 +382,6 @@ fn require_pinned_pop_snapshot(
         snapshot.registry_audit_head,
     )
 }
-fn latest_parent_randomness_anchor(
-    state_transaction: &StateTransaction<'_, '_>,
-) -> Result<[u8; 32], InstructionExecutionError> {
-    let anchor = state_transaction
-        .block_hashes()
-        .last()
-        .map(|hash| *hash.as_ref())
-        .ok_or_else(|| {
-            invalid_parameter(
-                "moderation sortition requires an already committed post-registration parent block",
-            )
-        })?;
-    if anchor == [0; 32] {
-        return Err(corrupt_state(
-            "moderation sortition parent-block randomness anchor is zero",
-        ));
-    }
-    Ok(anchor)
-}
 fn eligibility_class(class: PopEligibilityClassV1) -> ModerationJurorEligibilityClassV1 {
     match class {
         PopEligibilityClassV1::General => ModerationJurorEligibilityClassV1::General,
@@ -288,6 +398,12 @@ fn policy_key() -> &'static StatePath {
 fn status_key() -> &'static StatePath {
     static KEY: OnceLock<StatePath> = OnceLock::new();
     KEY.get_or_init(|| StatePath::from_str(STATUS_STATE_KEY).expect("static state key is valid"))
+}
+fn sortition_anchor_schedule_key() -> &'static StatePath {
+    static KEY: OnceLock<StatePath> = OnceLock::new();
+    KEY.get_or_init(|| {
+        StatePath::from_str(SORTITION_ANCHOR_SCHEDULE_STATE_KEY).expect("static state key is valid")
+    })
 }
 fn event_journal_head_key() -> &'static StatePath {
     static KEY: OnceLock<StatePath> = OnceLock::new();
@@ -331,6 +447,157 @@ fn validate_challenge_reason(reason: &str) -> Result<(), InstructionExecutionErr
             "moderation challenge reason is empty, padded, contains control characters, or is too long",
         ));
     }
+    Ok(())
+}
+fn lock_moderation_challenge_bond(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    policy: &ModerationLedgerPolicyV1,
+    authority: &AccountId,
+    case_id: &str,
+    round_id: &str,
+    challenge_id: &str,
+) -> Result<ModerationChallengeBondV1, InstructionExecutionError> {
+    let asset_definition_id = policy.challenge_voting_asset_id.clone();
+    let escrow_account = policy.challenge_escrow_account.clone();
+    let slash_receiver_account = policy.challenge_slash_receiver_account.clone();
+    if authority == &escrow_account || authority == &slash_receiver_account {
+        return Err(invalid_parameter(
+            "moderation bond custody accounts cannot submit public challenges",
+        ));
+    }
+    state_transaction
+        .world
+        .account(&escrow_account)
+        .map_err(InstructionExecutionError::Find)?;
+    state_transaction
+        .world
+        .account(&slash_receiver_account)
+        .map_err(InstructionExecutionError::Find)?;
+    let numeric_spec = state_transaction
+        .numeric_spec_for(&asset_definition_id)
+        .map_err(InstructionExecutionError::Find)?;
+    let amount = policy.challenge_bond_amount.clone();
+    let slash_amount = moderation_challenge_rejected_slash_amount(
+        &amount,
+        numeric_spec,
+        policy.challenge_rejected_slash_bps,
+    )?;
+    let refund_amount = amount
+        .checked_sub(&slash_amount)
+        .map_err(|_| corrupt_state("moderation challenge bond refund underflow"))?;
+    for settlement_amount in [&amount, &slash_amount, &refund_amount] {
+        crate::smartcontracts::isi::asset::isi::assert_numeric_spec_with(
+            settlement_amount.as_numeric(),
+            numeric_spec,
+        )
+        .map_err(InstructionExecutionError::from)?;
+    }
+    let source_id = AssetId::new(asset_definition_id.clone(), authority.clone());
+    let destination_id = AssetId::new(asset_definition_id.clone(), escrow_account.clone());
+    let movement = VerifiedModerationChallengeBondMovement::funding(
+        authority.clone(),
+        case_id.to_owned(),
+        round_id.to_owned(),
+        challenge_id.to_owned(),
+        source_id,
+        destination_id,
+        amount.clone(),
+    );
+    crate::smartcontracts::isi::asset::isi::execute_verified_moderation_challenge_bond_movement(
+        state_transaction,
+        movement,
+    )?;
+    Ok(ModerationChallengeBondV1 {
+        asset_definition_id,
+        amount,
+        escrow_account,
+        slash_receiver_account,
+        refunded_amount: Quantity::zero(),
+        slashed_amount: Quantity::zero(),
+        settled_at_unix_ms: None,
+    })
+}
+fn settle_moderation_challenge_bond(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    policy: &ModerationLedgerPolicyV1,
+    record: &mut ModerationChallengeRecordV1,
+    decision: ModerationChallengeDecisionV1,
+    settled_at_unix_ms: u64,
+) -> Result<(), InstructionExecutionError> {
+    if record.bond.settled_at_unix_ms.is_some() {
+        return Err(corrupt_state(
+            "moderation challenge bond was settled before its decision",
+        ));
+    }
+    let slash_amount = if decision == ModerationChallengeDecisionV1::Rejected {
+        let numeric_spec = state_transaction
+            .numeric_spec_for(&record.bond.asset_definition_id)
+            .map_err(InstructionExecutionError::Find)?;
+        moderation_challenge_rejected_slash_amount(
+            &record.bond.amount,
+            numeric_spec,
+            policy.challenge_rejected_slash_bps,
+        )?
+    } else {
+        Quantity::zero()
+    };
+    let refund_amount = record
+        .bond
+        .amount
+        .checked_sub(&slash_amount)
+        .map_err(|_| corrupt_state("moderation challenge bond settlement underflow"))?;
+    let source_id = AssetId::new(
+        record.bond.asset_definition_id.clone(),
+        record.bond.escrow_account.clone(),
+    );
+    // The record remains pending between the refund and slash legs of a
+    // rejected settlement. Preflight the complete aggregate liability once;
+    // the exact typed legs below then execute atomically in the outer state
+    // transaction without granting generic governance movements an exemption.
+    ensure_moderation_bond_custody_fully_backed(state_transaction.world(), &source_id)?;
+    if !refund_amount.is_zero() {
+        let destination_id = AssetId::new(
+            record.bond.asset_definition_id.clone(),
+            record.challenger.clone(),
+        );
+        let movement = VerifiedModerationChallengeBondMovement::settlement(
+            record.case_id.clone(),
+            record.round_id.clone(),
+            record.challenge_id.clone(),
+            decision,
+            ModerationChallengeBondSettlementLeg::Refund,
+            source_id.clone(),
+            destination_id,
+            refund_amount.clone(),
+        );
+        crate::smartcontracts::isi::asset::isi::execute_verified_moderation_challenge_bond_movement(
+            state_transaction,
+            movement,
+        )?;
+    }
+    if !slash_amount.is_zero() {
+        let destination_id = AssetId::new(
+            record.bond.asset_definition_id.clone(),
+            record.bond.slash_receiver_account.clone(),
+        );
+        let movement = VerifiedModerationChallengeBondMovement::settlement(
+            record.case_id.clone(),
+            record.round_id.clone(),
+            record.challenge_id.clone(),
+            decision,
+            ModerationChallengeBondSettlementLeg::Slash,
+            source_id,
+            destination_id,
+            slash_amount.clone(),
+        );
+        crate::smartcontracts::isi::asset::isi::execute_verified_moderation_challenge_bond_movement(
+            state_transaction,
+            movement,
+        )?;
+    }
+    record.bond.refunded_amount = refund_amount;
+    record.bond.slashed_amount = slash_amount;
+    record.bond.settled_at_unix_ms = Some(settled_at_unix_ms);
     Ok(())
 }
 fn case_digest(case_id: &str, round_id: &str) -> [u8; 32] {
@@ -748,6 +1015,537 @@ fn read_policy(
 ) -> Result<Option<ModerationLedgerPolicyRecord>, InstructionExecutionError> {
     read_policy_with_current(world, None)
 }
+
+/// Return the first live moderation reference that prevents account deletion.
+///
+/// Active policy custody, live pre-activation appeal actors and pinned custody,
+/// custody pinned by an open case, and all parties to an unsettled challenge
+/// must remain registered until no future moderation transition can name them.
+/// Persisted state is decoded canonically and malformed records fail the
+/// deletion closed.
+pub(crate) fn retained_moderation_account_reference(
+    world: &impl WorldReadOnly,
+    account: &AccountId,
+) -> Result<Option<String>, InstructionExecutionError> {
+    if let Some(record) = read_policy(world)? {
+        if &record.policy.challenge_escrow_account == account {
+            return Ok(Some("active policy challenge escrow".to_owned()));
+        }
+        if &record.policy.challenge_slash_receiver_account == account {
+            return Ok(Some("active policy challenge slash receiver".to_owned()));
+        }
+    }
+
+    let appeal_start = StatePath::from_str(APPEAL_STATE_KEY_PREFIX)
+        .expect("static moderation appeal prefix is valid");
+    for (key, payload) in world.smart_contract_state().range(appeal_start..) {
+        if !key.as_ref().starts_with(APPEAL_STATE_KEY_PREFIX) {
+            break;
+        }
+        let candidate: ModerationAppealRecordV1 =
+            decode_state_with_current(payload, "moderation appeal", None)?;
+        if appeal_key(&candidate.intake.case_id, &candidate.intake.round_id) != *key {
+            return Err(corrupt_state(
+                "retained moderation appeal key does not match its record",
+            ));
+        }
+        let appeal = read_appeal(world, &candidate.intake.case_id, &candidate.intake.round_id)?
+            .ok_or_else(|| corrupt_state("retained moderation appeal disappeared during read"))?;
+        if appeal != candidate {
+            return Err(corrupt_state(
+                "retained moderation appeal changed during read",
+            ));
+        }
+        if !matches!(
+            appeal.status,
+            ModerationAppealStatusV1::RegisteringJurors
+                | ModerationAppealStatusV1::AwaitingAcceptance
+        ) {
+            continue;
+        }
+        let label = if &appeal.submitted_by == account {
+            Some("appellant")
+        } else if &appeal.policy.challenge_escrow_account == account {
+            Some("policy challenge escrow")
+        } else if &appeal.policy.challenge_slash_receiver_account == account {
+            Some("policy challenge slash receiver")
+        } else if appeal.intake.exclusions.contains(account) {
+            Some("excluded account")
+        } else if appeal.eligible_jurors.contains(account) {
+            Some("eligible juror")
+        } else {
+            None
+        };
+        if let Some(label) = label {
+            return Ok(Some(format!(
+                "pre-activation appeal `{}` round `{}` {label}",
+                appeal.intake.case_id, appeal.intake.round_id
+            )));
+        }
+    }
+
+    let case_start =
+        StatePath::from_str(CASE_STATE_KEY_PREFIX).expect("static moderation case prefix is valid");
+    for (key, payload) in world.smart_contract_state().range(case_start..) {
+        if !key.as_ref().starts_with(CASE_STATE_KEY_PREFIX) {
+            break;
+        }
+        let case: ModerationCaseRecordV1 =
+            decode_state_with_current(payload, "moderation case", None)?;
+        if case_key(&case.spec.context.case_id, &case.spec.round_id) != *key {
+            return Err(corrupt_state(
+                "retained moderation case key does not match its record",
+            ));
+        }
+        if case.status == ModerationCaseStatusV1::Open {
+            if &case.policy.challenge_escrow_account == account {
+                return Ok(Some(format!(
+                    "open case `{}` round `{}` challenge escrow",
+                    case.spec.context.case_id, case.spec.round_id
+                )));
+            }
+            if &case.policy.challenge_slash_receiver_account == account {
+                return Ok(Some(format!(
+                    "open case `{}` round `{}` challenge slash receiver",
+                    case.spec.context.case_id, case.spec.round_id
+                )));
+            }
+        }
+    }
+
+    let challenge_start = StatePath::from_str(CHALLENGE_STATE_KEY_PREFIX)
+        .expect("static moderation challenge prefix is valid");
+    for (key, payload) in world.smart_contract_state().range(challenge_start..) {
+        if !key.as_ref().starts_with(CHALLENGE_STATE_KEY_PREFIX) {
+            break;
+        }
+        let challenge: ModerationChallengeRecordV1 =
+            decode_state_with_current(payload, "moderation challenge", None)?;
+        if challenge_key(
+            &challenge.case_id,
+            &challenge.round_id,
+            &challenge.challenge_id,
+        ) != *key
+        {
+            return Err(corrupt_state(
+                "retained moderation challenge key does not match its record",
+            ));
+        }
+        let pending_decision = challenge.decision.is_none();
+        let pending_settlement = challenge.bond.settled_at_unix_ms.is_none();
+        if pending_decision != pending_settlement {
+            return Err(corrupt_state(
+                "moderation challenge decision and bond settlement disagree",
+            ));
+        }
+        if !pending_decision {
+            continue;
+        }
+        let label = if &challenge.challenger == account {
+            Some("challenger")
+        } else if &challenge.bond.escrow_account == account {
+            Some("bond escrow")
+        } else if &challenge.bond.slash_receiver_account == account {
+            Some("bond slash receiver")
+        } else {
+            None
+        };
+        if let Some(label) = label {
+            return Ok(Some(format!(
+                "pending challenge `{}` for case `{}` round `{}` {label}",
+                challenge.challenge_id, challenge.case_id, challenge.round_id
+            )));
+        }
+    }
+    Ok(None)
+}
+
+/// Return the first moderation reference retaining one asset definition.
+pub(crate) fn retained_moderation_asset_definition_reference(
+    world: &impl WorldReadOnly,
+    asset_definition_id: &AssetDefinitionId,
+) -> Result<Option<String>, InstructionExecutionError> {
+    retained_moderation_asset_definition_reference_in(
+        world,
+        &BTreeSet::from([asset_definition_id.clone()]),
+    )
+    .map(|reference| reference.map(|(_, label)| label))
+}
+
+/// Return the first moderation reference retaining any definition in `candidates`.
+///
+/// This scans each durable moderation family at most once so domain teardown
+/// cannot amplify the check by the number of definitions it would cascade.
+pub(crate) fn retained_moderation_asset_definition_reference_in(
+    world: &impl WorldReadOnly,
+    candidates: &BTreeSet<AssetDefinitionId>,
+) -> Result<Option<(AssetDefinitionId, String)>, InstructionExecutionError> {
+    if candidates.is_empty() {
+        return Ok(None);
+    }
+    if let Some(record) = read_policy(world)?
+        && candidates.contains(&record.policy.challenge_voting_asset_id)
+    {
+        return Ok(Some((
+            record.policy.challenge_voting_asset_id,
+            "active policy challenge voting asset".to_owned(),
+        )));
+    }
+
+    let appeal_start = StatePath::from_str(APPEAL_STATE_KEY_PREFIX)
+        .expect("static moderation appeal prefix is valid");
+    for (key, payload) in world.smart_contract_state().range(appeal_start..) {
+        if !key.as_ref().starts_with(APPEAL_STATE_KEY_PREFIX) {
+            break;
+        }
+        let candidate: ModerationAppealRecordV1 =
+            decode_state_with_current(payload, "moderation appeal", None)?;
+        if appeal_key(&candidate.intake.case_id, &candidate.intake.round_id) != *key {
+            return Err(corrupt_state(
+                "retained moderation appeal key does not match its record",
+            ));
+        }
+        let appeal = read_appeal(world, &candidate.intake.case_id, &candidate.intake.round_id)?
+            .ok_or_else(|| corrupt_state("retained moderation appeal disappeared during read"))?;
+        if appeal != candidate {
+            return Err(corrupt_state(
+                "retained moderation appeal changed during read",
+            ));
+        }
+        if candidates.contains(&appeal.policy.challenge_voting_asset_id) {
+            let retained_definition = appeal.policy.challenge_voting_asset_id.clone();
+            return Ok(Some((
+                retained_definition,
+                format!(
+                    "appeal `{}` round `{}` immutable policy challenge voting asset",
+                    appeal.intake.case_id, appeal.intake.round_id
+                ),
+            )));
+        }
+    }
+
+    let case_start =
+        StatePath::from_str(CASE_STATE_KEY_PREFIX).expect("static moderation case prefix is valid");
+    for (key, payload) in world.smart_contract_state().range(case_start..) {
+        if !key.as_ref().starts_with(CASE_STATE_KEY_PREFIX) {
+            break;
+        }
+        let case: ModerationCaseRecordV1 =
+            decode_state_with_current(payload, "moderation case", None)?;
+        if case_key(&case.spec.context.case_id, &case.spec.round_id) != *key {
+            return Err(corrupt_state(
+                "retained moderation case key does not match its record",
+            ));
+        }
+        if case.status == ModerationCaseStatusV1::Open
+            && candidates.contains(&case.policy.challenge_voting_asset_id)
+        {
+            return Ok(Some((
+                case.policy.challenge_voting_asset_id,
+                format!(
+                    "open case `{}` round `{}` challenge voting asset",
+                    case.spec.context.case_id, case.spec.round_id
+                ),
+            )));
+        }
+    }
+
+    let challenge_start = StatePath::from_str(CHALLENGE_STATE_KEY_PREFIX)
+        .expect("static moderation challenge prefix is valid");
+    for (key, payload) in world.smart_contract_state().range(challenge_start..) {
+        if !key.as_ref().starts_with(CHALLENGE_STATE_KEY_PREFIX) {
+            break;
+        }
+        let candidate: ModerationChallengeRecordV1 =
+            decode_state_with_current(payload, "moderation challenge", None)?;
+        if challenge_key(
+            &candidate.case_id,
+            &candidate.round_id,
+            &candidate.challenge_id,
+        ) != *key
+        {
+            return Err(corrupt_state(
+                "retained moderation challenge key does not match its record",
+            ));
+        }
+        let challenge = read_challenge(
+            world,
+            &candidate.case_id,
+            &candidate.round_id,
+            &candidate.challenge_id,
+        )?
+        .ok_or_else(|| corrupt_state("retained moderation challenge disappeared during read"))?;
+        if challenge != candidate {
+            return Err(corrupt_state(
+                "retained moderation challenge changed during read",
+            ));
+        }
+        if candidates.contains(&challenge.bond.asset_definition_id) {
+            let settlement = if challenge.bond.settled_at_unix_ms.is_some() {
+                "settled"
+            } else {
+                "pending"
+            };
+            return Ok(Some((
+                challenge.bond.asset_definition_id,
+                format!(
+                    "{settlement} challenge `{}` for case `{}` round `{}` bond asset",
+                    challenge.challenge_id, challenge.case_id, challenge.round_id
+                ),
+            )));
+        }
+    }
+    Ok(None)
+}
+
+/// Install a valid active-policy asset reference for unregister guard tests.
+#[cfg(test)]
+pub(crate) fn seed_moderation_policy_asset_reference_for_test(
+    world: &mut crate::state::WorldTransaction<'_, '_>,
+    asset_definition_id: AssetDefinitionId,
+    custody_account: AccountId,
+    activated_by: AccountId,
+) -> Result<(), InstructionExecutionError> {
+    let policy = ModerationLedgerPolicyV1 {
+        version: iroha_data_model::sorafs::moderation_ledger::MODERATION_LEDGER_POLICY_VERSION_V1,
+        revision: 1,
+        predecessor_policy_digest: None,
+        challenge_voting_asset_id: asset_definition_id,
+        challenge_bond_amount: Quantity::from(MODERATION_CHALLENGE_BOND_AMOUNT_V1),
+        challenge_escrow_account: custody_account.clone(),
+        challenge_slash_receiver_account: custody_account,
+        challenge_rejected_slash_bps: MODERATION_CHALLENGE_REJECTED_SLASH_BPS_V1,
+        challenge_resolution_grace_ms: MODERATION_CHALLENGE_RESOLUTION_GRACE_MS_V1,
+        max_panel_size: 8,
+        max_candidate_pool_size: 32,
+        max_waitlist_size: 8,
+        max_exclusions_per_case: 16,
+        max_total_window_ms: 90_000_000,
+        max_challenges_per_case: 2,
+        missing_commit_penalty_points: 11,
+        unrevealed_commit_penalty_points: 23,
+    };
+    policy
+        .validate()
+        .map_err(|error| corrupt_state(format!("invalid test moderation policy: {error}")))?;
+    let record = ModerationLedgerPolicyRecord {
+        policy_digest: policy
+            .digest()
+            .map_err(|error| corrupt_state(format!("failed to digest test policy: {error}")))?,
+        policy,
+        activated_at_unix_ms: 1,
+        activated_by,
+    };
+    world.smart_contract_state.insert(
+        policy_key().clone(),
+        encode_state(&record, "test moderation policy")?,
+    );
+    Ok(())
+}
+
+/// Install one canonically valid pending bond liability for cross-custody tests.
+#[cfg(test)]
+pub(crate) fn seed_unsettled_moderation_bond_liability_for_test(
+    world: &mut crate::state::WorldTransaction<'_, '_>,
+    custody_asset: AssetId,
+    challenger: AccountId,
+) -> Result<(), InstructionExecutionError> {
+    const CASE_ID: &str = "case-reserve-overlap";
+    const ROUND_ID: &str = "round-reserve-overlap";
+    const CHALLENGE_ID: &str = "challenge-reserve-overlap";
+    const OPENED_AT: u64 = 1_000;
+    const COMMIT_DEADLINE: u64 = 2_000;
+    const SUBMISSION_DEADLINE: u64 = 3_000;
+    const RESOLUTION_DEADLINE: u64 =
+        SUBMISSION_DEADLINE + MODERATION_CHALLENGE_RESOLUTION_GRACE_MS_V1;
+    const REVEAL_DEADLINE: u64 = RESOLUTION_DEADLINE + 1_000;
+
+    let policy = ModerationLedgerPolicyV1 {
+        version: iroha_data_model::sorafs::moderation_ledger::MODERATION_LEDGER_POLICY_VERSION_V1,
+        revision: 1,
+        predecessor_policy_digest: None,
+        challenge_voting_asset_id: custody_asset.definition().clone(),
+        challenge_bond_amount: Quantity::from(MODERATION_CHALLENGE_BOND_AMOUNT_V1),
+        challenge_escrow_account: custody_asset.account().clone(),
+        challenge_slash_receiver_account: custody_asset.account().clone(),
+        challenge_rejected_slash_bps: MODERATION_CHALLENGE_REJECTED_SLASH_BPS_V1,
+        challenge_resolution_grace_ms: MODERATION_CHALLENGE_RESOLUTION_GRACE_MS_V1,
+        max_panel_size: 1,
+        max_candidate_pool_size: 1,
+        max_waitlist_size: 0,
+        max_exclusions_per_case: 1,
+        max_total_window_ms: 90_000_000,
+        max_challenges_per_case: 1,
+        missing_commit_penalty_points: 1,
+        unrevealed_commit_penalty_points: 1,
+    };
+    policy
+        .validate()
+        .map_err(|error| corrupt_state(format!("invalid overlap-test policy: {error}")))?;
+    let jurors = vec![challenger.clone()];
+    let context = SoraFsModerationBallotContextV1 {
+        version: SORAFS_MODERATION_BALLOT_CONTEXT_VERSION_V1,
+        case_id: CASE_ID.to_owned(),
+        evidence_bundle_digest: [0x91; 32],
+        appeal_finance_config_version: "finance-reserve-overlap-v1".to_owned(),
+        panel_roster_hash: sorafs_moderation_panel_roster_hash_v1(&jurors, 1),
+        policy_reference: "policy-reserve-overlap-v1".to_owned(),
+        evidence_uri: None,
+    };
+    let spec = ModerationCaseSpecV1 {
+        version: iroha_data_model::sorafs::moderation_ledger::MODERATION_LEDGER_CASE_VERSION_V1,
+        context,
+        round_id: ROUND_ID.to_owned(),
+        jurors,
+        quorum: 1,
+        commit_deadline_unix_ms: COMMIT_DEADLINE,
+        challenge_submission_deadline_unix_ms: SUBMISSION_DEADLINE,
+        challenge_resolution_deadline_unix_ms: RESOLUTION_DEADLINE,
+        reveal_deadline_unix_ms: REVEAL_DEADLINE,
+        policy_digest: policy
+            .digest()
+            .map_err(|error| corrupt_state(format!("failed to digest overlap policy: {error}")))?,
+    };
+    spec.validate()
+        .map_err(|error| corrupt_state(format!("invalid overlap-test case: {error}")))?;
+    let case = ModerationCaseRecordV1 {
+        spec,
+        policy,
+        status: ModerationCaseStatusV1::Open,
+        opened_at_unix_ms: OPENED_AT,
+        opened_by: challenger.clone(),
+        commitment_count: 0,
+        reveal_count: 0,
+        challenge_count: 1,
+        challenge_ids: vec![CHALLENGE_ID.to_owned()],
+        pending_challenge_count: 1,
+        accepted_challenge_count: 0,
+        expired_challenge_count: 0,
+    };
+    let challenge = ModerationChallengeRecordV1 {
+        case_id: CASE_ID.to_owned(),
+        round_id: ROUND_ID.to_owned(),
+        challenge_id: CHALLENGE_ID.to_owned(),
+        challenger,
+        kind:
+            iroha_data_model::sorafs::moderation_ledger::ModerationChallengeKindV1::EvidenceMismatch,
+        target_juror: None,
+        evidence_digest: [0x92; 32],
+        reason: "exercise overlapping protocol custody reserve".to_owned(),
+        raised_at_unix_ms: 2_500,
+        bond: ModerationChallengeBondV1 {
+            asset_definition_id: custody_asset.definition().clone(),
+            amount: Quantity::from(MODERATION_CHALLENGE_BOND_AMOUNT_V1),
+            escrow_account: custody_asset.account().clone(),
+            slash_receiver_account: custody_asset.account().clone(),
+            refunded_amount: Quantity::zero(),
+            slashed_amount: Quantity::zero(),
+            settled_at_unix_ms: None,
+        },
+        decision: None,
+        resolved_by: None,
+        resolved_at_unix_ms: None,
+    };
+    world.smart_contract_state.insert(
+        case_key(CASE_ID, ROUND_ID),
+        encode_state(&case, "overlap-test moderation case")?,
+    );
+    world.smart_contract_state.insert(
+        challenge_key(CASE_ID, ROUND_ID, CHALLENGE_ID),
+        encode_state(&challenge, "overlap-test moderation challenge")?,
+    );
+    read_challenge(world, CASE_ID, ROUND_ID, CHALLENGE_ID)?.ok_or_else(|| {
+        corrupt_state("overlap-test moderation challenge was not retained after insertion")
+    })?;
+    Ok(())
+}
+
+/// Sum every unsettled moderation bond pinned to one exact custody balance.
+///
+/// Challenge records retain the policy revision that admitted them, so this
+/// deliberately scans the durable records instead of consulting the current
+/// moderation policy. Every candidate is re-read through the authoritative
+/// validator; malformed, mis-keyed, or internally inconsistent state fails
+/// closed rather than undercounting custody liabilities.
+pub(in crate::smartcontracts::isi) fn unsettled_moderation_bond_liability(
+    world: &impl WorldReadOnly,
+    custody_asset: &AssetId,
+) -> Result<Quantity, InstructionExecutionError> {
+    let challenge_start = StatePath::from_str(CHALLENGE_STATE_KEY_PREFIX)
+        .expect("static moderation challenge prefix is valid");
+    let mut liability = Quantity::zero();
+    for (key, payload) in world.smart_contract_state().range(challenge_start..) {
+        if !key.as_ref().starts_with(CHALLENGE_STATE_KEY_PREFIX) {
+            break;
+        }
+        let candidate: ModerationChallengeRecordV1 =
+            decode_state_with_current(payload, "moderation challenge", None)?;
+        if challenge_key(
+            &candidate.case_id,
+            &candidate.round_id,
+            &candidate.challenge_id,
+        ) != *key
+        {
+            return Err(corrupt_state(
+                "moderation challenge custody key does not match its record",
+            ));
+        }
+        let record = read_challenge(
+            world,
+            &candidate.case_id,
+            &candidate.round_id,
+            &candidate.challenge_id,
+        )?
+        .ok_or_else(|| {
+            corrupt_state("moderation challenge disappeared during custody validation")
+        })?;
+        if record != candidate {
+            return Err(corrupt_state(
+                "moderation challenge changed during custody validation",
+            ));
+        }
+        if record.bond.settled_at_unix_ms.is_none()
+            && record.bond.asset_definition_id == *custody_asset.definition()
+            && record.bond.escrow_account == *custody_asset.account()
+        {
+            liability = liability
+                .checked_add(&record.bond.amount)
+                .map_err(|_| corrupt_state("moderation challenge bond liability overflow"))?;
+        }
+    }
+    Ok(liability)
+}
+
+/// Reject a debit whose resulting balance would undercollateralize moderation bonds.
+pub(in crate::smartcontracts::isi) fn ensure_moderation_bond_reserve_after_debit(
+    world: &impl WorldReadOnly,
+    custody_asset: &AssetId,
+    balance_after: &Quantity,
+) -> Result<(), InstructionExecutionError> {
+    let liability = unsettled_moderation_bond_liability(world, custody_asset)?;
+    if balance_after < &liability {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!(
+                "moderation challenge custody {custody_asset} must retain unsettled bond liability {liability}; debit would leave {balance_after}"
+            )
+            .into(),
+        ));
+    }
+    Ok(())
+}
+
+/// Verify that custody fully backs all bonds before an exact settlement starts.
+fn ensure_moderation_bond_custody_fully_backed(
+    world: &impl WorldReadOnly,
+    custody_asset: &AssetId,
+) -> Result<(), InstructionExecutionError> {
+    let balance = world
+        .assets()
+        .get(custody_asset)
+        .map(|value| value.as_ref().clone())
+        .unwrap_or_else(Quantity::zero);
+    ensure_moderation_bond_reserve_after_debit(world, custody_asset, &balance)
+}
 fn read_policy_for_current(
     world: &impl WorldReadOnly,
     current: &mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation,
@@ -780,6 +1578,344 @@ fn read_policy_with_current(
         ));
     }
     Ok(Some(record))
+}
+fn empty_sortition_anchor_schedule() -> ModerationSortitionAnchorScheduleV1 {
+    ModerationSortitionAnchorScheduleV1 {
+        version: MODERATION_SORTITION_ANCHOR_SCHEDULE_VERSION_V1,
+        entries: Vec::new(),
+    }
+}
+fn validate_sortition_anchor_schedule(
+    schedule: &ModerationSortitionAnchorScheduleV1,
+) -> Result<(), InstructionExecutionError> {
+    if schedule.version != MODERATION_SORTITION_ANCHOR_SCHEDULE_VERSION_V1 {
+        return Err(corrupt_state(format!(
+            "unsupported moderation sortition-anchor schedule version {}",
+            schedule.version
+        )));
+    }
+    if schedule.entries.len() > MODERATION_LEDGER_MAX_PENDING_SORTITION_ANCHORS_V1 {
+        return Err(corrupt_state(format!(
+            "moderation sortition-anchor schedule exceeds the hard bound of {MODERATION_LEDGER_MAX_PENDING_SORTITION_ANCHORS_V1}"
+        )));
+    }
+    let mut previous: Option<(u64, String, String)> = None;
+    let mut scopes = std::collections::BTreeSet::new();
+    for entry in &schedule.entries {
+        if entry.registration_deadline_unix_ms == 0
+            || entry.intake_digest == [0; 32]
+            || !is_canonical_moderation_identifier_v1(&entry.case_id)
+            || !is_canonical_moderation_identifier_v1(&entry.round_id)
+        {
+            return Err(corrupt_state(
+                "moderation sortition-anchor schedule contains an invalid entry",
+            ));
+        }
+        let key = (
+            entry.registration_deadline_unix_ms,
+            entry.case_id.clone(),
+            entry.round_id.clone(),
+        );
+        if previous.as_ref().is_some_and(|previous| previous >= &key) {
+            return Err(corrupt_state(
+                "moderation sortition-anchor schedule is duplicated or not canonically ordered",
+            ));
+        }
+        if !scopes.insert((entry.case_id.clone(), entry.round_id.clone())) {
+            return Err(corrupt_state(
+                "moderation sortition-anchor schedule repeats an appeal scope",
+            ));
+        }
+        previous = Some(key);
+    }
+    Ok(())
+}
+fn read_sortition_anchor_schedule(
+    world: &impl WorldReadOnly,
+) -> Result<ModerationSortitionAnchorScheduleV1, InstructionExecutionError> {
+    let Some(bytes) = world
+        .smart_contract_state()
+        .get(sortition_anchor_schedule_key())
+    else {
+        return Ok(empty_sortition_anchor_schedule());
+    };
+    let schedule: ModerationSortitionAnchorScheduleV1 =
+        decode_state_with_current(bytes, "moderation sortition-anchor schedule", None)?;
+    validate_sortition_anchor_schedule(&schedule)?;
+    Ok(schedule)
+}
+fn encode_sortition_anchor_schedule(
+    schedule: &ModerationSortitionAnchorScheduleV1,
+) -> Result<Vec<u8>, InstructionExecutionError> {
+    validate_sortition_anchor_schedule(schedule)?;
+    let encoded = encode_state(schedule, "moderation sortition-anchor schedule")?;
+    if encoded.len() > STATE_MAX_BYTES {
+        return Err(invalid_parameter(format!(
+            "moderation sortition-anchor schedule encoded state exceeds {STATE_MAX_BYTES} bytes"
+        )));
+    }
+    Ok(encoded)
+}
+fn insert_sortition_anchor_schedule_entry(
+    schedule: &mut ModerationSortitionAnchorScheduleV1,
+    entry: ModerationSortitionAnchorScheduleEntryV1,
+) -> Result<(), InstructionExecutionError> {
+    if schedule.entries.len() >= MODERATION_LEDGER_MAX_PENDING_SORTITION_ANCHORS_V1 {
+        return Err(invalid_parameter(format!(
+            "moderation sortition-anchor schedule reached the hard bound of {MODERATION_LEDGER_MAX_PENDING_SORTITION_ANCHORS_V1}"
+        )));
+    }
+    if schedule
+        .entries
+        .iter()
+        .any(|candidate| candidate.case_id == entry.case_id && candidate.round_id == entry.round_id)
+    {
+        return Err(corrupt_state(
+            "moderation sortition-anchor schedule already contains the appeal",
+        ));
+    }
+    let key = (
+        entry.registration_deadline_unix_ms,
+        entry.case_id.as_str(),
+        entry.round_id.as_str(),
+    );
+    let position = schedule
+        .entries
+        .binary_search_by(|candidate| {
+            (
+                candidate.registration_deadline_unix_ms,
+                candidate.case_id.as_str(),
+                candidate.round_id.as_str(),
+            )
+                .cmp(&key)
+        })
+        .unwrap_or_else(|position| position);
+    schedule.entries.insert(position, entry);
+    Ok(())
+}
+/// Pin the exact first consensus block after each due registration deadline.
+///
+/// This bounded start-of-block transition runs before ordinary entrypoints. The consensus header
+/// hash excludes execution results, so committing the anchor in world state is non-circular and
+/// replay-stable. An anchored appeal is removed from the schedule exactly once.
+///
+/// # Errors
+///
+/// Returns an invariant error if the bounded schedule and its indexed appeals disagree.
+pub(crate) fn pin_due_sortition_anchors_v1(
+    state_block: &mut StateBlock<'_>,
+) -> Result<usize, InstructionExecutionError> {
+    let mut transaction = state_block.transaction();
+    let mut schedule = read_sortition_anchor_schedule(transaction.world())?;
+    if schedule.entries.is_empty() {
+        return Ok(0);
+    }
+    let now = block_time_ms(&transaction)?;
+    let due_count = schedule
+        .entries
+        .partition_point(|entry| entry.registration_deadline_unix_ms < now);
+    if due_count == 0 {
+        return Ok(0);
+    }
+    let block_height = transaction._curr_block.height().get();
+    let block_hash = *transaction._curr_block.hash().as_ref();
+    if block_hash == [0; 32] {
+        return Err(corrupt_state(
+            "moderation sortition anchor resolved a zero consensus block hash",
+        ));
+    }
+    let due = schedule.entries.drain(..due_count).collect::<Vec<_>>();
+    for entry in &due {
+        let mut appeal = required_appeal(transaction.world(), &entry.case_id, &entry.round_id)?;
+        if appeal.status != ModerationAppealStatusV1::RegisteringJurors
+            || appeal.sortition_anchor.is_some()
+            || appeal.intake.registration_deadline_unix_ms != entry.registration_deadline_unix_ms
+            || appeal.intake_digest != entry.intake_digest
+        {
+            return Err(corrupt_state(
+                "moderation sortition-anchor schedule disagrees with its indexed appeal",
+            ));
+        }
+        appeal.sortition_anchor = Some(ModerationSortitionAnchorV1 {
+            block_height,
+            block_hash,
+            block_timestamp_unix_ms: now,
+        });
+        let encoded = encode_state(&appeal, "moderation appeal with pinned sortition anchor")?;
+        transaction
+            .world
+            .smart_contract_state
+            .insert(appeal_key(&entry.case_id, &entry.round_id), encoded);
+    }
+    if schedule.entries.is_empty() {
+        transaction
+            .world
+            .smart_contract_state
+            .remove(sortition_anchor_schedule_key().clone());
+    } else {
+        let encoded_schedule = encode_sortition_anchor_schedule(&schedule)?;
+        transaction
+            .world
+            .smart_contract_state
+            .insert(sortition_anchor_schedule_key().clone(), encoded_schedule);
+    }
+    transaction.apply();
+    Ok(due_count)
+}
+/// Validate every persisted moderation policy, appeal, anchor schedule, and case.
+///
+/// Moderation records live in the otherwise opaque smart-contract state map. Snapshot decoding
+/// therefore cannot rely on the world serializer to decode these values. Startup calls this
+/// validator explicitly so pre-cut layouts fail before the node serves requests.
+///
+/// # Errors
+///
+/// Returns an execution error when retained state does not decode and validate as the canonical
+/// first-release V1 schema, including exact correspondence between unanchored registering appeals
+/// and the bounded anchor schedule.
+pub(crate) fn validate_persisted_moderation_schema_v1(
+    world: &impl WorldReadOnly,
+) -> Result<(), InstructionExecutionError> {
+    let policy_present = read_policy(world)?.is_some();
+    let mut expected_schedule = std::collections::BTreeMap::new();
+    let appeal_start = StatePath::from_str(APPEAL_STATE_KEY_PREFIX)
+        .expect("static moderation appeal prefix is valid");
+    let mut appeal_present = false;
+    for (key, payload) in world.smart_contract_state().range(appeal_start..) {
+        if !key.as_ref().starts_with(APPEAL_STATE_KEY_PREFIX) {
+            break;
+        }
+        appeal_present = true;
+        let candidate: ModerationAppealRecordV1 =
+            decode_state_with_current(payload, "moderation appeal", None)?;
+        if appeal_key(&candidate.intake.case_id, &candidate.intake.round_id) != *key {
+            return Err(corrupt_state(
+                "persisted moderation appeal key does not match its V1 record",
+            ));
+        }
+        let restored = read_appeal(world, &candidate.intake.case_id, &candidate.intake.round_id)?
+            .ok_or_else(|| {
+            corrupt_state("persisted moderation appeal disappeared during validation")
+        })?;
+        if restored != candidate {
+            return Err(corrupt_state(
+                "persisted moderation appeal changed during validation",
+            ));
+        }
+        if candidate.status == ModerationAppealStatusV1::RegisteringJurors
+            && candidate.sortition_anchor.is_none()
+        {
+            expected_schedule.insert(
+                (
+                    candidate.intake.case_id.clone(),
+                    candidate.intake.round_id.clone(),
+                ),
+                (
+                    candidate.intake.registration_deadline_unix_ms,
+                    candidate.intake_digest,
+                ),
+            );
+        }
+    }
+    let schedule = read_sortition_anchor_schedule(world)?;
+    let actual_schedule = schedule
+        .entries
+        .iter()
+        .map(|entry| {
+            (
+                (entry.case_id.clone(), entry.round_id.clone()),
+                (entry.registration_deadline_unix_ms, entry.intake_digest),
+            )
+        })
+        .collect::<std::collections::BTreeMap<_, _>>();
+    if actual_schedule != expected_schedule {
+        return Err(corrupt_state(
+            "moderation sortition-anchor schedule does not exactly index unanchored registering appeals",
+        ));
+    }
+    let start =
+        StatePath::from_str(CASE_STATE_KEY_PREFIX).expect("static moderation case prefix is valid");
+    let mut case_present = false;
+    for (key, payload) in world.smart_contract_state().range(start..) {
+        if !key.as_ref().starts_with(CASE_STATE_KEY_PREFIX) {
+            break;
+        }
+        case_present = true;
+        let candidate: ModerationCaseRecordV1 =
+            decode_state_with_current(payload, "moderation case", None)?;
+        if case_key(&candidate.spec.context.case_id, &candidate.spec.round_id) != *key {
+            return Err(corrupt_state(
+                "persisted moderation case key does not match its V1 record",
+            ));
+        }
+        let restored = read_case(
+            world,
+            &candidate.spec.context.case_id,
+            &candidate.spec.round_id,
+        )?
+        .ok_or_else(|| corrupt_state("persisted moderation case disappeared during validation"))?;
+        if restored != candidate {
+            return Err(corrupt_state(
+                "persisted moderation case changed during validation",
+            ));
+        }
+    }
+    if (appeal_present || case_present) && !policy_present {
+        return Err(corrupt_state(
+            "persisted moderation appeals and cases require an active V1 policy",
+        ));
+    }
+    Ok(())
+}
+/// Bind every restored moderation sortition anchor to the committed hash journal.
+///
+/// Snapshot restoration calls this after decoding the world and its exact block-hash prefix.
+/// Live execution performs the same check before sortition, but failing during restore avoids
+/// serving an internally inconsistent first-release snapshot.
+///
+/// # Errors
+///
+/// Returns an invariant error if an anchored appeal names a missing height or a hash other than
+/// the hash committed at that one-based height.
+pub(crate) fn validate_persisted_moderation_anchor_history_v1(
+    world: &impl WorldReadOnly,
+    committed_block_hashes: &[iroha_crypto::HashOf<iroha_data_model::block::BlockHeader>],
+) -> Result<(), InstructionExecutionError> {
+    let appeal_start = StatePath::from_str(APPEAL_STATE_KEY_PREFIX)
+        .expect("static moderation appeal prefix is valid");
+    for (key, payload) in world.smart_contract_state().range(appeal_start..) {
+        if !key.as_ref().starts_with(APPEAL_STATE_KEY_PREFIX) {
+            break;
+        }
+        let candidate: ModerationAppealRecordV1 =
+            decode_state_with_current(payload, "moderation appeal", None)?;
+        let Some(anchor) = candidate.sortition_anchor else {
+            continue;
+        };
+        let zero_based_height = anchor
+            .block_height
+            .checked_sub(1)
+            .ok_or_else(|| corrupt_state("persisted moderation sortition-anchor height is zero"))?;
+        let anchor_index = usize::try_from(zero_based_height).map_err(|_| {
+            corrupt_state("persisted moderation sortition-anchor height exceeds index bounds")
+        })?;
+        let committed_hash = committed_block_hashes
+            .get(anchor_index)
+            .map(|hash| *hash.as_ref())
+            .ok_or_else(|| {
+                corrupt_state(format!(
+                    "persisted moderation sortition anchor for `{}` round `{}` names missing committed height {}",
+                    candidate.intake.case_id, candidate.intake.round_id, anchor.block_height
+                ))
+            })?;
+        if committed_hash != anchor.block_hash {
+            return Err(corrupt_state(format!(
+                "persisted moderation sortition anchor for `{}` round `{}` differs from committed block history at height {}",
+                candidate.intake.case_id, candidate.intake.round_id, anchor.block_height
+            )));
+        }
+    }
+    Ok(())
 }
 fn read_status(
     world: &impl WorldReadOnly,
@@ -904,6 +2040,11 @@ fn read_appeal_with_current(
             "failed to digest stored moderation PoP snapshot: {error}"
         ))
     })?;
+    let sortition_anchor_valid = record.sortition_anchor.as_ref().is_none_or(|anchor| {
+        anchor.block_height != 0
+            && anchor.block_hash != [0; 32]
+            && anchor.block_timestamp_unix_ms > record.intake.registration_deadline_unix_ms
+    });
     if record.intake.case_id != case_id
         || record.intake.round_id != round_id
         || record.intake.appellant != record.submitted_by
@@ -916,6 +2057,7 @@ fn read_appeal_with_current(
         || record.submitted_at_unix_ms == 0
         || record.submitted_at_unix_ms != record.pop_snapshot.captured_at_unix_ms
         || record.submitted_at_unix_ms >= record.intake.registration_deadline_unix_ms
+        || !sortition_anchor_valid
         || record.eligible_jurors.len() > usize::from(record.policy.max_candidate_pool_size)
         || !canonical_account_list(&record.eligible_jurors)
         || !canonical_account_list(&record.accepted_jurors)
@@ -937,6 +2079,10 @@ fn read_appeal_with_current(
     }
     if let Some(selection) = &record.selection {
         if selection.randomness_anchor == [0; 32]
+            || record.sortition_anchor.as_ref().is_none_or(|anchor| {
+                selection.randomness_anchor != anchor.block_hash
+                    || selection.selected_at_unix_ms < anchor.block_timestamp_unix_ms
+            })
             || selection.seed_digest == [0; 32]
             || selection.seed_digest
                 != sorafs_moderation_sortition_seed_v1(
@@ -1047,6 +2193,7 @@ fn read_appeal_with_current(
         }
         ModerationAppealStatusV1::InsufficientEligiblePool => {
             record.selection.is_none()
+                && record.sortition_anchor.is_some()
                 && record.activated_at_unix_ms.is_none()
                 && record.finalized_at_unix_ms.is_none()
         }
@@ -1305,7 +2452,7 @@ fn read_nullifier_with_current(
     }
     Ok(Some(record))
 }
-fn read_case(
+pub(in crate::smartcontracts::isi) fn read_case(
     world: &impl WorldReadOnly,
     case_id: &str,
     round_id: &str,
@@ -1381,8 +2528,7 @@ fn read_case_with_current(
         ));
     }
     match record.status {
-        ModerationCaseStatusV1::Open
-            if record.accepted_challenge_count == 0 && record.expired_challenge_count == 0 => {}
+        ModerationCaseStatusV1::Open if record.accepted_challenge_count == 0 => {}
         ModerationCaseStatusV1::Challenged if record.accepted_challenge_count > 0 => {}
         ModerationCaseStatusV1::Finalized => {}
         _ => {
@@ -1401,8 +2547,7 @@ fn read_case_with_current(
                 && outcome.votes_total == record.reveal_count
                 && record.pending_challenge_count == 0
                 && matches!(outcome.kind, ModerationOutcomeKindV1::Challenged)
-                    == (record.accepted_challenge_count > 0
-                        || record.expired_challenge_count > 0)
+                    == (record.accepted_challenge_count > 0)
                 && (matches!(outcome.kind, ModerationOutcomeKindV1::Challenged)
                     && outcome.no_show_count == 0
                     || !matches!(outcome.kind, ModerationOutcomeKindV1::Challenged)
@@ -1563,7 +2708,7 @@ fn read_reveal_with_current(
     .map_err(corrupt_stored_payload)?;
     if reveal.context != case.spec.context
         || !case.spec.jurors.iter().any(|candidate| candidate == juror)
-        || record.accepted_at_unix_ms <= case.spec.challenge_deadline_unix_ms
+        || record.accepted_at_unix_ms <= case.spec.challenge_resolution_deadline_unix_ms
         || record.accepted_at_unix_ms > case.spec.reveal_deadline_unix_ms
         || commit.verify_reveal(&reveal).is_err()
     {
@@ -1573,13 +2718,29 @@ fn read_reveal_with_current(
     }
     Ok(Some(record))
 }
-fn read_challenge(
+/// Read and validate one retained moderation challenge.
+pub(in crate::smartcontracts::isi) fn read_challenge(
     world: &impl WorldReadOnly,
     case_id: &str,
     round_id: &str,
     challenge_id: &str,
 ) -> Result<Option<ModerationChallengeRecordV1>, InstructionExecutionError> {
     read_challenge_with_current(world, case_id, round_id, challenge_id, None)
+}
+/// Compute the exact deterministic slash for a rejected challenge bond.
+pub(in crate::smartcontracts::isi) fn moderation_challenge_rejected_slash_amount(
+    amount: &Quantity,
+    numeric_spec: NumericSpec,
+    rejected_slash_bps: u16,
+) -> Result<Quantity, InstructionExecutionError> {
+    amount
+        .try_mul_div_decimal_round(
+            &Numeric::from(u64::from(rejected_slash_bps)),
+            &Numeric::from(10_000_u64),
+            numeric_spec.scale().unwrap_or(amount.scale()),
+            RoundingMode::TowardZero,
+        )
+        .map_err(|_| corrupt_state("moderation challenge bond slash amount overflow"))
 }
 fn read_challenge_for_current(
     world: &impl WorldReadOnly,
@@ -1626,7 +2787,11 @@ fn read_challenge_with_current(
     let case = read_case_with_current(world, case_id, round_id, transient_current.as_mut())?
         .ok_or_else(|| corrupt_state("stored moderation challenge has no authoritative case"))?;
     if record.raised_at_unix_ms <= case.spec.commit_deadline_unix_ms
-        || record.raised_at_unix_ms > case.spec.challenge_deadline_unix_ms
+        || record.raised_at_unix_ms > case.spec.challenge_submission_deadline_unix_ms
+        || record.bond.asset_definition_id != case.policy.challenge_voting_asset_id
+        || record.bond.amount != case.policy.challenge_bond_amount
+        || record.bond.escrow_account != case.policy.challenge_escrow_account
+        || record.bond.slash_receiver_account != case.policy.challenge_slash_receiver_account
         || case
             .challenge_ids
             .binary_search_by(|candidate| candidate.as_str().cmp(challenge_id))
@@ -1640,22 +2805,50 @@ fn read_challenge_with_current(
             "stored moderation challenge does not match authoritative case state",
         ));
     }
+    let zero = Quantity::zero();
+    let numeric_spec = world
+        .asset_definition(&record.bond.asset_definition_id)
+        .map_err(InstructionExecutionError::Find)?
+        .spec();
+    let rejected_slash = moderation_challenge_rejected_slash_amount(
+        &record.bond.amount,
+        numeric_spec,
+        case.policy.challenge_rejected_slash_bps,
+    )?;
+    let rejected_refund = record
+        .bond
+        .amount
+        .checked_sub(&rejected_slash)
+        .map_err(|_| corrupt_state("stored moderation challenge bond settlement underflow"))?;
     let resolution_valid = match (
         record.decision,
         record.resolved_by.as_ref(),
         record.resolved_at_unix_ms,
     ) {
-        (None, None, None) => true,
-        (
-            Some(ModerationChallengeDecisionV1::Rejected | ModerationChallengeDecisionV1::Accepted),
-            Some(_),
-            Some(resolved_at),
-        ) => {
+        (None, None, None) => {
+            record.bond.refunded_amount == zero
+                && record.bond.slashed_amount == zero
+                && record.bond.settled_at_unix_ms.is_none()
+        }
+        (Some(ModerationChallengeDecisionV1::Accepted), Some(_), Some(resolved_at)) => {
             resolved_at >= record.raised_at_unix_ms
-                && resolved_at <= case.spec.challenge_deadline_unix_ms
+                && resolved_at <= case.spec.challenge_resolution_deadline_unix_ms
+                && record.bond.refunded_amount == record.bond.amount
+                && record.bond.slashed_amount == zero
+                && record.bond.settled_at_unix_ms == Some(resolved_at)
+        }
+        (Some(ModerationChallengeDecisionV1::Rejected), Some(_), Some(resolved_at)) => {
+            resolved_at >= record.raised_at_unix_ms
+                && resolved_at <= case.spec.challenge_resolution_deadline_unix_ms
+                && record.bond.refunded_amount == rejected_refund
+                && record.bond.slashed_amount == rejected_slash
+                && record.bond.settled_at_unix_ms == Some(resolved_at)
         }
         (Some(ModerationChallengeDecisionV1::Expired), Some(_), Some(resolved_at)) => {
-            resolved_at > case.spec.reveal_deadline_unix_ms
+            resolved_at > case.spec.challenge_resolution_deadline_unix_ms
+                && record.bond.refunded_amount == record.bond.amount
+                && record.bond.slashed_amount == zero
+                && record.bond.settled_at_unix_ms == Some(resolved_at)
         }
         _ => false,
     };
@@ -1971,6 +3164,15 @@ impl Execute for SetSorafsModerationPolicy {
         self.policy.validate().map_err(|error| {
             invalid_parameter(format!("invalid SoraFS moderation policy: {error}"))
         })?;
+        if self.policy.challenge_voting_asset_id != state_transaction.gov.voting_asset_id
+            || self.policy.challenge_escrow_account != state_transaction.gov.bond_escrow_account
+            || self.policy.challenge_slash_receiver_account
+                != state_transaction.gov.slash_receiver_account
+        {
+            return Err(invalid_parameter(
+                "moderation challenge policy must match the consensus governance voting asset and custody accounts",
+            ));
+        }
         let now = block_time_ms(state_transaction)?;
         let digest = self.policy.digest().map_err(|error| {
             invalid_parameter(format!("failed to digest moderation policy: {error}"))
@@ -2147,6 +3349,16 @@ impl Execute for SubmitSorafsModerationAppeal {
                 "failed to digest moderation appeal intake: {error}"
             ))
         })?;
+        let mut anchor_schedule = read_sortition_anchor_schedule(state_transaction.world())?;
+        insert_sortition_anchor_schedule_entry(
+            &mut anchor_schedule,
+            ModerationSortitionAnchorScheduleEntryV1 {
+                registration_deadline_unix_ms: self.intake.registration_deadline_unix_ms,
+                case_id: self.intake.case_id.clone(),
+                round_id: self.intake.round_id.clone(),
+                intake_digest,
+            },
+        )?;
         let record = ModerationAppealRecordV1 {
             intake: self.intake,
             intake_digest,
@@ -2157,6 +3369,7 @@ impl Execute for SubmitSorafsModerationAppeal {
             submitted_by: authority.clone(),
             submitted_at_unix_ms: now,
             eligible_jurors: Vec::new(),
+            sortition_anchor: None,
             selection: None,
             accepted_jurors: Vec::new(),
             replacements: Vec::new(),
@@ -2187,6 +3400,7 @@ impl Execute for SubmitSorafsModerationAppeal {
             "moderation appeal proof-token binding",
         )?;
         let encoded_status = encode_status(&status)?;
+        let encoded_anchor_schedule = encode_sortition_anchor_schedule(&anchor_schedule)?;
         state_transaction
             .world
             .smart_contract_state
@@ -2203,6 +3417,10 @@ impl Execute for SubmitSorafsModerationAppeal {
             .world
             .smart_contract_state
             .insert(status_key().clone(), encoded_status);
+        state_transaction.world.smart_contract_state.insert(
+            sortition_anchor_schedule_key().clone(),
+            encoded_anchor_schedule,
+        );
         emit_moderation_ledger_event(
             state_transaction,
             SorafsModerationLedgerEventKind::AppealSubmitted,
@@ -2372,7 +3590,7 @@ impl Execute for FinalizeSorafsModerationSortition {
                 "proposed moderation roster or waitlist exceeds hard bounds",
             ));
         }
-        if self.pop_snapshot_digest == [0; 32] || self.randomness_anchor == [0; 32] {
+        if self.citizen_snapshot_digest == [0; 32] || self.randomness_anchor == [0; 32] {
             return Err(invalid_parameter(
                 "moderation sortition snapshot and randomness anchors must be non-zero",
             ));
@@ -2399,9 +3617,9 @@ impl Execute for FinalizeSorafsModerationSortition {
                 "moderation appeal sortition missed the acceptance window",
             ));
         }
-        if self.pop_snapshot_digest != appeal.pop_snapshot_digest {
+        if self.citizen_snapshot_digest != appeal.pop_snapshot_digest {
             return Err(invalid_parameter(
-                "moderation sortition PoP snapshot digest does not match the admitted appeal",
+                "moderation sortition citizen snapshot digest does not match the admitted appeal",
             ));
         }
         require_pinned_pop_snapshot(state_transaction, &appeal.pop_snapshot)?;
@@ -2419,12 +3637,41 @@ impl Execute for FinalizeSorafsModerationSortition {
                 })?,
             );
         }
-        let randomness_anchor = latest_parent_randomness_anchor(state_transaction)?;
-        if self.randomness_anchor != randomness_anchor {
+        let anchor = appeal.sortition_anchor.ok_or_else(|| {
+            invalid_parameter(
+                "moderation sortition anchor has not reached committed post-registration state",
+            )
+        })?;
+        let executing_height = state_transaction._curr_block.height().get();
+        if executing_height <= anchor.block_height {
             return Err(invalid_parameter(
-                "moderation sortition randomness anchor does not match the latest committed parent block",
+                "moderation sortition must execute after its pinned anchor block commits",
             ));
         }
+        let anchor_index =
+            usize::try_from(anchor.block_height.saturating_sub(1)).map_err(|_| {
+                corrupt_state("moderation sortition anchor height exceeds local index bounds")
+            })?;
+        let committed_anchor = state_transaction
+            .block_hashes()
+            .get(anchor_index)
+            .map(|hash| *hash.as_ref())
+            .ok_or_else(|| {
+                corrupt_state(
+                    "moderation sortition anchor height is absent from committed block history",
+                )
+            })?;
+        if committed_anchor != anchor.block_hash {
+            return Err(corrupt_state(
+                "moderation sortition anchor differs from committed block history",
+            ));
+        }
+        if self.randomness_anchor != anchor.block_hash {
+            return Err(invalid_parameter(
+                "moderation sortition randomness anchor does not match the consensus-pinned first post-registration block",
+            ));
+        }
+        let randomness_anchor = anchor.block_hash;
         let selection = sorafs_moderation_select_panel_v1(
             appeal.intake_digest,
             appeal.pop_snapshot_digest,
@@ -2698,7 +3945,12 @@ impl Execute for ActivateSorafsModerationCase {
             jurors,
             quorum: appeal.intake.quorum,
             commit_deadline_unix_ms: appeal.intake.commit_deadline_unix_ms,
-            challenge_deadline_unix_ms: appeal.intake.challenge_deadline_unix_ms,
+            challenge_submission_deadline_unix_ms: appeal
+                .intake
+                .challenge_submission_deadline_unix_ms,
+            challenge_resolution_deadline_unix_ms: appeal
+                .intake
+                .challenge_resolution_deadline_unix_ms,
             reveal_deadline_unix_ms: appeal.intake.reveal_deadline_unix_ms,
             policy_digest: appeal.intake.policy_digest,
         };
@@ -2707,7 +3959,7 @@ impl Execute for ActivateSorafsModerationCase {
         })?;
         let case = ModerationCaseRecordV1 {
             spec,
-            policy: appeal.policy,
+            policy: appeal.policy.clone(),
             status: ModerationCaseStatusV1::Open,
             opened_at_unix_ms: now,
             opened_by: authority.clone(),
@@ -2898,7 +4150,7 @@ impl Execute for RaiseSorafsModerationChallenge {
                 "moderation challenge phase has not opened",
             ));
         }
-        if now > case.spec.challenge_deadline_unix_ms {
+        if now > case.spec.challenge_submission_deadline_unix_ms {
             return Err(invalid_parameter("moderation challenge phase is closed"));
         }
         if case.reveal_count != 0 {
@@ -2920,6 +4172,27 @@ impl Execute for RaiseSorafsModerationChallenge {
             return Err(invalid_parameter(
                 "duplicate moderation challenge id for this case and round",
             ));
+        }
+        for existing_id in &case.challenge_ids {
+            let existing = read_challenge(
+                state_transaction.world(),
+                &self.case_id,
+                &self.round_id,
+                existing_id,
+            )?
+            .ok_or_else(|| {
+                corrupt_state("moderation case challenge index references a missing record")
+            })?;
+            if existing.challenger == *authority {
+                return Err(invalid_parameter(
+                    "moderation challenger already submitted a challenge for this case and round",
+                ));
+            }
+            if existing.evidence_digest == self.evidence_digest {
+                return Err(invalid_parameter(
+                    "duplicate moderation challenge evidence for this case and round",
+                ));
+            }
         }
         if case.challenge_count >= u32::from(case.policy.max_challenges_per_case) {
             return Err(invalid_parameter(format!(
@@ -2944,6 +4217,14 @@ impl Execute for RaiseSorafsModerationChallenge {
             .pending_challenge_count
             .checked_add(1)
             .ok_or_else(|| corrupt_state("moderation pending-challenge counter overflow"))?;
+        let bond = lock_moderation_challenge_bond(
+            state_transaction,
+            &case.policy,
+            authority,
+            &self.case_id,
+            &self.round_id,
+            &self.challenge_id,
+        )?;
         let record = ModerationChallengeRecordV1 {
             case_id: self.case_id,
             round_id: self.round_id,
@@ -2954,6 +4235,7 @@ impl Execute for RaiseSorafsModerationChallenge {
             evidence_digest: self.evidence_digest,
             reason: self.reason,
             raised_at_unix_ms: now,
+            bond,
             decision: None,
             resolved_by: None,
             resolved_at_unix_ms: None,
@@ -3004,7 +4286,7 @@ impl Execute for ResolveSorafsModerationChallenge {
         }
         if self.decision == ModerationChallengeDecisionV1::Expired {
             return Err(invalid_parameter(
-                "expired moderation challenges are derived only by terminal finalization",
+                "expired moderation challenges are derived after the resolution grace",
             ));
         }
         let now = block_time_ms(state_transaction)?;
@@ -3020,7 +4302,7 @@ impl Execute for ResolveSorafsModerationChallenge {
                 "finalized moderation case cannot resolve challenges",
             ));
         }
-        if now > case.spec.challenge_deadline_unix_ms {
+        if now > case.spec.challenge_resolution_deadline_unix_ms {
             return Err(invalid_parameter(
                 "moderation challenge resolution window is closed",
             ));
@@ -3053,12 +4335,126 @@ impl Execute for ResolveSorafsModerationChallenge {
                 .ok_or_else(|| corrupt_state("moderation accepted-challenge counter overflow"))?;
             case.status = ModerationCaseStatusV1::Challenged;
         }
+        settle_moderation_challenge_bond(
+            state_transaction,
+            &case.policy,
+            &mut record,
+            self.decision,
+            now,
+        )?;
         record.decision = Some(self.decision);
         record.resolved_by = Some(authority.clone());
         record.resolved_at_unix_ms = Some(now);
         let mut status = status_for_mutation(state_transaction.world(), now)?;
         status.updated_at_unix_ms = now;
         let encoded_record = encode_state(&record, "moderation challenge")?;
+        let encoded_case = encode_state(&case, "moderation case")?;
+        let encoded_status = encode_status(&status)?;
+        state_transaction.world.smart_contract_state.insert(
+            challenge_key(&self.case_id, &self.round_id, &self.challenge_id),
+            encoded_record,
+        );
+        state_transaction
+            .world
+            .smart_contract_state
+            .insert(case_key(&self.case_id, &self.round_id), encoded_case);
+        state_transaction
+            .world
+            .smart_contract_state
+            .insert(status_key().clone(), encoded_status);
+        emit_moderation_ledger_event(
+            state_transaction,
+            SorafsModerationLedgerEventKind::ChallengeResolved,
+            Some(&self.case_id),
+            Some(&self.round_id),
+            authority,
+            now,
+        )?;
+        Ok(())
+    }
+}
+fn expire_pending_moderation_challenge(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    case: &mut ModerationCaseRecordV1,
+    mut record: ModerationChallengeRecordV1,
+    authority: &AccountId,
+    now: u64,
+) -> Result<ModerationChallengeRecordV1, InstructionExecutionError> {
+    if now <= case.spec.challenge_resolution_deadline_unix_ms {
+        return Err(invalid_parameter(
+            "moderation challenge resolution grace has not elapsed",
+        ));
+    }
+    if record.decision.is_some() {
+        return Err(invalid_parameter(
+            "only a pending moderation challenge may expire",
+        ));
+    }
+    case.pending_challenge_count = case
+        .pending_challenge_count
+        .checked_sub(1)
+        .ok_or_else(|| corrupt_state("moderation pending-challenge counter underflow"))?;
+    case.expired_challenge_count = case
+        .expired_challenge_count
+        .checked_add(1)
+        .ok_or_else(|| corrupt_state("moderation expired-challenge counter overflow"))?;
+    settle_moderation_challenge_bond(
+        state_transaction,
+        &case.policy,
+        &mut record,
+        ModerationChallengeDecisionV1::Expired,
+        now,
+    )?;
+    record.decision = Some(ModerationChallengeDecisionV1::Expired);
+    record.resolved_by = Some(authority.clone());
+    record.resolved_at_unix_ms = Some(now);
+    Ok(record)
+}
+impl Execute for ExpireSorafsModerationChallenge {
+    fn execute(
+        self,
+        authority: &AccountId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), InstructionExecutionError> {
+        validate_lookup_identifiers(&self.case_id, &self.round_id)?;
+        if !is_canonical_moderation_identifier_v1(&self.challenge_id) {
+            return Err(invalid_parameter(
+                "moderation challenge challenge_id is not bounded canonical ASCII",
+            ));
+        }
+        let now = block_time_ms(state_transaction)?;
+        let mut case = required_case(state_transaction.world(), &self.case_id, &self.round_id)?;
+        let record = read_challenge(
+            state_transaction.world(),
+            &self.case_id,
+            &self.round_id,
+            &self.challenge_id,
+        )?
+        .ok_or_else(|| invalid_parameter("moderation challenge does not exist"))?;
+        match record.decision {
+            Some(ModerationChallengeDecisionV1::Expired) => return Ok(()),
+            Some(_) => {
+                return Err(invalid_parameter(
+                    "resolved moderation challenge cannot be expired",
+                ));
+            }
+            None => {}
+        }
+        if case.status == ModerationCaseStatusV1::Finalized {
+            return Err(corrupt_state(
+                "finalized moderation case retains a pending challenge",
+            ));
+        }
+        let record = expire_pending_moderation_challenge(
+            state_transaction,
+            &mut case,
+            record,
+            authority,
+            now,
+        )?;
+        let mut status = status_for_mutation(state_transaction.world(), now)?;
+        status.updated_at_unix_ms = now;
+        let encoded_record = encode_state(&record, "expired moderation challenge")?;
         let encoded_case = encode_state(&case, "moderation case")?;
         let encoded_status = encode_status(&status)?;
         state_transaction.world.smart_contract_state.insert(
@@ -3120,15 +4516,15 @@ impl Execute for SubmitSorafsModerationReveal {
                 "moderation reveal context does not match the authoritative case",
             ));
         }
-        if now <= case.spec.challenge_deadline_unix_ms {
+        if now <= case.spec.challenge_resolution_deadline_unix_ms {
             return Err(invalid_parameter("moderation reveal phase has not opened"));
         }
         if now > case.spec.reveal_deadline_unix_ms {
             return Err(invalid_parameter("moderation reveal phase is closed"));
         }
-        if case.pending_challenge_count != 0 || case.accepted_challenge_count != 0 {
+        if case.accepted_challenge_count != 0 {
             return Err(invalid_parameter(
-                "pending or accepted moderation challenge blocks reveals",
+                "accepted moderation challenge blocks reveals",
             ));
         }
         let commit_record = read_commit(
@@ -3250,14 +4646,13 @@ impl Execute for FinalizeSorafsModerationCase {
                 case.spec.reveal_deadline_unix_ms
             )));
         }
-        let mut expired_challenge_writes = Vec::new();
         if case.pending_challenge_count != 0 {
-            for challenge_id in &case.challenge_ids {
-                let mut challenge = read_challenge(
+            for challenge_id in case.challenge_ids.clone() {
+                let challenge = read_challenge(
                     state_transaction.world(),
                     &self.case_id,
                     &self.round_id,
-                    challenge_id,
+                    &challenge_id,
                 )?
                 .ok_or_else(|| {
                     corrupt_state("moderation case challenge index references a missing record")
@@ -3265,29 +4660,31 @@ impl Execute for FinalizeSorafsModerationCase {
                 if challenge.decision.is_some() {
                     continue;
                 }
-                challenge.decision = Some(ModerationChallengeDecisionV1::Expired);
-                challenge.resolved_by = Some(authority.clone());
-                challenge.resolved_at_unix_ms = Some(now);
-                expired_challenge_writes.push((
-                    challenge_key(&self.case_id, &self.round_id, challenge_id),
-                    encode_state(&challenge, "expired moderation challenge")?,
-                ));
+                let challenge = expire_pending_moderation_challenge(
+                    state_transaction,
+                    &mut case,
+                    challenge,
+                    authority,
+                    now,
+                )?;
+                // Stage each successful expiry in the transaction overlay
+                // before settling the next indexed challenge. Aggregate bond
+                // liability then observes the prior record as settled, while
+                // any later failure still discards every staged record and
+                // balance movement with the enclosing transaction.
+                let encoded_challenge = encode_state(&challenge, "expired moderation challenge")?;
+                state_transaction.world.smart_contract_state.insert(
+                    challenge_key(&self.case_id, &self.round_id, &challenge_id),
+                    encoded_challenge,
+                );
             }
-            let expired_count = u32::try_from(expired_challenge_writes.len()).map_err(|_| {
-                corrupt_state("expired moderation challenge count does not fit u32")
-            })?;
-            if expired_count != case.pending_challenge_count {
+            if case.pending_challenge_count != 0 {
                 return Err(corrupt_state(
                     "moderation pending-challenge counter disagrees with indexed records",
                 ));
             }
-            case.expired_challenge_count = case
-                .expired_challenge_count
-                .checked_add(expired_count)
-                .ok_or_else(|| corrupt_state("moderation expired-challenge counter overflow"))?;
-            case.pending_challenge_count = 0;
         }
-        let challenged = case.accepted_challenge_count != 0 || case.expired_challenge_count != 0;
+        let challenged = case.accepted_challenge_count != 0;
         let mut counts = ModerationVoteCountsV1::default();
         let mut no_shows = Vec::new();
         if !challenged {
@@ -3416,12 +4813,6 @@ impl Execute for FinalizeSorafsModerationCase {
             .world
             .smart_contract_state
             .insert(appeal_key(&self.case_id, &self.round_id), encoded_appeal);
-        for (key, encoded) in expired_challenge_writes {
-            state_transaction
-                .world
-                .smart_contract_state
-                .insert(key, encoded);
-        }
         for (key, encoded) in encoded_no_shows {
             state_transaction
                 .world
@@ -4992,15 +6383,25 @@ mod tests {
         query::store::LiveQueryStore,
         state::{State, World},
     };
-    use core::num::NonZeroU64;
+    use core::num::{NonZeroU16, NonZeroU64};
     use iroha_crypto::{Algorithm, KeyPair, PrivateKey, Signature};
     use iroha_data_model::{
-        IntoKeyValue, Registrable,
-        account::{Account, AccountId},
+        Registrable,
+        account::{Account, AccountId, MultisigMember, MultisigPolicy},
+        asset::{
+            ASSET_ISSUER_USAGE_POLICY_METADATA_KEY, Asset, AssetBalancePolicy, AssetDefinition,
+            AssetDefinitionId, AssetId, AssetIssuerUsagePolicyV1, AssetTransferAvailability,
+            AssetTransferControlWindow, AssetTransferLimit,
+        },
         block::BlockHeader,
-        isi::sorafs::{
-            CommitSorafsPopCredentialBatch, PublishSorafsPopRevocationList,
-            SetSorafsPopIssuerPolicy,
+        isi::{
+            AddSignatory, Burn, SetAssetHoldingLimit, SetAssetTransferAvailability,
+            SetAssetTransferBlacklist, SetAssetTransferControl, SetKeyValue, Transfer, Unregister,
+            sorafs::{
+                CommitSorafsPopCredentialBatch, PublishSorafsPopRevocationList,
+                SetSorafsPopIssuerPolicy,
+            },
+            transfer::{TransferAssetBatch, TransferAssetBatchEntry},
         },
         permission::{Permission, Permissions},
         sorafs::{
@@ -5024,6 +6425,9 @@ mod tests {
             },
         },
     };
+    use iroha_executor_data_model::isi::multisig::{
+        DEFAULT_MULTISIG_TTL_MS, MultisigInstructionBox, MultisigRegister, MultisigSpec,
+    };
     use iroha_primitives::json::Json;
     use sorafs_manifest::pop_credentials::{
         POP_COMMITMENT_ROOT_VERSION_V1, POP_CREDENTIAL_TREE_DEPTH_V1, POP_CREDENTIAL_VERSION_V1,
@@ -5038,10 +6442,80 @@ mod tests {
         pop_revocation_root_v1, prove_pop_membership_v1, verify_pop_commitment_root_signature_v1,
         verify_pop_credential_signature_v1, verify_pop_revocation_list_signature_v1,
     };
+    use std::collections::BTreeMap;
     const OPENED_AT: u64 = 1_000;
     const COMMIT_DEADLINE: u64 = 2_000;
-    const CHALLENGE_DEADLINE: u64 = 3_000;
-    const REVEAL_DEADLINE: u64 = 4_000;
+    const CHALLENGE_SUBMISSION_DEADLINE: u64 = 3_000;
+    const CHALLENGE_RESOLUTION_DEADLINE: u64 =
+        CHALLENGE_SUBMISSION_DEADLINE + MODERATION_CHALLENGE_RESOLUTION_GRACE_MS_V1;
+    const REVEAL_DEADLINE: u64 = CHALLENGE_RESOLUTION_DEADLINE + 1_000;
+    const REVEAL_AT: u64 = CHALLENGE_RESOLUTION_DEADLINE + 500;
+    const FINALIZE_AT: u64 = REVEAL_DEADLINE + 1;
+    #[derive(norito::codec::Encode)]
+    struct PreCutModerationLedgerPolicyV1 {
+        version: u16,
+        revision: u64,
+        predecessor_policy_digest: Option<[u8; 32]>,
+        max_panel_size: u16,
+        max_candidate_pool_size: u16,
+        max_waitlist_size: u16,
+        max_exclusions_per_case: u16,
+        max_total_window_ms: u64,
+        max_challenges_per_case: u16,
+        missing_commit_penalty_points: u32,
+        unrevealed_commit_penalty_points: u32,
+    }
+    #[derive(norito::codec::Encode)]
+    struct PreCutModerationLedgerPolicyRecord {
+        policy: PreCutModerationLedgerPolicyV1,
+        policy_digest: [u8; 32],
+        activated_at_unix_ms: u64,
+        activated_by: AccountId,
+    }
+    #[derive(norito::codec::Encode)]
+    struct PreCutModerationCaseSpecV1 {
+        version: u16,
+        context: SoraFsModerationBallotContextV1,
+        round_id: String,
+        jurors: Vec<AccountId>,
+        quorum: u16,
+        commit_deadline_unix_ms: u64,
+        challenge_deadline_unix_ms: u64,
+        reveal_deadline_unix_ms: u64,
+        policy_digest: [u8; 32],
+    }
+    #[derive(norito::codec::Encode)]
+    struct PreCutModerationCaseRecordV1 {
+        spec: PreCutModerationCaseSpecV1,
+        policy: PreCutModerationLedgerPolicyV1,
+        status: ModerationCaseStatusV1,
+        opened_at_unix_ms: u64,
+        opened_by: AccountId,
+        commitment_count: u32,
+        reveal_count: u32,
+        challenge_count: u32,
+        challenge_ids: Vec<String>,
+        pending_challenge_count: u32,
+        accepted_challenge_count: u32,
+        expired_challenge_count: u32,
+    }
+    #[derive(norito::codec::Encode)]
+    struct PreCutModerationAppealRecordV1 {
+        intake: ModerationAppealIntakeV1,
+        intake_digest: [u8; 32],
+        policy: ModerationLedgerPolicyV1,
+        pop_snapshot: ModerationPoPRegistrySnapshotV1,
+        pop_snapshot_digest: [u8; 32],
+        status: ModerationAppealStatusV1,
+        submitted_by: AccountId,
+        submitted_at_unix_ms: u64,
+        eligible_jurors: Vec<AccountId>,
+        selection: Option<ModerationPanelSelectionV1>,
+        accepted_jurors: Vec<AccountId>,
+        replacements: Vec<ModerationJurorReplacementV1>,
+        activated_at_unix_ms: Option<u64>,
+        finalized_at_unix_ms: Option<u64>,
+    }
     fn keypair(seed: u8) -> KeyPair {
         let private = PrivateKey::from_bytes(Algorithm::Ed25519, &[seed; 32])
             .expect("valid deterministic Ed25519 seed");
@@ -5055,15 +6529,63 @@ mod tests {
             version: MODERATION_LEDGER_POLICY_VERSION_V1,
             revision: 1,
             predecessor_policy_digest: None,
+            challenge_voting_asset_id:
+                iroha_config::parameters::defaults::governance::voting_asset_id()
+                    .parse()
+                    .expect("default governance voting asset"),
+            challenge_bond_amount: Quantity::from(MODERATION_CHALLENGE_BOND_AMOUNT_V1),
+            challenge_escrow_account:
+                iroha_config::parameters::defaults::governance::bond_escrow_account_id(),
+            challenge_slash_receiver_account:
+                iroha_config::parameters::defaults::governance::slash_receiver_account_id(),
+            challenge_rejected_slash_bps: MODERATION_CHALLENGE_REJECTED_SLASH_BPS_V1,
+            challenge_resolution_grace_ms: MODERATION_CHALLENGE_RESOLUTION_GRACE_MS_V1,
             max_panel_size: 8,
             max_candidate_pool_size: 32,
             max_waitlist_size: 8,
             max_exclusions_per_case: 16,
-            max_total_window_ms: 10_000,
+            max_total_window_ms: 90_000_000,
             max_challenges_per_case: 2,
             missing_commit_penalty_points: 11,
             unrevealed_commit_penalty_points: 23,
         }
+    }
+    fn policy_with_custody(
+        challenge_escrow_account: AccountId,
+        challenge_slash_receiver_account: AccountId,
+    ) -> ModerationLedgerPolicyV1 {
+        let mut policy = policy();
+        policy.challenge_escrow_account = challenge_escrow_account;
+        policy.challenge_slash_receiver_account = challenge_slash_receiver_account;
+        policy
+    }
+    fn pre_cut_policy() -> PreCutModerationLedgerPolicyV1 {
+        let current = policy();
+        PreCutModerationLedgerPolicyV1 {
+            version: current.version,
+            revision: current.revision,
+            predecessor_policy_digest: current.predecessor_policy_digest,
+            max_panel_size: current.max_panel_size,
+            max_candidate_pool_size: current.max_candidate_pool_size,
+            max_waitlist_size: current.max_waitlist_size,
+            max_exclusions_per_case: current.max_exclusions_per_case,
+            max_total_window_ms: current.max_total_window_ms,
+            max_challenges_per_case: current.max_challenges_per_case,
+            missing_commit_penalty_points: current.missing_commit_penalty_points,
+            unrevealed_commit_penalty_points: current.unrevealed_commit_penalty_points,
+        }
+    }
+    fn startup_error(world: World) -> String {
+        State::try_new(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+            #[cfg(feature = "telemetry")]
+            <_>::default(),
+        )
+        .err()
+        .expect("pre-cut moderation state must fail startup")
+        .to_string()
     }
     fn context(jurors: &[AccountId], quorum: u16) -> SoraFsModerationBallotContextV1 {
         SoraFsModerationBallotContextV1 {
@@ -5077,6 +6599,13 @@ mod tests {
         }
     }
     fn spec(jurors: Vec<AccountId>, quorum: u16) -> ModerationCaseSpecV1 {
+        spec_with_policy(jurors, quorum, &policy())
+    }
+    fn spec_with_policy(
+        jurors: Vec<AccountId>,
+        quorum: u16,
+        policy: &ModerationLedgerPolicyV1,
+    ) -> ModerationCaseSpecV1 {
         ModerationCaseSpecV1 {
             version: MODERATION_LEDGER_CASE_VERSION_V1,
             context: context(&jurors, quorum),
@@ -5084,10 +6613,188 @@ mod tests {
             jurors,
             quorum,
             commit_deadline_unix_ms: COMMIT_DEADLINE,
-            challenge_deadline_unix_ms: CHALLENGE_DEADLINE,
+            challenge_submission_deadline_unix_ms: CHALLENGE_SUBMISSION_DEADLINE,
+            challenge_resolution_deadline_unix_ms: CHALLENGE_RESOLUTION_DEADLINE,
             reveal_deadline_unix_ms: REVEAL_DEADLINE,
-            policy_digest: policy().digest().expect("policy digest"),
+            policy_digest: policy.digest().expect("policy digest"),
         }
+    }
+    fn startup_registering_appeal(appellant: &KeyPair) -> ModerationAppealRecordV1 {
+        let intake = panel_intake(appellant, "startup-appeal", 1, 0, 1, 0x95);
+        let intake_digest = intake.digest().expect("startup appeal digest");
+        let pop_snapshot = ModerationPoPRegistrySnapshotV1 {
+            issuer_policy_digest: [0x81; 32],
+            commitment_root: [0x82; 32],
+            commitment_tree_version: 1,
+            revocation_root: [0x83; 32],
+            revocation_list_version: 1,
+            registry_audit_sequence: 1,
+            registry_audit_head: [0x84; 32],
+            captured_at_unix_ms: 1_001_000,
+        };
+        ModerationAppealRecordV1 {
+            intake,
+            intake_digest,
+            policy: policy(),
+            pop_snapshot,
+            pop_snapshot_digest: pop_snapshot.digest().expect("startup PoP snapshot digest"),
+            status: ModerationAppealStatusV1::RegisteringJurors,
+            submitted_by: account(appellant),
+            submitted_at_unix_ms: 1_001_000,
+            eligible_jurors: Vec::new(),
+            sortition_anchor: None,
+            selection: None,
+            accepted_jurors: Vec::new(),
+            replacements: Vec::new(),
+            activated_at_unix_ms: None,
+            finalized_at_unix_ms: None,
+        }
+    }
+    fn startup_world_with_policy(manager: &AccountId) -> World {
+        let active_policy = ModerationLedgerPolicyRecord {
+            policy: policy(),
+            policy_digest: policy().digest().expect("current policy digest"),
+            activated_at_unix_ms: OPENED_AT,
+            activated_by: manager.clone(),
+        };
+        let mut world = World::new();
+        world.smart_contract_state.insert(
+            policy_key().clone(),
+            encode_state(&active_policy, "current moderation policy")
+                .expect("encode current policy"),
+        );
+        world
+    }
+    #[test]
+    fn startup_rejects_pre_cut_moderation_policy_layout() {
+        let manager = account(&keypair(0x11));
+        let legacy = PreCutModerationLedgerPolicyRecord {
+            policy: pre_cut_policy(),
+            policy_digest: [0x41; 32],
+            activated_at_unix_ms: OPENED_AT,
+            activated_by: manager,
+        };
+        let mut world = World::new();
+        world.smart_contract_state.insert(
+            policy_key().clone(),
+            norito::to_bytes(&legacy).expect("encode pre-cut moderation policy"),
+        );
+        let error = startup_error(world);
+        assert!(
+            error.contains(
+                "incompatible persisted SoraFS moderation V1 policy/appeal/anchor/case state"
+            ) && error.contains("moderation policy"),
+            "startup must identify the incompatible policy layout: {error}"
+        );
+    }
+    #[test]
+    fn startup_rejects_pre_cut_moderation_case_layout() {
+        let manager = account(&keypair(0x11));
+        let jurors = [account(&keypair(0x21)), account(&keypair(0x22))];
+        let current_policy = policy();
+        let current_policy_digest = current_policy.digest().expect("current policy digest");
+        let active_policy = ModerationLedgerPolicyRecord {
+            policy: current_policy,
+            policy_digest: current_policy_digest,
+            activated_at_unix_ms: OPENED_AT,
+            activated_by: manager.clone(),
+        };
+        let legacy = PreCutModerationCaseRecordV1 {
+            spec: PreCutModerationCaseSpecV1 {
+                version: MODERATION_LEDGER_CASE_VERSION_V1,
+                context: context(&jurors, 1),
+                round_id: "round-1".to_owned(),
+                jurors: jurors.to_vec(),
+                quorum: 1,
+                commit_deadline_unix_ms: COMMIT_DEADLINE,
+                challenge_deadline_unix_ms: CHALLENGE_SUBMISSION_DEADLINE,
+                reveal_deadline_unix_ms: REVEAL_DEADLINE,
+                policy_digest: [0x42; 32],
+            },
+            policy: pre_cut_policy(),
+            status: ModerationCaseStatusV1::Open,
+            opened_at_unix_ms: OPENED_AT,
+            opened_by: manager,
+            commitment_count: 0,
+            reveal_count: 0,
+            challenge_count: 0,
+            challenge_ids: Vec::new(),
+            pending_challenge_count: 0,
+            accepted_challenge_count: 0,
+            expired_challenge_count: 0,
+        };
+        let case_id = legacy.spec.context.case_id.clone();
+        let round_id = legacy.spec.round_id.clone();
+        let mut world = World::new();
+        world.smart_contract_state.insert(
+            policy_key().clone(),
+            encode_state(&active_policy, "current moderation policy")
+                .expect("encode current policy"),
+        );
+        world.smart_contract_state.insert(
+            case_key(&case_id, &round_id),
+            norito::to_bytes(&legacy).expect("encode pre-cut moderation case"),
+        );
+        let error = startup_error(world);
+        assert!(
+            error.contains(
+                "incompatible persisted SoraFS moderation V1 policy/appeal/anchor/case state"
+            ) && error.contains("moderation case"),
+            "startup must identify the incompatible case layout: {error}"
+        );
+    }
+    #[test]
+    fn startup_rejects_pre_cut_moderation_appeal_layout() {
+        let manager = account(&keypair(0x11));
+        let appellant = keypair(0x12);
+        let current = startup_registering_appeal(&appellant);
+        let case_id = current.intake.case_id.clone();
+        let round_id = current.intake.round_id.clone();
+        let legacy = PreCutModerationAppealRecordV1 {
+            intake: current.intake,
+            intake_digest: current.intake_digest,
+            policy: current.policy,
+            pop_snapshot: current.pop_snapshot,
+            pop_snapshot_digest: current.pop_snapshot_digest,
+            status: current.status,
+            submitted_by: current.submitted_by,
+            submitted_at_unix_ms: current.submitted_at_unix_ms,
+            eligible_jurors: current.eligible_jurors,
+            selection: current.selection,
+            accepted_jurors: current.accepted_jurors,
+            replacements: current.replacements,
+            activated_at_unix_ms: current.activated_at_unix_ms,
+            finalized_at_unix_ms: current.finalized_at_unix_ms,
+        };
+        let mut world = startup_world_with_policy(&manager);
+        world.smart_contract_state.insert(
+            appeal_key(&case_id, &round_id),
+            norito::to_bytes(&legacy).expect("encode pre-cut moderation appeal"),
+        );
+        let error = startup_error(world);
+        assert!(
+            error.contains("incompatible persisted SoraFS moderation V1")
+                && error.contains("moderation appeal"),
+            "startup must identify the incompatible appeal layout: {error}"
+        );
+    }
+    #[test]
+    fn startup_rejects_appeal_anchor_schedule_mismatch() {
+        let manager = account(&keypair(0x11));
+        let appellant = keypair(0x12);
+        let appeal = startup_registering_appeal(&appellant);
+        let mut world = startup_world_with_policy(&manager);
+        world.smart_contract_state.insert(
+            appeal_key(&appeal.intake.case_id, &appeal.intake.round_id),
+            encode_state(&appeal, "current moderation appeal")
+                .expect("encode current moderation appeal"),
+        );
+        let error = startup_error(world);
+        assert!(
+            error.contains("incompatible persisted SoraFS moderation V1")
+                && error.contains("sortition-anchor schedule does not exactly index"),
+            "startup must reject an appeal/schedule mismatch: {error}"
+        );
     }
     fn reveal(
         spec: &ModerationCaseSpecV1,
@@ -5125,12 +6832,49 @@ mod tests {
         norito::to_bytes(value).expect("encode alternate-layout fixture")
     }
     fn state(accounts: &[&KeyPair], manager: &AccountId) -> State {
-        let mut world = World::new();
-        for keypair in accounts {
-            let id = account(keypair);
-            let (id, value) = Account::new(id.clone()).build(&id).into_key_value();
-            world.accounts.insert(id, value);
+        let voting_asset_id: AssetDefinitionId =
+            iroha_config::parameters::defaults::governance::voting_asset_id()
+                .parse()
+                .expect("default governance voting asset");
+        let custody_accounts = [
+            iroha_config::parameters::defaults::governance::bond_escrow_account_id(),
+            iroha_config::parameters::defaults::governance::slash_receiver_account_id(),
+        ];
+        let mut account_ids = accounts
+            .iter()
+            .map(|keypair| account(keypair))
+            .collect::<Vec<_>>();
+        for custody in custody_accounts {
+            if !account_ids.contains(&custody) {
+                account_ids.push(custody);
+            }
         }
+        let account_models = account_ids.into_iter().map(|id| {
+            let authority = id.clone();
+            Account::new(id).build(&authority)
+        });
+        let balance = Quantity::from(1_000_u32);
+        let assets = accounts.iter().map(|keypair| {
+            Asset::new(
+                AssetId::new(voting_asset_id.clone(), account(keypair)),
+                balance.clone(),
+            )
+        });
+        let mut total = Quantity::zero();
+        for _ in accounts {
+            total = total
+                .checked_add(&balance)
+                .expect("moderation fixture voting-asset total remains valid");
+        }
+        let mut definition = AssetDefinition::numeric(
+            voting_asset_id.clone(),
+            "moderation challenge bond",
+            AssetBalancePolicy::Global,
+            None,
+        )
+        .build(manager);
+        definition.total_quantity = total;
+        let mut world = World::with_assets([], account_models, [definition], assets, []);
         let mut permissions = Permissions::new();
         for permission in [
             MANAGE_PERMISSION,
@@ -5142,11 +6886,87 @@ mod tests {
         world
             .account_permissions
             .insert(manager.clone(), permissions);
-        State::new_for_testing(
+        let state = State::new_for_testing(
             world,
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
-        )
+        );
+        assert_eq!(state.gov.voting_asset_id, voting_asset_id);
+        state
+    }
+    fn voting_asset_balance(state: &State, account: &AccountId) -> Quantity {
+        let id = AssetId::new(state.gov.voting_asset_id.clone(), account.clone());
+        state
+            .world
+            .assets
+            .view()
+            .get(&id)
+            .map(|value| value.as_ref().clone())
+            .unwrap_or_else(Quantity::zero)
+    }
+    fn assert_unique_voting_asset_total(
+        state: &State,
+        accounts: &[AccountId],
+        expected_total: u32,
+    ) {
+        let mut accounts = accounts.to_vec();
+        accounts.sort_by_key(ToString::to_string);
+        accounts.dedup();
+        let total = accounts.iter().fold(Quantity::zero(), |total, account| {
+            total
+                .checked_add(&voting_asset_balance(state, account))
+                .expect("moderation bond custody total remains valid")
+        });
+        assert_eq!(total, Quantity::from(expected_total));
+    }
+    fn assert_bond_custody_distribution(
+        state: &State,
+        challenger: &AccountId,
+        challenger_balance: u32,
+        escrow_balance: u32,
+        slash_receiver_balance: u32,
+    ) {
+        let current_policy = policy();
+        assert_eq!(
+            voting_asset_balance(state, challenger),
+            Quantity::from(challenger_balance)
+        );
+        assert_eq!(
+            voting_asset_balance(state, &current_policy.challenge_escrow_account),
+            Quantity::from(escrow_balance)
+        );
+        assert_eq!(
+            voting_asset_balance(state, &current_policy.challenge_slash_receiver_account),
+            Quantity::from(slash_receiver_balance)
+        );
+        let accounts = [
+            challenger.clone(),
+            current_policy.challenge_escrow_account,
+            current_policy.challenge_slash_receiver_account,
+        ];
+        assert_unique_voting_asset_total(state, &accounts, 1_000);
+    }
+    #[test]
+    fn rejected_challenge_slash_floors_to_voting_asset_precision() {
+        let amount = Quantity::from(MODERATION_CHALLENGE_BOND_AMOUNT_V1);
+        assert_eq!(
+            moderation_challenge_rejected_slash_amount(
+                &amount,
+                NumericSpec::integer(),
+                MODERATION_CHALLENGE_REJECTED_SLASH_BPS_V1,
+            )
+            .unwrap(),
+            Quantity::from(37_u32)
+        );
+        assert_eq!(
+            moderation_challenge_rejected_slash_amount(
+                &amount,
+                NumericSpec::fractional(1),
+                MODERATION_CHALLENGE_REJECTED_SLASH_BPS_V1,
+            )
+            .unwrap(),
+            "37.5".parse::<Quantity>().expect("fractional slash")
+        );
     }
     fn header(height: u64, now: u64) -> BlockHeader {
         BlockHeader::new(
@@ -5434,8 +7254,10 @@ mod tests {
             registration_deadline_unix_ms: 1_003_000,
             acceptance_deadline_unix_ms: 1_005_000,
             commit_deadline_unix_ms: 1_007_000,
-            challenge_deadline_unix_ms: 1_009_000,
-            reveal_deadline_unix_ms: 1_011_000,
+            challenge_submission_deadline_unix_ms: 1_009_000,
+            challenge_resolution_deadline_unix_ms: 1_009_000
+                + MODERATION_CHALLENGE_RESOLUTION_GRACE_MS_V1,
+            reveal_deadline_unix_ms: 1_011_000 + MODERATION_CHALLENGE_RESOLUTION_GRACE_MS_V1,
             policy_digest: policy().digest().expect("moderation policy digest"),
         }
     }
@@ -5534,12 +7356,21 @@ mod tests {
             })
             .expect("register panel juror eligibility");
         }
+        fn pin_sortition_anchor(&mut self) -> ModerationSortitionAnchorV1 {
+            if self.appeal().sortition_anchor.is_none() {
+                self.run(1_004_000, |_| Ok(()))
+                    .expect("commit first post-registration anchor block");
+            }
+            self.appeal()
+                .sortition_anchor
+                .expect("consensus maintenance pinned the sortition anchor")
+        }
         fn finalize_single_juror_sortition(&mut self) -> [u8; 32] {
             let manager = self.manager_id();
             let juror = self.juror_id();
             let snapshot_digest = self.appeal().pop_snapshot_digest;
-            self.run(1_004_000, |transaction| {
-                let randomness_anchor = latest_parent_randomness_anchor(transaction)?;
+            let randomness_anchor = self.pin_sortition_anchor().block_hash;
+            self.run(1_004_001, |transaction| {
                 FinalizeSorafsModerationSortition::new(
                     "panel-case".to_owned(),
                     "round-1".to_owned(),
@@ -5556,6 +7387,150 @@ mod tests {
                 .expect("selected panel")
                 .sortition_digest
         }
+    }
+    fn panel_anchor_hash(
+        transaction: &StateTransaction<'_, '_>,
+    ) -> Result<[u8; 32], InstructionExecutionError> {
+        required_appeal(transaction.world(), "panel-case", "round-1")?
+            .sortition_anchor
+            .map(|anchor| anchor.block_hash)
+            .ok_or_else(|| corrupt_state("panel fixture has no pinned sortition anchor"))
+    }
+    #[test]
+    fn pre_activation_appeal_retains_accounts_and_immutable_policy_asset() {
+        let mut fixture = PanelFixture::new();
+        let initial_signer = fixture.appellant_id();
+        let member = MultisigMember::new(fixture.appellant.public_key().clone(), 1)
+            .expect("valid pre-activation appellant member");
+        let multisig_appellant = AccountId::new_multisig(
+            MultisigPolicy::new(1, vec![member]).expect("valid pre-activation appellant policy"),
+        );
+        let multisig_spec = MultisigSpec {
+            signatories: BTreeMap::from([(initial_signer.clone(), 1)]),
+            quorum: NonZeroU16::new(1).expect("nonzero quorum"),
+            transaction_ttl_ms: NonZeroU64::new(DEFAULT_MULTISIG_TTL_MS)
+                .expect("nonzero transaction ttl"),
+        };
+        let registration_seed = account(&keypair(0x53));
+        fixture
+            .run(1_001_000, |transaction| {
+                crate::smartcontracts::isi::multisig::execute_multisig_instruction(
+                    transaction,
+                    &initial_signer,
+                    MultisigInstructionBox::Register(MultisigRegister::with_account(
+                        registration_seed,
+                        None::<iroha_data_model::domain::DomainId>,
+                        multisig_spec,
+                    )),
+                )
+                .map_err(|error| {
+                    InstructionExecutionError::InvariantViolation(error.to_string().into())
+                })
+            })
+            .expect("register native multisig appellant");
+
+        let mut intake = panel_intake(&fixture.appellant, "panel-case", 1, 0, 1, 0x91);
+        intake.appellant = multisig_appellant.clone();
+        intake.exclusions = vec![multisig_appellant.clone()];
+        fixture
+            .run(1_001_001, |transaction| {
+                SubmitSorafsModerationAppeal::new(intake).execute(&multisig_appellant, transaction)
+            })
+            .expect("submit a registering appeal from the multisig appellant");
+        assert_eq!(
+            fixture.appeal().status,
+            ModerationAppealStatusV1::RegisteringJurors
+        );
+
+        let immutable_policy = fixture.appeal().policy;
+        let old_custody = immutable_policy.challenge_escrow_account.clone();
+        let old_definition = immutable_policy.challenge_voting_asset_id.clone();
+        let replacement_definition = AssetDefinitionId::derive_from_components(
+            iroha_data_model::domain::DomainId::try_new("replacement", "preactivation")
+                .expect("replacement moderation domain"),
+            "bond".parse().expect("replacement moderation asset name"),
+        );
+        let manager = fixture.manager_id();
+        fixture
+            .run(1_001_002, |transaction| {
+                seed_moderation_policy_asset_reference_for_test(
+                    &mut transaction.world,
+                    replacement_definition,
+                    manager.clone(),
+                    manager.clone(),
+                )
+            })
+            .expect("rotate the active policy away from every immutable appeal reference");
+
+        let removal_error = fixture
+            .run(1_001_003, |transaction| {
+                Unregister::account(multisig_appellant.clone())
+                    .execute(&multisig_appellant, transaction)
+            })
+            .expect_err("registering appeal must retain its appellant account");
+        assert!(
+            removal_error
+                .to_string()
+                .contains("pre-activation appeal `panel-case`")
+                && removal_error.to_string().contains("appellant"),
+            "unexpected pre-activation appellant removal error: {removal_error}"
+        );
+        let added_signatory = fixture.outsider.public_key().clone();
+        let rekey_error = fixture
+            .run(1_001_003, |transaction| {
+                AddSignatory::new(multisig_appellant.clone(), added_signatory)
+                    .execute(&multisig_appellant, transaction)
+            })
+            .expect_err("registering appeal appellant must not escape exclusion by rekeying");
+        assert!(
+            rekey_error
+                .to_string()
+                .contains("pre-activation appeal `panel-case`")
+                && rekey_error.to_string().contains("appellant"),
+            "unexpected pre-activation appellant rekey error: {rekey_error}"
+        );
+        let custody_error = fixture
+            .run(1_001_003, |transaction| {
+                Unregister::account(old_custody.clone()).execute(&old_custody, transaction)
+            })
+            .expect_err("registering appeal must retain its immutable policy custody");
+        assert!(
+            custody_error
+                .to_string()
+                .contains("pre-activation appeal `panel-case`")
+                && custody_error
+                    .to_string()
+                    .contains("policy challenge escrow"),
+            "unexpected immutable appeal custody removal error: {custody_error}"
+        );
+        let definition_error = fixture
+            .run(1_001_003, |transaction| {
+                Unregister::asset_definition(old_definition.clone()).execute(&manager, transaction)
+            })
+            .expect_err("immutable appeal policy must retain its voting asset definition");
+        assert!(
+            definition_error
+                .to_string()
+                .contains("immutable policy challenge voting asset"),
+            "unexpected immutable appeal asset removal error: {definition_error}"
+        );
+        assert!(
+            fixture
+                .state
+                .view()
+                .world()
+                .account(&multisig_appellant)
+                .is_ok()
+        );
+        assert!(fixture.state.view().world().account(&old_custody).is_ok());
+        assert!(
+            fixture
+                .state
+                .view()
+                .world()
+                .asset_definition(&old_definition)
+                .is_ok()
+        );
     }
     #[test]
     fn moderation_payload_decoder_rejects_alternate_norito_layout() {
@@ -5638,6 +7613,7 @@ mod tests {
         transaction: &mut StateTransaction<'_, '_>,
         manager: &AccountId,
         spec: ModerationCaseSpecV1,
+        case_policy: ModerationLedgerPolicyV1,
     ) -> Result<(), InstructionExecutionError> {
         let mut eligible_jurors = spec.jurors.clone();
         eligible_jurors.sort_by_key(ToString::to_string);
@@ -5671,7 +7647,8 @@ mod tests {
             registration_deadline_unix_ms: 800,
             acceptance_deadline_unix_ms: 900,
             commit_deadline_unix_ms: spec.commit_deadline_unix_ms,
-            challenge_deadline_unix_ms: spec.challenge_deadline_unix_ms,
+            challenge_submission_deadline_unix_ms: spec.challenge_submission_deadline_unix_ms,
+            challenge_resolution_deadline_unix_ms: spec.challenge_resolution_deadline_unix_ms,
             reveal_deadline_unix_ms: spec.reveal_deadline_unix_ms,
             policy_digest: spec.policy_digest,
         };
@@ -5700,13 +7677,18 @@ mod tests {
         let appeal = ModerationAppealRecordV1 {
             intake,
             intake_digest,
-            policy: policy(),
+            policy: case_policy.clone(),
             pop_snapshot,
             pop_snapshot_digest,
             status: ModerationAppealStatusV1::BallotOpen,
             submitted_by: manager.clone(),
             submitted_at_unix_ms: 700,
             eligible_jurors: eligible_jurors.clone(),
+            sortition_anchor: Some(ModerationSortitionAnchorV1 {
+                block_height: 1,
+                block_hash: randomness_anchor,
+                block_timestamp_unix_ms: 801,
+            }),
             selection: Some(ModerationPanelSelectionV1 {
                 randomness_anchor,
                 seed_digest,
@@ -5723,7 +7705,7 @@ mod tests {
         };
         let case = ModerationCaseRecordV1 {
             spec,
-            policy: policy(),
+            policy: case_policy,
             status: ModerationCaseStatusV1::Open,
             opened_at_unix_ms: OPENED_AT,
             opened_by: manager.clone(),
@@ -5765,19 +7747,25 @@ mod tests {
     }
     impl Fixture {
         fn new(quorum: u16) -> Self {
+            Self::new_with_policy(quorum, policy())
+        }
+        fn new_with_policy(quorum: u16, case_policy: ModerationLedgerPolicyV1) -> Self {
             let manager = keypair(0x11);
             let jurors = [keypair(0x21), keypair(0x22), keypair(0x23)];
             let outsider = keypair(0x31);
             let manager_id = account(&manager);
             let juror_ids = jurors.iter().map(account).collect::<Vec<_>>();
-            let spec = spec(juror_ids, quorum);
+            let spec = spec_with_policy(juror_ids, quorum, &case_policy);
             let mut state = state(
                 &[&manager, &jurors[0], &jurors[1], &jurors[2], &outsider],
                 &manager_id,
             );
+            state.gov.bond_escrow_account = case_policy.challenge_escrow_account.clone();
+            state.gov.slash_receiver_account = case_policy.challenge_slash_receiver_account.clone();
             transact(&mut state, 1, OPENED_AT, |transaction| {
-                SetSorafsModerationPolicy::new(policy()).execute(&manager_id, transaction)?;
-                seed_activated_case(transaction, &manager_id, spec.clone())
+                SetSorafsModerationPolicy::new(case_policy.clone())
+                    .execute(&manager_id, transaction)?;
+                seed_activated_case(transaction, &manager_id, spec.clone(), case_policy.clone())
             })
             .expect("activate policy and open case");
             state.push_block_hash_for_testing(iroha_crypto::HashOf::new(&header(1, OPENED_AT)));
@@ -5814,6 +7802,12 @@ mod tests {
         }
     }
     #[test]
+    fn persisted_current_moderation_policy_and_case_validate_at_startup() {
+        let fixture = Fixture::new(1);
+        validate_persisted_moderation_schema_v1(&fixture.state.world.view())
+            .expect("current first-release moderation state must validate");
+    }
+    #[test]
     fn successful_commit_reveal_finalization_persists_queries_and_no_show() {
         let mut fixture = Fixture::new(2);
         let juror0 = fixture.juror_id(0);
@@ -5841,7 +7835,7 @@ mod tests {
             })
             .unwrap();
         fixture
-            .run(3_500, |transaction| {
+            .run(REVEAL_AT, |transaction| {
                 SubmitSorafsModerationReveal::new(encode(&reveal0))
                     .execute(&juror0, transaction)?;
                 SubmitSorafsModerationReveal::new(encode(&reveal1)).execute(&juror1, transaction)
@@ -5849,7 +7843,7 @@ mod tests {
             .unwrap();
         let manager = fixture.manager_id();
         fixture
-            .run(4_001, |transaction| {
+            .run(FINALIZE_AT, |transaction| {
                 FinalizeSorafsModerationCase::new("case-1".to_owned(), "round-1".to_owned())
                     .execute(&manager, transaction)
             })
@@ -5947,21 +7941,21 @@ mod tests {
         mismatched.choice = SoraFsModerationVoteChoice::Modify;
         assert!(
             fixture
-                .run(3_500, |transaction| {
+                .run(REVEAL_AT, |transaction| {
                     SubmitSorafsModerationReveal::new(encode(&mismatched))
                         .execute(&juror, transaction)
                 })
                 .is_err()
         );
         fixture
-            .run(3_500, |transaction| {
+            .run(REVEAL_AT, |transaction| {
                 SubmitSorafsModerationReveal::new(encode(&juror_reveal))
                     .execute(&juror, transaction)
             })
             .unwrap();
         assert!(
             fixture
-                .run(3_501, |transaction| {
+                .run(REVEAL_AT + 1, |transaction| {
                     SubmitSorafsModerationReveal::new(encode(&juror_reveal))
                         .execute(&juror, transaction)
                 })
@@ -5979,7 +7973,513 @@ mod tests {
         assert_eq!(status.reveals, 1);
     }
     #[test]
-    fn pending_and_accepted_challenges_block_reveal_and_close_without_penalties() {
+    fn challenge_submission_deadline_is_inclusive_and_one_tick_later_is_atomic() {
+        let mut at_deadline = Fixture::new(1);
+        let challenger = account(&at_deadline.outsider);
+        at_deadline
+            .run(CHALLENGE_SUBMISSION_DEADLINE, |transaction| {
+                RaiseSorafsModerationChallenge::new(
+                    "case-1".to_owned(),
+                    "round-1".to_owned(),
+                    "challenge-at-deadline".to_owned(),
+                    ModerationChallengeKindV1::EvidenceMismatch,
+                    None,
+                    [0x61; 32],
+                    "submitted at the exact deadline".to_owned(),
+                )
+                .execute(&challenger, transaction)
+            })
+            .expect("the challenge submission deadline is inclusive");
+        let challenge = FindSorafsModerationChallenge::new(
+            "case-1".to_owned(),
+            "round-1".to_owned(),
+            "challenge-at-deadline".to_owned(),
+        )
+        .execute(&at_deadline.state.view())
+        .expect("deadline challenge is retained");
+        assert_eq!(challenge.raised_at_unix_ms, CHALLENGE_SUBMISSION_DEADLINE);
+        assert_bond_custody_distribution(&at_deadline.state, &challenger, 850, 150, 150);
+
+        let mut after_deadline = Fixture::new(1);
+        let late_challenger = account(&after_deadline.outsider);
+        let case_before = FindSorafsModerationCase::new("case-1".to_owned(), "round-1".to_owned())
+            .execute(&after_deadline.state.view())
+            .expect("fixture case");
+        let status_before = FindSorafsModerationStatus
+            .execute(&after_deadline.state.view())
+            .expect("fixture status");
+        let error = after_deadline
+            .run(CHALLENGE_SUBMISSION_DEADLINE + 1, |transaction| {
+                RaiseSorafsModerationChallenge::new(
+                    "case-1".to_owned(),
+                    "round-1".to_owned(),
+                    "challenge-after-deadline".to_owned(),
+                    ModerationChallengeKindV1::EvidenceMismatch,
+                    None,
+                    [0x62; 32],
+                    "submitted one tick too late".to_owned(),
+                )
+                .execute(&late_challenger, transaction)
+            })
+            .expect_err("one tick after the deadline must reject");
+        assert!(
+            error.to_string().contains("challenge phase is closed"),
+            "unexpected deadline error: {error}"
+        );
+        assert_eq!(
+            FindSorafsModerationCase::new("case-1".to_owned(), "round-1".to_owned())
+                .execute(&after_deadline.state.view())
+                .expect("fixture case after rejection"),
+            case_before
+        );
+        assert_eq!(
+            FindSorafsModerationStatus
+                .execute(&after_deadline.state.view())
+                .expect("fixture status after rejection"),
+            status_before
+        );
+        assert!(
+            FindSorafsModerationChallenge::new(
+                "case-1".to_owned(),
+                "round-1".to_owned(),
+                "challenge-after-deadline".to_owned(),
+            )
+            .execute(&after_deadline.state.view())
+            .is_err()
+        );
+        assert_bond_custody_distribution(&after_deadline.state, &late_challenger, 1_000, 0, 0);
+    }
+    #[test]
+    fn insufficient_challenge_bond_rejects_without_balances_records_or_counters() {
+        let mut fixture = Fixture::new(1);
+        let challenger = account(&fixture.outsider);
+        let manager = fixture.manager_id();
+        let challenger_asset = AssetId::new(
+            fixture.state.gov.voting_asset_id.clone(),
+            challenger.clone(),
+        );
+        fixture
+            .run(1_500, |transaction| {
+                Transfer::asset_quantity(challenger_asset, 851_u32, manager)
+                    .execute(&challenger, transaction)
+            })
+            .expect("reduce the challenger balance to one unit below the fixed bond");
+        assert_eq!(
+            voting_asset_balance(&fixture.state, &challenger),
+            Quantity::from(149_u32)
+        );
+        let case_before = FindSorafsModerationCase::new("case-1".to_owned(), "round-1".to_owned())
+            .execute(&fixture.state.view())
+            .expect("fixture case");
+        let status_before = FindSorafsModerationStatus
+            .execute(&fixture.state.view())
+            .expect("fixture status");
+        let error = fixture
+            .run(2_500, |transaction| {
+                RaiseSorafsModerationChallenge::new(
+                    "case-1".to_owned(),
+                    "round-1".to_owned(),
+                    "challenge-underfunded".to_owned(),
+                    ModerationChallengeKindV1::EvidenceMismatch,
+                    None,
+                    [0x63; 32],
+                    "bond is one unit short".to_owned(),
+                )
+                .execute(&challenger, transaction)
+            })
+            .expect_err("a 149-unit balance cannot fund the fixed 150-unit bond");
+        assert!(
+            error.to_string().contains("Not enough quantity"),
+            "unexpected underfunded bond error: {error}"
+        );
+        assert_eq!(
+            FindSorafsModerationCase::new("case-1".to_owned(), "round-1".to_owned())
+                .execute(&fixture.state.view())
+                .expect("fixture case after rejection"),
+            case_before
+        );
+        assert_eq!(
+            FindSorafsModerationStatus
+                .execute(&fixture.state.view())
+                .expect("fixture status after rejection"),
+            status_before
+        );
+        assert!(
+            FindSorafsModerationChallenge::new(
+                "case-1".to_owned(),
+                "round-1".to_owned(),
+                "challenge-underfunded".to_owned(),
+            )
+            .execute(&fixture.state.view())
+            .is_err()
+        );
+        let current_policy = policy();
+        assert_eq!(
+            voting_asset_balance(&fixture.state, &challenger),
+            Quantity::from(149_u32)
+        );
+        assert_eq!(
+            voting_asset_balance(&fixture.state, &current_policy.challenge_escrow_account),
+            Quantity::zero()
+        );
+        assert_eq!(
+            voting_asset_balance(
+                &fixture.state,
+                &current_policy.challenge_slash_receiver_account,
+            ),
+            Quantity::zero()
+        );
+    }
+    #[test]
+    fn challenge_funding_uses_case_pinned_custody_after_live_governance_rotation() {
+        let pinned_escrow = account(&keypair(0x22));
+        let pinned_slash_receiver = account(&keypair(0x23));
+        let pinned_policy =
+            policy_with_custody(pinned_escrow.clone(), pinned_slash_receiver.clone());
+        let mut fixture = Fixture::new_with_policy(1, pinned_policy.clone());
+        let challenger = account(&fixture.outsider);
+        let rotated_escrow = fixture.juror_id(0);
+        let rotated_slash_receiver = fixture.manager_id();
+        assert_ne!(pinned_escrow, pinned_slash_receiver);
+        assert_ne!(rotated_escrow, rotated_slash_receiver);
+        for pinned in [&pinned_escrow, &pinned_slash_receiver] {
+            assert_ne!(pinned, &rotated_escrow);
+            assert_ne!(pinned, &rotated_slash_receiver);
+        }
+        fixture.state.gov.bond_escrow_account = rotated_escrow.clone();
+        fixture.state.gov.slash_receiver_account = rotated_slash_receiver.clone();
+
+        fixture
+            .run(2_500, |transaction| {
+                RaiseSorafsModerationChallenge::new(
+                    "case-1".to_owned(),
+                    "round-1".to_owned(),
+                    "challenge-pinned-policy".to_owned(),
+                    ModerationChallengeKindV1::EvidenceMismatch,
+                    None,
+                    [0x7A; 32],
+                    "case policy remains authoritative after configuration rotation".to_owned(),
+                )
+                .execute(&challenger, transaction)
+            })
+            .expect("challenge funding must use the immutable case-policy snapshot");
+
+        let record = FindSorafsModerationChallenge::new(
+            "case-1".to_owned(),
+            "round-1".to_owned(),
+            "challenge-pinned-policy".to_owned(),
+        )
+        .execute(&fixture.state.view())
+        .expect("query challenge funded under the pinned policy");
+        assert_eq!(
+            record.bond.asset_definition_id,
+            pinned_policy.challenge_voting_asset_id
+        );
+        assert_eq!(
+            record.bond.escrow_account,
+            pinned_policy.challenge_escrow_account
+        );
+        assert_eq!(
+            record.bond.slash_receiver_account,
+            pinned_policy.challenge_slash_receiver_account
+        );
+        assert_eq!(record.bond.amount, pinned_policy.challenge_bond_amount);
+        assert_eq!(
+            voting_asset_balance(&fixture.state, &challenger),
+            Quantity::from(850_u32)
+        );
+        assert_eq!(
+            voting_asset_balance(&fixture.state, &pinned_escrow),
+            Quantity::from(1_150_u32),
+            "the old pinned escrow receives the bond"
+        );
+        assert_eq!(
+            voting_asset_balance(&fixture.state, &pinned_slash_receiver),
+            Quantity::from(1_000_u32),
+            "funding must not confuse the distinct pinned slash receiver with escrow"
+        );
+        assert_eq!(
+            voting_asset_balance(&fixture.state, &rotated_escrow),
+            Quantity::from(1_000_u32),
+            "the distinct replacement escrow must not receive the pinned bond"
+        );
+        assert_eq!(
+            voting_asset_balance(&fixture.state, &rotated_slash_receiver),
+            Quantity::from(1_000_u32),
+            "the distinct replacement slash receiver must not receive the pinned bond"
+        );
+
+        let manager = fixture.manager_id();
+        fixture
+            .run(2_600, |transaction| {
+                ResolveSorafsModerationChallenge::new(
+                    "case-1".to_owned(),
+                    "round-1".to_owned(),
+                    "challenge-pinned-policy".to_owned(),
+                    ModerationChallengeDecisionV1::Rejected,
+                )
+                .execute(&manager, transaction)
+            })
+            .expect("rejected settlement must keep using the distinct pinned custody roles");
+        let record = FindSorafsModerationChallenge::new(
+            "case-1".to_owned(),
+            "round-1".to_owned(),
+            "challenge-pinned-policy".to_owned(),
+        )
+        .execute(&fixture.state.view())
+        .expect("query challenge after pinned settlement");
+        assert_eq!(
+            record.decision,
+            Some(ModerationChallengeDecisionV1::Rejected)
+        );
+        assert_eq!(record.bond.refunded_amount, Quantity::from(113_u32));
+        assert_eq!(record.bond.slashed_amount, Quantity::from(37_u32));
+        assert_eq!(
+            voting_asset_balance(&fixture.state, &challenger),
+            Quantity::from(963_u32)
+        );
+        assert_eq!(
+            voting_asset_balance(&fixture.state, &pinned_escrow),
+            Quantity::from(1_000_u32)
+        );
+        assert_eq!(
+            voting_asset_balance(&fixture.state, &pinned_slash_receiver),
+            Quantity::from(1_037_u32),
+            "the slash must reach the old pinned slash receiver"
+        );
+        assert_eq!(
+            voting_asset_balance(&fixture.state, &rotated_escrow),
+            Quantity::from(1_000_u32)
+        );
+        assert_eq!(
+            voting_asset_balance(&fixture.state, &rotated_slash_receiver),
+            Quantity::from(1_000_u32)
+        );
+        assert_unique_voting_asset_total(
+            &fixture.state,
+            &[
+                challenger,
+                pinned_escrow,
+                pinned_slash_receiver,
+                rotated_escrow,
+                rotated_slash_receiver,
+            ],
+            5_000,
+        );
+    }
+    #[test]
+    fn pending_bond_liability_blocks_transfer_and_burn_but_allows_exact_excess() {
+        let mut fixture = Fixture::new(1);
+        let manager = fixture.manager_id();
+        let challenger = account(&fixture.outsider);
+        let second_challenger = fixture.juror_id(0);
+        let current_policy = policy();
+        let escrow = current_policy.challenge_escrow_account.clone();
+        assert_ne!(
+            manager, escrow,
+            "fixture funder must not be the custody account"
+        );
+        let definition = fixture.state.gov.voting_asset_id.clone();
+
+        fixture
+            .run(2_400, |transaction| {
+                Transfer::asset_quantity(
+                    AssetId::new(definition.clone(), manager.clone()),
+                    10_u32,
+                    escrow.clone(),
+                )
+                .execute(&manager, transaction)
+            })
+            .expect("fund ten units above the pending-bond reserve");
+        for (authority, challenge_id, evidence) in [
+            (challenger.clone(), "challenge-reserve-a", [0x81; 32]),
+            (second_challenger.clone(), "challenge-reserve-b", [0x82; 32]),
+        ] {
+            fixture
+                .run(2_500, |transaction| {
+                    RaiseSorafsModerationChallenge::new(
+                        "case-1".to_owned(),
+                        "round-1".to_owned(),
+                        challenge_id.to_owned(),
+                        ModerationChallengeKindV1::EvidenceMismatch,
+                        None,
+                        evidence,
+                        "exercise aggregate custody reserve".to_owned(),
+                    )
+                    .execute(&authority, transaction)
+                })
+                .expect("raise a distinct bonded challenge");
+        }
+        let escrow_asset = AssetId::new(definition, escrow.clone());
+        assert_eq!(
+            unsettled_moderation_bond_liability(&fixture.state.world.view(), &escrow_asset)
+                .expect("sum retained bond liabilities"),
+            Quantity::from(300_u32)
+        );
+        assert_eq!(
+            voting_asset_balance(&fixture.state, &escrow),
+            Quantity::from(310_u32)
+        );
+
+        let cumulative_batch_error = fixture
+            .run(2_501, |transaction| {
+                TransferAssetBatch::new(vec![
+                    TransferAssetBatchEntry::with_leg_id(
+                        "reserve-leg-a",
+                        escrow.clone(),
+                        manager.clone(),
+                        escrow_asset.definition().clone(),
+                        6_u32,
+                    ),
+                    TransferAssetBatchEntry::with_leg_id(
+                        "reserve-leg-b",
+                        escrow.clone(),
+                        challenger.clone(),
+                        escrow_asset.definition().clone(),
+                        6_u32,
+                    ),
+                ])
+                .execute(&escrow, transaction)
+            })
+            .expect_err(
+                "atomic batch aggregate must reject cumulative depletion below bond liability",
+            );
+        assert!(
+            cumulative_batch_error
+                .to_string()
+                .contains("must retain unsettled bond liability"),
+            "unexpected cumulative reserve error: {cumulative_batch_error}"
+        );
+        assert_eq!(
+            voting_asset_balance(&fixture.state, &escrow),
+            Quantity::from(310_u32),
+            "rejected cumulative reserve batch must preserve custody"
+        );
+        assert_eq!(
+            voting_asset_balance(&fixture.state, &manager),
+            Quantity::from(990_u32),
+            "rejected cumulative reserve batch must roll back its first leg"
+        );
+        assert_eq!(
+            voting_asset_balance(&fixture.state, &challenger),
+            Quantity::from(850_u32),
+            "rejected cumulative reserve batch must not credit its second leg"
+        );
+
+        fixture
+            .run(2_501, |transaction| {
+                Transfer::asset_quantity(escrow_asset.clone(), 10_u32, manager.clone())
+                    .execute(&escrow, transaction)
+            })
+            .expect("the exact balance above aggregate liability remains transferable");
+        assert_eq!(
+            voting_asset_balance(&fixture.state, &escrow),
+            Quantity::from(300_u32)
+        );
+        assert_eq!(
+            voting_asset_balance(&fixture.state, &manager),
+            Quantity::from(1_000_u32)
+        );
+
+        let manager_before = voting_asset_balance(&fixture.state, &manager);
+        let transfer_error = fixture
+            .run(2_502, |transaction| {
+                Transfer::asset_quantity(escrow_asset.clone(), 1_u32, manager.clone())
+                    .execute(&escrow, transaction)
+            })
+            .expect_err("ordinary transfer cannot consume unsettled bond principal");
+        assert!(
+            transfer_error
+                .to_string()
+                .contains("must retain unsettled bond liability"),
+            "unexpected custody-transfer error: {transfer_error}"
+        );
+        let burn_error = fixture
+            .run(2_503, |transaction| {
+                Burn::asset_quantity(1_u32, escrow_asset.clone()).execute(&escrow, transaction)
+            })
+            .expect_err("ordinary burn cannot consume unsettled bond principal");
+        assert!(
+            burn_error
+                .to_string()
+                .contains("must retain unsettled bond liability"),
+            "unexpected custody-burn error: {burn_error}"
+        );
+        assert_eq!(
+            voting_asset_balance(&fixture.state, &escrow),
+            Quantity::from(300_u32)
+        );
+        assert_eq!(
+            voting_asset_balance(&fixture.state, &manager),
+            manager_before
+        );
+
+        fixture
+            .run(2_900, |transaction| {
+                ResolveSorafsModerationChallenge::new(
+                    "case-1".to_owned(),
+                    "round-1".to_owned(),
+                    "challenge-reserve-a".to_owned(),
+                    ModerationChallengeDecisionV1::Accepted,
+                )
+                .execute(&manager, transaction)
+            })
+            .expect("accepted challenge refunds through its typed settlement path");
+        fixture
+            .run(2_901, |transaction| {
+                ResolveSorafsModerationChallenge::new(
+                    "case-1".to_owned(),
+                    "round-1".to_owned(),
+                    "challenge-reserve-b".to_owned(),
+                    ModerationChallengeDecisionV1::Rejected,
+                )
+                .execute(&manager, transaction)
+            })
+            .expect("two-leg rejected settlement consumes only its own retained bond");
+        fixture
+            .run(FINALIZE_AT, |transaction| {
+                FinalizeSorafsModerationCase::new("case-1".to_owned(), "round-1".to_owned())
+                    .execute(&manager, transaction)
+            })
+            .expect("finalize the case before rotating the active policy reference");
+        let replacement_definition = AssetDefinitionId::derive_from_components(
+            iroha_data_model::domain::DomainId::try_new("replacement", "moderation")
+                .expect("replacement domain"),
+            "bond".parse().expect("replacement asset name"),
+        );
+        fixture
+            .run(FINALIZE_AT + 1, |transaction| {
+                seed_moderation_policy_asset_reference_for_test(
+                    &mut transaction.world,
+                    replacement_definition,
+                    manager.clone(),
+                    manager.clone(),
+                )
+            })
+            .expect("rotate the active policy away from the historical bond definition");
+        assert_eq!(
+            unsettled_moderation_bond_liability(&fixture.state.world.view(), &escrow_asset)
+                .expect("all challenge liabilities are settled"),
+            Quantity::zero()
+        );
+        let historical_reference = retained_moderation_asset_definition_reference(
+            &fixture.state.world.view(),
+            escrow_asset.definition(),
+        )
+        .expect("validate retained historical challenge")
+        .expect("immutable appeal policy must retain its historical definition");
+        assert!(
+            historical_reference.contains("immutable policy challenge voting asset"),
+            "historical retention must include the immutable appeal policy after rotation: {historical_reference}"
+        );
+        assert_eq!(
+            voting_asset_balance(&fixture.state, &escrow),
+            Quantity::from(37_u32),
+            "the default slash receiver is the escrow account, so only the exact slash remains"
+        );
+    }
+    #[test]
+    fn accepted_challenge_blocks_reveal_and_closes_without_penalties() {
         let mut fixture = Fixture::new(1);
         let juror = fixture.juror_id(0);
         let challenger = account(&fixture.outsider);
@@ -6082,6 +8582,15 @@ mod tests {
                 .execute(&challenger, transaction)
             })
             .unwrap();
+        assert_bond_custody_distribution(&fixture.state, &challenger, 850, 150, 150);
+        let case_after_first =
+            FindSorafsModerationCase::new("case-1".to_owned(), "round-1".to_owned())
+                .execute(&fixture.state.view())
+                .expect("case after first challenge");
+        let status_after_first = FindSorafsModerationStatus
+            .execute(&fixture.state.view())
+            .expect("status after first challenge");
+        let juror_balance_after_first = voting_asset_balance(&fixture.state, &juror);
         assert!(
             fixture
                 .run(2_501, |transaction| {
@@ -6097,6 +8606,96 @@ mod tests {
                     .execute(&challenger, transaction)
                 })
                 .is_err()
+        );
+        assert!(
+            fixture
+                .run(2_502, |transaction| {
+                    RaiseSorafsModerationChallenge::new(
+                        "case-1".to_owned(),
+                        "round-1".to_owned(),
+                        "challenge-second".to_owned(),
+                        ModerationChallengeKindV1::EvidenceMismatch,
+                        None,
+                        [0x53; 32],
+                        "same challenger".to_owned(),
+                    )
+                    .execute(&challenger, transaction)
+                })
+                .is_err()
+        );
+        assert_eq!(
+            FindSorafsModerationCase::new("case-1".to_owned(), "round-1".to_owned())
+                .execute(&fixture.state.view())
+                .expect("case after duplicate rejections"),
+            case_after_first,
+            "duplicate id and challenger rejections must preserve all case counters and indexes"
+        );
+        assert_eq!(
+            FindSorafsModerationStatus
+                .execute(&fixture.state.view())
+                .expect("status after duplicate rejections"),
+            status_after_first,
+            "duplicate challenge rejections must preserve global counters"
+        );
+        assert_bond_custody_distribution(&fixture.state, &challenger, 850, 150, 150);
+        assert_eq!(
+            voting_asset_balance(&fixture.state, &juror),
+            juror_balance_after_first,
+            "duplicate evidence rejection must not debit its alternate challenger"
+        );
+        assert!(
+            FindSorafsModerationChallenge::new(
+                "case-1".to_owned(),
+                "round-1".to_owned(),
+                "challenge-second".to_owned(),
+            )
+            .execute(&fixture.state.view())
+            .is_err(),
+            "duplicate challenger rejection must not retain a record"
+        );
+        assert!(
+            fixture
+                .run(2_502, |transaction| {
+                    RaiseSorafsModerationChallenge::new(
+                        "case-1".to_owned(),
+                        "round-1".to_owned(),
+                        "challenge-same-evidence".to_owned(),
+                        ModerationChallengeKindV1::EvidenceMismatch,
+                        None,
+                        [0x51; 32],
+                        "same evidence".to_owned(),
+                    )
+                    .execute(&juror, transaction)
+                })
+                .is_err()
+        );
+        assert_eq!(
+            FindSorafsModerationCase::new("case-1".to_owned(), "round-1".to_owned())
+                .execute(&fixture.state.view())
+                .expect("case after duplicate evidence rejection"),
+            case_after_first
+        );
+        assert_eq!(
+            FindSorafsModerationStatus
+                .execute(&fixture.state.view())
+                .expect("status after duplicate evidence rejection"),
+            status_after_first
+        );
+        assert_bond_custody_distribution(&fixture.state, &challenger, 850, 150, 150);
+        assert_eq!(
+            voting_asset_balance(&fixture.state, &juror),
+            juror_balance_after_first,
+            "duplicate evidence rejection must not debit its alternate challenger"
+        );
+        assert!(
+            FindSorafsModerationChallenge::new(
+                "case-1".to_owned(),
+                "round-1".to_owned(),
+                "challenge-same-evidence".to_owned(),
+            )
+            .execute(&fixture.state.view())
+            .is_err(),
+            "duplicate evidence rejection must not retain a record"
         );
         assert!(
             fixture
@@ -6132,13 +8731,13 @@ mod tests {
             .unwrap();
         assert!(
             fixture
-                .run(3_501, |transaction| {
+                .run(REVEAL_AT, |transaction| {
                     SubmitSorafsModerationReveal::new(encode(&reveal)).execute(&juror, transaction)
                 })
                 .is_err()
         );
         fixture
-            .run(4_001, |transaction| {
+            .run(FINALIZE_AT, |transaction| {
                 FinalizeSorafsModerationCase::new("case-1".to_owned(), "round-1".to_owned())
                     .execute(&manager, transaction)
             })
@@ -6148,6 +8747,19 @@ mod tests {
             .unwrap();
         assert_eq!(outcome.kind, ModerationOutcomeKindV1::Challenged);
         assert_eq!(outcome.no_show_count, 0);
+        let challenge = FindSorafsModerationChallenge::new(
+            "case-1".to_owned(),
+            "round-1".to_owned(),
+            "challenge-1".to_owned(),
+        )
+        .execute(&fixture.state.view())
+        .unwrap();
+        assert_eq!(
+            challenge.bond.refunded_amount,
+            Quantity::from(MODERATION_CHALLENGE_BOND_AMOUNT_V1)
+        );
+        assert_eq!(challenge.bond.slashed_amount, Quantity::zero());
+        assert_bond_custody_distribution(&fixture.state, &challenger, 1_000, 0, 0);
         assert_eq!(
             FindSorafsModerationStatus
                 .execute(&fixture.state.view())
@@ -6157,7 +8769,323 @@ mod tests {
         );
     }
     #[test]
-    fn unresolved_challenge_expires_fail_safe_without_deadlock_or_no_show_penalties() {
+    fn pending_challenge_retains_challenger_until_permissionless_expiry_settles() {
+        let mut fixture = Fixture::new(1);
+        let challenger = account(&fixture.outsider);
+        fixture
+            .run(2_500, |transaction| {
+                RaiseSorafsModerationChallenge::new(
+                    "case-1".to_owned(),
+                    "round-1".to_owned(),
+                    "challenge-retains-account".to_owned(),
+                    ModerationChallengeKindV1::EvidenceMismatch,
+                    None,
+                    [0x74; 32],
+                    "retain refund destination".to_owned(),
+                )
+                .execute(&challenger, transaction)
+            })
+            .expect("raise bonded challenge");
+        let error = fixture
+            .run(2_501, |transaction| {
+                Unregister::account(challenger.clone()).execute(&challenger, transaction)
+            })
+            .expect_err("pending challenger must remain a valid refund destination");
+        assert!(
+            error
+                .to_string()
+                .contains("retained by moderation pending challenge")
+                && error.to_string().contains("challenge-retains-account"),
+            "unexpected retained-account error: {error}"
+        );
+        assert!(fixture.state.view().world().account(&challenger).is_ok());
+        assert_bond_custody_distribution(&fixture.state, &challenger, 850, 150, 150);
+        let expiry_authority = fixture.juror_id(0);
+        fixture
+            .run(CHALLENGE_RESOLUTION_DEADLINE + 1, |transaction| {
+                ExpireSorafsModerationChallenge::new(
+                    "case-1".to_owned(),
+                    "round-1".to_owned(),
+                    "challenge-retains-account".to_owned(),
+                )
+                .execute(&expiry_authority, transaction)
+            })
+            .expect("permissionless expiry refunds the retained challenger");
+        assert_bond_custody_distribution(&fixture.state, &challenger, 1_000, 0, 0);
+        fixture
+            .run(CHALLENGE_RESOLUTION_DEADLINE + 2, |transaction| {
+                Unregister::account(challenger.clone()).execute(&challenger, transaction)
+            })
+            .expect("settled challenger is no longer retained by moderation");
+        assert!(fixture.state.view().world().account(&challenger).is_err());
+    }
+    #[test]
+    fn pending_challenge_blocks_native_multisig_controller_rekey() {
+        let mut fixture = Fixture::new(1);
+        let initial_signer = account(&fixture.outsider);
+        let added_signatory = fixture
+            .juror_id(0)
+            .controller()
+            .single_signatory()
+            .expect("juror is a single-signatory account")
+            .clone();
+        let spec = MultisigSpec {
+            signatories: BTreeMap::from([(initial_signer.clone(), 1)]),
+            quorum: NonZeroU16::new(1).expect("nonzero quorum"),
+            transaction_ttl_ms: NonZeroU64::new(DEFAULT_MULTISIG_TTL_MS)
+                .expect("nonzero transaction ttl"),
+        };
+        let member = MultisigMember::new(fixture.outsider.public_key().clone(), 1)
+            .expect("valid multisig member");
+        let challenger = AccountId::new_multisig(
+            MultisigPolicy::new(1, vec![member]).expect("valid multisig policy"),
+        );
+        let registration_seed = account(&keypair(0x32));
+        let voting_asset_id = fixture.state.gov.voting_asset_id.clone();
+        fixture
+            .run(2_400, |transaction| {
+                crate::smartcontracts::isi::multisig::execute_multisig_instruction(
+                    transaction,
+                    &initial_signer,
+                    MultisigInstructionBox::Register(MultisigRegister::with_account(
+                        registration_seed,
+                        None::<iroha_data_model::domain::DomainId>,
+                        spec,
+                    )),
+                )
+                .map_err(|error| {
+                    InstructionExecutionError::InvariantViolation(error.to_string().into())
+                })?;
+                Transfer::asset_quantity(
+                    AssetId::new(voting_asset_id, initial_signer.clone()),
+                    1_000_u32,
+                    challenger.clone(),
+                )
+                .execute(&initial_signer, transaction)
+            })
+            .expect("register and fund native multisig challenger");
+        fixture
+            .run(2_500, |transaction| {
+                RaiseSorafsModerationChallenge::new(
+                    "case-1".to_owned(),
+                    "round-1".to_owned(),
+                    "challenge-retains-multisig".to_owned(),
+                    ModerationChallengeKindV1::EvidenceMismatch,
+                    None,
+                    [0x75; 32],
+                    "retain multisig refund destination".to_owned(),
+                )
+                .execute(&challenger, transaction)
+            })
+            .expect("raise challenge from native multisig account");
+
+        let error = fixture
+            .run(2_501, |transaction| {
+                AddSignatory::new(challenger.clone(), added_signatory)
+                    .execute(&challenger, transaction)
+            })
+            .expect_err("pending challenger must not escape retention through controller rekey");
+        assert!(
+            error
+                .to_string()
+                .contains("retained by moderation pending challenge")
+                && error.to_string().contains("challenge-retains-multisig"),
+            "unexpected retained-rekey error: {error}"
+        );
+        assert!(fixture.state.view().world().account(&challenger).is_ok());
+        assert_bond_custody_distribution(&fixture.state, &challenger, 850, 150, 150);
+    }
+    #[test]
+    fn finalization_stages_multiple_expiries_against_declining_bond_liability() {
+        let mut fixture = Fixture::new(1);
+        let challengers = [account(&fixture.outsider), fixture.juror_id(0)];
+        let challenge_ids = ["challenge-expiry-a", "challenge-expiry-b"];
+        for ((challenger, challenge_id), evidence) in challengers
+            .iter()
+            .zip(challenge_ids)
+            .zip([[0x76; 32], [0x77; 32]])
+        {
+            fixture
+                .run(2_500, |transaction| {
+                    RaiseSorafsModerationChallenge::new(
+                        "case-1".to_owned(),
+                        "round-1".to_owned(),
+                        challenge_id.to_owned(),
+                        ModerationChallengeKindV1::EvidenceMismatch,
+                        None,
+                        evidence,
+                        "expire together during finalization".to_owned(),
+                    )
+                    .execute(challenger, transaction)
+                })
+                .expect("raise one of two pending challenges");
+        }
+        let current_policy = policy();
+        assert_eq!(
+            voting_asset_balance(&fixture.state, &current_policy.challenge_escrow_account),
+            Quantity::from(300_u32)
+        );
+
+        let manager = fixture.manager_id();
+        fixture
+            .run(FINALIZE_AT, |transaction| {
+                FinalizeSorafsModerationCase::new("case-1".to_owned(), "round-1".to_owned())
+                    .execute(&manager, transaction)
+            })
+            .expect("both indexed pending challenges expire in one finalization");
+
+        let case = FindSorafsModerationCase::new("case-1".to_owned(), "round-1".to_owned())
+            .execute(&fixture.state.view())
+            .expect("finalized case");
+        assert_eq!(case.status, ModerationCaseStatusV1::Finalized);
+        assert_eq!(case.pending_challenge_count, 0);
+        assert_eq!(case.expired_challenge_count, 2);
+        for (challenger, challenge_id) in challengers.iter().zip(challenge_ids) {
+            let challenge = FindSorafsModerationChallenge::new(
+                "case-1".to_owned(),
+                "round-1".to_owned(),
+                challenge_id.to_owned(),
+            )
+            .execute(&fixture.state.view())
+            .expect("expired challenge");
+            assert_eq!(
+                challenge.decision,
+                Some(ModerationChallengeDecisionV1::Expired)
+            );
+            assert_eq!(
+                challenge.bond.refunded_amount,
+                Quantity::from(MODERATION_CHALLENGE_BOND_AMOUNT_V1)
+            );
+            assert_eq!(
+                voting_asset_balance(&fixture.state, challenger),
+                Quantity::from(1_000_u32)
+            );
+        }
+        assert_eq!(
+            voting_asset_balance(&fixture.state, &current_policy.challenge_escrow_account),
+            Quantity::zero()
+        );
+    }
+    #[test]
+    fn later_finalization_expiry_failure_rolls_back_prior_staged_expiry() {
+        let mut fixture = Fixture::new(1);
+        let first_challenger = account(&fixture.outsider);
+        let second_challenger = fixture.juror_id(0);
+        for (challenger, challenge_id, evidence) in [
+            (
+                first_challenger.clone(),
+                "challenge-staged-rollback-a",
+                [0x78; 32],
+            ),
+            (
+                second_challenger.clone(),
+                "challenge-staged-rollback-b",
+                [0x79; 32],
+            ),
+        ] {
+            fixture
+                .run(2_500, |transaction| {
+                    RaiseSorafsModerationChallenge::new(
+                        "case-1".to_owned(),
+                        "round-1".to_owned(),
+                        challenge_id.to_owned(),
+                        ModerationChallengeKindV1::EvidenceMismatch,
+                        None,
+                        evidence,
+                        "prove staged expiry rollback".to_owned(),
+                    )
+                    .execute(&challenger, transaction)
+                })
+                .expect("raise one of two rollback challenges");
+        }
+        let case_before = FindSorafsModerationCase::new("case-1".to_owned(), "round-1".to_owned())
+            .execute(&fixture.state.view())
+            .expect("pending case before failed finalization");
+        let first_before = FindSorafsModerationChallenge::new(
+            "case-1".to_owned(),
+            "round-1".to_owned(),
+            "challenge-staged-rollback-a".to_owned(),
+        )
+        .execute(&fixture.state.view())
+        .expect("first pending challenge before failed finalization");
+        let second_before = FindSorafsModerationChallenge::new(
+            "case-1".to_owned(),
+            "round-1".to_owned(),
+            "challenge-staged-rollback-b".to_owned(),
+        )
+        .execute(&fixture.state.view())
+        .expect("second pending challenge before failed finalization");
+        let current_policy = policy();
+
+        let manager = fixture.manager_id();
+        let error = fixture
+            .run(FINALIZE_AT, |transaction| {
+                assert!(
+                    transaction
+                        .world
+                        .accounts
+                        .remove(second_challenger.clone())
+                        .is_some()
+                );
+                FinalizeSorafsModerationCase::new("case-1".to_owned(), "round-1".to_owned())
+                    .execute(&manager, transaction)
+            })
+            .expect_err("the second expiry refund destination is deliberately missing");
+        assert!(
+            error.to_string().contains(&second_challenger.to_string()),
+            "unexpected later-expiry failure: {error}"
+        );
+        assert_eq!(
+            FindSorafsModerationCase::new("case-1".to_owned(), "round-1".to_owned())
+                .execute(&fixture.state.view())
+                .expect("case after failed finalization"),
+            case_before
+        );
+        assert_eq!(
+            FindSorafsModerationChallenge::new(
+                "case-1".to_owned(),
+                "round-1".to_owned(),
+                "challenge-staged-rollback-a".to_owned(),
+            )
+            .execute(&fixture.state.view())
+            .expect("first challenge after failed finalization"),
+            first_before,
+            "the first staged record transition must roll back"
+        );
+        assert_eq!(
+            FindSorafsModerationChallenge::new(
+                "case-1".to_owned(),
+                "round-1".to_owned(),
+                "challenge-staged-rollback-b".to_owned(),
+            )
+            .execute(&fixture.state.view())
+            .expect("second challenge after failed finalization"),
+            second_before
+        );
+        assert_eq!(
+            voting_asset_balance(&fixture.state, &first_challenger),
+            Quantity::from(850_u32),
+            "the first staged refund must roll back"
+        );
+        assert_eq!(
+            voting_asset_balance(&fixture.state, &second_challenger),
+            Quantity::from(850_u32)
+        );
+        assert_eq!(
+            voting_asset_balance(&fixture.state, &current_policy.challenge_escrow_account),
+            Quantity::from(300_u32)
+        );
+        assert!(
+            fixture
+                .state
+                .view()
+                .world()
+                .account(&second_challenger)
+                .is_ok()
+        );
+    }
+    #[test]
+    fn unresolved_challenge_expires_permissionlessly_and_fails_open() {
         let mut fixture = Fixture::new(1);
         let juror = fixture.juror_id(0);
         let challenger = account(&fixture.outsider);
@@ -6188,6 +9116,50 @@ mod tests {
             })
             .unwrap();
         let manager = fixture.manager_id();
+        fixture
+            .run(2_501, |transaction| {
+                RaiseSorafsModerationChallenge::new(
+                    "case-1".to_owned(),
+                    "round-1".to_owned(),
+                    "challenge-swept".to_owned(),
+                    ModerationChallengeKindV1::Other,
+                    None,
+                    [0x73; 32],
+                    "awaiting final sweep".to_owned(),
+                )
+                .execute(&manager, transaction)
+            })
+            .unwrap();
+        let current_policy = policy();
+        assert_eq!(
+            voting_asset_balance(&fixture.state, &challenger),
+            Quantity::from(850_u32)
+        );
+        assert_eq!(
+            voting_asset_balance(&fixture.state, &manager),
+            Quantity::from(850_u32)
+        );
+        assert_eq!(
+            voting_asset_balance(&fixture.state, &current_policy.challenge_escrow_account),
+            Quantity::from(300_u32)
+        );
+        assert_eq!(
+            voting_asset_balance(
+                &fixture.state,
+                &current_policy.challenge_slash_receiver_account,
+            ),
+            Quantity::from(300_u32)
+        );
+        assert_unique_voting_asset_total(
+            &fixture.state,
+            &[
+                challenger.clone(),
+                manager.clone(),
+                current_policy.challenge_escrow_account.clone(),
+                current_policy.challenge_slash_receiver_account.clone(),
+            ],
+            2_000,
+        );
         assert!(
             fixture
                 .run(2_600, |transaction| {
@@ -6203,7 +9175,7 @@ mod tests {
         );
         assert!(
             fixture
-                .run(3_500, |transaction| {
+                .run(CHALLENGE_RESOLUTION_DEADLINE + 1, |transaction| {
                     ResolveSorafsModerationChallenge::new(
                         "case-1".to_owned(),
                         "round-1".to_owned(),
@@ -6214,24 +9186,52 @@ mod tests {
                 })
                 .is_err()
         );
-        assert!(
-            fixture
-                .run(3_500, |transaction| {
-                    SubmitSorafsModerationReveal::new(encode(&reveal)).execute(&juror, transaction)
-                })
-                .is_err()
-        );
         fixture
-            .run(4_001, |transaction| {
+            .run(REVEAL_AT, |transaction| {
+                SubmitSorafsModerationReveal::new(encode(&reveal)).execute(&juror, transaction)
+            })
+            .unwrap();
+        fixture
+            .run(REVEAL_AT + 1, |transaction| {
+                ExpireSorafsModerationChallenge::new(
+                    "case-1".to_owned(),
+                    "round-1".to_owned(),
+                    "challenge-unresolved".to_owned(),
+                )
+                .execute(&juror, transaction)
+            })
+            .unwrap();
+        fixture
+            .run(REVEAL_AT + 2, |transaction| {
+                ExpireSorafsModerationChallenge::new(
+                    "case-1".to_owned(),
+                    "round-1".to_owned(),
+                    "challenge-unresolved".to_owned(),
+                )
+                .execute(&juror, transaction)
+            })
+            .unwrap();
+        fixture
+            .run(FINALIZE_AT, |transaction| {
                 FinalizeSorafsModerationCase::new("case-1".to_owned(), "round-1".to_owned())
                     .execute(&manager, transaction)
+            })
+            .unwrap();
+        fixture
+            .run(FINALIZE_AT + 1, |transaction| {
+                ExpireSorafsModerationChallenge::new(
+                    "case-1".to_owned(),
+                    "round-1".to_owned(),
+                    "challenge-swept".to_owned(),
+                )
+                .execute(&juror, transaction)
             })
             .unwrap();
         let case = FindSorafsModerationCase::new("case-1".to_owned(), "round-1".to_owned())
             .execute(&fixture.state.view())
             .unwrap();
         assert_eq!(case.pending_challenge_count, 0);
-        assert_eq!(case.expired_challenge_count, 1);
+        assert_eq!(case.expired_challenge_count, 2);
         let challenge = FindSorafsModerationChallenge::new(
             "case-1".to_owned(),
             "round-1".to_owned(),
@@ -6243,11 +9243,32 @@ mod tests {
             challenge.decision,
             Some(ModerationChallengeDecisionV1::Expired)
         );
-        assert_eq!(challenge.resolved_by, Some(manager));
+        assert_eq!(challenge.resolved_by, Some(juror));
+        assert_eq!(
+            challenge.bond.refunded_amount,
+            Quantity::from(MODERATION_CHALLENGE_BOND_AMOUNT_V1)
+        );
+        assert_eq!(challenge.bond.slashed_amount, Quantity::zero());
+        assert_bond_custody_distribution(&fixture.state, &challenger, 1_000, 0, 0);
+        assert_bond_custody_distribution(&fixture.state, &manager, 1_000, 0, 0);
+        assert_unique_voting_asset_total(
+            &fixture.state,
+            &[
+                challenger.clone(),
+                manager.clone(),
+                current_policy.challenge_escrow_account,
+                current_policy.challenge_slash_receiver_account,
+            ],
+            2_000,
+        );
         let outcome = FindSorafsModerationOutcome::new("case-1".to_owned(), "round-1".to_owned())
             .execute(&fixture.state.view())
             .unwrap();
-        assert_eq!(outcome.kind, ModerationOutcomeKindV1::Challenged);
+        assert_eq!(
+            outcome.kind,
+            ModerationOutcomeKindV1::Decided(SoraFsModerationVoteChoice::Uphold)
+        );
+        assert_eq!(outcome.votes_total, 1);
         assert_eq!(outcome.no_show_count, 0);
         assert_eq!(
             FindSorafsModerationStatus
@@ -6297,6 +9318,7 @@ mod tests {
                 .execute(&challenger, transaction)
             })
             .unwrap();
+        assert_bond_custody_distribution(&fixture.state, &challenger, 850, 150, 150);
         let manager = fixture.manager_id();
         fixture
             .run(2_600, |transaction| {
@@ -6310,14 +9332,14 @@ mod tests {
             })
             .unwrap();
         fixture
-            .run(3_500, |transaction| {
+            .run(REVEAL_AT, |transaction| {
                 SubmitSorafsModerationReveal::new(encode(&reveal0))
                     .execute(&juror0, transaction)?;
                 SubmitSorafsModerationReveal::new(encode(&reveal1)).execute(&juror1, transaction)
             })
             .unwrap();
         fixture
-            .run(4_001, |transaction| {
+            .run(FINALIZE_AT, |transaction| {
                 FinalizeSorafsModerationCase::new("case-1".to_owned(), "round-1".to_owned())
                     .execute(&manager, transaction)
             })
@@ -6333,11 +9355,429 @@ mod tests {
             challenge.decision,
             Some(ModerationChallengeDecisionV1::Rejected)
         );
+        assert_eq!(challenge.bond.refunded_amount, Quantity::from(113_u32));
+        assert_eq!(challenge.bond.slashed_amount, Quantity::from(37_u32));
+        assert_bond_custody_distribution(&fixture.state, &challenger, 963, 37, 37);
         let outcome = FindSorafsModerationOutcome::new("case-1".to_owned(), "round-1".to_owned())
             .execute(&fixture.state.view())
             .unwrap();
         assert_eq!(outcome.kind, ModerationOutcomeKindV1::Contested);
         assert_eq!(outcome.votes_total, 2);
+    }
+    #[test]
+    fn retained_challenge_settlements_ignore_post_funding_issuer_and_account_controls() {
+        for (label, decision, expected_refund, expected_slash) in [
+            (
+                "accepted",
+                ModerationChallengeDecisionV1::Accepted,
+                150_u32,
+                0_u32,
+            ),
+            (
+                "rejected",
+                ModerationChallengeDecisionV1::Rejected,
+                113_u32,
+                37_u32,
+            ),
+            (
+                "expired",
+                ModerationChallengeDecisionV1::Expired,
+                150_u32,
+                0_u32,
+            ),
+        ] {
+            let escrow = account(&keypair(0x22));
+            let slash_receiver = account(&keypair(0x23));
+            let case_policy = policy_with_custody(escrow.clone(), slash_receiver.clone());
+            let mut fixture = Fixture::new_with_policy(1, case_policy.clone());
+            let challenger = account(&fixture.outsider);
+            let manager = fixture.manager_id();
+            let definition = case_policy.challenge_voting_asset_id.clone();
+            let challenge_id = format!("challenge-controlled-{label}");
+            fixture
+                .run(2_500, |transaction| {
+                    RaiseSorafsModerationChallenge::new(
+                        "case-1".to_owned(),
+                        "round-1".to_owned(),
+                        challenge_id.clone(),
+                        ModerationChallengeKindV1::EvidenceMismatch,
+                        None,
+                        [0x7B; 32],
+                        "settlement remains mandatory after funding".to_owned(),
+                    )
+                    .execute(&challenger, transaction)
+                })
+                .expect("fund a bond under distinct pinned custody");
+            fixture
+                .run(2_501, |transaction| {
+                    SetKeyValue::asset_definition(
+                        definition.clone(),
+                        ASSET_ISSUER_USAGE_POLICY_METADATA_KEY
+                            .parse()
+                            .expect("issuer usage metadata key"),
+                        Json::new(AssetIssuerUsagePolicyV1 {
+                            require_subject_binding: true,
+                            subject_bindings: BTreeMap::new(),
+                        }),
+                    )
+                    .execute(&manager, transaction)?;
+                    SetAssetTransferControl::new(
+                        escrow.clone(),
+                        definition.clone(),
+                        vec![AssetTransferLimit {
+                            window: AssetTransferControlWindow::Day,
+                            cap_amount: Some(Quantity::zero()),
+                        }],
+                    )
+                    .execute(&manager, transaction)?;
+                    SetAssetTransferBlacklist::new(escrow.clone(), definition.clone(), true)
+                        .execute(&manager, transaction)?;
+                    SetAssetTransferAvailability::new(
+                        escrow.clone(),
+                        definition.clone(),
+                        0,
+                        AssetTransferAvailability::Enabled,
+                        AssetTransferAvailability::Disabled,
+                        Some("post-funding escrow hold".to_owned()),
+                    )
+                    .execute(&manager, transaction)?;
+                    SetAssetTransferAvailability::new(
+                        challenger.clone(),
+                        definition.clone(),
+                        0,
+                        AssetTransferAvailability::Disabled,
+                        AssetTransferAvailability::Enabled,
+                        Some("post-funding refund hold".to_owned()),
+                    )
+                    .execute(&manager, transaction)?;
+                    SetAssetHoldingLimit::new(
+                        challenger.clone(),
+                        definition.clone(),
+                        Some(Quantity::from(850_u32)),
+                    )
+                    .execute(&manager, transaction)?;
+                    SetAssetTransferAvailability::new(
+                        slash_receiver.clone(),
+                        definition.clone(),
+                        0,
+                        AssetTransferAvailability::Disabled,
+                        AssetTransferAvailability::Enabled,
+                        Some("post-funding slash hold".to_owned()),
+                    )
+                    .execute(&manager, transaction)?;
+                    SetAssetHoldingLimit::new(
+                        slash_receiver.clone(),
+                        definition.clone(),
+                        Some(Quantity::from(1_000_u32)),
+                    )
+                    .execute(&manager, transaction)
+                })
+                .expect("install issuer and ordinary controls only after the bond is funded");
+
+            let ordinary_source = fixture.juror_id(0);
+            let issuer_usage_error = fixture
+                .run(2_502, |transaction| {
+                    Transfer::asset_quantity(
+                        AssetId::new(definition.clone(), ordinary_source.clone()),
+                        1_u32,
+                        manager.clone(),
+                    )
+                    .execute(&ordinary_source, transaction)
+                })
+                .expect_err("post-funding issuer policy must deny an ordinary transfer");
+            assert!(
+                issuer_usage_error
+                    .to_string()
+                    .contains("requires explicit subject binding"),
+                "unexpected issuer-usage rejection for {label}: {issuer_usage_error}"
+            );
+
+            let ordinary_error = fixture
+                .run(2_502, |transaction| {
+                    Transfer::asset_quantity(
+                        AssetId::new(definition.clone(), escrow.clone()),
+                        1_u32,
+                        manager.clone(),
+                    )
+                    .execute(&escrow, transaction)
+                })
+                .expect_err("ordinary custody transfer must remain subject to the new controls");
+            assert!(
+                matches!(
+                    ordinary_error,
+                    InstructionExecutionError::AssetTransferAdmission(_)
+                ),
+                "unexpected ordinary-control rejection for {label}: {ordinary_error}"
+            );
+
+            if decision == ModerationChallengeDecisionV1::Expired {
+                fixture
+                    .run(CHALLENGE_RESOLUTION_DEADLINE + 1, |transaction| {
+                        ExpireSorafsModerationChallenge::new(
+                            "case-1".to_owned(),
+                            "round-1".to_owned(),
+                            challenge_id.clone(),
+                        )
+                        .execute(&manager, transaction)
+                    })
+                    .expect("retained expiry refund overrides ordinary account controls");
+            } else {
+                fixture
+                    .run(2_600, |transaction| {
+                        ResolveSorafsModerationChallenge::new(
+                            "case-1".to_owned(),
+                            "round-1".to_owned(),
+                            challenge_id.clone(),
+                            decision,
+                        )
+                        .execute(&manager, transaction)
+                    })
+                    .expect("retained resolution settlement overrides ordinary account controls");
+            }
+            let challenge = FindSorafsModerationChallenge::new(
+                "case-1".to_owned(),
+                "round-1".to_owned(),
+                challenge_id,
+            )
+            .execute(&fixture.state.view())
+            .expect("settled controlled challenge");
+            assert_eq!(challenge.decision, Some(decision));
+            assert_eq!(
+                challenge.bond.refunded_amount,
+                Quantity::from(expected_refund)
+            );
+            assert_eq!(
+                challenge.bond.slashed_amount,
+                Quantity::from(expected_slash)
+            );
+            assert_eq!(
+                voting_asset_balance(&fixture.state, &challenger),
+                Quantity::from(850_u32 + expected_refund)
+            );
+            assert_eq!(
+                voting_asset_balance(&fixture.state, &escrow),
+                Quantity::from(1_000_u32)
+            );
+            assert_eq!(
+                voting_asset_balance(&fixture.state, &slash_receiver),
+                Quantity::from(1_000_u32 + expected_slash)
+            );
+            assert_unique_voting_asset_total(
+                &fixture.state,
+                &[challenger, escrow, slash_receiver],
+                3_000,
+            );
+        }
+    }
+    #[test]
+    fn undercollateralized_challenge_settlement_rejects_before_refund() {
+        let mut fixture = Fixture::new(1);
+        let challenger = account(&fixture.outsider);
+        fixture
+            .run(2_500, |transaction| {
+                RaiseSorafsModerationChallenge::new(
+                    "case-1".to_owned(),
+                    "round-1".to_owned(),
+                    "challenge-rollback".to_owned(),
+                    ModerationChallengeKindV1::EvidenceMismatch,
+                    None,
+                    [0x74; 32],
+                    "exercise settlement rollback".to_owned(),
+                )
+                .execute(&challenger, transaction)
+            })
+            .expect("fund the challenge bond");
+        let current_policy = policy();
+        let escrow_asset = AssetId::new(
+            fixture.state.gov.voting_asset_id.clone(),
+            current_policy.challenge_escrow_account.clone(),
+        );
+        fixture
+            .run(2_501, |transaction| {
+                crate::smartcontracts::isi::asset::isi::replace_numeric_asset_balance_for_corruption_test(
+                    &mut transaction.world,
+                    &escrow_asset,
+                    Quantity::from(149_u32),
+                );
+                Ok(())
+            })
+            .expect("simulate one-unit custody undercollateralization");
+        let case_before = FindSorafsModerationCase::new("case-1".to_owned(), "round-1".to_owned())
+            .execute(&fixture.state.view())
+            .expect("pending challenge case");
+        let status_before = FindSorafsModerationStatus
+            .execute(&fixture.state.view())
+            .expect("pending challenge status");
+        let challenge_before = FindSorafsModerationChallenge::new(
+            "case-1".to_owned(),
+            "round-1".to_owned(),
+            "challenge-rollback".to_owned(),
+        )
+        .execute(&fixture.state.view())
+        .expect("pending challenge");
+        assert_eq!(
+            voting_asset_balance(&fixture.state, &challenger),
+            Quantity::from(850_u32)
+        );
+        assert_eq!(
+            voting_asset_balance(&fixture.state, &current_policy.challenge_escrow_account),
+            Quantity::from(149_u32)
+        );
+
+        let manager = fixture.manager_id();
+        let error = fixture
+            .run(2_600, |transaction| {
+                ResolveSorafsModerationChallenge::new(
+                    "case-1".to_owned(),
+                    "round-1".to_owned(),
+                    "challenge-rollback".to_owned(),
+                    ModerationChallengeDecisionV1::Rejected,
+                )
+                .execute(&manager, transaction)
+            })
+            .expect_err("custody preflight must reject before any settlement leg runs");
+        assert!(
+            error
+                .to_string()
+                .contains("must retain unsettled bond liability"),
+            "unexpected settlement error: {error}"
+        );
+        assert_eq!(
+            FindSorafsModerationCase::new("case-1".to_owned(), "round-1".to_owned())
+                .execute(&fixture.state.view())
+                .expect("case after settlement rollback"),
+            case_before
+        );
+        assert_eq!(
+            FindSorafsModerationStatus
+                .execute(&fixture.state.view())
+                .expect("status after settlement rollback"),
+            status_before
+        );
+        assert_eq!(
+            FindSorafsModerationChallenge::new(
+                "case-1".to_owned(),
+                "round-1".to_owned(),
+                "challenge-rollback".to_owned(),
+            )
+            .execute(&fixture.state.view())
+            .expect("pending challenge after settlement rollback"),
+            challenge_before
+        );
+        assert_eq!(
+            voting_asset_balance(&fixture.state, &challenger),
+            Quantity::from(850_u32),
+            "the custody preflight must not run the refund leg"
+        );
+        assert_eq!(
+            voting_asset_balance(&fixture.state, &current_policy.challenge_escrow_account),
+            Quantity::from(149_u32),
+            "failed settlement must preserve undercollateralized custody exactly"
+        );
+    }
+    #[test]
+    fn rejected_settlement_rolls_back_refund_when_slash_destination_disappears() {
+        let escrow = account(&keypair(0x22));
+        let slash_receiver = account(&keypair(0x23));
+        let case_policy = policy_with_custody(escrow.clone(), slash_receiver.clone());
+        let mut fixture = Fixture::new_with_policy(1, case_policy);
+        let challenger = account(&fixture.outsider);
+        fixture
+            .run(2_500, |transaction| {
+                RaiseSorafsModerationChallenge::new(
+                    "case-1".to_owned(),
+                    "round-1".to_owned(),
+                    "challenge-real-two-leg-rollback".to_owned(),
+                    ModerationChallengeKindV1::EvidenceMismatch,
+                    None,
+                    [0x7C; 32],
+                    "fail only after the refund applies".to_owned(),
+                )
+                .execute(&challenger, transaction)
+            })
+            .expect("fund a rejected-settlement rollback challenge");
+        let case_before = FindSorafsModerationCase::new("case-1".to_owned(), "round-1".to_owned())
+            .execute(&fixture.state.view())
+            .expect("case before real two-leg rollback");
+        let status_before = FindSorafsModerationStatus
+            .execute(&fixture.state.view())
+            .expect("status before real two-leg rollback");
+        let challenge_before = FindSorafsModerationChallenge::new(
+            "case-1".to_owned(),
+            "round-1".to_owned(),
+            "challenge-real-two-leg-rollback".to_owned(),
+        )
+        .execute(&fixture.state.view())
+        .expect("challenge before real two-leg rollback");
+
+        let manager = fixture.manager_id();
+        let error = fixture
+            .run(2_600, |transaction| {
+                assert!(
+                    transaction
+                        .world
+                        .accounts
+                        .remove(slash_receiver.clone())
+                        .is_some()
+                );
+                ResolveSorafsModerationChallenge::new(
+                    "case-1".to_owned(),
+                    "round-1".to_owned(),
+                    "challenge-real-two-leg-rollback".to_owned(),
+                    ModerationChallengeDecisionV1::Rejected,
+                )
+                .execute(&manager, transaction)
+            })
+            .expect_err("slash destination disappears only after refund admission");
+        assert!(
+            error.to_string().contains(&slash_receiver.to_string()),
+            "unexpected slash-leg failure: {error}"
+        );
+        assert_eq!(
+            FindSorafsModerationCase::new("case-1".to_owned(), "round-1".to_owned())
+                .execute(&fixture.state.view())
+                .expect("case after real two-leg rollback"),
+            case_before
+        );
+        assert_eq!(
+            FindSorafsModerationStatus
+                .execute(&fixture.state.view())
+                .expect("status after real two-leg rollback"),
+            status_before
+        );
+        assert_eq!(
+            FindSorafsModerationChallenge::new(
+                "case-1".to_owned(),
+                "round-1".to_owned(),
+                "challenge-real-two-leg-rollback".to_owned(),
+            )
+            .execute(&fixture.state.view())
+            .expect("challenge after real two-leg rollback"),
+            challenge_before
+        );
+        assert_eq!(
+            voting_asset_balance(&fixture.state, &challenger),
+            Quantity::from(850_u32),
+            "the already-applied refund leg must be discarded"
+        );
+        assert_eq!(
+            voting_asset_balance(&fixture.state, &escrow),
+            Quantity::from(1_150_u32),
+            "the custody debit from the refund leg must be discarded"
+        );
+        assert_eq!(
+            voting_asset_balance(&fixture.state, &slash_receiver),
+            Quantity::from(1_000_u32),
+            "the deliberately removed slash account must also be restored"
+        );
+        assert!(
+            fixture
+                .state
+                .view()
+                .world()
+                .account(&slash_receiver)
+                .is_ok()
+        );
     }
     #[test]
     fn missed_quorum_persists_distinct_no_show_penalties() {
@@ -6430,6 +9870,18 @@ mod tests {
             SetSorafsModerationPolicy::new(policy()).execute(&manager, transaction)
         })
         .unwrap();
+        let active = FindSorafsModerationPolicy.execute(&state.view()).unwrap();
+        let mut substituted_custody = policy();
+        substituted_custody.revision = 2;
+        substituted_custody.predecessor_policy_digest = Some(active.policy_digest);
+        substituted_custody.challenge_escrow_account = outsider.clone();
+        assert!(
+            transact(&mut state, 2, OPENED_AT + 1, |transaction| {
+                SetSorafsModerationPolicy::new(substituted_custody).execute(&manager, transaction)
+            })
+            .is_err(),
+            "policy activation must bind challenge custody to consensus governance"
+        );
         let mut bad_revision = policy();
         bad_revision.revision = 2;
         bad_revision.predecessor_policy_digest = Some([0xFF; 32]);

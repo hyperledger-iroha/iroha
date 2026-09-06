@@ -10,7 +10,13 @@ persisted attempt can exceed the authoritative framed-state bound, when a signed
 draft can claim a consensus-owned certificate outcome, or when the
 current specifications regress to the retired proposal-time JIT description. It
 also pins the modeled no-pulse hidden-electorate capacity failure and atomic
-Policy-to-Confirmation capacity handoff.
+Policy-to-Confirmation capacity handoff. The model and implementation must also
+share one proposal-wide fresh-randomness redraw ceiling across successor
+attempts, sortition/Confirmation generations, and timed-OVN ballot retries;
+committed transport replay must remain state-idempotent.
+The first-release `Executable::IvmProved` ZK-governance and proof-carrying
+execution corridor is an additive dependency of Parliament hardening and must
+remain typed, admitted, replayed, fee-checked, visited, and API-visible.
 It also keeps the PR model run bound to archived copies of its exact inputs and
 to stable, source-identified result metadata.
 """
@@ -75,6 +81,50 @@ def require_all(relative: str, text: str, needles: tuple[str, ...]) -> None:
         raise RuntimeError(f"{relative}: missing modeled source binding(s): {rendered}")
 
 
+def require_identifiers_absent(
+    relative: str, text: str, identifiers: tuple[str, ...]
+) -> None:
+    """Reject exact retired identifiers without matching longer live names."""
+    alternatives = "|".join(re.escape(identifier) for identifier in identifiers)
+    pattern = re.compile(
+        rf"(?<![A-Za-z0-9_])(?P<identifier>{alternatives})(?![A-Za-z0-9_])"
+    )
+    found = sorted({match.group("identifier") for match in pattern.finditer(text)})
+    if found:
+        rendered = ", ".join(repr(item) for item in found)
+        raise RuntimeError(
+            f"{relative}: retired public Parliament identifier(s) remain: {rendered}"
+        )
+
+
+def require_public_items_absent(
+    relative: str, text: str, identifiers: tuple[str, ...]
+) -> None:
+    """Reject exact retired public item/field declarations while allowing private internals."""
+    alternatives = "|".join(re.escape(identifier) for identifier in identifiers)
+    pattern = re.compile(
+        rf"(?m)^\s*pub\s+(?:"
+        rf"(?:struct|enum|type|const|fn|mod)\s+"
+        rf"(?P<item>{alternatives})(?![A-Za-z0-9_])"
+        rf"|(?P<field>{alternatives})(?![A-Za-z0-9_])\s*:"
+        rf")"
+    )
+    found = sorted(
+        {match.group("item") or match.group("field") for match in pattern.finditer(text)}
+    )
+    if found:
+        rendered = ", ".join(repr(item) for item in found)
+        raise RuntimeError(
+            f"{relative}: retired public Parliament item(s) remain: {rendered}"
+        )
+
+
+def require_path_absent(relative: str) -> None:
+    """Reject a retired source module if it is recreated."""
+    if (ROOT / relative).exists():
+        raise RuntimeError(f"{relative}: retired public Parliament module remains")
+
+
 def section(text: str, start: str, end: str, relative: str) -> str:
     pattern = re.compile(re.escape(start) + r"(?P<body>.*?)" + re.escape(end), re.S)
     match = pattern.search(text)
@@ -89,6 +139,146 @@ def public_field_names(text: str) -> tuple[str, ...]:
 
 
 def main() -> int:
+    ivm_executable_path = "crates/iroha_data_model/src/transaction/executable.rs"
+    ivm_executable = read(ivm_executable_path)
+    require_all(
+        ivm_executable_path,
+        ivm_executable,
+        (
+            "IvmProved(IvmProved)",
+            "pub struct IvmProved {",
+            '"IvmProved" =>',
+            "Executable::IvmProved(proved)",
+        ),
+    )
+    ivm_transaction_path = "crates/iroha_data_model/src/transaction/mod.rs"
+    require_all(
+        ivm_transaction_path,
+        read(ivm_transaction_path),
+        ("IvmBytecode, IvmProved, TransactionGasLimitError",),
+    )
+    ivm_signed_path = "crates/iroha_data_model/src/transaction/signed.rs"
+    require_all(
+        ivm_signed_path,
+        read(ivm_signed_path),
+        (
+            "PrivacyTransactionIntentUnsupportedPathV1::IvmProved",
+            "Executable::IvmProved(proved)",
+            "privacy_in_unsupported_path",
+        ),
+    )
+    ivm_overlay_path = "crates/iroha_core/src/pipeline/overlay.rs"
+    require_all(
+        ivm_overlay_path,
+        read(ivm_overlay_path),
+        (
+            "pub(crate) fn sccp_ivm_proved_execution_binding",
+            "fn tx_overlay_from_ivm_proved_replay",
+            "Executable::IvmProved(proved)",
+            "enforce_ivm_proved_completed_axt_admission",
+        ),
+    )
+    for ivm_path, bindings in (
+        (
+            "crates/iroha_core/src/block.rs",
+            ("Executable::IvmProved(_)", "ivm_proved_uses_live_overlay_scheduler_path"),
+        ),
+        (
+            "crates/iroha_core/src/validation_fee.rs",
+            ("Executable::IvmProved(proved)", "enforce_ivm_proved_completed_axt_admission"),
+        ),
+        (
+            "crates/iroha_core/src/queue.rs",
+            ("Executable::IvmProved(proved)",),
+        ),
+        (
+            "crates/iroha_data_model/src/visit/mod.rs",
+            ("Executable::IvmProved(proved)", "visitor.visit_ivm(&proved.bytecode)"),
+        ),
+        (
+            "crates/iroha_torii/src/lib.rs",
+            ("derive_ivm_proved_payload_from_ivm_execution_bounded_with_vk_context",),
+        ),
+        (
+            "crates/iroha_sccp/src/test_fixtures.rs",
+            (
+                "vk_ref: SccpPortableVerifyingKeyRefV1",
+                "Executable::IvmProved(proved) => proved.overlay.iter().collect()",
+                ".with_executable(Executable::IvmProved(IvmProved {",
+            ),
+        ),
+    ):
+        require_all(ivm_path, read(ivm_path), bindings)
+
+    # Every maintained SCCP SDK must accept the same proof-carrying execution
+    # policy that Rust and OpenAPI publish. In particular, `vk_ref` is a
+    # governed verification-key identity, not a retired extension field.
+    for ivm_sdk_path, bindings in (
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/SccpJsonParser.java",
+            (
+                '"ivm_proved_record_sccp_message_v1"',
+                'Set.of("version", "semantics", "contract_artifact_sha256", "vk_ref", "gas_limit")',
+                'requiredObject(value, "vk_ref")',
+            ),
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/SccpModels.java",
+            (
+                "class PortableVerifyingKeyReferenceV1",
+                "PortableVerifyingKeyReferenceV1 verifyingKeyReference",
+            ),
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/SccpModels.kt",
+            (
+                '"ivm_proved_record_sccp_message_v1"',
+                "data class SccpPortableVerifyingKeyReferenceV1(",
+                'setOf("version", "semantics", "contract_artifact_sha256", "vk_ref", "gas_limit")',
+                'requiredObject(value, "vk_ref")',
+            ),
+        ),
+        (
+            "python/iroha_torii_client/governance_proposals.py",
+            (
+                '"ivm_proved_record_sccp_message_v1"',
+                "class GovernanceSccpPortableVerifyingKeyRef:",
+                "vk_ref: GovernanceSccpPortableVerifyingKeyRef",
+                'record["vk_ref"]',
+            ),
+        ),
+        (
+            "python/iroha_torii_client/sccp.py",
+            (
+                '"ivm_proved_record_sccp_message_v1"',
+                "class SccpPortableVerifyingKeyRef:",
+                "vk_ref: SccpPortableVerifyingKeyRef",
+                "execution_policy.vk_ref.commitment",
+            ),
+        ),
+        (
+            "javascript/iroha_js/src/sccp.js",
+            (
+                '"ivm_proved_record_sccp_message_v1"',
+                "function portableVerifyingKeyIdField(value, label)",
+                'new Set(["version", "semantics", "contract_artifact_sha256", "vk_ref", "gas_limit"])',
+                "executionPolicy.commitment",
+                '"verifying_key_version"',
+                "record.verifying_key_version !== policy.version",
+            ),
+        ),
+        (
+            "javascript/iroha_js/index.d.ts",
+            (
+                '"ivm_proved_record_sccp_message_v1"',
+                "export interface SccpPortableVerifyingKeyRefV1",
+                "readonly vk_ref: SccpPortableVerifyingKeyRefV1",
+                "readonly verifying_key_version: number",
+            ),
+        ),
+    ):
+        require_all(ivm_sdk_path, read(ivm_sdk_path), bindings)
+
     types_path = "crates/iroha_data_model/src/governance/types.rs"
     types = read(types_path)
     require_all(
@@ -102,6 +292,10 @@ def main() -> int:
             "MAX_PARLIAMENT_BALLOT_CORPUS_ENTRIES_V1: u32 = 1_000",
             "PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1: usize = 32",
             "MAX_PARLIAMENT_ATTEMPT_STATE_BYTES_V1: usize = 16 * 1024 * 1024",
+            "MAX_PARLIAMENT_CITIZENS_V1: u32 = 65_536",
+            "MAX_PARLIAMENT_CANDIDATE_SNAPSHOT_BYTES_V1: usize =",
+            "CandidateCountExceedsMaximum",
+            "self.candidate_count > MAX_PARLIAMENT_CITIZENS_V1",
             "pub fn parliament_timed_ovn_required_chunk_blocks_v1",
             "parliament_ballot_failure_root_v1",
             "parliament_ballot_result_root_v1",
@@ -112,7 +306,10 @@ def main() -> int:
             "BallotOpeningDeadlineExpired",
             "SortitionRetriesExhausted",
             "ConfirmationJuryCapacityUnavailable",
+            "RandomnessRedrawBudgetExhausted",
             "impl From<ParliamentBallotFailureKindV1> for ParliamentNoResultKindV1",
+            "ParliamentBallotFailureKindV1::RandomnessRedrawBudgetExhausted => {",
+            "Self::RandomnessRedrawBudgetExhausted",
             "pub opening_deadline_height: u64",
             "ExecutionFailed",
             "parliament_execution_failure_root_v1",
@@ -151,7 +348,20 @@ def main() -> int:
             "SortitionPulseAvailable",
             "SortitionRetryLimitExceeded",
             "GovernanceAttemptRetryLimitExceeded",
+            "MAX_PARLIAMENT_RANDOMNESS_REDRAWS_V1",
+            "RandomnessRedrawLimitExceeded",
+            "RandomnessRedrawLineageMismatch",
+            "randomness_redraws_before_attempt: u32",
+            "pub(crate) fn randomness_redraws_used_v1(",
+            "fn ensure_sortition_generation_redraw_available_v1(",
+            "fn ensure_ballot_redraw_available_v1(",
+            "validate_parliament_randomness_redraw_lineage_v1",
             "AttemptStateSizeLimitExceeded",
+            "fn candidate_snapshot_fits_resource_bounds_v1(",
+            "MAX_PARLIAMENT_CANDIDATE_SNAPSHOT_BYTES_V1",
+            "MAX_PARLIAMENT_CITIZENS_V1",
+            "!candidate_snapshot_fits_resource_bounds_v1(&candidate_snapshot)",
+            "!candidate_snapshot_fits_resource_bounds_v1(snapshot)",
             "TimedOvnResourceScheduleConflict",
             "TooManyConcurrentCastingContexts",
             "pub fn register_sortition_request_batch(",
@@ -161,10 +371,12 @@ def main() -> int:
             "ParliamentElectionFailureKindV1::InsufficientHiddenBallotRoster",
             "pub struct ParliamentSortitionCapacityFailureV1 {",
             "pub fn record_hidden_sortition_capacity_failure_batch(",
-            "candidate_snapshot.len() >= 2",
+            "hidden_ballot_population_meets_anonymity_floor_v1(candidate_snapshot.len())",
             "failure.failure_height != failure.request_height",
             "active_sortition_capacity_failures",
-            "BodyElectionAttemptStatusV1::AwaitingPulse\n                    | BodyElectionAttemptStatusV1::Drawing\n                    | BodyElectionAttemptStatusV1::AcceptingInvitations",
+            "BodyElectionAttemptStatusV1::AwaitingPulse",
+            "BodyElectionAttemptStatusV1::Drawing",
+            "BodyElectionAttemptStatusV1::AcceptingInvitations",
             "request.request_height < failure_height",
             "election.attempt.sequence == MAX_PARLIAMENT_SORTITION_RETRIES_V1",
             "election_awaiting_pulse_shape_is_empty(election)",
@@ -198,10 +410,11 @@ def main() -> int:
             "ParliamentBallotFailureKindV1::ReleasePulseUnavailable",
             "ParliamentBallotFailureKindV1::OpeningDeadlineExpired",
             "ParliamentBallotFailureKindV1::ConfirmationJuryCapacityUnavailable",
+            "ParliamentBallotFailureKindV1::RandomnessRedrawBudgetExhausted",
             "eligible_confirmation_candidates: Option<u32>",
-            "if requires_confirmation && eligible_confirmation_candidates < 2",
-            "request.target_seats < 2",
-            "candidate_snapshot.len() < 2",
+            "eligible_confirmation_candidates < MIN_PARLIAMENT_HIDDEN_BALLOT_ANONYMITY_V1",
+            "request.target_seats < MIN_PARLIAMENT_HIDDEN_BALLOT_ANONYMITY_V1",
+            "!hidden_ballot_population_meets_anonymity_floor_v1(candidate_snapshot.len())",
             "request.request_height < policy_result_height",
             "request.request_height != policy_result_height",
             "sequences.get(&0)",
@@ -236,9 +449,27 @@ def main() -> int:
             "if current_height <= deadline_height",
             "ParliamentNoResultKindV1::PublicFindingDeadlineExpired",
             "let retry_budget_exhausted = ballot.attempt.sequence == ballot.max_ballot_retries;",
+            "proposal_wide_redraw_budget_composes_sortition_and_timed_ovn_retries",
+            "successor_attempt_inherits_exact_proposal_redraw_prefix",
+            "narrow_policy_at_randomness_redraw_ceiling_persists_terminal_no_result",
+            "an exact transport retry must not spend a redraw unit",
             "parliament_public_finding_endorsement_root_v1(",
             "body.public_finding_binding = Some(ParliamentPublicFindingCertificateBindingV1",
             "endorsing_assignments,\n                endorsements,\n                quorum,",
+        ),
+    )
+    canonical_attempt_ids = section(
+        reducer,
+        "pub fn canonical_governance_attempt_ids_v1(",
+        "/// A reducible entity named by",
+        reducer_path,
+    )
+    require_all(
+        reducer_path,
+        canonical_attempt_ids,
+        (
+            "0..=MAX_PARLIAMENT_GOVERNANCE_ATTEMPT_RETRIES_V1",
+            "GovernanceAttemptId::derive_v1(proposal_content_id, sequence)",
         ),
     )
     attempt_size_validation = section(
@@ -254,6 +485,148 @@ def main() -> int:
             "norito::core::encoded_frame_len(self)",
             "MAX_PARLIAMENT_ATTEMPT_STATE_BYTES_V1",
             "ParliamentReducerErrorV1::AttemptStateSizeLimitExceeded",
+        ),
+    )
+    redraw_accounting = section(
+        reducer,
+        "pub(crate) fn randomness_redraws_used_v1(",
+        "fn ensure_sortition_generation_redraw_available_v1(",
+        reducer_path,
+    )
+    require_all(
+        reducer_path,
+        redraw_accounting,
+        (
+            "self.attempt.sequence == 0 && sortition_generations > 0",
+            ".checked_sub(baseline_generations)",
+            ".filter(|ballot| ballot.attempt.sequence > 0)",
+            ".randomness_redraws_before_attempt",
+            ".checked_add(sortition_redraws)",
+            ".and_then(|used| used.checked_add(ballot_redraws))",
+            "used > MAX_PARLIAMENT_RANDOMNESS_REDRAWS_V1",
+        ),
+    )
+    sortition_redraw_guard = section(
+        reducer,
+        "fn ensure_sortition_generation_redraw_available_v1(",
+        "fn ensure_ballot_redraw_available_v1(",
+        reducer_path,
+    )
+    require_all(
+        reducer_path,
+        sortition_redraw_guard,
+        (
+            "generations.contains(&slot)",
+            "self.attempt.sequence == 0 && generations.is_empty()",
+            "self.randomness_redraws_used_v1()? < MAX_PARLIAMENT_RANDOMNESS_REDRAWS_V1",
+            "ParliamentReducerErrorV1::RandomnessRedrawLimitExceeded",
+        ),
+    )
+    ballot_redraw_guard = section(
+        reducer,
+        "fn ensure_ballot_redraw_available_v1(",
+        "/// Return the distinct accounts referenced by this attempt",
+        reducer_path,
+    )
+    require_all(
+        reducer_path,
+        ballot_redraw_guard,
+        (
+            "sequence == 0",
+            "self.randomness_redraws_used_v1()? < MAX_PARLIAMENT_RANDOMNESS_REDRAWS_V1",
+            "ParliamentReducerErrorV1::RandomnessRedrawLimitExceeded",
+        ),
+    )
+    confirmation_redraw_terminalization = section(
+        reducer,
+        "pub fn finalize_opened_ballot(",
+        "/// Construct and freeze the complete automatic governance certificate.",
+        reducer_path,
+    )
+    require_all(
+        reducer_path,
+        confirmation_redraw_terminalization,
+        (
+            "eligible_confirmation_candidates < MIN_PARLIAMENT_HIDDEN_BALLOT_ANONYMITY_V1",
+            "self.randomness_redraws_used_v1()? == MAX_PARLIAMENT_RANDOMNESS_REDRAWS_V1",
+            "Some(ParliamentBallotFailureKindV1::RandomnessRedrawBudgetExhausted)",
+            "if let Some(failure_kind) = confirmation_failure_kind",
+            "ballot.failure_kind = Some(failure_kind)",
+            "ballot.attempt.status = BallotAttemptStatusV1::NoResult",
+            "BodyInstanceStatusV1::NoResult",
+            "self.attempt.status = GovernanceAttemptStatusV1::Rejected",
+            "return Ok(ParliamentAggregateOutcomeV1::NoResult)",
+        ),
+    )
+    sortition_failure_terminalization = section(
+        reducer,
+        "pub fn fail_body_election_no_roster(",
+        "/// Seal a canonical roster into a new body instance.",
+        reducer_path,
+    )
+    require_all(
+        reducer_path,
+        sortition_failure_terminalization,
+        (
+            "let proposal_redraw_budget_exhausted =",
+            "self.randomness_redraws_used_v1()? == MAX_PARLIAMENT_RANDOMNESS_REDRAWS_V1",
+            "retry_budget_exhausted || proposal_redraw_budget_exhausted",
+            "election.attempt.sequence == MAX_PARLIAMENT_SORTITION_RETRIES_V1",
+            "self.attempt.status = GovernanceAttemptStatusV1::Rejected",
+        ),
+    )
+    ballot_failure_terminalization = section(
+        reducer,
+        "pub fn fail_ballot_no_result(",
+        "/// Finalize a cryptographically opened aggregate and its body result.",
+        reducer_path,
+    )
+    require_all(
+        reducer_path,
+        ballot_failure_terminalization,
+        (
+            "let proposal_redraw_budget_exhausted =",
+            "self.randomness_redraws_used_v1()? == MAX_PARLIAMENT_RANDOMNESS_REDRAWS_V1",
+            "retry_budget_exhausted || proposal_redraw_budget_exhausted",
+            "self.attempt.status = GovernanceAttemptStatusV1::Rejected",
+        ),
+    )
+    confirmation_redraw_terminal_test = section(
+        reducer,
+        "fn narrow_policy_at_randomness_redraw_ceiling_persists_terminal_no_result()",
+        "fn sealed_and_released_cross_store_bindings_fail_closed_on_substitution()",
+        reducer_path,
+    )
+    require_all(
+        reducer_path,
+        confirmation_redraw_terminal_test,
+        (
+            "MAX_PARLIAMENT_RANDOMNESS_REDRAWS_V1",
+            "ParliamentAggregateOutcomeV1::NoResult",
+            "GovernanceAttemptStatusV1::Rejected",
+            '"the unaffordable Confirmation draw must never enter the pipeline"',
+            '"the narrow Policy result must remain uncommitted"',
+            "BodyInstanceStatusV1::NoResult",
+            "BallotAttemptStatusV1::NoResult",
+            "ParliamentBallotFailureKindV1::RandomnessRedrawBudgetExhausted",
+            '"redraw-exhausted opening must restore canonically"',
+            '"the redraw-exhaustion classification requires the exact shared ceiling"',
+        ),
+    )
+    redraw_lineage = section(
+        reducer,
+        "pub fn validate_parliament_randomness_redraw_lineage_v1",
+        "#[cfg(test)]\npub(crate) mod tests {",
+        reducer_path,
+    )
+    require_all(
+        reducer_path,
+        redraw_lineage,
+        (
+            "attempts.sort_unstable_by_key(|attempt| attempt.borrow().attempt.sequence)",
+            "attempt.randomness_redraws_before_attempt != expected_prefix",
+            "attempt.randomness_redraws_before_attempt >= MAX_PARLIAMENT_RANDOMNESS_REDRAWS_V1",
+            "expected_prefix = attempt.randomness_redraws_used_v1()?",
         ),
     )
     full_attempt_validation = section(
@@ -309,6 +682,8 @@ def main() -> int:
             "pub requests: Vec<ParliamentSortitionRequestRegistrationV1>",
             "next contiguous corpus chunk is appended",
             "complete exact survivor coverage and causes automatic corpus sealing",
+            "entry.request.validate_capacity_intent(None).is_err()",
+            "fn zero_candidate_sortition_intent_reaches_consensus_capacity_validation()",
         ),
     )
     for misplaced_policy_definition in (
@@ -491,7 +866,7 @@ def main() -> int:
         ),
         (
             "pub struct ParliamentFreezeBallotSurvivorsV1 {",
-            "/// Payload freezing the exact timed-OVN ciphertext and one-hot-proof corpus.",
+            "/// Payload appending the exact next timed-OVN ciphertext and one-hot-proof chunk.",
             ("survivor_participant_hashes", "dropout_root", "survivor_corpus_root"),
         ),
     ):
@@ -553,10 +928,15 @@ def main() -> int:
             "state_transaction.gov.parliament_public_finding_phase_blocks",
             "no_result_kind",
             "fn validated_active_parliament_tle_key_session_for_new_ballot_v1(",
-            ".tle_key_session_eligible_for_new_ballots(key_session_id)",
+            ".tle_key_session_eligible_for_new_ballots(",
+            "key_session_id,\n                state_transaction.block_height(),",
             ".tle_key_session_rosters()",
             "frozen_ordered_roster != Some(ordered_roster)",
             '"active Parliament TLE key session is not bound to the current commit topology"',
+            "let randomness_redraws_before_attempt = previous",
+            "ParliamentAttemptStateV1::randomness_redraws_used_v1",
+            "randomness_redraws_before_attempt\n                    >= crate::governance::parliament::MAX_PARLIAMENT_RANDOMNESS_REDRAWS_V1",
+            "ParliamentAttemptStateV1::try_new_with_randomness_redraws_before_attempt(",
         ),
     )
     manager_partition = section(
@@ -573,6 +953,7 @@ def main() -> int:
             "ParliamentLifecycleTransitionKindV1::BeginInvitationAcceptance",
             "ParliamentLifecycleTransitionKindV1::FailBodyElectionNoRoster",
             "ParliamentLifecycleTransitionKindV1::SealBodyRoster",
+            "ParliamentLifecycleTransitionKindV1::FreezeTimedOvnCorpus",
         ),
     )
     for manager_only in (
@@ -581,7 +962,6 @@ def main() -> int:
         "ParliamentLifecycleTransitionKindV1::RegisterSortitionRequest",
         "ParliamentLifecycleTransitionKindV1::AdvanceBodyPhase",
         "ParliamentLifecycleTransitionKindV1::RegisterBallotAttempt",
-        "ParliamentLifecycleTransitionKindV1::FreezeTimedOvnCorpus",
     ):
         if manager_only in manager_partition:
             raise RuntimeError(
@@ -603,12 +983,24 @@ def main() -> int:
         world_path,
         world,
         (
+            "fn canonical_parliament_eligible_candidates_with_limits_v1(",
+            "state_transaction.world.citizens.len() > max_citizens",
+            "let mut snapshot_bytes = norito::core::seq_len_prefix_len(0)",
+            "norito::core::encoded_payload_len(account_id)",
+            "snapshot_bytes > max_snapshot_bytes",
+            "fn ensure_parliament_citizen_registry_capacity_with_limit_v1(",
+            "!owner_is_already_citizen && current_citizens >= max_citizens",
+            "MAX_PARLIAMENT_CITIZENS_V1",
+            "fn parliament_candidate_snapshot_derivation_has_preallocation_resource_bounds()",
+            "exact_snapshot_bytes - 1",
             "fn parliament_progress_authority_partition_is_exact()",
             "fn parliament_hidden_sortition_capacity_is_objective_for_zero_and_one_candidate()",
             "fn parliament_sortition_pulse_consumption_is_permissionless_and_exactly_bound()",
             "fn parliament_invitation_start_is_permissionless_and_election_bound()",
             "fn parliament_no_roster_failure_is_permissionless_and_reducer_derived()",
             "fn parliament_roster_sealing_is_permissionless_and_transcript_derived()",
+            "fn parliament_proof_heavy_ballot_corpus_is_permissionless_but_shape_checked()",
+            "fn parliament_non_manager_can_append_the_exact_next_timed_ovn_chunks()",
         ),
     )
     for branch_start, branch_end, bindings in (
@@ -665,7 +1057,7 @@ def main() -> int:
         register_sortition_branch,
         (
             "canonical_parliament_candidate_snapshot_v1(",
-            "expected_candidates.len() < 2 && hidden_body_requested",
+            "hidden_ballot_population_meets_anonymity_floor_v1(\n                        expected_candidates.len(),",
             ".record_hidden_sortition_capacity_failure_batch(",
             "ParliamentNoResultKindV1::SortitionRetriesExhausted",
             ".register_sortition_request_batch(",
@@ -778,9 +1170,12 @@ def main() -> int:
         api,
         (
             "pub execution_failure_root: Option<[u8; 32]>",
-            "MAX_PARLIAMENT_ATTEMPT_STATE_BYTES_V1 as PARLIAMENT_ATTEMPT_READ_MAX_STATE_BYTES_V1",
         ),
     )
+    if "PARLIAMENT_ATTEMPT_READ_MAX_STATE_BYTES_V1" in api:
+        raise RuntimeError(
+            f"{api_path}: retired compatibility alias for the authoritative state bound remains"
+        )
 
     torii_gov_path = "crates/iroha_torii/src/gov.rs"
     torii_gov = read(torii_gov_path)
@@ -795,7 +1190,7 @@ def main() -> int:
         attempt_read,
         (
             "norito::core::to_bytes_bounded(",
-            "PARLIAMENT_ATTEMPT_READ_MAX_STATE_BYTES_V1",
+            "MAX_PARLIAMENT_ATTEMPT_STATE_BYTES_V1",
         ),
     )
 
@@ -814,12 +1209,190 @@ def main() -> int:
             "record_due_parliament_execution_failure_v1(",
             "failure.apply();",
             "crate::telemetry::parliament_lifecycle_metric_projection(event)",
-            "events.push(projection);",
-            "telemetry.record_committed_parliament_transition(transition, no_result_kind);",
-            "telemetry.seed_parliament_attempts(snapshot);",
-            "telemetry_seed.seed_parliament_attempts(parliament_view.iter()",
+            "validate_parliament_randomness_redraw_lineage_v1(",
+            "canonical_governance_attempt_ids_v1(",
+            "for (expected_sequence, persisted_id) in",
+            "if persisted_id == id",
+            "history.push(&attempt)",
+            "let Some(persisted) = self.parliament_attempts.get(&persisted_id) else",
+            "if expected_sequence > attempt.attempt().sequence",
+            "history.push(persisted)",
+            "pub(crate) global_beacon_pulse_slots: Storage<(BeaconSessionId, u64), [u8; 32]>",
         ),
     )
+    parliament_event_capture = section(
+        state,
+        "    fn apply_without_execution_inner(",
+        "    fn pin_new_autoscale_lane_committee(",
+        state_path,
+    )
+    require_all(
+        state_path,
+        parliament_event_capture,
+        (
+            "let parliament_transitions = self",
+            "crate::telemetry::parliament_lifecycle_metric_projection(event)",
+            ".collect::<Vec<_>>();",
+            "self.pending_parliament_telemetry_events",
+            ".extend(parliament_transitions);",
+            "let events = self.world.take_external_events();",
+        ),
+    )
+    capture_order = tuple(
+        parliament_event_capture.find(token)
+        for token in (
+            "let parliament_transitions = self",
+            "crate::telemetry::parliament_lifecycle_metric_projection(event)",
+            ".collect::<Vec<_>>();",
+            "self.pending_parliament_telemetry_events",
+            ".extend(parliament_transitions);",
+            "let events = self.world.take_external_events();",
+        )
+    )
+    if tuple(sorted(capture_order)) != capture_order:
+        raise RuntimeError(
+            f"{state_path}: Parliament telemetry projection must be captured before "
+            "the external-event buffer is drained"
+        )
+    if "record_committed_parliament_transition(" in parliament_event_capture:
+        raise RuntimeError(
+            f"{state_path}: Parliament transition telemetry must not publish before commit"
+        )
+    parliament_commit = section(
+        state,
+        "    fn commit_inner(",
+        "    fn mint_canonical_carrier_commit_metadata_authorization(",
+        state_path,
+    )
+    require_all(
+        state_path,
+        parliament_commit,
+        (
+            "let committed_parliament_attempt_counts = world",
+            ".parliament_attempt_counts",
+            ".is_dirty()",
+            "if let Some(err) = commit_error",
+            "drop(autoscale_lifecycle_guard);",
+            "if block_metadata_committed && !replay_prevalidation",
+            "if !authenticated_replay_commit",
+            "for (transition, no_result_kind) in pending_parliament_telemetry_events",
+            ".record_committed_parliament_transition(transition, no_result_kind);",
+            "if let Some(counts) = committed_parliament_attempt_counts",
+            ".set_parliament_attempt_counts(status_counts, stage_counts);",
+        ),
+    )
+    commit_publication_start = parliament_commit.find(
+        "if block_metadata_committed && !replay_prevalidation"
+    )
+    commit_publication_order = (
+        parliament_commit.find("if let Some(err) = commit_error"),
+        parliament_commit.find("drop(autoscale_lifecycle_guard);"),
+        commit_publication_start,
+        parliament_commit.find(
+            "if !authenticated_replay_commit", commit_publication_start
+        ),
+        parliament_commit.find(
+            ".record_committed_parliament_transition(transition, no_result_kind);",
+            commit_publication_start,
+        ),
+        parliament_commit.find(
+            "if let Some(counts) = committed_parliament_attempt_counts",
+            commit_publication_start,
+        ),
+        parliament_commit.find(
+            ".set_parliament_attempt_counts(status_counts, stage_counts);",
+            commit_publication_start,
+        ),
+    )
+    if tuple(sorted(commit_publication_order)) != commit_publication_order:
+        raise RuntimeError(
+            f"{state_path}: Parliament telemetry must publish only after the canonical "
+            "commit succeeds, then refresh derived gauges"
+        )
+    if parliament_commit.count(
+        ".record_committed_parliament_transition(transition, no_result_kind);"
+    ) != 1:
+        raise RuntimeError(
+            f"{state_path}: Parliament commit must have one exact transition-metric publisher"
+        )
+    parliament_startup = section(
+        state,
+        "    fn new_inner(",
+        "    pub(crate) fn install_active_lane_markers_for_tests(",
+        state_path,
+    )
+    require_all(
+        state_path,
+        parliament_startup,
+        (
+            "s.rebuild_derived_state_indexes()",
+            "let (status_counts, stage_counts) = s",
+            ".parliament_attempt_counts",
+            ".telemetry_counts();",
+            "telemetry_seed.set_parliament_attempt_counts(status_counts, stage_counts);",
+        ),
+    )
+    startup_gauge_order = tuple(
+        parliament_startup.find(token)
+        for token in (
+            "s.rebuild_derived_state_indexes()",
+            "let (status_counts, stage_counts) = s",
+            ".parliament_attempt_counts",
+            ".telemetry_counts();",
+            "telemetry_seed.set_parliament_attempt_counts(status_counts, stage_counts);",
+        )
+    )
+    if tuple(sorted(startup_gauge_order)) != startup_gauge_order:
+        raise RuntimeError(
+            f"{state_path}: startup must rebuild Parliament derived indexes before "
+            "publishing exact status/stage gauges"
+        )
+    for retired_full_scan in (
+        "events.push(projection);",
+        "seed_parliament_attempts(",
+    ):
+        if retired_full_scan in state:
+            raise RuntimeError(
+                f"{state_path}: retired Parliament telemetry full-scan/immediate-publication "
+                f"path remains: {retired_full_scan!r}"
+            )
+    finalized_pulse_slot_rebuild = section(
+        state,
+        "pub(crate) fn rebuild_global_beacon_pulse_slots(&mut self) -> Result<(), String>",
+        "fn rebuild_confidential_policy_transition_index",
+        state_path,
+    )
+    require_all(
+        state_path,
+        finalized_pulse_slot_rebuild,
+        (
+            "BeaconSessionId::for_network_v1(&pulse.network_id)",
+            "let slot =",
+            "rebuilt.insert(slot, *stored_pulse_id)",
+            '"global beacon pulses {} and {} claim the same logical-beacon-height slot"',
+            "let current = {",
+            "pulse_slot_index(pulses.iter())?",
+            "let previous = {",
+            "self.global_beacon_pulses.block_and_revert()",
+            "self.global_beacon_pulse_slots = rebuild_derived_storage_with_previous(current, previous)",
+        ),
+    )
+    pulse_rebuild_order = tuple(
+        finalized_pulse_slot_rebuild.find(token)
+        for token in (
+            "let current = {",
+            "let pulses = self.global_beacon_pulses.view();",
+            "pulse_slot_index(pulses.iter())?",
+            "let previous = {",
+            "self.global_beacon_pulses.block_and_revert()",
+            "self.global_beacon_pulse_slots = rebuild_derived_storage_with_previous(current, previous)",
+        )
+    )
+    if tuple(sorted(pulse_rebuild_order)) != pulse_rebuild_order:
+        raise RuntimeError(
+            f"{state_path}: finalized pulse-slot rebuild must validate current and "
+            "reverted views before installing the derived storage overlay"
+        )
 
     events_path = "crates/iroha_data_model/src/events/data/governance.rs"
     events = read(events_path)
@@ -1056,13 +1629,22 @@ def main() -> int:
             "TimedOvnLifecycleStateV1::CorpusOpen(_)",
             ".validated_parliament_reducer_binding(key_session)",
             "timed_ovn_reducer_binding_matches(ballot_attempt_id, &lifecycle_binding)",
-            "Some(FailureKind::ConfirmationJuryCapacityUnavailable)",
+            "FailureKind::ConfirmationJuryCapacityUnavailable",
+            "FailureKind::RandomnessRedrawBudgetExhausted",
             "phase == PersistedTimedOvnPhaseV1::Released",
-            "Confirmation-capacity NoResult must retain its released timed-OVN evidence",
+            "post-opening NoResult must retain its released timed-OVN evidence",
             "let tle_key_session_rosters = world.tle_key_session_rosters.view();",
             "validate_tle_key_session_roster_binding_v1(public_state, ordered_roster)",
             '"TLE key session {key_session_id} is missing its frozen ordered roster"',
             '"frozen ordered roster references missing TLE key session {key_session_id}"',
+            "proposal_attempts.sort_unstable_by_key(|attempt| attempt.attempt().sequence)",
+            "validate_parliament_randomness_redraw_lineage_v1(",
+            '"governance Parliament randomness-redraw lineage is invalid: {error}"',
+            "let unavailable_beacon_pulse_slots = world",
+            ".flat_map(|(_, attempt)| attempt.unavailable_beacon_pulse_slots_v1())",
+            ".collect::<BTreeSet<_>>()",
+            "unavailable_beacon_pulse_slots.contains(&(logical_session, pulse.height))",
+            '"finalized pulse conflicts with a Parliament slot terminally classified as unavailable"',
         ),
     )
     restore_size_validation = section(
@@ -1086,6 +1668,42 @@ def main() -> int:
         restore_path,
         restore_attempt_prefix,
         ("validate_parliament_attempt_encoded_size_bounds_v1(&world)?;",),
+    )
+    grouped_restore_validation = section(
+        restore,
+        "let parliament_attempts_view = world.parliament_attempts.view();",
+        "validate_tle_ovn_persistence(&world)?;",
+        restore_path,
+    )
+    require_all(
+        restore_path,
+        grouped_restore_validation,
+        (
+            "let mut parliament_attempts_by_proposal = BTreeMap::<",
+            "for (attempt_id, attempt) in parliament_attempts_view.iter()",
+            "parliament_attempts_by_proposal",
+            ".entry(attempt.proposal_content_id())",
+            ".or_default()",
+            ".push(attempt)",
+        ),
+    )
+    grouped_restore_lineage = section(
+        restore,
+        "for (proposal_id, proposal) in governance_proposals_view.iter()",
+        "crate::validation_fee::validate_persisted_policy_registry_governance_v1",
+        restore_path,
+    )
+    require_all(
+        restore_path,
+        grouped_restore_lineage,
+        (
+            "let mut proposal_attempts = parliament_attempts_by_proposal",
+            ".get(&proposal_content_id)",
+            ".cloned()",
+            ".unwrap_or_default()",
+            "proposal_attempts.sort_unstable_by_key(|attempt| attempt.attempt().sequence)",
+            "validate_parliament_randomness_redraw_lineage_v1(",
+        ),
     )
     restored_reservations = section(
         restore,
@@ -1137,6 +1755,29 @@ def main() -> int:
             "unique_peers.len() != ordered_roster.len()",
             "usize::from(public_state.committee_size) != ordered_roster.len()",
             "global_threshold_beacon_roster_hash_v1(ordered_roster)",
+            "fn validate_tle_key_session_lifecycle_head_v1(",
+            "ordered_lifecycles.split_last()",
+            "!lifecycle.selection_is_closed()",
+            "active_key_session_id == latest.key_session_id",
+            'Err("the open latest lifecycle head lacks its exact active TLE pointer")',
+            'Err("a closed latest lifecycle head still has an active TLE pointer")',
+        ),
+    )
+    restored_tle_head = section(
+        restore,
+        "    let mut lifecycle_rows = tle_key_session_lifecycles.iter().collect::<Vec<_>>();",
+        "    for (ballot_attempt_id, lifecycle) in timed_ovn_evidence.iter()",
+        restore_path,
+    )
+    require_all(
+        restore_path,
+        restored_tle_head,
+        (
+            "lifecycle_rows.sort_by",
+            "active_tle_sessions.iter()",
+            "*key != TLE_KEY_SESSION_SINGLETON_KEY",
+            "active_key_session_id.replace(*key_session_id)",
+            "validate_tle_key_session_lifecycle_head_v1(&ordered_lifecycles, active_key_session_id)",
         ),
     )
     checked_reservation_insert = section(
@@ -1176,10 +1817,43 @@ def main() -> int:
         attempt_admission,
         (
             "attempt.validate()?",
+            "canonical_governance_attempt_ids_v1(",
+            "for (expected_sequence, persisted_id) in",
+            "if persisted_id == id",
+            "history.push(&attempt)",
+            "let Some(persisted) = self.parliament_attempts.get(&persisted_id) else",
+            "if expected_sequence > attempt.attempt().sequence",
+            "history.push(persisted)",
             "let mut next_reservations = BTreeMap::new()",
             "insert_parliament_timed_ovn_resource_reservation_v1(",
             "for ballot_attempt_id in stale_reservations",
+            "let stale_casting_candidates = self",
+            ".parliament_timed_ovn_casting_candidates",
+            "let active_casting_candidates = attempt",
+            "parliament_timed_ovn_casting_candidate_v1(id, &attempt, *ballot_attempt_id)",
+            "for ballot_attempt_id in stale_casting_candidates",
+            "for (ballot_attempt_id, candidate) in active_casting_candidates",
+            "let previous_enactment_height =",
+            "ParliamentAttemptStateV1::certified_enactment_height_v1",
+            "let next_enactment_height = attempt.certified_enactment_height_v1()",
+            "self.parliament_certified_enactments",
+            "let previous_required_slots =",
+            "let next_required_slots = attempt.required_beacon_pulse_slots_v1()",
+            "previous_required_slots.difference(&next_required_slots)",
+            "self.parliament_required_beacon_pulse_slots",
+            "let previous_unavailable_slots =",
+            "let next_unavailable_slots = attempt.unavailable_beacon_pulse_slots_v1()",
+            "self.global_beacon_pulse_slots.get(slot).is_some()",
+            "return Err(ParliamentReducerErrorV1::BeaconPulseAlreadyAvailable)",
+            "previous_unavailable_slots.difference(&next_unavailable_slots)",
+            "self.parliament_unavailable_beacon_pulse_slots",
+            "let previous_tle_retention_contributions =",
+            ".map(ParliamentAttemptStateV1::tle_key_session_retention_contributions_v1)",
+            "let next_tle_retention_contributions =",
+            "attempt.tle_key_session_retention_contributions_v1()",
+            "self.remove_parliament_tle_retention_contribution(",
             "self.parliament_attempts.insert(id, attempt)",
+            "self.insert_parliament_tle_retention_contribution(",
         ),
     )
     if attempt_admission.find("insert_parliament_timed_ovn_resource_reservation_v1(") > attempt_admission.find(
@@ -1188,10 +1862,257 @@ def main() -> int:
         raise RuntimeError(
             f"{state_path}: attempt admission mutates the live reservation index before validation"
         )
+    if attempt_admission.find("self.global_beacon_pulse_slots.get(slot).is_some()") > attempt_admission.find(
+        "for ballot_attempt_id in stale_reservations"
+    ):
+        raise RuntimeError(
+            f"{state_path}: finalized-pulse contradiction must reject before live index mutation"
+        )
+    if attempt_admission.find("self.remove_parliament_tle_retention_contribution(") > attempt_admission.find(
+        "self.parliament_attempts.insert(id, attempt)"
+    ):
+        raise RuntimeError(
+            f"{state_path}: stale TLE retention contributors must be removed before attempt replacement"
+        )
+    if attempt_admission.find("self.insert_parliament_tle_retention_contribution(") < attempt_admission.find(
+        "self.parliament_attempts.insert(id, attempt)"
+    ):
+        raise RuntimeError(
+            f"{state_path}: replacement TLE retention contributors must follow authoritative attempt replacement"
+        )
+    late_pulse_admission = section(
+        state,
+        "    pub(crate) fn verify_and_advance_global_beacon_pulse(",
+        "    /// Test helper: seed governance proposals while retaining the exact typed index.",
+        state_path,
+    )
+    require_all(
+        state_path,
+        late_pulse_admission,
+        (
+            "BeaconSessionId::for_network_v1(&pulse.network_id)",
+            ".parliament_unavailable_beacon_pulse_slots",
+            ".get(&(logical_beacon_session_id, pulse.height))",
+            "return Err(GlobalThresholdBeaconError::PersistenceConflict)",
+        ),
+    )
+    attempt_removal = section(
+        state,
+        "    pub fn remove_parliament_attempt_for_testing(",
+        "    /// Test helper: get mutable access to citizenship storage for direct seeding.",
+        state_path,
+    )
+    require_all(
+        state_path,
+        attempt_removal,
+        (
+            "removed.certified_enactment_height_v1()",
+            ".parliament_certified_enactments",
+            "ParliamentAttemptStateV1::required_beacon_pulse_slots_v1",
+            ".parliament_required_beacon_pulse_slots",
+            "ParliamentAttemptStateV1::unavailable_beacon_pulse_slots_v1",
+            ".parliament_unavailable_beacon_pulse_slots",
+            ".parliament_timed_ovn_casting_candidates",
+            "candidate.governance_attempt_id == *id",
+            "removed.tle_key_session_retention_contributions_v1()",
+            "self.remove_parliament_tle_retention_contribution(",
+            "attempts.remove(id)",
+            "let member_reference_updates =\n            parliament_member_reference_count_updates_v1(",
+            "self.parliament_attempts\n            .remove(*id)",
+            "self.apply_parliament_member_reference_count_updates(member_reference_updates)",
+        ),
+    )
+    reference_preflight = attempt_removal.find(
+        "let member_reference_updates =\n            parliament_member_reference_count_updates_v1("
+    )
+    authoritative_removal = attempt_removal.find(
+        "self.parliament_attempts\n            .remove(*id)"
+    )
+    reference_apply = attempt_removal.find(
+        "self.apply_parliament_member_reference_count_updates(member_reference_updates)"
+    )
+    if not reference_preflight < authoritative_removal < reference_apply:
+        raise RuntimeError(
+            f"{state_path}: Parliament member-reference updates must preflight before "
+            "authoritative attempt removal and apply afterward"
+        )
+    state_tests_path = "crates/iroha_core/src/state/tests.rs"
+    state_tests = read(state_tests_path)
+    certified_enactment_regressions = section(
+        state_tests,
+        "fn parliament_certified_enactment_index_tracks_rebuild_transition_and_removal()",
+        "fn parliament_required_beacon_slot_index_tracks_lifecycle_and_removal()",
+        state_tests_path,
+    )
+    require_all(
+        state_tests_path,
+        certified_enactment_regressions,
+        (
+            "certified_parliament_attempt_for_testing(",
+            ".parliament_certified_enactments",
+            'expect("idempotent replacement retains one index member")',
+            'expect("terminal replacement removes the due index member")',
+            ".remove_parliament_attempt_for_testing(&governance_attempt_id)",
+        ),
+    )
+    pulse_slot_regressions = section(
+        state_tests,
+        "fn parliament_required_beacon_slot_index_tracks_lifecycle_and_removal()",
+        "fn governance_lock_index_rebuild_rejects_invalid_authoritative_records_fail_atomically()",
+        state_tests_path,
+    )
+    require_all(
+        state_tests_path,
+        pulse_slot_regressions,
+        (
+            ".parliament_required_beacon_pulse_slots",
+            'expect("replace the live request with its terminal transcript")',
+            "fn parliament_attempt_rejects_unavailable_slot_after_pulse_finalization_atomically()",
+            "Err(ParliamentReducerErrorV1::BeaconPulseAlreadyAvailable)",
+            '"rejection must not publish a partial unavailable-slot index"',
+            "fn parliament_unavailable_slot_rebuild_rejects_finalized_pulse_fail_atomically()",
+            'expect_err("a finalized pulse cannot also be terminally unavailable")',
+            'error.contains("classifies finalized logical beacon slot")',
+            '"a failed rebuild must retain the previously published derived index"',
+        ),
+    )
+    finalized_pulse_slot_regressions = section(
+        state_tests,
+        "fn global_beacon_pulse_slot_index_is_snapshot_skipped_rebuilt_and_unique()",
+        "fn global_beacon_fixture_installs_the_logical_slot_index()",
+        state_tests_path,
+    )
+    require_all(
+        state_tests_path,
+        finalized_pulse_slot_regressions,
+        (
+            "BeaconSessionId::for_network_v1(&pulse.network_id)",
+            'assert!(!encoded.contains("global_beacon_pulse_slots"))',
+            ".rebuild_global_beacon_pulse_slots()",
+            ".global_beacon_pulse_at_slot(&pulse.network_id, pulse.height)",
+            '"restore must reject two pulse records claiming one logical-beacon-height slot"',
+        ),
+    )
+    tle_retention_regressions = section(
+        state_tests,
+        "fn tle_runtime_custody_projection_is_inclusive_and_retains_unbounded_history()",
+        "fn parliament_timed_ovn_resource_index_tracks_only_the_active_retry()",
+        state_tests_path,
+    )
+    require_all(
+        state_tests_path,
+        tle_retention_regressions,
+        (
+            ".rebuild_governance_read_indexes()",
+            ".tle_key_sessions_required_for_runtime_custody_v1(62)",
+            ".tle_key_sessions_required_for_runtime_custody_v1(63)",
+            ".tle_key_sessions_required_for_runtime_custody_v1(u64::MAX)",
+            '"the greatest opening deadline is inclusive"',
+            '"retained historical custody does not depend on an active session"',
+            '"u64::MAX custody remains required even at the maximum committed height"',
+            '"terminal-height custody fails closed for the still-selectable session"',
+        ),
+    )
+    tle_selection_index_regression = section(
+        state_tests,
+        "fn tle_selection_interval_index_resolves_only_the_latest_predecessor()",
+        "fn parliament_tle_retention_rebuild_preserves_the_next_maximum()",
+        state_tests_path,
+    )
+    require_all(
+        state_tests_path,
+        tle_selection_index_regression,
+        (
+            ".rebuild_governance_read_indexes()",
+            ".selectable_tle_key_session_for_fresh_ballot_at(19)",
+            ".selectable_tle_key_session_for_fresh_ballot_at(20)",
+            ".selectable_tle_key_session_for_fresh_ballot_at(30)",
+            '"an expired latest predecessor must not expose older history"',
+            "fn tle_lifecycle_head_rebuild_requires_an_exact_reconstructible_pointer()",
+            'expect_err("a non-latest lifecycle cannot remain open")',
+            'expect_err("an open latest head requires its exact active pointer")',
+            'expect_err("a closed latest head cannot retain an active pointer")',
+            '"a rejected head must not partially publish rebuilt intervals"',
+        ),
+    )
+    casting_candidate_index_regressions = section(
+        state_tests,
+        "fn parliament_timed_ovn_casting_candidate_index_tracks_exact_phase_windows()",
+        "fn parliament_timed_ovn_resource_index_tracks_only_the_active_retry()",
+        state_tests_path,
+    )
+    require_all(
+        state_tests_path,
+        casting_candidate_index_regressions,
+        (
+            ".parliament_timed_ovn_casting_candidates",
+            "valid_from_height: 27",
+            "valid_until_height_exclusive: 31",
+            "valid_from_height: 31",
+            "valid_until_height_exclusive: 34",
+            "valid_from_height: 34",
+            "valid_until_height_exclusive: 36",
+            'expect("terminal ballot replacement removes the casting candidate")',
+            "fn parliament_casting_snapshot_filters_candidate_window_before_evidence_lookup()",
+            "for outside_height in [26, 31]",
+            'expect("out-of-window candidates require no point lookups")',
+            "TimedOvnCastingAuthorizationErrorV1::MissingTimedOvnEvidence",
+        ),
+    )
+    derived_index_snapshot_regression = section(
+        state_tests,
+        "fn parliament_derived_indexes_are_snapshot_skipped_and_rebuilt()",
+        "fn world_block_snapshot_schema_matches_committed_world()",
+        state_tests_path,
+    )
+    require_all(
+        state_tests_path,
+        derived_index_snapshot_regression,
+        (
+            ".parliament_tle_key_session_retention_deadlines",
+            'assert!(!encoded.contains("parliament_tle_key_session_retention_deadlines"))',
+            ".parliament_timed_ovn_casting_candidates",
+            'assert!(!encoded.contains("parliament_timed_ovn_casting_candidates"))',
+            ".tle_key_session_selection_intervals",
+            'assert!(!encoded.contains("tle_key_session_selection_intervals"))',
+            ".rebuild_governance_read_indexes()",
+            'expect("empty authoritative attempts rebuild an empty reservation index")',
+        ),
+    )
+    derived_index_merge_regression = section(
+        state_tests,
+        "fn parliament_derived_index_changes_are_bound_into_merge_write_sets()",
+        "fn world_block_snapshot_schema_matches_committed_world()",
+        state_tests_path,
+    )
+    require_all(
+        state_tests_path,
+        derived_index_merge_regression,
+        (
+            ".parliament_timed_ovn_resource_reservations",
+            ".parliament_timed_ovn_casting_candidates",
+            ".merge_execution_write_set_bytes()",
+            'b"parliament_timed_ovn_resource_reservations"',
+            'b"parliament_timed_ovn_casting_candidates"',
+            '"merge certification must bind changes to derived Parliament indexes"',
+        ),
+    )
+    require_all(
+        state_path,
+        state,
+        (
+            "#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode)]\nstruct ParliamentTimedOvnResourceReservationV1",
+            "#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode)]\npub(crate) struct ParliamentTimedOvnCastingCandidateV1",
+            "fn parliament_timed_ovn_casting_candidate_v1(",
+            "BallotAttemptStatusV1::Registration => (",
+            "BallotAttemptStatusV1::SurvivorFreeze => (",
+            "BallotAttemptStatusV1::TimedCommitment => (",
+        ),
+    )
     tle_session_admission = section(
         state,
         "    pub(crate) fn put_tle_key_session(",
-        "    /// Make one committed public TLE key session eligible for new ballots.",
+        "    /// Schedule one committed public TLE key session for next-height activation.",
         state_path,
     )
     require_all(
@@ -1208,6 +2129,23 @@ def main() -> int:
             "_ => Err(TleReleaseAdapterError::TranscriptMismatch)",
         ),
     )
+    tle_session_activation = section(
+        state,
+        "    pub(crate) fn activate_tle_key_session(",
+        "    /// Schedule the active TLE key session to stop admitting ballots after this height.",
+        state_path,
+    )
+    require_all(
+        state_path,
+        tle_session_activation,
+        (
+            "let latest_predecessor = self",
+            "if let Some((previous_activation_height, (selectable_through_height, key_session_id))) =",
+            "previous.activation_height != previous_activation_height",
+            "previous.selectable_through_height != selectable_through_height",
+            "!previous.selection_is_closed()",
+        ),
+    )
     required_tle_custody = section(
         state,
         "    fn tle_key_sessions_required_for_runtime_custody_v1(",
@@ -1218,19 +2156,88 @@ def main() -> int:
         state_path,
         required_tle_custody,
         (
-            "if let Some(active_key_session_id) = self.active_tle_key_session()",
-            "attempt.validate()?",
-            "for (_, ballot) in attempt.ballot_attempts()",
-            "let opening_deadline = ballot.opening_deadline_height()",
-            "(*deadline).max(opening_deadline)",
-            ".or_insert(opening_deadline)",
-            "committed_height <= deadline",
+            "let next_height = committed_height.checked_add(1).unwrap_or(committed_height);",
+            "self.selectable_tle_key_session_for_fresh_ballot_at(next_height)",
+            "self.parliament_tle_key_session_retention_deadlines()",
+            ".keys()",
+            ".next_back()",
+            ".is_some_and(|deadline| committed_height <= *deadline)",
+        ),
+    )
+    selectable_tle_session = section(
+        state,
+        "    fn selectable_tle_key_session_for_fresh_ballot_at(",
+        "    /// Return whether `key_session_id` is eligible for a fresh ballot at `height`.",
+        state_path,
+    )
+    require_all(
+        state_path,
+        selectable_tle_session,
+        (
+            ".tle_key_session_selection_intervals()",
+            ".range(..=height)",
+            ".next_back()?",
+            "self.tle_key_session_lifecycles().get(key_session_id)?",
+            "lifecycle.activation_height == *activation_height",
+            "lifecycle.selectable_through_height == *selectable_through_height",
+            "lifecycle.permits_fresh_ballot_at(height)",
+        ),
+    )
+    if "tle_key_session_lifecycles().iter()" in selectable_tle_session:
+        raise RuntimeError(
+            f"{state_path}: fresh-ballot TLE selection regressed to a full lifecycle scan"
+        )
+    tle_selection_intervals = section(
+        state,
+        "fn tle_key_session_selection_intervals_v1<'a>(",
+        "struct ParliamentDerivedReadIndexesV1",
+        state_path,
+    )
+    require_all(
+        state_path,
+        tle_selection_intervals,
+        (
+            "let mut intervals = BTreeMap::new()",
+            "for (key_session_id, lifecycle) in lifecycles",
+            "lifecycle.activation_height,",
+            "lifecycle.selectable_through_height",
+            "multiple TLE key-session lifecycles activate at height",
+            "TLE key-session selection intervals for {previous_key_session_id} and {key_session_id} overlap",
+            "for (singleton_key, key_session_id) in active_key_sessions",
+            "validate_tle_key_session_lifecycle_head_v1(&ordered_lifecycles, active_key_session_id)",
+            "Ok(intervals)",
+        ),
+    )
+    parliament_derived_indexes = section(
+        state,
+        "fn parliament_derived_read_indexes_v1<'a>(",
+        "impl World {",
+        state_path,
+    )
+    require_all(
+        state_path,
+        parliament_derived_indexes,
+        (
+            "let mut timed_ovn_resource_reservations = BTreeMap::new()",
+            "insert_parliament_timed_ovn_resource_reservation_v1(",
+            "let mut timed_ovn_casting_candidates = BTreeMap::new()",
+            "parliament_timed_ovn_casting_candidate_v1(",
+            "let mut certified_enactments =",
+            "attempt.certified_enactment_height_v1()",
+            "let mut required_beacon_pulse_slots =",
+            "for pulse_slot in attempt.required_beacon_pulse_slots_v1()",
+            "let mut unavailable_beacon_pulse_slots =",
+            "for pulse_slot in attempt.unavailable_beacon_pulse_slots_v1()",
+            "let mut tle_key_session_retention_deadlines =",
+            "attempt.tle_key_session_retention_contributions_v1()",
+            ".entry(opening_deadline)",
+            "Ok(ParliamentDerivedReadIndexesV1 {",
         ),
     )
     rebuilt_reservations = section(
         state,
         "    fn rebuild_governance_read_indexes(",
-        "    /// Rebuild the unique `(network, height)` lookup",
+        "    /// Rebuild the unique logical-beacon height lookup",
         state_path,
     )
     require_all(
@@ -1238,18 +2245,71 @@ def main() -> int:
         rebuilt_reservations,
         (
             "-> Result<(), String>",
-            "let mut timed_ovn_resource_reservations = BTreeMap::new()",
-            "insert_parliament_timed_ovn_resource_reservation_v1(",
+            "self.citizens.view().len() > maximum_citizens",
+            "MAX_PARLIAMENT_CITIZENS_V1",
+            "parliament_derived_read_indexes_v1(attempts.iter(), &finalized_beacon_pulse_slots)?",
+            "tle_key_session_selection_intervals_v1(",
+            "let reverted_attempts = self.parliament_attempts.block_and_revert()",
+            "let reverted_lifecycles = self.tle_key_session_lifecycles.block_and_revert()",
+            "let previous_parliament = parliament_derived_read_indexes_v1(",
+            "let previous_tle_key_session_selection_intervals =",
+            "let ParliamentDerivedReadIndexesV1 {",
             "self.parliament_timed_ovn_resource_reservations =",
+            "self.parliament_timed_ovn_casting_candidates =",
+            "self.parliament_certified_enactments =",
+            "self.parliament_required_beacon_pulse_slots =",
+            "self.parliament_unavailable_beacon_pulse_slots =",
+            "self.parliament_tle_key_session_retention_deadlines =",
+            "self.tle_key_session_selection_intervals =",
             "Ok(())",
         ),
     )
-    if rebuilt_reservations.find("insert_parliament_timed_ovn_resource_reservation_v1(") > rebuilt_reservations.find(
+    if rebuilt_reservations.find("parliament_derived_read_indexes_v1(") > rebuilt_reservations.find(
         "self.parliament_timed_ovn_resource_reservations ="
     ):
         raise RuntimeError(
             f"{state_path}: restore publishes the reservation index before complete validation"
         )
+
+    due_enactment = section(
+        state,
+        "        // Height-trigger: open/close referenda at scheduled heights",
+        "        let current_slot =",
+        state_path,
+    )
+    require_all(
+        state_path,
+        due_enactment,
+        (
+            ".parliament_certified_enactments.iter().next()",
+            "*enact_at_height < now_h",
+            ".parliament_certified_enactments",
+            ".get(&now_h)",
+            "for governance_attempt_id in due_parliament_certificates",
+            "execute_due_parliament_certificate_v1(",
+            "record_due_parliament_execution_failure_v1(",
+            '"Parliament certified-enactment index retained a due bucket',
+        ),
+    )
+    if "sb.world.parliament_attempts.iter()" in due_enactment:
+        raise RuntimeError(
+            f"{state_path}: block-start enactment selection regressed to an unbounded Parliament attempt scan"
+        )
+
+    mv_storage_path = "crates/mv/src/storage.rs"
+    mv_storage = read(mv_storage_path)
+    require_all(
+        mv_storage_path,
+        mv_storage,
+        (
+            "pub struct RangeIter<'slf, K: Key, V: Value>",
+            "Box<dyn DoubleEndedIterator<Item = (&'slf K, &'slf V)> + 'slf>",
+            "impl<'slf, K: Key, V: Value> DoubleEndedIterator for RangeIter<'slf, K, V>",
+            "self.iter.next_back()",
+            "assert_eq!(view.range(..=3).next_back(), Some((&3, &1)))",
+            "assert_eq!(transaction.range(..=5).next_back(), Some((&5, &3)))",
+        ),
+    )
 
     tle_release_path = "crates/iroha_core/src/tle_release.rs"
     tle_release = read(tle_release_path)
@@ -1263,7 +2323,7 @@ def main() -> int:
             "finalized_height > opening_deadline_height",
             "pub trait TlePartialReleaseSignerV1: Send + Sync",
             "fn attest_partial_release_capability(",
-            "Err(TlePartialReleaseCapabilityErrorV1::Unsupported)",
+            "expected_participant_index: u16,\n    ) -> Result<TlePartialReleaseCapabilityAttestationV1, TlePartialReleaseCapabilityErrorV1>;",
             "pub struct TlePartialReleaseCapabilityAttestationV1",
             "pub enum TlePartialReleaseCapabilityErrorV1",
             "impl TlePartialReleaseSignerV1 for InMemoryTlePartialReleaseSignerV1",
@@ -1343,8 +2403,9 @@ def main() -> int:
             "pub fn import_committed_components(",
             ".tle_key_sessions()",
             "pub fn retire_session(",
-            ".tle_key_session_eligible_for_new_ballots(key_session_id)",
-            "attempt.tle_key_session_retention_deadline(key_session_id)",
+            "let next_height = committed_height.checked_add(1).unwrap_or(committed_height);",
+            ".tle_key_session_eligible_for_new_ballots(key_session_id, next_height)",
+            ".tle_key_session_retention_deadline_v1(key_session_id)",
             "deadline == u64::MAX || committed_height <= deadline",
             ".remove(&key_session_id)",
             "drop(retired);",
@@ -1364,10 +2425,10 @@ def main() -> int:
         custody_path,
     )
     if retirement.find("tle_key_session_eligible_for_new_ballots") > retirement.find(
-        "for (_, attempt)"
+        ".tle_key_session_retention_deadline_v1(key_session_id)"
     ):
         raise RuntimeError(
-            f"{custody_path}: active-session retirement guard must precede ballot deadline scan"
+            f"{custody_path}: active-session retirement guard must precede retention-index lookup"
         )
     custody_type = section(
         custody,
@@ -1419,6 +2480,51 @@ def main() -> int:
             ".active_ballot_for_body(&body_instance_id)",
             ".registration_opened_at_finalized_height()",
             "TimedOvnLifecycleStateV1::Sealed(_) | TimedOvnLifecycleStateV1::Released(_)",
+        ),
+    )
+    casting_snapshot = section(
+        casting,
+        "pub(crate) fn derive_parliament_timed_ovn_casting_snapshot_v1(",
+        "fn compact_binding_from_world_v1(",
+        casting_path,
+    )
+    require_all(
+        casting_path,
+        casting_snapshot,
+        (
+            ".parliament_timed_ovn_casting_candidates()",
+            "evaluated_height < candidate.valid_from_height",
+            "evaluated_height >= candidate.valid_until_height_exclusive",
+            ".timed_ovn_evidence()",
+            "TimedOvnCastingAuthorizationErrorV1::MissingTimedOvnEvidence",
+            ".ok_or(TimedOvnCastingAuthorizationErrorV1::BindingMismatch)?",
+            "bindings.sort_by_key(|binding| binding.ballot_attempt_id)",
+        ),
+    )
+    if "world.timed_ovn_evidence().iter()" in casting_snapshot:
+        raise RuntimeError(
+            f"{casting_path}: compact casting snapshot regressed to a full evidence scan"
+        )
+    if casting_snapshot.find("evaluated_height < candidate.valid_from_height") > casting_snapshot.find(
+        ".timed_ovn_evidence()"
+    ):
+        raise RuntimeError(
+            f"{casting_path}: casting-candidate height filtering must precede point lookups"
+        )
+    compact_casting_binding = section(
+        casting,
+        "fn compact_binding_from_world_v1(",
+        "/// Authorize and replay-validate one public timed-OVN casting context.",
+        casting_path,
+    )
+    require_all(
+        casting_path,
+        compact_casting_binding,
+        (
+            "candidate.governance_attempt_id != governance_attempt_id",
+            "candidate.valid_from_height != expected_valid_from_height",
+            "candidate.valid_until_height_exclusive != expected_valid_until_height_exclusive",
+            "TimedOvnCastingAuthorizationErrorV1::BindingMismatch",
         ),
     )
     casting_authorization = section(
@@ -1503,7 +2609,8 @@ def main() -> int:
             "pub(crate) async fn request_local_partial_release_v1(",
             "ballot_attempt_id: String",
             "signer_admission: crate::QueryAdmissionPermit",
-            "tokio::task::spawn_blocking",
+            "crate::panic_recovery::join_recoverable(",
+            "crate::panic_recovery::spawn_blocking_recoverable(",
             "let _signer_admission = signer_admission;",
             "coordinator.request_partial_release(&view, ballot_attempt_id)",
             "TleReleaseCoordinatorErrorV1::SignerUnavailable",
@@ -1545,6 +2652,198 @@ def main() -> int:
             '"/v1/gov/parliament/ballots/{ballot_attempt_id}/partial-release"',
         ),
     )
+
+    retired_public_parliament_identifiers = (
+        "ParliamentTerm",
+        "CouncilState",
+        "CouncilDerivationKind",
+        "ParliamentRoster",
+        "ParliamentBodies",
+        "CitizenServiceDiscipline",
+        "CitizenServiceEvent",
+        "RecordCitizenServiceOutcome",
+        "GovernanceCouncilPersisted",
+        "GovernanceParliamentSelected",
+        "GovernanceCitizenServiceRecorded",
+        "CouncilPersisted",
+        "ParliamentSelected",
+        "CitizenServiceRecorded",
+        "GovernanceProposalApproved",
+        "ProposalApproved",
+        "GovernanceParliamentApprovalRecorded",
+        "ParliamentApprovalRecorded",
+        "GovernanceParliamentAttemptTransitioned",
+        "ParliamentAttemptTransitioned",
+        "GovernanceParliamentBodyTransitioned",
+        "ParliamentBodyTransitioned",
+        "GovernanceParliamentBallotTransitioned",
+        "ParliamentBallotTransitioned",
+        "GovernanceParliamentConcentrationWarning",
+        "ParliamentConcentrationWarning",
+        "ParliamentConcentrationWarningV1",
+        "GovernanceParliamentAggregateFinalized",
+        "ParliamentAggregateFinalized",
+        "GovernanceParliamentCertificateIssued",
+        "ParliamentCertificateIssued",
+    )
+
+    # The former feature-gated governance event module duplicated the canonical
+    # data-event stream and exposed caller-oriented Parliament outcomes. Keep
+    # both the module and every uniquely named public payload/type retired. The
+    # declaration-aware check deliberately does not confuse canonical enum
+    # variants such as `ReferendumOpened` with those removed payload structs.
+    retired_event_module_path = "crates/iroha_data_model/src/governance/events.rs"
+    require_path_absent(retired_event_module_path)
+    governance_mod_path = "crates/iroha_data_model/src/governance/mod.rs"
+    governance_mod = read(governance_mod_path)
+    if re.search(r"(?m)^\s*pub\s+mod\s+events\s*;", governance_mod):
+        raise RuntimeError(
+            f"{governance_mod_path}: retired duplicate governance event module is exported"
+        )
+
+    retired_public_item_identifiers = (
+        "SudoExecutionResult",
+        "SudoFailure",
+        "SudoExecuted",
+        "ReferendumProposed",
+        "ReferendumOpened",
+        "VoteCast",
+        "ReferendumTallied",
+        "GovernanceScheduled",
+        "GovernanceEnacted",
+        "GovernanceExecutionFailed",
+        "ParliamentSelected",
+        "ParliamentEnacted",
+        "ParliamentExecutionFailed",
+        "ParliamentHouse",
+        "ParliamentTimeout",
+        "ParliamentVetoed",
+        "ParliamentMemberEjected",
+        "CertificateRejected",
+        "RescheduleRequired",
+        "FastTrackGranted",
+        "DepositSlashed",
+        "GovernanceCouncilPersisted",
+        "GovernanceParliamentSelected",
+        "GovernanceCitizenServiceRecorded",
+        "GovernanceProposalApproved",
+        "GovernanceParliamentApprovalRecorded",
+        "GovernanceParliamentAttemptTransitioned",
+        "GovernanceParliamentBodyTransitioned",
+        "GovernanceParliamentBallotTransitioned",
+        "GovernanceParliamentConcentrationWarning",
+        "GovernanceParliamentAggregateFinalized",
+        "GovernanceParliamentCertificateIssued",
+        "ParliamentConcentrationWarningV1",
+        "CouncilDerivationKind",
+        "ParliamentRoster",
+        "ParliamentBodies",
+        "ParliamentTerm",
+        "CouncilState",
+        "PRIMARY_PARLIAMENT_BODIES_V1",
+        "ParliamentDrawPlan",
+        "derive_attempt_body_plan_v1",
+        "smallest_feasible_assignment_cap",
+        "CitizenServiceDiscipline",
+        "CitizenServiceEvent",
+        "RecordCitizenServiceOutcome",
+        "CITIZEN_SEAT_COOLDOWN_BLOCKS",
+        "CITIZEN_MAX_SEATS_PER_EPOCH",
+        "CITIZEN_FREE_DECLINES_PER_EPOCH",
+        "CITIZEN_DECLINE_SLASH_BPS",
+        "CITIZEN_NO_SHOW_SLASH_BPS",
+        "CITIZEN_MISCONDUCT_SLASH_BPS",
+        "citizen_service",
+        "role_bond_multipliers",
+        "bond_multiplier_for_role",
+        "record_citizen_service_event",
+        "record_council_draw",
+    )
+    require_path_absent("crates/iroha_core/src/governance/state.rs")
+    retired_public_item_surfaces = (
+        (governance_mod_path, governance_mod),
+        (types_path, types),
+        (instruction_path, instructions),
+        (events_path, events),
+        (world_path, world),
+        (state_path, state),
+        (telemetry_path, telemetry),
+        (
+            "crates/iroha_core/src/governance/draw.rs",
+            read("crates/iroha_core/src/governance/draw.rs"),
+        ),
+        (
+            "crates/iroha_config/src/parameters/defaults.rs",
+            read("crates/iroha_config/src/parameters/defaults.rs"),
+        ),
+        (
+            "crates/iroha_config/src/parameters/actual.rs",
+            read("crates/iroha_config/src/parameters/actual.rs"),
+        ),
+        (
+            "crates/iroha_config/src/parameters/user.rs",
+            read("crates/iroha_config/src/parameters/user.rs"),
+        ),
+    )
+    for relative, contract_surface in retired_public_item_surfaces:
+        require_public_items_absent(
+            relative,
+            contract_surface,
+            retired_public_item_identifiers,
+        )
+
+    retired_identifier_surfaces = (
+        (types_path, types),
+        (instruction_path, instructions),
+        (events_path, events),
+        (world_path, world),
+        (state_path, state),
+        (telemetry_path, telemetry),
+        (metrics_path, metrics),
+        (api_path, api),
+        (torii_gov_path, torii_gov),
+        (torii_path, torii),
+        (route_catalog_path, route_catalog),
+    )
+    for relative, contract_surface in retired_identifier_surfaces:
+        require_identifiers_absent(
+            relative,
+            contract_surface,
+            retired_public_parliament_identifiers,
+        )
+
+    retired_identifier_surface_paths = (
+        "crates/iroha_data_model/src/events/data/filters.rs",
+        "crates/iroha_data_model/src/isi/governance.rs",
+        "crates/iroha_data_model/src/isi/registry.rs",
+        "crates/iroha_data_model/src/isi/registry/wire_ids.rs",
+        "crates/iroha_torii/src/routing.rs",
+        "crates/iroha_cli/src/gov.rs",
+        "crates/iroha_config/src/parameters/defaults.rs",
+        "crates/iroha_config/src/parameters/actual.rs",
+        "crates/iroha_config/src/parameters/user.rs",
+        "javascript/iroha_js/index.d.ts",
+        "javascript/iroha_js/src/parliamentApiV1.js",
+        "python/iroha_torii_client/parliament_api.py",
+        "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/ParliamentApiV1.kt",
+        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ParliamentApiV1.java",
+        "IrohaSwift/Sources/IrohaSwift/ToriiParliamentAPIV1.swift",
+        "artifacts/openapi/torii.json",
+        "artifacts/openapi/versions/current/torii.json",
+        "crates/iroha_torii/assets/openapi/torii.json",
+        "specs/governance_api.md",
+        "specs/governance_pipeline.md",
+        "specs/governance_playbook.md",
+        "specs/sorafs/signing_ceremony.md",
+        "fixtures/sorafs_chunker/README.md",
+        "crates/iroha_cli/README.md",
+    )
+    for relative in retired_identifier_surface_paths:
+        require_identifiers_absent(
+            relative,
+            read(relative),
+            retired_public_parliament_identifiers,
+        )
 
     runtime_deps_path = "crates/irohad/src/main/runtime_deps.rs"
     runtime_deps = read(runtime_deps_path)
@@ -1848,9 +3147,9 @@ def main() -> int:
         tle_broker_backend,
         (
             "fn attest_partial_release_capability(",
-            "_session: &iroha_core::tle_release::ValidatedTleKeySessionV1",
-            "_expected_participant_index: u16",
-            "Err(ParliamentTlePartialReleaseSignerBrokerBackendErrorV1::Rejected)",
+            "session: &iroha_core::tle_release::ValidatedTleKeySessionV1",
+            "expected_participant_index: u16",
+            "ParliamentTlePartialReleaseSignerBrokerBackendErrorV1,\n    >;",
         ),
     )
     broker_client_path = (
@@ -1986,9 +3285,16 @@ def main() -> int:
             "FuturePulseSortition ==",
             "SortitionPulseDelayBlocks",
             "MaxSortitionRetries",
+            "MaxRandomnessRedraws",
+            "governanceAttemptSequence",
+            "randomnessRedrawsBeforeAttempt",
+            "InitialSortitionRedrawCost ==",
+            "ProposalRandomnessRedrawsUsed ==",
+            "ProposalWideRandomnessRedrawBudget ==",
             "sortitionPulseHeight' = height + SortitionPulseDelayBlocks",
             "FailSortitionPulseUnavailable ==",
             "RetryInitialSortitionBatch ==",
+            "ReplayCommittedTransportIdempotently ==",
             "RecordInitialHiddenSortitionCapacityFailure(candidateCount) ==",
             "RecordRetryHiddenSortitionCapacityFailure(candidateCount) ==",
             '"HiddenElectorateCapacityUnavailable"',
@@ -2048,12 +3354,131 @@ def main() -> int:
             '"ExecutionFailed"',
             "FinalizeAggregateApprovedAndCertify ==",
             "FinalizeNarrowPolicyCapacityNoResult(eligibleCount) ==",
+            "FinalizeNarrowPolicyRandomnessRedrawBudgetExhausted ==",
+            "ParliamentBallotFailureKindV1::RandomnessRedrawBudgetExhausted",
             "FinalizeNarrowPolicyAndRegisterConfirmationRequest ==",
             "AtomicPolicyConfirmationCapacity ==",
             "RecordInternalExecutionFailureAtExactHeight ==",
             "~releasePulseKnown",
         ),
     )
+    redraw_accounting_model = section(
+        model,
+        "InitialSortitionRedrawCost ==",
+        "PublicFindingQuorum ==",
+        model_path,
+    )
+    require_all(
+        model_path,
+        redraw_accounting_model,
+        (
+            "BoolToNat(governanceAttemptSequence > 0)",
+            'IF sortitionState = "None"',
+            "sortitionSequence + InitialSortitionRedrawCost",
+            'IF ballotState = "None" THEN 0 ELSE ballotSequence',
+            "randomnessRedrawsBeforeAttempt +",
+            "BoolToNat(confirmationRequestCommitted)",
+        ),
+    )
+    redraw_init_model = section(model, "Init ==", "FindingLifecycleFrame ==", model_path)
+    require_all(
+        model_path,
+        redraw_init_model,
+        (
+            "governanceAttemptSequence = 0",
+            "randomnessRedrawsBeforeAttempt = 0",
+            "governanceAttemptSequence = 1",
+            "0..(MaxRandomnessRedraws - 1)",
+        ),
+    )
+    redraw_budget_invariant = section(
+        model,
+        "ProposalWideRandomnessRedrawBudget ==",
+        "FuturePulseSortition ==",
+        model_path,
+    )
+    require_all(
+        model_path,
+        redraw_budget_invariant,
+        (
+            "ProposalRandomnessRedrawsUsed \\in 0..MaxRandomnessRedraws",
+            "randomnessRedrawsBeforeAttempt < MaxRandomnessRedraws",
+            'sortitionState = "NoRoster"',
+            'ballotState = "NoResult"',
+            'attemptStatus = "Rejected"',
+        ),
+    )
+    initial_sortition_action = section(
+        model,
+        "CommitInitialSortitionBatch ==",
+        "RecordInitialHiddenSortitionCapacityFailure(candidateCount) ==",
+        model_path,
+    )
+    require_all(
+        model_path,
+        initial_sortition_action,
+        (
+            'sortitionState = "None"',
+            "ProposalRandomnessRedrawsUsed + InitialSortitionRedrawCost <=",
+            "MaxRandomnessRedraws",
+        ),
+    )
+    sortition_retry_action = section(
+        model,
+        "RetryInitialSortitionBatch ==",
+        "RecordRetryHiddenSortitionCapacityFailure(candidateCount) ==",
+        model_path,
+    )
+    require_all(
+        model_path,
+        sortition_retry_action,
+        (
+            "ProposalRandomnessRedrawsUsed < MaxRandomnessRedraws",
+            "sortitionSequence' = sortitionSequence + 1",
+        ),
+    )
+    ballot_registration_action = section(
+        model,
+        "RegisterPrivateBallot ==",
+        "CloseRegistrationAtBoundary ==",
+        model_path,
+    )
+    require_all(
+        model_path,
+        ballot_registration_action,
+        (
+            'ballotState \\in {"None", "NoResult"}',
+            'ballotState = "None" \\/',
+            "ProposalRandomnessRedrawsUsed < MaxRandomnessRedraws",
+            'ballotSequence\' = IF ballotState = "None" THEN 0 ELSE ballotSequence + 1',
+        ),
+    )
+    transport_replay_action = section(
+        model,
+        "ReplayCommittedTransportIdempotently ==",
+        "ReducerNext ==",
+        model_path,
+    )
+    require_all(
+        model_path,
+        transport_replay_action,
+        (
+            "sortitionState",
+            "ballotState",
+            "confirmationRequestCommitted",
+            "UNCHANGED vars",
+        ),
+    )
+    for forbidden_update in (
+        "sortitionSequence'",
+        "ballotSequence'",
+        "confirmationRequestCommitted'",
+        "randomnessRedrawsBeforeAttempt'",
+    ):
+        if forbidden_update in transport_replay_action:
+            raise RuntimeError(
+                f"{model_path}: committed transport replay mutates {forbidden_update!r}"
+            )
     for start, end in (
         (
             "RecordInitialHiddenSortitionCapacityFailure(candidateCount) ==",
@@ -2069,7 +3494,7 @@ def main() -> int:
             model_path,
             capacity_action,
             (
-                "candidateCount \\in 0..1",
+                "candidateCount \\in 0..2",
                 'sortitionFailureKind\' = "HiddenElectorateCapacityUnavailable"',
                 "sortitionFailureHeight' = height",
                 "requestHeight' = height",
@@ -2085,14 +3510,35 @@ def main() -> int:
     confirmation_capacity_action = section(
         model,
         "FinalizeNarrowPolicyCapacityNoResult(eligibleCount) ==",
+        "FinalizeNarrowPolicyRandomnessRedrawBudgetExhausted ==",
+        model_path,
+    )
+    confirmation_redraw_exhaustion_action = section(
+        model,
+        "FinalizeNarrowPolicyRandomnessRedrawBudgetExhausted ==",
         "FinalizeNarrowPolicyAndRegisterConfirmationRequest ==",
         model_path,
     )
     require_all(
         model_path,
+        confirmation_redraw_exhaustion_action,
+        (
+            "ProposalRandomnessRedrawsUsed = MaxRandomnessRedraws",
+            'ballotState\' = "NoResult"',
+            'attemptStatus\' = "Rejected"',
+            "eligibleConfirmationCandidates' = 3",
+            "policyBindingCommitted' = FALSE",
+            "confirmationRequirementCommitted' = FALSE",
+            "confirmationRequestCommitted' = FALSE",
+            "confirmationRequestHeight' = None",
+            "confirmationPulseHeight' = None",
+        ),
+    )
+    require_all(
+        model_path,
         confirmation_capacity_action,
         (
-            "eligibleCount \\in 0..1",
+            "eligibleCount \\in 0..2",
             'ballotState\' = "NoResult"',
             'attemptStatus\' = "Rejected"',
             "policyBindingCommitted' = FALSE",
@@ -2112,13 +3558,14 @@ def main() -> int:
         model_path,
         confirmation_handoff_action,
         (
-            "eligibleConfirmationCandidates' = 2",
+            "eligibleConfirmationCandidates' = 3",
             "policyResultHeight' = height",
             "policyBindingCommitted' = TRUE",
             "confirmationRequirementCommitted' = TRUE",
             "confirmationRequestCommitted' = TRUE",
             "confirmationRequestHeight' = height",
             "confirmationPulseHeight' = height + SortitionPulseDelayBlocks",
+            "ProposalRandomnessRedrawsUsed < MaxRandomnessRedraws",
         ),
     )
     if "ConstructCertificate ==" in model:
@@ -2133,21 +3580,23 @@ def main() -> int:
         (
             "SortitionPulseDelayBlocks = 1",
             "MaxSortitionRetries = 2",
+            "MaxRandomnessRedraws = 2",
             "MaxConcurrentReservations = 2",
             "ReservationIds = {Reservation0, Reservation1, Reservation2}",
             "FirstConflictingReservation = Reservation0",
             "SecondConflictingReservation = Reservation1",
             "OpeningBlocks = 2",
-            "RegistrationBlocks = 3",
-            "SurvivorBlocks = 2",
+            "RegistrationBlocks = 4",
+            "SurvivorBlocks = 3",
             "CommitmentBlocks = 2",
-            "MaxCorpusEntries = 2",
+            "MaxCorpusEntries = 3",
             "FindingBlocks = 2",
             "SeatedAssignments = {Seat0, Seat1}",
             "FirstAssignment = Seat0",
             "SecondAssignment = Seat1",
             "FindingRoots = {Finding0, Finding1}",
             "ObjectiveBoundedSortitionRetries",
+            "ProposalWideRandomnessRedrawBudget",
             "HiddenElectorateCapacityConsumesNoPulse",
             "TimedOvnReservationSafety",
             "RejectedReservationDoesNotLeak",
@@ -2165,6 +3614,7 @@ def main() -> int:
     )
     expected_invariants = (
         "TypeOK",
+        "ProposalWideRandomnessRedrawBudget",
         "FuturePulseSortition",
         "ObjectiveBoundedSortitionRetries",
         "HiddenElectorateCapacityConsumesNoPulse",
@@ -2212,6 +3662,185 @@ def main() -> int:
                 f"{model_path}: invariant {invariant!r} must be declared exactly once; "
                 f"found {declaration_count}"
             )
+
+    lifecycle_world_path = "crates/iroha_core/src/smartcontracts/isi/world.rs"
+    lifecycle_world = read(lifecycle_world_path)
+    global_beacon_install = section(
+        lifecycle_world,
+        "                Action::InstallGlobalBeaconKey => {",
+        "                Action::RetireGlobalBeaconKey => {",
+        lifecycle_world_path,
+    )
+    require_all(
+        lifecycle_world_path,
+        global_beacon_install,
+        (
+            "norito::decode_canonical::<",
+            "FinalizedGlobalThresholdBeaconKeySessionRecordV1,",
+            "record.session.network_id != certificate.network_id",
+            ".put_finalized_global_beacon_key_session(record)",
+            ".activate_global_beacon_key_session(certificate.session_id, next_height)",
+            "the H+1 producer checks that target against its authenticated",
+        ),
+    )
+    for conflated_binding in (
+        "record.session.roster_hash != certificate.roster_hash",
+        "record.session.committee_size != certificate.committee_size",
+    ):
+        if conflated_binding in global_beacon_install:
+            raise RuntimeError(
+                f"{lifecycle_world_path}: global-beacon target DKG roster was conflated "
+                f"with block-height authorization: {conflated_binding!r}"
+            )
+    require_all(
+        lifecycle_world_path,
+        lifecycle_world,
+        (
+            "global_beacon_boundary_rotation_signs_the_successor_dkg_target",
+            "the block-H roster remains the sole lifecycle-signature authority",
+            "the signed public state independently names the H+1 DKG target",
+            "the authorization roster cannot be substituted as the DKG target",
+        ),
+    )
+
+    certificate_state_path = "crates/iroha_core/src/state.rs"
+    certificate_state = read(certificate_state_path)
+    certificate_preimage = section(
+        certificate_state,
+        "pub fn threshold_key_lifecycle_certificate_preimage_v1(",
+        "fn threshold_key_lifecycle_successor_roster_v1(",
+        certificate_state_path,
+    )
+    require_all(
+        certificate_state_path,
+        certificate_preimage,
+        (
+            "let public_state_len = u64::try_from(certificate.public_state.len())",
+            "let public_state_hash = Hash::new(&certificate.public_state);",
+            "preimage.extend_from_slice(&public_state_len.to_be_bytes());",
+            "preimage.extend_from_slice(public_state_hash.as_ref());",
+        ),
+    )
+
+    beacon_runtime_path = "crates/iroha_core/src/sumeragi/v2_beacon.rs"
+    beacon_runtime = read(beacon_runtime_path)
+    beacon_open = section(
+        beacon_runtime,
+        "    pub(crate) fn open(",
+        "    /// Return whether committed state requests a pulse attempt at this height.",
+        beacon_runtime_path,
+    )
+    require_all(
+        beacon_runtime_path,
+        beacon_open,
+        (
+            "let parliament_requested_at_height =",
+            ".parliament_required_beacon_pulse_slots",
+            ".get(&(logical_beacon_id, context.height))",
+            "let required_for_consensus = npos_boundary_requested || parliament_requested_at_height;",
+            "Err(_) if !required_for_consensus => None",
+            "requested: true,",
+            "required_for_consensus,",
+        ),
+    )
+    if "attempt.requires_beacon_pulse_at(logical_beacon_id, context.height)" in beacon_open:
+        raise RuntimeError(
+            f"{beacon_runtime_path}: beacon production regressed to an unbounded Parliament attempt scan"
+        )
+    beacon_attach = section(
+        beacon_runtime,
+        "    pub(crate) fn attach_candidate_effects(",
+        "        Ok(())\n    }",
+        beacon_runtime_path,
+    )
+    require_all(
+        beacon_runtime_path,
+        beacon_attach,
+        (
+            "if self.pulse_required_for_consensus() && pulse.is_none()",
+            '"required finalized pulse is absent for the candidate view"',
+            "effects.finalized_global_beacon_pulse = pulse;",
+        ),
+    )
+
+    beacon_state_path = "crates/iroha_core/src/beacon.rs"
+    beacon_state = read(beacon_state_path)
+    require_all(
+        beacon_state_path,
+        beacon_state,
+        (
+            "fn parliament_requested_slot_survives_key_rotation_and_produces_authoritative_pulse()",
+            "fn assert_same_block_key_rotation_persists_requested_pulse(",
+            ".put_parliament_attempt(attempt)",
+            'expect("persist the Parliament request and its beacon-slot index")',
+        ),
+    )
+    if beacon_state.count(".put_parliament_attempt(attempt)") < 2:
+        raise RuntimeError(
+            f"{beacon_state_path}: Parliament pulse fixtures must seed both derived-index consumers through canonical admission"
+        )
+
+    block_path = "crates/iroha_core/src/block.rs"
+    block = read(block_path)
+    pulse_validation = section(
+        block,
+        "        fn validate_global_beacon_pulse_effect(",
+        "        fn execution_context_error(",
+        block_path,
+    )
+    require_all(
+        block_path,
+        pulse_validation,
+        (
+            ".parliament_required_beacon_pulse_slots",
+            ".get(&(logical_beacon_id, context.height))",
+            "let pulse_requested = pulse_required_for_successor || parliament_requested;",
+            "return if pulse_requested {",
+            '"block is missing a finalized global beacon pulse requested by committed pre-state"',
+            ".parliament_unavailable_beacon_pulse_slots",
+            ".get(&(logical_beacon_id, pulse.height))",
+            '"global beacon pulse arrives after Parliament terminally classified its slot as unavailable"',
+            "authenticated_global_threshold_beacon_roster_hash_v1(",
+            "&context_roster,",
+        ),
+    )
+    if "attempt.classifies_beacon_pulse_unavailable_at(logical_beacon_id, pulse.height)" in pulse_validation:
+        raise RuntimeError(
+            f"{block_path}: block validation regressed to an unbounded unavailable-pulse attempt scan"
+        )
+    if "attempt.requires_beacon_pulse_at(logical_beacon_id, context.height)" in pulse_validation:
+        raise RuntimeError(
+            f"{block_path}: block validation regressed to an unbounded required-pulse attempt scan"
+        )
+    require_all(
+        block_path,
+        block,
+        (
+            "fn committed_parliament_request_rejects_candidate_without_pulse()",
+            ".put_parliament_attempt(attempt)",
+            'expect("persist the committed Parliament pulse request and its indexes")',
+        ),
+    )
+
+    penalty_path = "crates/iroha_core/src/sumeragi/penalties.rs"
+    penalties = read(penalty_path)
+    pulse_application = section(
+        penalties,
+        "pub(crate) fn apply_npos_consensus_effects_to_transaction(",
+        "    for admission in &effects.v2_evidence_admissions",
+        penalty_path,
+    )
+    require_all(
+        penalty_path,
+        pulse_application,
+        (
+            "authenticated_roster: &[PeerId]",
+            "authenticated_global_threshold_beacon_roster_hash_v1(",
+            "authenticated_roster,",
+            '"pulse-height global beacon key differs from the authenticated height roster"',
+            "roster_hash: expected_roster_hash,",
+        ),
+    )
 
     for declaration in ("SPECIFICATION Spec", "INVARIANTS", "CHECK_DEADLOCK FALSE"):
         declaration_count = model_config.count(declaration)
@@ -2334,10 +3963,14 @@ def main() -> int:
             "mathematically irreversible splits",
             "permissionless caller eventually submitting the deadline trigger",
             "post-deadline non-response rejection",
-            "empty or singleton live electorate",
+            "empty or live electorate below three",
             "without revealing or consuming a pulse",
             "Policy binding, Confirmation requirement, and Confirmation request all",
             "same transition commits the Policy binding and Confirmation requirement",
+            "one proposal-wide redraw budget",
+            "successor governance attempt's first sortition",
+            "Exact request/session transport replays are state-idempotent",
+            "required Confirmation draw at an already exhausted ceiling fails closed",
         ),
     )
     pipeline_spec = read("specs/governance_pipeline.md")

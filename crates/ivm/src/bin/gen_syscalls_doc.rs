@@ -166,9 +166,9 @@ fn guess_defaults(n: u32) -> (String, String, String) {
             args = format!("r10=&{value_type}, r11=&{value_type}");
             ret = format!("r10=&{value_type}-or-zero, r11=NumericFaultV1-or-zero");
         }
-    } else if up.contains("PROVE_EXECUTION") || n == 0xF4 {
-        ret = "r10=ptr (&NoritoBytes(ExecutionProof)), r11=status:u64".into();
-        gas = "G_prove".into();
+    } else if up.contains("EXECUTION_SUMMARY") || n == 0xF4 {
+        ret = "r10=ptr (&NoritoBytes(ExecutionSummary)), r11=status:u64".into();
+        gas = "G_execution_summary".into();
     } else if up.contains("SM4_GCM_SEAL") || n == 0x92 {
         args = "r10=&Blob(key16), r11=&Blob(nonce12), r12=&Blob(aad)?, r13=&Blob(plaintext)".into();
         ret = "r10=ptr (&Blob(ciphertext || tag16))".into();

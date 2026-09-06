@@ -22,7 +22,7 @@ use iroha_data_model::{
     transaction::{FeePaymentIntent, SignedTransaction, TransactionPayload},
 };
 use iroha_primitives::{json::Json, numeric::Quantity};
-use iroha_telemetry::metrics::Status;
+use iroha_torii_shared::status::Status;
 use norito::{
     core::NoritoDeserialize as _,
     derive::{JsonDeserialize, JsonSerialize},

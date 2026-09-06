@@ -36,7 +36,11 @@ public sealed partial class ToriiClientTests
             };
         });
 
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = new ToriiClient(
+            new Uri("https://torii.example"),
+            new HttpClient(handler),
+            options: null,
+            TransactionSubmissionTransportAssurance.OneShotWithoutRedirectsOrRetries);
         seenEnvelope = new SignedQueryBuilder(
             CanonicalAccountId,
             NetworkId.Parse(CanonicalNetworkId))

@@ -6,7 +6,7 @@
 //! aggregates for relay operators and oversight tooling.
 use crate::incentives::RelayRewardEngine;
 use hex::encode as hex_encode;
-use iroha_core::soranet_incentives::RelayPayoutLedger;
+use soranet_incentives::RelayPayoutLedger;
 use iroha_data_model::{
     account::AccountId,
     asset::{AssetDefinitionId, AssetId},
@@ -1087,9 +1087,9 @@ impl PayoutRecord {
         };
         Some(TransferSummary {
             epoch,
-            source_asset: transfer.source.clone(),
-            destination: transfer.destination.clone(),
-            amount: transfer.object.clone(),
+            source_asset: transfer.source().clone(),
+            destination: transfer.destination().clone(),
+            amount: transfer.object().clone(),
         })
     }
 }

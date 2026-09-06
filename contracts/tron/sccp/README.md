@@ -64,10 +64,10 @@ The irreversible recipient is specifically the exact discriminant-`369`
 `test...` I105 spelling of a canonical single-key Ed25519 account in the
 prime-order subgroup. Small-order and mixed-torsion keys are rejected exactly
 as they are by Taira's native admission.
-This is intentionally narrower than the proof-authenticated Taira sender on the
-reverse path, which may use a canonical Ed25519/secp256k1 single or multisig
-controller. Unsupported controller algorithms are rejected on Taira before an
-outbound lock is created.
+The proof-authenticated Taira sender on the reverse path uses the same
+single-controller Ed25519 shape because it is the sole account form constrained
+by the fixed V1 semantic circuits. Multisig, secp256k1, and every other
+controller are rejected on Taira before an outbound lock is created.
 
 ## Exact destination binding
 

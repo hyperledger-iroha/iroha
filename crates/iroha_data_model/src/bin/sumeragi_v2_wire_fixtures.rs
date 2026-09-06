@@ -27,6 +27,10 @@ use iroha_data_model::{
         TimeoutCertificate, TimeoutJustification, TimeoutVote, TimeoutVoteGroup, ValidatorPower,
         Vote, encode_payload_chunks, native_amx_application_manifest_empty_root,
     },
+    isi::kagemusha_v1::{
+        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterV1,
+        KagemushaMintFinalityValidatorKeysV1,
+    },
     merge::MergeLedgerEntry,
     peer::PeerId,
 };
@@ -87,12 +91,27 @@ struct NamedMessage {
     message: ConsensusMessageV2,
 }
 #[derive(Encode)]
+#[allow(dead_code)]
+enum RetiredConsensusMessageV2Payload {
+    Proposal(Proposal),
+    Vote(Vote),
+    QuorumCertificate(QuorumCertificate),
+    TimeoutVote(TimeoutVote),
+    TimeoutCertificate(TimeoutCertificate),
+    PayloadManifest(PayloadManifest),
+}
+#[derive(Encode)]
+struct RetiredConsensusMessageV2 {
+    protocol_version: u16,
+    payload: RetiredConsensusMessageV2Payload,
+}
+#[derive(Encode)]
 struct PreV4ExecutionCommitment {
     parent_state_root: Hash,
     post_state_root: Hash,
     ordinary_writes_root: Hash,
-    topup_anchor_root: Option<Hash>,
-    topup_anchor_count: u32,
+    kagemusha_top_up_root: Option<Hash>,
+    kagemusha_top_up_count: u32,
     native_amx_application_manifest_version: u16,
     native_amx_application_manifest_root: Hash,
     native_amx_application_manifest_count: u32,
@@ -128,6 +147,26 @@ fn network_id(seed: u8) -> NetworkId {
         )),
     )
 }
+fn mint_finality_roster(
+    network_id: NetworkId,
+    epoch: u64,
+    roster: &[ValidatorPower],
+) -> KagemushaMintFinalityEpochRosterV1 {
+    KagemushaMintFinalityEpochRosterV1 {
+        version: KAGEMUSHA_CHAIN_VERSION_V1,
+        network_id,
+        epoch,
+        validators: roster
+            .iter()
+            .enumerate()
+            .map(|(index, validator)| KagemushaMintFinalityValidatorKeysV1 {
+                validator: validator.validator.clone(),
+                eq_proof_public_key: [u8::try_from(index + 1).expect("small fixture roster"); 32],
+                ep_proof_public_key: [u8::try_from(index + 17).expect("small fixture roster"); 32],
+            })
+            .collect(),
+    }
+}
 fn context() -> HeightContext {
     let mut peers = (1..=4).map(peer).collect::<Vec<_>>();
     peers.sort();
@@ -138,11 +177,18 @@ fn context() -> HeightContext {
             power: 1,
         })
         .collect::<Vec<_>>();
+    let network_id = network_id(0x71);
+    let mint_finality_roster = mint_finality_roster(network_id, 2, &roster);
+    let mint_finality_epoch_id = mint_finality_roster
+        .finality_epoch_id()
+        .expect("valid fixture mint-finality roster");
     HeightContext {
-        network_id: network_id(0x71),
+        network_id,
         protocol_version: PROTOCOL_VERSION,
         height: 1,
         epoch: 2,
+        kagemusha_mint_finality_epoch_id: mint_finality_epoch_id,
+        kagemusha_mint_finality_epoch_roster: mint_finality_roster,
         epoch_end_height: 100,
         next_epoch_snapshot: None,
         mode: ConsensusMode::Npos,
@@ -182,7 +228,7 @@ fn subject(seed: u8) -> BlockSubject {
     }
 }
 fn execution_commitment(seed: u8) -> ExecutionCommitment {
-    ExecutionCommitment::without_topups_or_merge_carrier(
+    ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
         Hash::new([seed, 3]),
         Hash::new([seed, 4]),
         Hash::new([seed, 5]),
@@ -365,12 +411,6 @@ fn build_values() -> Result<FixtureValues, Box<dyn Error>> {
             )),
         },
         NamedMessage {
-            name: "payload_manifest",
-            message: ConsensusMessageV2::new(ConsensusMessageV2Payload::PayloadManifest(
-                manifest.clone(),
-            )),
-        },
-        NamedMessage {
             name: "payload_chunk",
             message: ConsensusMessageV2::new(ConsensusMessageV2Payload::PayloadChunk(
                 PayloadChunk {
@@ -548,20 +588,32 @@ fn build_rows(values: &FixtureValues) -> Result<Vec<FixtureRow>, Box<dyn Error>>
             values.commit_response.signature_preimage(),
         ),
     ]);
-    let canonical_manifest = values.message("payload_manifest")?;
+    let canonical_transport = values.message("payload_chunk")?;
     let canonical_vote = values.message("vote")?;
     let canonical_reproposal_vote = values.message("commit_vote_reproposal")?;
     let canonical_reproposal_qc = values.message("commit_quorum_certificate_reproposal")?;
     let canonical_merge_carrier_qc = values.message("quorum_certificate_merge_carrier")?;
     let canonical_request = values.message("commit_certificate_request")?;
     let canonical_response = values.message("commit_certificate_response")?;
-    let mut wrong_protocol_version = canonical_manifest.clone();
+    let ConsensusMessageV2Payload::Proposal(canonical_proposal) =
+        &values.message("proposal")?.payload
+    else {
+        return Err("canonical proposal fixture contains the wrong payload".into());
+    };
+    let retired_payload_manifest = RetiredConsensusMessageV2 {
+        protocol_version: PROTOCOL_VERSION,
+        payload: RetiredConsensusMessageV2Payload::PayloadManifest(
+            canonical_proposal.manifest.clone(),
+        ),
+    }
+    .encode();
+    let mut wrong_protocol_version = canonical_transport.clone();
     wrong_protocol_version.protocol_version = PROTOCOL_VERSION - 1;
-    let mut truncated = canonical_manifest.encode();
+    let mut truncated = canonical_transport.encode();
     truncated
         .pop()
-        .ok_or("canonical payload-manifest message was unexpectedly empty")?;
-    let mut trailing_byte = canonical_manifest.encode();
+        .ok_or("canonical payload-chunk message was unexpectedly empty")?;
+    let mut trailing_byte = canonical_transport.encode();
     trailing_byte.push(0);
     let mut noncanonical_qc = values.prepare.clone();
     noncanonical_qc.signers = vec![1, 0, 2];
@@ -609,8 +661,8 @@ fn build_rows(values: &FixtureValues) -> Result<Vec<FixtureRow>, Box<dyn Error>>
         parent_state_root: commitment.parent_state_root,
         post_state_root: commitment.post_state_root,
         ordinary_writes_root: commitment.ordinary_writes_root,
-        topup_anchor_root: commitment.topup_anchor_root,
-        topup_anchor_count: commitment.topup_anchor_count,
+        kagemusha_top_up_root: commitment.kagemusha_top_up_root,
+        kagemusha_top_up_count: commitment.kagemusha_top_up_count,
         native_amx_application_manifest_version: commitment.native_amx_application_manifest_version,
         native_amx_application_manifest_root: commitment.native_amx_application_manifest_root,
         native_amx_application_manifest_count: commitment.native_amx_application_manifest_count,
@@ -649,12 +701,12 @@ fn build_rows(values: &FixtureValues) -> Result<Vec<FixtureRow>, Box<dyn Error>>
             },
         ],
     };
-    let mut unknown_payload_tag = canonical_manifest.encode();
+    let mut unknown_payload_tag = canonical_transport.encode();
     replace_first_guarded(
         &mut unknown_payload_tag,
         &[5, 0, 0, 0],
         &[11, 0, 0, 0],
-        "payload-manifest discriminant",
+        "payload-chunk discriminant",
     )?;
     let mut wrong_nested_request = values.commit_request.clone();
     wrong_nested_request.protocol_version = PROTOCOL_VERSION - 1;
@@ -767,6 +819,11 @@ fn build_rows(values: &FixtureValues) -> Result<Vec<FixtureRow>, Box<dyn Error>>
             "negative_message",
             "unknown_payload_tag",
             unknown_payload_tag,
+        ),
+        FixtureRow::rejected(
+            "negative_message",
+            "retired_payload_manifest",
+            retired_payload_manifest,
         ),
         FixtureRow::rejected(
             "negative_message",
@@ -1002,6 +1059,7 @@ fn validate_rows(rows: &[FixtureRow], values: &FixtureValues) -> Result<(), Box<
         "trailing_byte",
         "retired_zero_prepare_tag",
         "unknown_payload_tag",
+        "retired_payload_manifest",
         "commit_request_truncated_signature",
         "commit_response_truncated_signature",
         "commit_request_invalid_network_id",

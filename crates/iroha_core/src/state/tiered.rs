@@ -1979,6 +1979,11 @@ impl TieredStateBackend {
             world.private_settlement_outputs
         );
         collect_map!(
+            TieredSegment::PrivateSettlementStagedLocks,
+            PrivateSettlementStagedLock,
+            world.private_settlement_staged_locks
+        );
+        collect_map!(
             TieredSegment::PrivateSettlementReceipts,
             PrivateSettlementReceipt,
             world.private_settlement_receipts
@@ -2076,12 +2081,6 @@ impl TieredStateBackend {
             GovernanceSlash,
             world.governance_slashes
         );
-        collect_map!(TieredSegment::Council, Council, world.council);
-        collect_map!(
-            TieredSegment::ParliamentBodies,
-            ParliamentBodies,
-            world.parliament_bodies
-        );
         collect_map!(
             TieredSegment::ParliamentAttempts,
             ParliamentAttempt,
@@ -2096,6 +2095,11 @@ impl TieredStateBackend {
             TieredSegment::TleKeySessionRosters,
             TleKeySessionRoster,
             world.tle_key_session_rosters
+        );
+        collect_map!(
+            TieredSegment::TleKeySessionLifecycles,
+            TleKeySessionLifecycle,
+            world.tle_key_session_lifecycles
         );
         collect_map!(
             TieredSegment::TleActiveKeySession,
@@ -2133,9 +2137,34 @@ impl TieredStateBackend {
             world.global_beacon_pulses
         );
         collect_map!(
-            TieredSegment::KagemushaReplayKeys,
-            KagemushaReplayKey,
-            world.kagemusha_replay_keys
+            TieredSegment::KagemushaReservePools,
+            KagemushaReservePool,
+            world.kagemusha_reserve_pools
+        );
+        collect_map!(
+            TieredSegment::KagemushaReserveOperations,
+            KagemushaReserveOperation,
+            world.kagemusha_reserve_operations
+        );
+        collect_map!(
+            TieredSegment::KagemushaMintCreditOperations,
+            KagemushaMintCreditOperation,
+            world.kagemusha_mint_credit_operations
+        );
+        collect_map!(
+            TieredSegment::KagemushaIssuanceOperations,
+            KagemushaIssuanceOperation,
+            world.kagemusha_issuance_operations
+        );
+        collect_map!(
+            TieredSegment::KagemushaRedemptionIdOperations,
+            KagemushaRedemptionIdOperation,
+            world.kagemusha_redemption_id_operations
+        );
+        collect_map!(
+            TieredSegment::KagemushaTerminalNullifierOperations,
+            KagemushaTerminalNullifierOperation,
+            world.kagemusha_terminal_nullifier_operations
         );
         Ok(())
     }
@@ -2629,10 +2658,7 @@ mod measured_bytes_impls {
             FinalizedGlobalThresholdBeaconKeySessionRecordV1, GlobalThresholdBeaconDkgSnapshotV1,
             GlobalThresholdBeaconPulseLinkV1,
         },
-        governance::{
-            parliament::ParliamentAttemptStateV1, state::ParliamentTerm,
-            timed_ovn::TimedOvnLifecycleStateV1,
-        },
+        governance::{parliament::ParliamentAttemptStateV1, timed_ovn::TimedOvnLifecycleStateV1},
         privacy_state::{
             PrivacyPgcAccountProvenanceV1, PrivacyPgcAccountStateV1, PrivacyPgcPoolInvariantV1,
             PrivacyRootHeadRecordV1, PrivacyRootProvenanceV1, PrivacyStateItemRecordV1,
@@ -2640,11 +2666,16 @@ mod measured_bytes_impls {
         private_settlement::{
             global_state::{
                 PrivateSettlementFinalizationReferenceV1, PrivateSettlementOutputRecordV1,
-                PrivateSettlementRootProvenanceV1,
+                PrivateSettlementRootProvenanceV1, PrivateSettlementStagedLockRecordV1,
             },
             state::{PrivateSettlementPoolGovernanceProjectionV1, PrivateSettlementPoolStateV1},
         },
-        smartcontracts::code::ContractSubjectBinding,
+        smartcontracts::{
+            code::ContractSubjectBinding,
+            isi::kagemusha::kagemusha_v1_reserve::{
+                KagemushaReserveOperationRecordV1, KagemushaReservePoolV1,
+            },
+        },
         state::{
             AssetDefinitionAliasBindingRecord, ConfidentialTreeProfile, ContractAliasBindingRecord,
             ElectionState, FrontierCheckpoint, GovernanceLockCustody, GovernanceLockRecord,
@@ -2652,7 +2683,7 @@ mod measured_bytes_impls {
             GovernanceReferendumMode, GovernanceReferendumRecord, GovernanceReferendumStatus,
             GovernanceSlashEntry, GovernanceSlashLedger, ZkAssetState, ZkAssetVerifierBinding,
         },
-        tle_release::TleKeySessionPublicStateV1,
+        tle_release::{TleKeySessionLifecycleV1, TleKeySessionPublicStateV1},
     };
     use iroha_crypto::{
         Hash, HashOf, LaneCommitmentId, MerkleProof, MerkleTree, PublicKey, Signature, SignatureOf,
@@ -2681,17 +2712,16 @@ mod measured_bytes_impls {
         },
         common::Owned,
         confidential::ConfidentialStatus,
-        consensus::{CertPhase, FinalizedGlobalThresholdBeaconPulseV1, QcRef},
+        consensus::{CertPhase, FinalizedGlobalThresholdBeaconPulseV1},
         domain::{Domain, DomainId},
         events::EventFilterBox,
         governance::types::{
-            AbiVersion, ContractAbiHash, ContractCodeHash, DeployContractProposal,
-            ParliamentBodies, ParliamentBody, ParliamentRoster, ProposalKind,
-            RuntimeUpgradeProposal, SccpRouteGovernanceProposal, SorafsProviderGovernanceProposal,
-            TleKeySessionId, ValidationFeePayoutLifecycleProposal, ValidationFeePolicyProposal,
+            AbiVersion, ContractAbiHash, ContractCodeHash, DeployContractProposal, ParliamentBody,
+            ProposalKind, RuntimeUpgradeProposal, SccpRouteGovernanceProposal,
+            SorafsProviderGovernanceProposal, TleKeySessionId,
+            ValidationFeePayoutLifecycleProposal, ValidationFeePolicyProposal,
         },
         ipfs::IpfsPath,
-        isi::governance::CouncilDerivationKind,
         metadata::Metadata,
         name::Name,
         nexus::{
@@ -2784,7 +2814,6 @@ mod measured_bytes_impls {
         ConfidentialTreeProfile,
         ContractAbiHash,
         ContractCodeHash,
-        CouncilDerivationKind,
         EntryPointKind,
         GovernanceReferendumMode,
         GovernanceReferendumStatus,
@@ -2795,11 +2824,11 @@ mod measured_bytes_impls {
         NumericSpec,
         ParliamentBody,
         ProofStatus,
-        QcRef,
         Repeats,
         RuntimeUpgradeId,
         RuntimeUpgradeStatus,
         TleKeySessionId,
+        TleKeySessionLifecycleV1,
         PrivacyProtocolActivationRecordV1,
         PrivacyPgcAccountProvenanceV1,
         PrivacyPgcAccountStateV1,
@@ -2830,8 +2859,11 @@ mod measured_bytes_impls {
         PrivateSettlementPoolStateV1,
         PrivateSettlementRootProvenanceV1,
         PrivateSettlementOutputRecordV1,
+        PrivateSettlementStagedLockRecordV1,
         PrivateSettlementReceiptV1,
         PrivateSettlementAbortReceiptV1,
+        KagemushaReservePoolV1,
+        KagemushaReserveOperationRecordV1,
     );
     impl<T: MeasuredBytes, const N: usize> MeasuredBytes for [T; N] {
         fn measured_bytes(&self) -> usize {
@@ -2934,7 +2966,33 @@ mod measured_bytes_impls {
     }
     impl MeasuredBytes for ContractSubjectBinding {
         fn measured_bytes(&self) -> usize {
-            size_of::<ContractSubjectBinding>().saturating_add(self.subject.measured_bytes_extra())
+            use iroha_data_model::smart_contract::{
+                ContractDeploymentOriginV1, ContractLifecycleOwnerV1,
+            };
+            let mut total = size_of::<ContractSubjectBinding>()
+                .saturating_add(self.subject.measured_bytes_extra());
+            let mut add_owner = |owner: &ContractLifecycleOwnerV1| {
+                if let ContractLifecycleOwnerV1::Account(account) = owner {
+                    total = total.saturating_add(account.measured_bytes_extra());
+                }
+            };
+            add_owner(&self.lifecycle.owner);
+            if let Some(owner) = self.lifecycle.pending_owner.as_ref() {
+                add_owner(owner);
+            }
+            match &self.lifecycle.origin {
+                ContractDeploymentOriginV1::Direct(origin) => {
+                    total = total.saturating_add(origin.deployer.measured_bytes_extra());
+                }
+                ContractDeploymentOriginV1::Parliament(origin) => {
+                    let deployer = &origin.proposer;
+                    total = total.saturating_add(deployer.measured_bytes_extra());
+                }
+            }
+            if let Some(hold) = self.lifecycle.emergency_hold.as_ref() {
+                total = total.saturating_add(hold.reason.capacity());
+            }
+            total
         }
     }
     impl MeasuredBytes for AssetDefinitionAliasBindingRecord {
@@ -3700,6 +3758,7 @@ mod measured_bytes_impls {
     impl MeasuredBytes for DeployContractProposal {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<DeployContractProposal>();
+            total = total.saturating_add(self.proposal_operator.measured_bytes_extra());
             total = total.saturating_add(self.contract_address.measured_bytes_extra());
             total = total.saturating_add(self.code_hash.measured_bytes_extra());
             total = total.saturating_add(self.abi_hash.measured_bytes_extra());
@@ -3711,6 +3770,7 @@ mod measured_bytes_impls {
     impl MeasuredBytes for RuntimeUpgradeProposal {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<RuntimeUpgradeProposal>();
+            total = total.saturating_add(self.proposal_operator.measured_bytes_extra());
             total = total.saturating_add(self.manifest.measured_bytes_extra());
             total
         }
@@ -3766,6 +3826,15 @@ mod measured_bytes_impls {
                 }
                 ProposalKind::MusubiRegistryGovernance(action) => {
                     total = total.saturating_add(norito::codec::Encode::encode(action).len());
+                }
+                ProposalKind::ContractLifecycleGovernance(payload) => {
+                    total = total.saturating_add(norito::codec::Encode::encode(payload).len());
+                }
+                ProposalKind::ContractEmergencyHold(payload) => {
+                    total = total.saturating_add(norito::codec::Encode::encode(payload).len());
+                }
+                ProposalKind::GlobalDataTriggerPermissionGovernance(payload) => {
+                    total = total.saturating_add(norito::codec::Encode::encode(payload).len());
                 }
             }
             total
@@ -3909,26 +3978,6 @@ mod measured_bytes_impls {
             total
         }
     }
-    impl MeasuredBytes for ParliamentRoster {
-        fn measured_bytes(&self) -> usize {
-            let mut total = size_of::<ParliamentRoster>();
-            total = total.saturating_add(self.body.measured_bytes_extra());
-            total = total.saturating_add(self.epoch.measured_bytes_extra());
-            total = total.saturating_add(self.members.measured_bytes_extra());
-            total = total.saturating_add(self.alternates.measured_bytes_extra());
-            total = total.saturating_add(self.candidate_count.measured_bytes_extra());
-            total = total.saturating_add(self.derived_by.measured_bytes_extra());
-            total
-        }
-    }
-    impl MeasuredBytes for ParliamentBodies {
-        fn measured_bytes(&self) -> usize {
-            let mut total = size_of::<ParliamentBodies>();
-            total = total.saturating_add(self.selection_epoch.measured_bytes_extra());
-            total = total.saturating_add(self.rosters.measured_bytes_extra());
-            total
-        }
-    }
     impl MeasuredBytes for ParliamentAttemptStateV1 {
         fn measured_bytes(&self) -> usize {
             size_of::<ParliamentAttemptStateV1>()
@@ -3963,17 +4012,6 @@ mod measured_bytes_impls {
         fn measured_bytes(&self) -> usize {
             size_of::<FinalizedGlobalThresholdBeaconPulseV1>()
                 .saturating_add(norito::codec::Encode::encode(self).len())
-        }
-    }
-    impl MeasuredBytes for ParliamentTerm {
-        fn measured_bytes(&self) -> usize {
-            let mut total = size_of::<ParliamentTerm>();
-            total = total.saturating_add(self.epoch.measured_bytes_extra());
-            total = total.saturating_add(self.members.measured_bytes_extra());
-            total = total.saturating_add(self.alternates.measured_bytes_extra());
-            total = total.saturating_add(self.candidate_count.measured_bytes_extra());
-            total = total.saturating_add(self.derived_by.measured_bytes_extra());
-            total
         }
     }
     impl MeasuredBytes for ProofAttachment {
@@ -4164,6 +4202,7 @@ enum TieredSegment {
     PrivateSettlementRoots,
     PrivateSettlementNullifiers,
     PrivateSettlementOutputs,
+    PrivateSettlementStagedLocks,
     PrivateSettlementReceipts,
     PrivateSettlementAborts,
     Proofs,
@@ -4184,11 +4223,10 @@ enum TieredSegment {
     GovernanceReferenda,
     GovernanceLocks,
     GovernanceSlashes,
-    Council,
-    ParliamentBodies,
     ParliamentAttempts,
     TleKeySessions,
     TleKeySessionRosters,
+    TleKeySessionLifecycles,
     TleActiveKeySession,
     TimedOvnEvidence,
     GlobalBeaconDkg,
@@ -4196,7 +4234,12 @@ enum TieredSegment {
     GlobalBeaconActiveSession,
     GlobalBeaconLatestPulse,
     GlobalBeaconPulses,
-    KagemushaReplayKeys,
+    KagemushaReservePools,
+    KagemushaReserveOperations,
+    KagemushaMintCreditOperations,
+    KagemushaIssuanceOperations,
+    KagemushaRedemptionIdOperations,
+    KagemushaTerminalNullifierOperations,
 }
 impl TieredSegment {
     fn dir_name(self) -> &'static str {
@@ -4242,6 +4285,7 @@ impl TieredSegment {
             TieredSegment::PrivateSettlementRoots => "private_settlement_roots",
             TieredSegment::PrivateSettlementNullifiers => "private_settlement_nullifiers",
             TieredSegment::PrivateSettlementOutputs => "private_settlement_outputs",
+            TieredSegment::PrivateSettlementStagedLocks => "private_settlement_staged_locks",
             TieredSegment::PrivateSettlementReceipts => "private_settlement_receipts",
             TieredSegment::PrivateSettlementAborts => "private_settlement_aborts",
             TieredSegment::Proofs => "proofs",
@@ -4262,11 +4306,10 @@ impl TieredSegment {
             TieredSegment::GovernanceReferenda => "governance_referenda",
             TieredSegment::GovernanceLocks => "governance_locks",
             TieredSegment::GovernanceSlashes => "governance_slashes",
-            TieredSegment::Council => "council",
-            TieredSegment::ParliamentBodies => "parliament_bodies",
             TieredSegment::ParliamentAttempts => "parliament_attempts",
             TieredSegment::TleKeySessions => "tle_key_sessions",
             TieredSegment::TleKeySessionRosters => "tle_key_session_rosters",
+            TieredSegment::TleKeySessionLifecycles => "tle_key_session_lifecycles",
             TieredSegment::TleActiveKeySession => "tle_active_key_session",
             TieredSegment::TimedOvnEvidence => "timed_ovn_evidence",
             TieredSegment::GlobalBeaconDkg => "global_beacon_dkg",
@@ -4274,7 +4317,14 @@ impl TieredSegment {
             TieredSegment::GlobalBeaconActiveSession => "global_beacon_active_session",
             TieredSegment::GlobalBeaconLatestPulse => "global_beacon_latest_pulse",
             TieredSegment::GlobalBeaconPulses => "global_beacon_pulses",
-            TieredSegment::KagemushaReplayKeys => "kagemusha_replay_keys",
+            TieredSegment::KagemushaReservePools => "kagemusha_reserve_pools",
+            TieredSegment::KagemushaReserveOperations => "kagemusha_reserve_operations",
+            TieredSegment::KagemushaMintCreditOperations => "kagemusha_mint_credit_operations",
+            TieredSegment::KagemushaIssuanceOperations => "kagemusha_issuance_operations",
+            TieredSegment::KagemushaRedemptionIdOperations => "kagemusha_redemption_id_operations",
+            TieredSegment::KagemushaTerminalNullifierOperations => {
+                "kagemusha_terminal_nullifier_operations"
+            }
         }
     }
 }
@@ -4330,6 +4380,7 @@ impl norito::json::JsonDeserialize for TieredSegment {
             "private_settlement_roots" => TieredSegment::PrivateSettlementRoots,
             "private_settlement_nullifiers" => TieredSegment::PrivateSettlementNullifiers,
             "private_settlement_outputs" => TieredSegment::PrivateSettlementOutputs,
+            "private_settlement_staged_locks" => TieredSegment::PrivateSettlementStagedLocks,
             "private_settlement_receipts" => TieredSegment::PrivateSettlementReceipts,
             "private_settlement_aborts" => TieredSegment::PrivateSettlementAborts,
             "proofs" => TieredSegment::Proofs,
@@ -4350,11 +4401,10 @@ impl norito::json::JsonDeserialize for TieredSegment {
             "governance_referenda" => TieredSegment::GovernanceReferenda,
             "governance_locks" => TieredSegment::GovernanceLocks,
             "governance_slashes" => TieredSegment::GovernanceSlashes,
-            "council" => TieredSegment::Council,
-            "parliament_bodies" => TieredSegment::ParliamentBodies,
             "parliament_attempts" => TieredSegment::ParliamentAttempts,
             "tle_key_sessions" => TieredSegment::TleKeySessions,
             "tle_key_session_rosters" => TieredSegment::TleKeySessionRosters,
+            "tle_key_session_lifecycles" => TieredSegment::TleKeySessionLifecycles,
             "tle_active_key_session" => TieredSegment::TleActiveKeySession,
             "timed_ovn_evidence" => TieredSegment::TimedOvnEvidence,
             "global_beacon_dkg" => TieredSegment::GlobalBeaconDkg,
@@ -4362,7 +4412,14 @@ impl norito::json::JsonDeserialize for TieredSegment {
             "global_beacon_active_session" => TieredSegment::GlobalBeaconActiveSession,
             "global_beacon_latest_pulse" => TieredSegment::GlobalBeaconLatestPulse,
             "global_beacon_pulses" => TieredSegment::GlobalBeaconPulses,
-            "kagemusha_replay_keys" => TieredSegment::KagemushaReplayKeys,
+            "kagemusha_reserve_pools" => TieredSegment::KagemushaReservePools,
+            "kagemusha_reserve_operations" => TieredSegment::KagemushaReserveOperations,
+            "kagemusha_mint_credit_operations" => TieredSegment::KagemushaMintCreditOperations,
+            "kagemusha_issuance_operations" => TieredSegment::KagemushaIssuanceOperations,
+            "kagemusha_redemption_id_operations" => TieredSegment::KagemushaRedemptionIdOperations,
+            "kagemusha_terminal_nullifier_operations" => {
+                TieredSegment::KagemushaTerminalNullifierOperations
+            }
             other => {
                 return Err(norito::json::Error::InvalidField {
                     field: "segment".into(),
@@ -4551,6 +4608,9 @@ pub(crate) enum TieredKeyHandle {
         crate::private_settlement::global_state::PrivateSettlementNullifierKeyV1,
     ),
     PrivateSettlementOutput(crate::private_settlement::global_state::PrivateSettlementOutputKeyV1),
+    PrivateSettlementStagedLock(
+        crate::private_settlement::global_state::PrivateSettlementStagedLockKeyV1,
+    ),
     PrivateSettlementReceipt(iroha_crypto::Hash),
     PrivateSettlementAbort(iroha_crypto::Hash),
     Proof(iroha_data_model::proof::ProofId),
@@ -4571,11 +4631,10 @@ pub(crate) enum TieredKeyHandle {
     GovernanceReferendum(String),
     GovernanceLock(String),
     GovernanceSlash(String),
-    Council(u64),
-    ParliamentBodies(u64),
     ParliamentAttempt(iroha_data_model::governance::types::GovernanceAttemptId),
     TleKeySession(iroha_data_model::governance::types::TleKeySessionId),
     TleKeySessionRoster(iroha_data_model::governance::types::TleKeySessionId),
+    TleKeySessionLifecycle(iroha_data_model::governance::types::TleKeySessionId),
     TleActiveKeySession(u64),
     TimedOvnEvidence(iroha_data_model::governance::types::BallotAttemptId),
     GlobalBeaconDkg([u8; 32]),
@@ -4583,7 +4642,12 @@ pub(crate) enum TieredKeyHandle {
     GlobalBeaconActiveSession(u64),
     GlobalBeaconLatestPulse(u64),
     GlobalBeaconPulse([u8; 32]),
-    KagemushaReplayKey(iroha_crypto::Hash),
+    KagemushaReservePool([u8; 32]),
+    KagemushaReserveOperation([u8; 32]),
+    KagemushaMintCreditOperation([u8; 32]),
+    KagemushaIssuanceOperation([u8; 32]),
+    KagemushaRedemptionIdOperation([u8; 32]),
+    KagemushaTerminalNullifierOperation([u8; 32]),
 }
 impl TieredKeyHandle {
     fn segment(&self) -> TieredSegment {
@@ -4641,6 +4705,9 @@ impl TieredKeyHandle {
                 TieredSegment::PrivateSettlementNullifiers
             }
             TieredKeyHandle::PrivateSettlementOutput(_) => TieredSegment::PrivateSettlementOutputs,
+            TieredKeyHandle::PrivateSettlementStagedLock(_) => {
+                TieredSegment::PrivateSettlementStagedLocks
+            }
             TieredKeyHandle::PrivateSettlementReceipt(_) => {
                 TieredSegment::PrivateSettlementReceipts
             }
@@ -4663,11 +4730,10 @@ impl TieredKeyHandle {
             TieredKeyHandle::GovernanceReferendum(_) => TieredSegment::GovernanceReferenda,
             TieredKeyHandle::GovernanceLock(_) => TieredSegment::GovernanceLocks,
             TieredKeyHandle::GovernanceSlash(_) => TieredSegment::GovernanceSlashes,
-            TieredKeyHandle::Council(_) => TieredSegment::Council,
-            TieredKeyHandle::ParliamentBodies(_) => TieredSegment::ParliamentBodies,
             TieredKeyHandle::ParliamentAttempt(_) => TieredSegment::ParliamentAttempts,
             TieredKeyHandle::TleKeySession(_) => TieredSegment::TleKeySessions,
             TieredKeyHandle::TleKeySessionRoster(_) => TieredSegment::TleKeySessionRosters,
+            TieredKeyHandle::TleKeySessionLifecycle(_) => TieredSegment::TleKeySessionLifecycles,
             TieredKeyHandle::TleActiveKeySession(_) => TieredSegment::TleActiveKeySession,
             TieredKeyHandle::TimedOvnEvidence(_) => TieredSegment::TimedOvnEvidence,
             TieredKeyHandle::GlobalBeaconDkg(_) => TieredSegment::GlobalBeaconDkg,
@@ -4677,7 +4743,22 @@ impl TieredKeyHandle {
             }
             TieredKeyHandle::GlobalBeaconLatestPulse(_) => TieredSegment::GlobalBeaconLatestPulse,
             TieredKeyHandle::GlobalBeaconPulse(_) => TieredSegment::GlobalBeaconPulses,
-            TieredKeyHandle::KagemushaReplayKey(_) => TieredSegment::KagemushaReplayKeys,
+            TieredKeyHandle::KagemushaReservePool(_) => TieredSegment::KagemushaReservePools,
+            TieredKeyHandle::KagemushaReserveOperation(_) => {
+                TieredSegment::KagemushaReserveOperations
+            }
+            TieredKeyHandle::KagemushaMintCreditOperation(_) => {
+                TieredSegment::KagemushaMintCreditOperations
+            }
+            TieredKeyHandle::KagemushaIssuanceOperation(_) => {
+                TieredSegment::KagemushaIssuanceOperations
+            }
+            TieredKeyHandle::KagemushaRedemptionIdOperation(_) => {
+                TieredSegment::KagemushaRedemptionIdOperations
+            }
+            TieredKeyHandle::KagemushaTerminalNullifierOperation(_) => {
+                TieredSegment::KagemushaTerminalNullifierOperations
+            }
         }
     }
     fn encode_key(&self) -> Result<Vec<u8>> {
@@ -4738,6 +4819,9 @@ impl TieredKeyHandle {
                 Ok(norito::codec::Encode::encode(key))
             }
             TieredKeyHandle::PrivateSettlementOutput(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::PrivateSettlementStagedLock(key) => {
+                Ok(norito::codec::Encode::encode(key))
+            }
             TieredKeyHandle::PrivateSettlementReceipt(key)
             | TieredKeyHandle::PrivateSettlementAbort(key) => {
                 Ok(norito::codec::Encode::encode(key))
@@ -4757,11 +4841,10 @@ impl TieredKeyHandle {
             TieredKeyHandle::GovernanceReferendum(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::GovernanceLock(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::GovernanceSlash(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::Council(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::ParliamentBodies(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::ParliamentAttempt(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::TleKeySession(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::TleKeySessionRoster(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::TleKeySessionLifecycle(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::TleActiveKeySession(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::TimedOvnEvidence(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::GlobalBeaconDkg(key) => Ok(norito::codec::Encode::encode(key)),
@@ -4771,7 +4854,14 @@ impl TieredKeyHandle {
             }
             TieredKeyHandle::GlobalBeaconLatestPulse(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::GlobalBeaconPulse(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::KagemushaReplayKey(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::KagemushaReservePool(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::KagemushaReserveOperation(key)
+            | TieredKeyHandle::KagemushaMintCreditOperation(key)
+            | TieredKeyHandle::KagemushaIssuanceOperation(key)
+            | TieredKeyHandle::KagemushaRedemptionIdOperation(key)
+            | TieredKeyHandle::KagemushaTerminalNullifierOperation(key) => {
+                Ok(norito::codec::Encode::encode(key))
+            }
         }
     }
     fn entry_id(&self) -> Result<(TieredEntryId, Vec<u8>)> {
@@ -4869,6 +4959,9 @@ impl TieredKeyHandle {
             TieredKeyHandle::PrivateSettlementOutput(id) => {
                 fetch!(world.private_settlement_outputs, id)
             }
+            TieredKeyHandle::PrivateSettlementStagedLock(id) => {
+                fetch!(world.private_settlement_staged_locks, id)
+            }
             TieredKeyHandle::PrivateSettlementReceipt(id) => {
                 fetch!(world.private_settlement_receipts, id)
             }
@@ -4901,12 +4994,13 @@ impl TieredKeyHandle {
             TieredKeyHandle::GovernanceReferendum(id) => fetch!(world.governance_referenda, id),
             TieredKeyHandle::GovernanceLock(id) => fetch!(world.governance_locks, id),
             TieredKeyHandle::GovernanceSlash(id) => fetch!(world.governance_slashes, id),
-            TieredKeyHandle::Council(id) => fetch!(world.council, id),
-            TieredKeyHandle::ParliamentBodies(id) => fetch!(world.parliament_bodies, id),
             TieredKeyHandle::ParliamentAttempt(id) => fetch!(world.parliament_attempts, id),
             TieredKeyHandle::TleKeySession(id) => fetch!(world.tle_key_sessions, id),
             TieredKeyHandle::TleKeySessionRoster(id) => {
                 fetch!(world.tle_key_session_rosters, id)
+            }
+            TieredKeyHandle::TleKeySessionLifecycle(id) => {
+                fetch!(world.tle_key_session_lifecycles, id)
             }
             TieredKeyHandle::TleActiveKeySession(id) => {
                 fetch!(world.tle_active_key_session, id)
@@ -4923,8 +5017,23 @@ impl TieredKeyHandle {
                 fetch!(world.global_beacon_latest_pulse, id)
             }
             TieredKeyHandle::GlobalBeaconPulse(id) => fetch!(world.global_beacon_pulses, id),
-            TieredKeyHandle::KagemushaReplayKey(id) => {
-                fetch!(world.kagemusha_replay_keys, id)
+            TieredKeyHandle::KagemushaReservePool(id) => {
+                fetch!(world.kagemusha_reserve_pools, id)
+            }
+            TieredKeyHandle::KagemushaReserveOperation(id) => {
+                fetch!(world.kagemusha_reserve_operations, id)
+            }
+            TieredKeyHandle::KagemushaMintCreditOperation(id) => {
+                fetch!(world.kagemusha_mint_credit_operations, id)
+            }
+            TieredKeyHandle::KagemushaIssuanceOperation(id) => {
+                fetch!(world.kagemusha_issuance_operations, id)
+            }
+            TieredKeyHandle::KagemushaRedemptionIdOperation(id) => {
+                fetch!(world.kagemusha_redemption_id_operations, id)
+            }
+            TieredKeyHandle::KagemushaTerminalNullifierOperation(id) => {
+                fetch!(world.kagemusha_terminal_nullifier_operations, id)
             }
         }
     }
@@ -5017,6 +5126,9 @@ impl TieredKeyHandle {
             TieredKeyHandle::PrivateSettlementOutput(id) => {
                 fetch!(world.private_settlement_outputs, id)
             }
+            TieredKeyHandle::PrivateSettlementStagedLock(id) => {
+                fetch!(world.private_settlement_staged_locks, id)
+            }
             TieredKeyHandle::PrivateSettlementReceipt(id) => {
                 fetch!(world.private_settlement_receipts, id)
             }
@@ -5049,12 +5161,13 @@ impl TieredKeyHandle {
             TieredKeyHandle::GovernanceReferendum(id) => fetch!(world.governance_referenda, id),
             TieredKeyHandle::GovernanceLock(id) => fetch!(world.governance_locks, id),
             TieredKeyHandle::GovernanceSlash(id) => fetch!(world.governance_slashes, id),
-            TieredKeyHandle::Council(id) => fetch!(world.council, id),
-            TieredKeyHandle::ParliamentBodies(id) => fetch!(world.parliament_bodies, id),
             TieredKeyHandle::ParliamentAttempt(id) => fetch!(world.parliament_attempts, id),
             TieredKeyHandle::TleKeySession(id) => fetch!(world.tle_key_sessions, id),
             TieredKeyHandle::TleKeySessionRoster(id) => {
                 fetch!(world.tle_key_session_rosters, id)
+            }
+            TieredKeyHandle::TleKeySessionLifecycle(id) => {
+                fetch!(world.tle_key_session_lifecycles, id)
             }
             TieredKeyHandle::TleActiveKeySession(id) => {
                 fetch!(world.tle_active_key_session, id)
@@ -5071,8 +5184,23 @@ impl TieredKeyHandle {
                 fetch!(world.global_beacon_latest_pulse, id)
             }
             TieredKeyHandle::GlobalBeaconPulse(id) => fetch!(world.global_beacon_pulses, id),
-            TieredKeyHandle::KagemushaReplayKey(id) => {
-                fetch!(world.kagemusha_replay_keys, id)
+            TieredKeyHandle::KagemushaReservePool(id) => {
+                fetch!(world.kagemusha_reserve_pools, id)
+            }
+            TieredKeyHandle::KagemushaReserveOperation(id) => {
+                fetch!(world.kagemusha_reserve_operations, id)
+            }
+            TieredKeyHandle::KagemushaMintCreditOperation(id) => {
+                fetch!(world.kagemusha_mint_credit_operations, id)
+            }
+            TieredKeyHandle::KagemushaIssuanceOperation(id) => {
+                fetch!(world.kagemusha_issuance_operations, id)
+            }
+            TieredKeyHandle::KagemushaRedemptionIdOperation(id) => {
+                fetch!(world.kagemusha_redemption_id_operations, id)
+            }
+            TieredKeyHandle::KagemushaTerminalNullifierOperation(id) => {
+                fetch!(world.kagemusha_terminal_nullifier_operations, id)
             }
         }
     }
@@ -5211,6 +5339,9 @@ impl fmt::Display for TieredKeyHandle {
             TieredKeyHandle::PrivateSettlementOutput(id) => {
                 write!(f, "private_settlement_output:{id:?}")
             }
+            TieredKeyHandle::PrivateSettlementStagedLock(id) => {
+                write!(f, "private_settlement_staged_lock:{id:?}")
+            }
             TieredKeyHandle::PrivateSettlementReceipt(id) => {
                 write!(f, "private_settlement_receipt:{id}")
             }
@@ -5249,12 +5380,13 @@ impl fmt::Display for TieredKeyHandle {
             TieredKeyHandle::GovernanceReferendum(id) => write!(f, "gov_referendum:{id}"),
             TieredKeyHandle::GovernanceLock(id) => write!(f, "gov_lock:{id}"),
             TieredKeyHandle::GovernanceSlash(id) => write!(f, "gov_slash:{id}"),
-            TieredKeyHandle::Council(id) => write!(f, "council:{id}"),
-            TieredKeyHandle::ParliamentBodies(id) => write!(f, "parliament_bodies:{id}"),
             TieredKeyHandle::ParliamentAttempt(id) => write!(f, "parliament_attempt:{id}"),
             TieredKeyHandle::TleKeySession(id) => write!(f, "tle_key_session:{id}"),
             TieredKeyHandle::TleKeySessionRoster(id) => {
                 write!(f, "tle_key_session_roster:{id}")
+            }
+            TieredKeyHandle::TleKeySessionLifecycle(id) => {
+                write!(f, "tle_key_session_lifecycle:{id}")
             }
             TieredKeyHandle::TleActiveKeySession(id) => {
                 write!(f, "tle_active_key_session:{id}")
@@ -5275,9 +5407,36 @@ impl fmt::Display for TieredKeyHandle {
             TieredKeyHandle::GlobalBeaconPulse(id) => {
                 write!(f, "global_beacon_pulse:{}", id.encode_hex::<String>())
             }
-            TieredKeyHandle::KagemushaReplayKey(id) => {
-                write!(f, "kagemusha_replay_key:{id}")
+            TieredKeyHandle::KagemushaReservePool(id) => {
+                write!(f, "kagemusha_reserve_pool:{}", id.encode_hex::<String>())
             }
+            TieredKeyHandle::KagemushaReserveOperation(id) => {
+                write!(
+                    f,
+                    "kagemusha_reserve_operation:{}",
+                    id.encode_hex::<String>()
+                )
+            }
+            TieredKeyHandle::KagemushaMintCreditOperation(id) => write!(
+                f,
+                "kagemusha_mint_credit_operation:{}",
+                id.encode_hex::<String>()
+            ),
+            TieredKeyHandle::KagemushaIssuanceOperation(id) => write!(
+                f,
+                "kagemusha_issuance_operation:{}",
+                id.encode_hex::<String>()
+            ),
+            TieredKeyHandle::KagemushaRedemptionIdOperation(id) => write!(
+                f,
+                "kagemusha_redemption_id_operation:{}",
+                id.encode_hex::<String>()
+            ),
+            TieredKeyHandle::KagemushaTerminalNullifierOperation(id) => write!(
+                f,
+                "kagemusha_terminal_nullifier_operation:{}",
+                id.encode_hex::<String>()
+            ),
         }
     }
 }
@@ -5431,6 +5590,36 @@ mod tests {
                 );
             }
         }
+
+        let prepared_world =
+            crate::private_settlement::global_state::tests::prepared_world_fixture();
+        backend
+            .record_world_snapshot(&prepared_world)
+            .expect("persist prepared private-settlement tiered snapshot");
+        let prepared_manifest = backend
+            .last_manifest()
+            .expect("prepared snapshot manifest recorded");
+        let prepared_snapshot_dir = root.join(format!("{:020}", prepared_manifest.snapshot_index));
+        let staged_entries = prepared_manifest
+            .cold_entries
+            .iter()
+            .filter(|entry| entry.segment == TieredSegment::PrivateSettlementStagedLocks)
+            .collect::<Vec<_>>();
+        assert!(
+            !staged_entries.is_empty(),
+            "active private-settlement staged locks must be represented in the cold manifest"
+        );
+        for entry in staged_entries {
+            let spill = entry
+                .spill_path
+                .as_ref()
+                .expect("cold staged-lock entry has a spill path");
+            assert_canaries_absent(
+                &fs::read(prepared_snapshot_dir.join(spill))
+                    .expect("read staged-lock cold payload"),
+                "private-settlement staged-lock cold payload",
+            );
+        }
     }
 
     fn sccp_replay_forest_fixture() -> (SccpReplayAccumulatorIdV1, SccpReplayForestV1) {
@@ -5438,10 +5627,18 @@ mod tests {
             iroha_data_model::bridge::SccpNetworkV1::BscMainnet,
             iroha_data_model::bridge::SccpRouteActivationV1::Bidirectional,
         );
-        let id = SccpReplayAccumulatorIdV1 {
-            route_key: route.key(),
+        let domain = iroha_data_model::bridge::SccpReplayDomainV1 {
+            source_network: route.lane_id.source,
+            target_network: route.lane_id.target,
             boundary: SccpReplayBoundaryV1::SoraInboundRelease,
+            route_revision: route.revision,
+            route_configuration_hash: route
+                .route_configuration_hash()
+                .expect("replay route configuration hashes"),
+            actor: iroha_data_model::bridge::SccpReplayActorV1::Route,
         };
+        let id = SccpReplayAccumulatorIdV1::from_domain(route.key(), &domain)
+            .expect("replay accumulator fixture matches its route");
         let mut forest = SccpReplayForestV1::default();
         forest.nonempty_shard_roots.insert(0xA6, [0x5B; 32]);
         forest.leaf_count = 1;

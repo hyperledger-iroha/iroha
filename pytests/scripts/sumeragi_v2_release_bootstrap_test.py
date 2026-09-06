@@ -425,7 +425,6 @@ def _sdk_dependency_fixture_material() -> tuple[
             "gradle/gradle-user-home/wrapper/dists/gradle-9.3.0-bin/"
             f"{gradle_key}/gradle-9.3.0-bin.zip.ok"
         ): b"",
-        "gradle/java-gradle-wrapper.properties": wrapper,
         "gradle/kotlin-gradle-wrapper.properties": wrapper,
         "node/node_modules/.package-lock.json": installed_lock,
         "node/package-lock.json": package_lock,

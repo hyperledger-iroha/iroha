@@ -164,6 +164,7 @@ def settlement_proof_payload(
     capsule: bytes,
     *,
     genesis: bytes = SETTLEMENT_GENESIS,
+    delta: bytes = b"canonical-private-settlement-delta",
 ) -> bytes:
     return b"".join(
         (
@@ -176,6 +177,7 @@ def settlement_proof_payload(
             b"\x64" * 32,
             put_bytes_u32(statement),
             put_bytes_u32(b"public-stark-proof"),
+            put_bytes_u32(delta),
             put_bytes_u32(capsule),
         )
     )
@@ -491,11 +493,16 @@ def test_private_settlement_prove_accepts_only_public_norito_and_checks_exact_re
     assert result.statement_norito == statement
     assert result.audit_capsule_norito == capsule
     assert result.proof == b"public-stark-proof"
+    assert result.delta_norito == b"canonical-private-settlement-delta"
+    assert repr(result) == "PrivateSettlementPreparedProofV1(<restricted>)"
+    assert "public-stark-proof" not in repr(result)
+    assert "capsule" not in repr(result).lower()
     [(command, sequence, payload)] = written_frames(process)
     assert command == worker.PrivacyWalletWorkerCommandV1.PROVE_PRIVATE_SETTLEMENT
     assert sequence == 1
     for public_object in (manifest, statement, capsule, policy):
         assert public_object in payload
+    assert payload.endswith(struct.pack(">Q", 41))
 
 
 def test_private_settlement_proof_substitution_terminates_the_session(
@@ -517,6 +524,35 @@ def test_private_settlement_proof_substitution_terminates_the_session(
             manifest_norito=b"manifest\0norito",
             statement_norito=b"statement\0norito",
             audit_capsule_norito=b"capsule\0norito",
+            audit_policy_norito=b"policy\0norito",
+            canonical_genesis_hash=SETTLEMENT_GENESIS,
+            current_height=41,
+        )
+    assert client.closed
+    assert process.killed
+
+
+def test_private_settlement_empty_delta_terminates_the_session(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    statement = b"statement\0norito"
+    capsule = b"capsule\0norito"
+    client, process = controller(
+        monkeypatch,
+        tmp_path,
+        response_frame(
+            worker.PrivacyWalletWorkerCommandV1.PROVE_PRIVATE_SETTLEMENT,
+            1,
+            settlement_proof_payload(statement, capsule, delta=b""),
+        ),
+    )
+    with pytest.raises(worker.PrivacyWalletWorkerErrorV1, match="substituted"):
+        client.prove_private_settlement(
+            worker.PrivacyWalletWitnessHandleV1(b"\xd1" * 32),
+            settlement_binding(),
+            manifest_norito=b"manifest\0norito",
+            statement_norito=statement,
+            audit_capsule_norito=capsule,
             audit_policy_norito=b"policy\0norito",
             canonical_genesis_hash=SETTLEMENT_GENESIS,
             current_height=41,

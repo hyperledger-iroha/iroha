@@ -350,6 +350,8 @@ pub const SORA_INROU_HOSTED_REPLICA_CAPACITY_V1: u16 = 1;
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoracloudTxInstruction")]
 pub struct SoracloudTxInstruction {
     /// Stable instruction wire identifier used to select the concrete decoder.
     pub wire_id: String,
@@ -395,6 +397,8 @@ impl SoracloudTxInstruction {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soracloud::SoracloudMutationDraftResponse")]
 pub struct SoracloudMutationDraftResponse {
     /// Success marker. V1 admits only `true`; failures use a non-success HTTP response.
     pub ok: bool,
@@ -515,3 +519,6 @@ mod tests {
     include!("soracloud/tests/fhe_policy.rs");
     include!("soracloud/tests/decryption_and_records.rs");
 }
+
+#[cfg(test)]
+mod captured_soracloud_schema_tests;

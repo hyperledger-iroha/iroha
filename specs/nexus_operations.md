@@ -111,7 +111,21 @@ Dashboards and alert rules are versioned under `dashboards/` and documented in
   transaction hash before retrying; a blind resubmission can obscure which
   authority owns the durable admission. A journal durability fault blocks
   drain until restart repair either restores the record or leaves the lane
-  explicitly fail-closed.
+  explicitly fail-closed. An authority may retry an exact historical request
+  only when it already owns and revalidates the same durable claim; honest
+  authorities sign only while current or while replaying that exact claim,
+  never for a first-time unowned old-height request. A quorum certificate assembled while the
+  context was current remains usable after a height-only race only when its
+  canonical predecessor and complete route, roster, and incarnation bindings
+  still match the current source. This relies on the static at-most-`f`
+  Byzantine-key model and does not establish continuous source equality under
+  mobile key compromise. `queue_plan_admission_context_future` is retryable and
+  must not create queue ownership. A future quorum certificate may be parked
+  durably only when its roster and incarnation equal the local current
+  authority source, and is reclassified automatically after catch-up; source
+  drift makes it stale and releases its slot. Treat
+  `queue_plan_admission_context_mismatch` as a fail-closed history, roster,
+  incarnation, or routing-policy mismatch rather than retrying it blindly.
 - Treat the proposal-native QueuePlan certificate as control-only. The
   `QueuePlanSynced` transaction's physical FIFO position or live-reservation
   ordinal must remain a fence until its autonomous outcome is terminal, and it

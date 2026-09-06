@@ -27,6 +27,23 @@ const torii = new ToriiClient(TAIRA_TESTNET_PROFILE.toriiBaseUrl, {
 });
 ```
 
+Before an account exists, `ToriiClient.getAccountCapabilities({ signal })` and
+the browser client's matching method read public `GET /v1/accounts/capabilities`.
+The closed `AccountCapabilitiesV1` JSON response contains `schema_version: 1`,
+the canonical `network_id`, a u16 `network_prefix`, the current `allowed_signing`
+admission set, and explicit `default_signing: "ed25519"`. Ed25519 is the
+first-release account-bootstrap policy and is mandatory in node admission;
+array ordering and the node's default hash do not express signing preferences.
+Compare the returned network identity with the user's selected network before
+creating an identity. This advert is endpoint discovery, not signed network
+evidence or permission to submit a transaction.
+
+These SDK calls omit configured credentials, reject redirects, accept only the
+exact V1 JSON shape, enforce a 4 KiB streamed response limit, and support abort
+through body consumption. The route accepts no query or request body. Standard
+Torii listener access controls still apply; permission-aware
+`GET /v1/node/capabilities` retains its existing account authentication.
+
 From an Iroha source checkout, run the native build (wrapping
 `cargo build -p iroha_js_host`) before using native-backed APIs:
 
@@ -44,6 +61,13 @@ peer processes, toolchain, build scripts, procedural macros, dependencies, and
 build environment. It is not a reproducible-build or hostile-executor proof.
 Release processes that require that stronger property must compare matching
 artifacts from independent controlled rebuilders.
+
+Loading a debug artifact from a dirty source tree verifies its recorded source
+seal in a separate process before loading native code. This verifier has a
+15-second timeout and does not inherit `NODE_OPTIONS`. In Electron, it runs
+with `ELECTRON_RUN_AS_NODE=1` so verification cannot launch another application
+or renderer. Verification failure or timeout prevents the native binding from
+loading.
 
 Native publication also assumes that the configured Cargo target is on a
 single-host local, hard-link-capable filesystem and that cooperating builders
@@ -99,8 +123,12 @@ browser exports (`/browser`, `/transaction-codec`, `/canonical-request`,
 Node Ed25519 fallback without a native host. Applications that need native-only
 APIs must
 provide a separately built and checksum-verified host through
-`IROHA_JS_NATIVE_DIR`. The registry artifact includes only two portable,
-offline examples: `recipes/iso_bridge_builder.mjs` and
+`IROHA_JS_NATIVE_DIR` before the first native-dependent call. The verified host
+surface is then captured as an immutable runtime dependency; later environment
+changes and mutable `globalThis` overrides cannot retarget it. The registry
+publishes one executable tree, `dist/`; development
+`src/` and `scripts/` copies stay in the source checkout. The registry artifact includes only
+two portable, offline examples: `recipes/iso_bridge_builder.mjs` and
 `recipes/nexus_app_transfer.mjs`. The wider recipe catalog is kept in the
 source repository where its native and live-service prerequisites are
 available.
@@ -174,25 +202,133 @@ validator options use the exact TypeScript camelCase names; snake_case option
 aliases and alternate `payload`/`noritoBytes` byte fields are rejected before
 native dispatch. Fixture-bundle and Governance DAG block entries use `bytes`.
 
-## Offline cash SDK boundary
+## KAGEMUSHA SDK boundary
 
-The JavaScript package exposes the four stable Kagemusha Torii routes through
-`getOfflineCapability`, `submitKagemushaTopUpV4`,
-`submitKagemushaRedeemV4`, and `getKagemushaOperationStatus`. Discovery is
-an asset-neutral protocol capability compiled into every deployment and accepts
-only the exact four-field `cash_handoff_v1`, bridge ABI 23, eight-hop
-`OfflineStatus` with `ready: true`.
+The JavaScript package exposes the sole `Kagemusha` namespace. It models the
+three-message direct request, committed payment, and durable acknowledgement
+exchange, plus mint
+authorization/credit binding and typed encrypted-credit opening, AAD, and
+envelope codecs. Sender recovery reproduces the same hardware-committed
+canonical payment bytes from the durable outbox.
 
-This is deliberately a transport-only boundary. Command helpers require an
-externally produced `{ version: 4, operationId, norito }` archive and never
-derive witnesses, install recursive artifacts, or claim a native prover. Use a
-supported Swift or JVM wallet implementation to create the archive, then pass a
-detached copy to JavaScript only when a web or Node service owns Torii
-submission and operation polling. Top-up archives are limited to 512 KiB and
-redeem archives to 48 MiB; the exported
-`KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES` and
-`KAGEMUSHA_REDEEM_REQUEST_MAX_BYTES` constants expose those exact Torii
-boundaries.
+Model fields are immutable after validation. Byte getters return defensive
+copies, including fields reached through nested models; canonical backing
+values remain private to the codec module.
+
+```js
+import { Kagemusha } from "@iroha/iroha-js/kagemusha";
+```
+
+The root entry point re-exports that same namespace; no parallel product alias
+or version-suffixed product subpath is published.
+
+Requests bind one exact positive amount and the recipient's fresh encryption
+key. Strict canonical Norito and unpadded `kgm1:` decoders enforce per-message
+bounds. `validateCompleteExchange` is the sole public spend-exchange validator: it
+requires the exact request, payment, and acknowledgement
+and caps their combined transport at 9,211 raw bytes or 12,288 `kgm1:` text
+bytes.
+
+A committed payment carries its hardware commit certificate and post-commit
+`PaymentProof`, whose semantic digest binds the request, output, and actual
+ciphertext. Distinct valid payments against the same reusable request remain
+acceptable; exposed credits cannot be cancelled.
+
+The namespace is codec and orchestration support only. Monetary proving,
+signing, encryption, decryption, and hardware state changes must come from the
+release-pinned native implementation. No public predecessor/successor link or
+software money-crypto fallback is exposed.
+
+`DeviceMintStageCommand` and `DeviceMintStageResult` describe operation 16 at
+the host/native boundary. `encodeDeviceMintStageCommandShape` and
+`decodeDeviceMintStageCommandShapeExact` check the exact nested authorization
+and mint-credit archives, their derived credit ID, and their public bindings.
+The command is bounded to 65,536 bytes, each nested archive to 7,936 bytes, and
+the result to 128 bytes. The result codecs accept an optional command for
+credit-ID binding. These codecs do not execute a device transition or
+authenticate a result: the qualified native response authenticator remains
+mandatory, and private openings and complete Guard certificates stay native.
+
+Top-up is payer-signed in the first-release protocol. Build the sole
+`TopUpKagemushaV1` instruction with
+`Kagemusha.buildTopUpInstruction(request)` (or obtain its exact framed
+`InstructionBox` with `encodeTopUpInstruction`), place exactly that instruction
+in a normal transaction, and sign it with the payer. Submit the resulting
+canonical version-1 `SignedTransaction` bytes with the same exact binary
+operation ID embedded in the request:
+
+```js
+await torii.submitKagemushaTopUp(signedTransaction, request.operationId);
+```
+
+The SDK sends those bytes unchanged to `POST /v1/kagemusha/top-up` and uses the
+lowercase hexadecimal operation ID as `Idempotency-Key`. There is no unsigned
+top-up overload, wrapper envelope, or server-signing path. The embedded top-up
+request may be up to 16 KiB so a full paired mint-authorization proof fits;
+the enclosing transaction uses Torii's normal signed-transaction ingress
+limit. `Kagemusha.topUpInstructionWireId` is the exact
+`iroha.kagemusha.v1.top_up` registry ID. The standard instruction transaction
+builder signature-binds `QueuePlanSynced`; KAGEMUSHA top-ups must not be built
+with ordinary queue admission. Redemption retains its typed request submission
+surface. Both submission methods require the exact operation resource in
+`Location`: HTTP 202 is accepted only with a pending status and a positive
+`Retry-After`, while HTTP 200 is accepted only for applied or rejected status
+without `Retry-After`. Applied monetary results remain inaccessible in the
+returned wrapper until a caller-pinned finality verifier authenticates them.
+
+`getKagemushaReadiness` reads the universally compiled four-field readiness
+projection: `kagemusha_handoff_v1`, wire version `1`, secure-device lifecycle
+version `1`, and `ready: true`. Monetary transitions still require a qualified
+non-forking hardware profile; successful transport decoding alone grants no
+monetary authority.
+
+## Atomic private settlement transport
+
+`@iroha/iroha-js/atomic-private-settlement` is a browser-safe, witness-free
+transport for the V1 private settlement routes. A native wallet or coordinator
+must prepare the exact JSON object; JavaScript does not accept note witnesses,
+capsule plaintext, spending keys, or a generic proof callback:
+
+```js
+import {
+  AtomicPrivateSettlementOperationV1,
+  AtomicPrivateSettlementPreparedRequestV1,
+  AtomicPrivateSettlementToriiClientV1,
+} from "@iroha/iroha-js/atomic-private-settlement";
+
+const settlement = new AtomicPrivateSettlementToriiClientV1(toriiUrl, {
+  sponsorHeaderProvider: (request) => sponsorSigner.headersFor(request),
+});
+const prepared = new AtomicPrivateSettlementPreparedRequestV1(
+  AtomicPrivateSettlementOperationV1.LEG_UPLOAD,
+  nativeCoordinator.preparedLegUploadJson(),
+);
+
+try {
+  const response = await settlement.uploadLeg(prepared);
+  try {
+    nativeCoordinator.acceptToriiResponse(response.bytes());
+  } finally {
+    response.close();
+  }
+} finally {
+  prepared.close();
+}
+```
+
+Sponsor operations require exactly the canonical account-header quartet.
+Committee proof reads require an exact validator role-header provider; capsule
+reads and approvals require an exact governed auditor provider. Public bundle
+status and receipt reads carry no caller identity. The client sends each exact
+route once with redirects, credentials, ambient authorization, compression,
+and retries disabled. It rejects header collisions, response URL substitution,
+unknown public fields, malformed identifiers, and oversized responses, and it
+never renders request or response bodies in errors.
+
+This transport does not activate the protocol or establish production
+readiness. Operators must keep the feature governed and disabled until the
+deployment has passed the real-process, leakage, performance, independent
+cryptographic-review, and artifact-publication gates.
 
 ## Native Privacy Bridge
 
@@ -780,20 +916,13 @@ console.log(formats.i105);
 console.log(formats.i105Warning);
 ```
 
-`secp256k1` account ids are first-class in the JS codec. Optional controller
-families remain opt-in; enable them before encoding or decoding account ids
-that use `ml-dsa`, `gost*`, `sm2`, or feature-gated `bls_*` public keys:
-
-```js
-import { configureCurveSupport } from "@iroha/iroha-js";
-
-configureCurveSupport({
-  allowMlDsa: true,
-  allowGost: true,
-  allowSm2: true,
-  allowBls: true,
-});
-```
+Every V1 controller family is deterministic and always available in the
+address codec: `ed25519`, `secp256k1`, `ml-dsa`,
+`gost3410-2012-256-paramset-a`, `gost3410-2012-256-paramset-b`,
+`gost3410-2012-256-paramset-c`, `gost3410-2012-512-paramset-a`,
+`gost3410-2012-512-paramset-b`, `sm2`, `bls_normal`, and `bls_small`.
+There is no process-wide curve toggle. Pass exactly one of these canonical
+labels; aliases and case-folded spellings are rejected before encoding.
 
 > ℹ️ When showing addresses in wallets, explorers, or SDK samples, follow the
 > single-format UX checklist captured in
@@ -964,7 +1093,7 @@ import {
   NetworkId,
   ToriiClient,
   NoritoRpcClient,
-  SUPPORTED_CRYPTO_ALGORITHMS,
+  supportedCryptoAlgorithms,
   generateKeyPair,
   sign,
   verify,
@@ -1016,7 +1145,7 @@ const vaultLotId = normalizeRwaId(
 const message = Buffer.from("test");
 const signature = signEd25519(message, privateKey);
 console.log(verifyEd25519(message, signature, publicKey)); // true
-console.log(SUPPORTED_CRYPTO_ALGORITHMS);
+console.log(supportedCryptoAlgorithms());
 
 // Native builds also expose generic helpers for secp256k1, ML-DSA-65,
 // GOST R 34.10-2012 parameter sets, BLS normal/small, and SM2.
@@ -1044,6 +1173,9 @@ console.log(meta.contentType, meta.size, meta.createdMs);
 
 When you pass `authToken` or `apiToken` credentials, prefer an `https://` Torii base URL; the
 client will reject insecure schemes unless you opt into `allowInsecure: true` for local/dev use.
+The client copies default canonical-auth key bytes and keeps credentials,
+origins, retry policy, and validation caches in private state; underscored
+properties are not a supported configuration or inspection surface.
 
 const instruction = buildRegisterDomainInstruction({
   domainId: "wonderland",
@@ -1052,9 +1184,8 @@ const instruction = buildRegisterDomainInstruction({
 const encoded = noritoEncodeInstruction(instruction);
 const decoded = noritoDecodeInstruction(encoded);
 console.log(decoded.Register.Domain.id); // "wonderland"
-// Note: `noritoDecodeInstruction` throws when the payload cannot be decoded
-// (for example, current builds reject Kaigi relay manifests until the runtime
-// canonicalises them), so wrap it in a try/catch in production code.
+// `noritoDecodeInstruction` throws on malformed bytes and when neither the
+// portable codec nor the native runtime owns a wire ID, so handle decode errors.
 
 const registerAccountInstruction = buildRegisterAccountInstruction({
   accountId: newAccountId,
@@ -1074,6 +1205,10 @@ const sampleHashHex =
   receipt?.payload?.tx_hash ?? "ab".repeat(32); // marked 32-byte Iroha hash as lowercase hex
 const status = await torii.getTransactionStatus(sampleHashHex);
 console.log(status?.status.kind); // e.g. "Applied"
+
+// A 204 or empty response has no receipt. A non-empty application/x-norito
+// response must decode successfully; missing native support, malformed bytes,
+// and invalid decoder JSON reject the submission promise instead of returning null.
 
 // Normalised helper exposes canonical fields (`kind`, `hashHex`, `status.kind`, etc.)
 const typedStatus = await torii.getTransactionStatusTyped(sampleHashHex);
@@ -1281,12 +1416,15 @@ The script writes the report to
 prints the top contributors to stdout:
 
 ```
-[bundle-size] @iroha/iroha-js@0.0.2
-  files: 46 (total 1 MB)
-  tarball: 229 KB (b4ee…)
+[bundle-size] @iroha/iroha-js@0.0.3
+  files: 161 (total 4.4 MB)
+  tarball: 873 KB (<sha256>)
   top files:
-     1. src/toriiClient.js — 494 KB (41.5% of total)
-     2. src/instructionBuilders.js — 60 KB (5.0% of total)
+     1. dist/toriiClient.js — 1.1 MB (25.51% of total)
+     2. index.d.ts — 433 KB (9.62% of total)
+     3. dist/norito.js — 312 KB (6.93% of total)
+     4. README.md — 202 KB (4.48% of total)
+     5. dist/instructionBuilders.js — 189 KB (4.19% of total)
 ```
 
 Pass `-- --out /tmp/report.json` to control the output path or
@@ -1540,9 +1678,8 @@ console.log(Buffer.from(kaigiJoinTx.hash).toString("hex"));
 
 ## Norito RPC client
 
-The [`NoritoRpcClient`](./src/noritoRpcClient.js) mirrors the Python helper so
-you can talk to the binary Norito-RPC surface without sprinkling manual fetch
-calls throughout your code. It automatically sets the required
+The `NoritoRpcClient` provides the binary Norito-RPC transport without requiring
+manual Fetch calls throughout your code. It automatically sets the required
 `Content-Type: application/x-norito` header, defaults `Accept` to the same
 media type, and lets you provide shared headers (authorization tokens, custom
 trace identifiers, etc.) when the client is constructed.
@@ -1596,7 +1733,14 @@ try {
 Pass a custom `fetchImpl`, per-request headers, alternate HTTP methods, or an
 AbortSignal when integrating with higher-level transports. The helper returns
 `Uint8Array` so you can feed the response straight into the Norito decode
-utilities or persist it for parity fixtures.
+utilities or persist it for parity fixtures. Constructor credentials, headers,
+origin policy, Fetch implementation, and timeout are private snapshots; object
+inspection does not expose them. Each supported binary payload container is
+copied before Fetch sees it, so later caller mutation cannot change an in-flight
+request. A per-call `authToken` or `apiToken` replaces its constructor value;
+passing `null` or an empty string removes that credential for the call. Timeout
+values must be non-negative safe integers; constructor `null` means no default
+deadline.
 
 Every `NoritoRpcClient.call(...)` dispatch is one-shot because its binary body
 may be a signed query with a consumable nonce. The client passes
@@ -1960,11 +2104,21 @@ reads and Prometheus transport metrics for operations. Consensus evidence is
 available through the supported read-only endpoints:
 
 ```js
-const evidence = await torii.listSumeragiEvidence({ limit: 20, kind: "DoublePrepare" });
-console.log(`Observed ${evidence.total} evidence entries`);
+const evidence = await torii.listSumeragiEvidence({
+  limit: 20,
+  kind: "SumeragiV2Equivocation",
+});
+console.log(`Committed ${evidence.total} evidence entries`);
 const count = await torii.getSumeragiEvidenceCount();
-console.log(`Node retains ${count.count} evidence entries`);
+console.log(`Committed evidence count: ${count.count}`);
 ```
+
+The first-release JSON contract is closed: each item is a
+`SumeragiV2Equivocation` record with a non-null consensus admission height and
+a `pending`, `applied`, or `cancelled` penalty status. Unknown response fields
+and retired evidence kinds are rejected. Unsigned 64-bit values above
+`Number.MAX_SAFE_INTEGER` are returned as `bigint` without rounding. Count
+responses are capped at 1 KiB and JSON list responses at 1 MiB.
 
 ## SoraFS Storage Helpers
 
@@ -2050,18 +2204,11 @@ console.log(
   `admitted transaction=${admission.tx_hash_hex} manifest=${admission.manifest_digest_hex}`,
 );
 
-// Local storage diagnostics use a separately provisioned, exact-network
+// Local storage-state diagnostics use a separately provisioned, exact-network
 // OperatorSigningContext; do not reuse the transaction key implicitly.
 const operatorTorii = new ToriiClient(toriiUrl, {
   operatorSigningContext: runtimeOperatorSigningContext,
 });
-const range = await operatorTorii.fetchSorafsPayloadRange({
-  manifestIdHex: admission.manifest_digest_hex,
-  offset: 0,
-  length: 4096,
-});
-const firstChunk = Buffer.from(range.data_b64, "base64");
-
 const storageState = await operatorTorii.getSorafsStorageState();
 console.log(`pin queue depth=${storageState.pin_queue_depth}`);
 
@@ -2195,13 +2342,12 @@ console.log("scoreboard saved:", proveResult.scoreboardPath);
 console.log("proof summary saved:", proveResult.proofSummaryPath);
 ```
 
-`fetchSorafsPayloadRange` is a legacy local diagnostic, not a public content
-transport. It and `getSorafsStorageState` fail before dispatch unless the
-client has an immutable exact-network `OperatorSigningContext`. Remote
-cache-miss hydration no longer falls back to this unsigned JSON fetch; it
-requires a request-bound CAR/chunk stream capability. Without one, the cache
-miss returns a capability-required error while already-local content remains
-available.
+`getSorafsStorageState` fails before dispatch unless the client has an immutable
+exact-network `OperatorSigningContext`. Payload bytes are available only through
+request-bound CAR/chunk stream capabilities; Torii has no JSON payload-range
+diagnostic or unsigned remote-hydration fallback. Without a valid capability, a
+cache miss returns a capability-required error while already-local content
+remains available.
 
 `fetchDaPayloadViaGateway` automatically derives the chunker handle from the manifest bundle when you omit `chunkerHandle`, and the exported `deriveDaChunkerHandle` helper surfaces the same logic for bespoke tooling. `generateDaProofSummary` reuses the Norito + PoR logic from the CLI via the native binding so proofs remain identical across SDKs.
 
@@ -2939,9 +3085,11 @@ when governance stages code hashes separately, and the native Norito path
 round-trips the full current manifest metadata surface including
 `entrypoints`, `kotoba`, and `provenance`. Bytecode helpers enforce the 32-byte
 hash length and accept `Buffer`, typed arrays, or base64 strings. Public
-deployment is now alias-first through `ToriiClient.deployContract`, which
-requires `contractAlias`, returns a fresh immutable `contract_address`, and
-reports `kaizen` when the deploy replaces an existing alias binding.
+deployment uses two explicit steps: `ToriiClient.registerContractCode` submits
+the manifest and code transaction, then `ToriiClient.setContractAlias` binds or
+updates the canonical address. The SDK intentionally has no one-shot
+`deployContract` compatibility wrapper, so signing and alias mutation remain
+visible to the caller.
 `buildRemoveSmartContractBytesInstruction/Transaction` wires the bytecode
 reclamation ISI into CI/governance tooling and rejects empty reason strings
 before submission so operators get fast feedback during rehearsals.
@@ -3211,6 +3359,7 @@ const proposalTx = buildProposeDeployContractTransaction({
   authority,
   feePayment,
   proposal: {
+    proposalOperator: authority,
     contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
     codeHash: Buffer.alloc(32, 0xaa),
     abiHash: `blake2b32:${"bb".repeat(32)}`,
@@ -3279,8 +3428,8 @@ part of the portable registry tarball.
 Node.js clients can register confidential assets and schedule policy
 transitions without hand-writing Norito payloads. ABI V1 does not expose
 generic shield, transfer, or unshield instructions: wallets use the typed,
-proof-bound Kagemusha top-up and redemption routes described above. The
-underlying confidential proof helpers remain available for those typed flows.
+proof-bound `Kagemusha` mint and redemption operations described above.
+The underlying confidential proof helpers remain available for those typed flows.
 
 ```js
 import { buildRegisterZkAssetTransaction } from "@iroha/iroha-js";
@@ -3344,9 +3493,9 @@ The codec is exported by the package root and the browser-safe `./norito` leaf.
 It is intentionally absent from the broad `./browser` facade so applications
 that do not inspect release fixtures do not retain the complete Exact12 codec.
 
-Verifying-key registry helpers mirror the Torii app API (`/v1/zk/vk/*`). Typed
-helpers normalise casing and payload layouts so tests and automation can inspect
-registry state without manual parsing:
+Verifying-key registry helpers mirror the Torii app API (`/v1/zk/vk/*`). Read
+methods validate the canonical response before returning it; there is no parallel
+raw/typed API or compatibility casing layer:
 
 ```js
 import { LocalSigningContext, NetworkId, ToriiClient } from "@iroha/iroha-js";
@@ -3357,13 +3506,13 @@ const torii = new ToriiClient("http://localhost:8080", {
   // Immutable local-signing context. Read-only clients may omit this.
   localSigningContext: new LocalSigningContext(networkId),
 });
-const list = await torii.listVerifyingKeysTyped({ backend: "halo2/ipa", status: "active" });
+const list = await torii.listVerifyingKeys({ backend: "halo2/ipa", status: "Active" });
 console.log(list[0]?.record?.commitment_hex);
 for await (const item of torii.iterateVerifyingKeys({ backend: "halo2/ipa", pageSize: 1 })) {
   console.log(item.id.name);
 }
 
-const detail = await torii.getVerifyingKeyTyped("halo2/ipa", "vk_main");
+const detail = await torii.getVerifyingKey("halo2/ipa", "vk_main");
 console.log(detail.record.status); // "Active"
 
 const draft = await torii.registerVerifyingKey({
@@ -4018,7 +4167,8 @@ It posts to `/v1/transactions/visible/query`, lets Torii enforce the authenticat
 viewer scope, and accepts convenience filters without hand-writing a QueryEnvelope:
 
 ```js
-import { LocalSigningContext, NetworkId, ToriiClient } from "@iroha/iroha-js/torii";
+import { NetworkId } from "@iroha/iroha-js";
+import { LocalSigningContext, ToriiClient } from "@iroha/iroha-js/torii";
 
 const canonicalAuth = {
   accountId: canonicalI105AccountId,
@@ -4076,12 +4226,10 @@ Asset and RWA quantities use the stricter `QuantityInput` surface:
 `number` is deliberately rejected, and strings are never trimmed or rewritten;
 for example `"1"` is valid while `" 1"`, `"01"`, `"+1"`, and `"1.0"` are not.
 
-Kagemusha proving is intentionally not exposed through the JavaScript client.
-Its top-up and redemption bodies are canonical manifest-V4 Norito archives and
-its peer-transfer keys must remain device-bound, so browser and Node
-applications must not hand-encode those payloads. They may submit and poll an
-archive produced by a supported IrohaSwift or JVM wallet through the typed
-ABI-21/V4 Torii helpers described above.
+`Kagemusha` exposes canonical wire encoding and public binding checks, not a
+cryptographic proof verifier, software prover, or fallback for device authority.
+Peer-transfer keys and state transitions remain hardware-bound; applications
+must obtain and verify transition proofs through a qualified wallet implementation.
 
 for await (const assetDef of torii.iterateAssetDefinitions({
   pageSize: 50,
@@ -4195,6 +4343,36 @@ Governance evidence travels inline with the register/transfer/unfreeze request b
 
 ## Torii Queries & Events
 
+Browser keystores can configure one immutable read identity. Explorer
+list/detail/latest/snapshot/metrics calls and contract activity/event replay or
+streams then sign the exact final pathname and wire query. Without
+`canonicalRequestAuth`, dataspace reads stay anonymous and public-only, while
+the global-reader metrics route is expected to reject the request. The public
+Explorer health call is never signed by this context. Incomplete contexts,
+caller-precomputed canonical headers, and redirects are rejected.
+
+Pass the Torii root itself (for example, `https://torii.example`), not a `/v1`
+or `/v1/explorer` endpoint. The browser client accepts only an exact `string` or
+`URL` using HTTP(S), rejects embedded URL credentials, queries, and fragments,
+and snapshots its headers and timeout before any request. Browser code imports
+the canonical `ToriiBrowserClient` and `ToriiBrowserHttpError` names; the
+pre-release `ToriiClient` and `ToriiHttpError` browser aliases are not exposed.
+
+```js
+import { NetworkId } from "@iroha/iroha-js/browser";
+import { ToriiBrowserClient } from "@iroha/iroha-js/torii-browser";
+
+const browserTorii = new ToriiBrowserClient("https://torii.example", {
+  networkId: NetworkId.parse(genesisNetworkHash),
+  canonicalRequestAuth: {
+    accountId: walletAccountId,
+    sign: ({ messageBase64 }) => wallet.signCanonicalRequest(messageBase64),
+  },
+});
+
+const visibleNfts = await browserTorii.listExplorerNfts({ limit: 25 });
+```
+
 ```js
 import { AccountAddress } from "@iroha/iroha-js";
 
@@ -4231,11 +4409,17 @@ console.log(block?.height); // null when the block is missing
 
 const recentBlocks = await torii.listBlocks({ limit: 5 });
 console.log(
-  `returned ${recentBlocks.items.length} of ${recentBlocks.pagination.totalItems} blocks`,
+  `returned ${recentBlocks.items.length} blocks from snapshot #${recentBlocks.pagination.snapshotHeight}`,
 );
+console.log(`more=${recentBlocks.pagination.hasMore}`);
 for (const entry of recentBlocks.items) {
   console.log(`${entry.hash} rejected=${entry.transactionsRejected}`);
 }
+
+// With `canonicalRequestAuth` configured, Explorer, generic event SSE, and
+// contract activity/event GETs are signed over the final path and query so
+// restricted visible dataspaces are included. Without it, reads stay anonymous
+// and public-only; invalid authentication never falls back to anonymous access.
 
 // NFT and account-asset iteration mirrors the Torii JSON envelopes while handling pagination.
 const holdings = [];
@@ -4330,6 +4514,7 @@ if (!tallyResult.found) {
 // Governance write helpers also accept AbortSignal options so transactions can be cancelled.
 const writeController = new AbortController();
 const deployDraft = await torii.governanceProposeDeployContract({
+  proposalOperator: governanceCanonicalAuth.accountId,
   contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
   codeHash: "11".repeat(32),
   abiHash: Buffer.alloc(32, 0xaa),
@@ -4350,9 +4535,7 @@ const ballot = await torii.governanceSubmitPlainBallot({
   durationBlocks: 7200,
   direction: "Aye",
 }, { canonicalAuth: governanceCanonicalAuth, signal: writeController.signal });
-if (!ballot.accepted) {
-  console.warn("ballot rejected:", ballot.reason);
-}
+console.log("ballot draft instructions", ballot.tx_instructions.length);
 
 const zkOwner = "sorauﾛ1Ni1A1mYｲzｳﾚﾊGﾆｲgｵ4ﾜｾﾒﾔzｺﾍz6ﾀFoVDﾇXzｹCkﾙ4CQVXL"; // canonical I105 account id for ZK public inputs
 await torii.governanceSubmitZkBallotV1({
@@ -4385,11 +4568,6 @@ await torii.governanceSubmitZkBallotV1({
 // finalize, and enact draft routes.
 // Protected namespace labels are exact printable-ASCII tokens and are never
 // trimmed.
-
-const council = await torii.getGovernanceCouncilCurrent({
-  canonicalAuth: governanceCanonicalAuth,
-});
-console.log(`active council epoch=${council.epoch} members=${council.members.length}`);
 
 const protectedNamespaceAbort = new AbortController();
 await torii.setProtectedNamespaces(["apps", "system"], {
@@ -4618,7 +4796,10 @@ rejected.
   See `specs/sdk/js/publishing.md` for the full workflow.
 
 - `ToriiClient` accepts `timeoutMs`, `maxRetries`, `backoffInitialMs`, `backoffMultiplier`, `maxBackoffMs`, `retryStatuses`, and `retryMethods`, mirroring the retry knobs exposed in `iroha_config`.
-- Retry settings never apply to signed transaction or batch submission, or to a request carrying `canonicalAuth`/`X-Iroha-Nonce`: those final dispatches always use `redirect: "error"` and make exactly one Fetch call. `ToriiBrowserClient` applies the same redirect policy to signed transactions and canonical nonce-bearing requests. Pre-dispatch validation reads, such as the node-capabilities check, retain the normal safe retry policy. A custom `fetchImpl` must preserve this one-shot boundary whenever it receives `redirect: "error"`; it must not follow 307/308 responses or replay the request after a network error, timeout, or retryable status.
+- `ToriiBrowserClient` accepts its exact transport options directly. It does not
+  accept the Node client's nested `config` object, and endpoint success statuses
+  are fixed by the SDK rather than caller-configurable.
+- Retry settings never apply to signed transaction or batch submission, or to a request carrying `canonicalAuth`/`X-Iroha-Nonce`: those final dispatches always use `redirect: "error"` and make exactly one Fetch call. `ToriiBrowserClient` applies the same redirect policy to signed transactions, canonical nonce-bearing requests, and configured dataspace-visible reads. Pre-dispatch validation reads, such as the node-capabilities check, retain the normal safe retry policy. A custom `fetchImpl` must preserve this one-shot boundary whenever it receives `redirect: "error"`; it must not follow 307/308 responses or replay the request after a network error, timeout, or retryable status.
 - Attach `retryTelemetryHook` to capture deterministic per-attempt telemetry for dashboards and SLO drills; events include phase (`response`/`network`/`timeout`), attempt numbers, method/URL, status or error metadata, backoffMs, profile name when set, durationMs for the attempt, and timestampMs so logs can be correlated with Torii-side traces.
 - Authentication headers can be supplied via `authToken` (maps to `Authorization: Bearer ...`) or `apiToken` (maps to `X-API-Token`). Requests that carry auth headers, `canonicalAuth`, or raw `private_key*` JSON fields pin to the client's base scheme/host; cross-host overrides are rejected, insecure `http`/`ws` requires `allowInsecure: true` (dev-only), and `insecureTransportTelemetryHook` captures any downgraded transports. Cross-host requests without sensitive material require `allowAbsoluteUrl: true`.
 - Runtime defaults can be pulled from `iroha_config` JSON/TOML by passing a camelCase config object (map `torii.api_tokens` to `torii.apiTokens`) to `new ToriiClient(url, { config })`. The helper `resolveToriiClientConfig({ config })` returns the merged settings if you need to inspect them directly.

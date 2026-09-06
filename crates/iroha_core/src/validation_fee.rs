@@ -517,7 +517,7 @@ enum ValidationFeeAdmissionError {
         instruction_index: usize,
         instruction_wire_id: &'static str,
     },
-    InvalidKagemushaOfflineConversion {
+    InvalidKagemushaV1Conversion {
         context_index: usize,
         instruction_index: usize,
         instruction_wire_id: &'static str,
@@ -793,13 +793,13 @@ impl fmt::Display for ValidationFeeAdmissionError {
                 f,
                 "native instruction `{instruction_wire_id}` at instruction {instruction_index} in execution context {context_index} can move the policy DS outside an explicit asset transfer; this path is disabled while the validation-fee policy is active"
             ),
-            Self::InvalidKagemushaOfflineConversion {
+            Self::InvalidKagemushaV1Conversion {
                 context_index,
                 instruction_index,
                 instruction_wire_id,
             } => write!(
                 f,
-                "Kagemusha offline-cash conversion `{instruction_wire_id}` at instruction {instruction_index} in execution context {context_index} does not have a valid payer/recipient-signed public effect binding"
+                "Kagemusha V1 conversion `{instruction_wire_id}` at instruction {instruction_index} in execution context {context_index} does not have a valid payer/recipient-signed public effect binding"
             ),
             Self::UnclassifiedNativeInstruction {
                 context_index,
@@ -3710,7 +3710,7 @@ enum NativeInstructionDsEffectDisposition {
     /// A multisig proposal whose signed nested instructions are collected recursively.
     RecursiveMultisigProposal,
     /// A payer/recipient-signed conversion between a transparent balance and protocol escrow.
-    AuditedKagemushaOfflineConversion,
+    AuditedKagemushaV1Conversion,
     /// Deferred execution is guarded again when the stored trigger/proposal is materialized.
     GuardedDeferredEffect,
     /// Audited not to change numeric asset balances or supply.
@@ -3847,7 +3847,7 @@ fn native_instruction_ds_effect_disposition(
     {
         return NativeInstructionDsEffectDisposition::RejectKnownDsCapable(instruction_wire_id);
     }
-    // Kagemusha does not expose an arbitrary transparent account-to-account transfer. A top-up
+    // Kagemusha V1 does not expose an arbitrary transparent account-to-account transfer. A top-up
     // can only debit the payer authenticated inside the request and reserve the exact amount in
     // protocol escrow; a redemption can only debit provenance-bound protocol escrow and credit
     // the recipient authenticated inside the request. The offline peer-to-peer value transition
@@ -3857,20 +3857,20 @@ fn native_instruction_ds_effect_disposition(
     // instructions under `PerQualifyingTransferInstruction`.
     if let Some(top_up) = instruction
         .as_any()
-        .downcast_ref::<iroha_data_model::isi::offline::TopUpKagemushaRecursiveV4>(
-    ) {
-        return if top_up.request.asset.definition() == fee_asset_definition_id {
-            NativeInstructionDsEffectDisposition::AuditedKagemushaOfflineConversion
+        .downcast_ref::<iroha_data_model::isi::kagemusha_v1::TopUpKagemushaV1>()
+    {
+        return if &top_up.request.asset == fee_asset_definition_id {
+            NativeInstructionDsEffectDisposition::AuditedKagemushaV1Conversion
         } else {
             NativeInstructionDsEffectDisposition::AuditedNoDsEffect
         };
     }
     if let Some(redeem) = instruction
         .as_any()
-        .downcast_ref::<iroha_data_model::isi::offline::RedeemKagemushaRecursiveV4>(
-    ) {
-        return if &redeem.request.bundle.statement.asset == fee_asset_definition_id {
-            NativeInstructionDsEffectDisposition::AuditedKagemushaOfflineConversion
+        .downcast_ref::<iroha_data_model::isi::kagemusha_v1::RedeemKagemushaV1>()
+    {
+        return if &redeem.request.voucher.statement.lifecycle.asset == fee_asset_definition_id {
+            NativeInstructionDsEffectDisposition::AuditedKagemushaV1Conversion
         } else {
             NativeInstructionDsEffectDisposition::AuditedNoDsEffect
         };
@@ -3975,13 +3975,19 @@ fn native_instruction_ds_effect_disposition(
         iroha_data_model::isi::staking::SlashPublicLaneValidator,
         iroha_data_model::isi::staking::RecordPublicLaneRewards,
         iroha_data_model::isi::staking::ClaimPublicLaneRewards,
+        // Moderation challenge custody is selected from governance state and
+        // finalization may sweep unresolved bonds. Those balance effects are
+        // not explicit signed transfer coordinates for validation-fee admission.
+        iroha_data_model::isi::sorafs::RaiseSorafsModerationChallenge,
+        iroha_data_model::isi::sorafs::ResolveSorafsModerationChallenge,
+        iroha_data_model::isi::sorafs::ExpireSorafsModerationChallenge,
+        iroha_data_model::isi::sorafs::FinalizeSorafsModerationCase,
         iroha_data_model::isi::privacy::SubmitPrivacyProofV1,
         iroha_data_model::isi::zk::RegisterZkAsset,
         iroha_data_model::isi::zk::ScheduleConfidentialPolicyTransition,
         iroha_data_model::isi::zk::CancelConfidentialPolicyTransition,
         iroha_data_model::isi::governance::CastZkBallot,
         iroha_data_model::isi::governance::CastPlainBallot,
-        iroha_data_model::isi::governance::RecordCitizenServiceOutcome,
         iroha_data_model::isi::governance::RegisterCitizen,
         iroha_data_model::isi::governance::UnregisterCitizen,
         iroha_data_model::isi::governance::SlashGovernanceLock,
@@ -3991,6 +3997,7 @@ fn native_instruction_ds_effect_disposition(
     // control-plane records, or deferred-execution bookkeeping.
     audited_no_ds_effect!(
         iroha_data_model::isi::register::RegisterPeerWithPop,
+        iroha_data_model::isi::register::RegisterCommitteePeerWithPop,
         // The exact-roster QC is the complete authority for this control-plane
         // operation. Applying it changes only threshold-key session records.
         iroha_data_model::isi::consensus_keys::ApplyThresholdKeyLifecycleCertificateV1,
@@ -3999,6 +4006,9 @@ fn native_instruction_ds_effect_disposition(
         // authority and consensus proofs before applying those state changes.
         iroha_data_model::isi::governance::CreateParliamentGovernanceAttemptV1,
         iroha_data_model::isi::governance::SubmitParliamentLifecycleTransitionV1,
+        iroha_data_model::isi::governance::ProposeContractLifecycleGovernance,
+        iroha_data_model::isi::governance::ProposeContractEmergencyHold,
+        iroha_data_model::isi::governance::ProposeGlobalDataTriggerPermissionGovernance,
         // These lifecycle steps only register content-addressed artifacts or create an
         // initially absent address -> code-hash binding. The executor rejects activation
         // over an address already bound to a different hash. Deactivation/removal remain
@@ -4010,6 +4020,10 @@ fn native_instruction_ds_effect_disposition(
         iroha_data_model::isi::smart_contract_code::FinalizeSmartContractCodeUpload,
         iroha_data_model::isi::smart_contract_code::CancelSmartContractCodeUpload,
         iroha_data_model::isi::smart_contract_code::ActivateContractInstance,
+        iroha_data_model::isi::smart_contract_code::SetContractParliamentDelegation,
+        iroha_data_model::isi::smart_contract_code::OfferContractOwnership,
+        iroha_data_model::isi::smart_contract_code::AcceptContractOwnership,
+        iroha_data_model::isi::smart_contract_code::CancelContractOwnershipOffer,
         // Privacy governance and bootstrap instructions affect only typed
         // privacy state and rollback-safe privacy budgets. Proof admission is
         // classified above because ZK-ACE can authorize a transparent transfer.
@@ -4025,6 +4039,10 @@ fn native_instruction_ds_effect_disposition(
         iroha_data_model::isi::privacy::RotatePrivacyZkAcePolicyV1,
         iroha_data_model::isi::privacy::RevokePrivacyZkAcePolicyV1,
         iroha_data_model::isi::private_settlement::ActivatePrivateSettlementPoolV1,
+        // The complete all-Prepare control-lock carrier is still an ordinary
+        // sponsor-paid transaction; this classification only avoids requiring
+        // a second legacy inline treasury transfer inside its one-ISI payload.
+        iroha_data_model::isi::private_settlement::RegisterAtomicPrivateSettlementPrepareV1,
         iroha_data_model::isi::private_settlement::AbortAtomicPrivateSettlementV1,
         // The global private-settlement carrier mutates only opaque roots,
         // nullifiers, commitments, ciphertexts, and its receipt. Its public
@@ -4152,42 +4170,37 @@ fn collect_instruction_asset_transfers(
                     collection,
                 )?;
             }
-            NativeInstructionDsEffectDisposition::AuditedKagemushaOfflineConversion => {
+            NativeInstructionDsEffectDisposition::AuditedKagemushaV1Conversion => {
                 let (instruction_wire_id, valid_public_binding) = if let Some(top_up) = instruction
                     .as_any()
-                    .downcast_ref::<iroha_data_model::isi::offline::TopUpKagemushaRecursiveV4>()
+                    .downcast_ref::<iroha_data_model::isi::kagemusha_v1::TopUpKagemushaV1>()
                 {
                     (
-                        core::any::type_name::<
-                            iroha_data_model::isi::offline::TopUpKagemushaRecursiveV4,
-                        >(),
-                        top_up.request.validate_public_binding().is_ok(),
+                        core::any::type_name::<iroha_data_model::isi::kagemusha_v1::TopUpKagemushaV1>(
+                        ),
+                        top_up.request.validate_shape().is_ok(),
                     )
-                } else if let Some(redeem) =
-                    instruction
-                        .as_any()
-                        .downcast_ref::<iroha_data_model::isi::offline::RedeemKagemushaRecursiveV4>(
-                        )
-                {
+                } else if let Some(redeem) = instruction
+                    .as_any()
+                    .downcast_ref::<iroha_data_model::isi::kagemusha_v1::RedeemKagemushaV1>(
+                ) {
                     (
                         core::any::type_name::<
-                            iroha_data_model::isi::offline::RedeemKagemushaRecursiveV4,
+                            iroha_data_model::isi::kagemusha_v1::RedeemKagemushaV1,
                         >(),
-                        redeem.request.validate_public_binding().is_ok(),
+                        redeem.request.validate_shape().is_ok(),
                     )
                 } else {
                     unreachable!(
-                        "audited Kagemusha conversion disposition must contain a V4 top-up or redemption"
+                        "audited Kagemusha V1 conversion disposition must contain a V1 top-up or redemption"
                     );
                 };
                 if !valid_public_binding {
-                    return Err(
-                        ValidationFeeAdmissionError::InvalidKagemushaOfflineConversion {
-                            context_index,
-                            instruction_index,
-                            instruction_wire_id,
-                        },
-                    );
+                    return Err(ValidationFeeAdmissionError::InvalidKagemushaV1Conversion {
+                        context_index,
+                        instruction_index,
+                        instruction_wire_id,
+                    });
                 }
             }
             NativeInstructionDsEffectDisposition::GuardedDeferredEffect

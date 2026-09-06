@@ -14,9 +14,6 @@ const TEST_DIRECTORY = path.join(SDK_DIRECTORY, "test");
 
 const PROFILE_FILES = Object.freeze({
   heavy: Object.freeze(["sorafsChunker.oneGib.test.js"]),
-  "taira-kagemusha-read-only": Object.freeze([
-    "liveTairaKagemushaReadOnly.test.js",
-  ]),
   "native-provenance": Object.freeze(["nativeBuildProvenance.test.js"]),
   "sorafs-native": Object.freeze([
     "cancelAssetLockV1.test.js",
@@ -30,7 +27,6 @@ const PROFILE_FILES = Object.freeze({
 
 const UNIT_EXCLUSIONS = new Set([
   "integrationTorii.test.js",
-  ...PROFILE_FILES["taira-kagemusha-read-only"],
   ...PROFILE_FILES.heavy,
 ]);
 
@@ -60,7 +56,7 @@ function selectedTests(profile) {
   const files = PROFILE_FILES[profile];
   if (!files) {
     throw new Error(
-      `unknown JavaScript test profile ${JSON.stringify(profile)}; expected unit, native-provenance, sorafs-native, taira-kagemusha-read-only, or heavy`,
+      `unknown JavaScript test profile ${JSON.stringify(profile)}; expected unit, native-provenance, sorafs-native, or heavy`,
     );
   }
   return [...files];
@@ -101,16 +97,12 @@ async function run(profile) {
     testArguments.push("--test-concurrency=1");
   }
   testArguments.push(...files.map((file) => path.join("test", file)));
-  const childEnvironment =
-    profile === "taira-kagemusha-read-only"
-      ? { ...process.env, IROHA_TAIRA_KAGEMUSHA_READ_ONLY: "1" }
-      : process.env;
   const child = spawn(
     process.execPath,
     testArguments,
     {
       cwd: SDK_DIRECTORY,
-      env: childEnvironment,
+      env: process.env,
       stdio: ["inherit", "pipe", "pipe"],
     },
   );

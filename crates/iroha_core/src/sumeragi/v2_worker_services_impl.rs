@@ -56,6 +56,109 @@ struct LifecycleIoQueuedCommandKindsV1 {
 }
 
 impl ProductionV2Services {
+    /// Linearize one Runtime step after the physical Completion prefix.
+    ///
+    /// `RetryCompletion` leaves Runtime untouched and sends the outer driver
+    /// back to Completion rank. The I/O worker and this census use the same mutex, so
+    /// an asynchronously completed Validate cannot appear between an empty
+    /// census and a timeout step while still claiming the earlier ordering.
+    /// When an ordinary completion is blocked solely by a full runtime FIFO,
+    /// the returned capacity cut instead permits one exact Completion-class
+    /// step linearized at that completion's retention time, after which the
+    /// physical Completion rank must be retried.
+    pub(in crate::sumeragi) fn prepare_completion_runtime_cut(
+        &self,
+        runtime_capacity_available: bool,
+    ) -> Result<V2CompletionRuntimeCutDecisionV1, String> {
+        if self.output_guard.restart_required() {
+            return Err("Sumeragi v2 consensus requires process restart".to_owned());
+        }
+        let runtime_cut = |cut_at| {
+            V2CompletionRuntimeCutDecisionV1::Runtime(V2CompletionRuntimeCutV1::new(
+                Arc::clone(&self.output_guard),
+                self.context.id(),
+                self.context.height,
+                cut_at,
+            ))
+        };
+        let capacity_relief_cut = |cut_at, blocked_completion_lifecycle_ordinal| {
+            V2CompletionCapacityReliefCutV1::new(
+                Arc::clone(&self.output_guard),
+                self.context.id(),
+                self.context.height,
+                cut_at,
+                blocked_completion_lifecycle_ordinal,
+            )
+            .map(V2CompletionRuntimeCutDecisionV1::CapacityRelief)
+            .ok_or_else(|| {
+                "capacity-blocked completion lost its actor-global lifecycle ordinal".to_owned()
+            })
+        };
+
+        if let Some(completion) = self.held_io_completion.as_ref() {
+            if runtime_capacity_available
+                || completion.is_dedicated_lifecycle_completion()
+                || !completion.requires_runtime_capacity()
+            {
+                return Ok(V2CompletionRuntimeCutDecisionV1::RetryCompletion);
+            }
+            let Some(io) = self.io.as_ref() else {
+                return Ok(V2CompletionRuntimeCutDecisionV1::RetryCompletion);
+            };
+            let V2IoCompletionRuntimeCutObservationV1::Pending(owner) =
+                io.admission.completion_runtime_cut_observation()
+            else {
+                return Err("held runtime completion lost its physical ownership record".to_owned());
+            };
+            if !owner.requires_runtime_capacity || owner.is_dedicated_lifecycle() {
+                return Err(
+                    "held runtime completion changed its physical ownership class".to_owned(),
+                );
+            }
+            let blocked_ordinal = owner.runtime_lifecycle_ordinal.ok_or_else(|| {
+                "held runtime completion lost its actor-global lifecycle ordinal".to_owned()
+            })?;
+            return capacity_relief_cut(owner.retained_at, blocked_ordinal);
+        }
+
+        // Local reconstruction completions have no worker-side timestamp, but
+        // they are already retained on this serialized service. A full FIFO
+        // therefore permits one relief step at the present cut; otherwise the
+        // next Completion turn can consume them directly.
+        if !self.local_completions.is_empty() {
+            if runtime_capacity_available {
+                return Ok(V2CompletionRuntimeCutDecisionV1::RetryCompletion);
+            }
+            let blocked_ordinal = self
+                .local_completions
+                .front()
+                .expect("non-empty local completion queue has a head")
+                .runtime_lifecycle_ordinal();
+            return capacity_relief_cut(Instant::now(), blocked_ordinal);
+        }
+
+        let Some(io) = self.io.as_ref() else {
+            return Ok(runtime_cut(Instant::now()));
+        };
+        // Worker retention samples its timestamp inside this same mutex.
+        match io.admission.completion_runtime_cut_observation() {
+            V2IoCompletionRuntimeCutObservationV1::Empty { cut_at } => Ok(runtime_cut(cut_at)),
+            V2IoCompletionRuntimeCutObservationV1::Pending(owner)
+                if !runtime_capacity_available
+                    && owner.requires_runtime_capacity
+                    && !owner.is_dedicated_lifecycle() =>
+            {
+                let blocked_ordinal = owner.runtime_lifecycle_ordinal.ok_or_else(|| {
+                    "capacity-blocked completion lost its actor-global lifecycle ordinal".to_owned()
+                })?;
+                capacity_relief_cut(owner.retained_at, blocked_ordinal)
+            }
+            V2IoCompletionRuntimeCutObservationV1::Pending(_) => {
+                Ok(V2CompletionRuntimeCutDecisionV1::RetryCompletion)
+            }
+        }
+    }
+
     /// Whether Phase B reparked a certified-Fetch result behind the service boundary.
     #[cfg(test)]
     pub(in crate::sumeragi) fn has_reparked_certified_fetch_completion_for_test(&self) -> bool {
@@ -63,6 +166,47 @@ impl ProductionV2Services {
             self.held_io_completion.as_ref(),
             Some(V2IoCompletion::CertifiedFetchBodyPersisted(_))
         )
+    }
+    fn sign_payload_chunks(
+        &self,
+        payload: EncodedV2Payload,
+        sender: wire::ValidatorIndex,
+    ) -> Result<(wire::ValidatedPayloadManifest, Vec<wire::PayloadChunk>), String> {
+        // `EncodedV2Payload` is the private canonical-encoder capability. Its
+        // manifest hashes already commit these exact bytes, so signing can
+        // safely reuse them instead of hashing every chunk again.
+        let (manifest, chunks) = payload.into_parts();
+        let validated = wire::ValidatedPayloadManifest::new(&self.context, manifest)
+            .map_err(|error| error.to_string())?;
+        if chunks.len() != validated.manifest().chunk_hashes.len() {
+            return Err("encoded Sumeragi v2 chunk count differs from its manifest".to_owned());
+        }
+        let manifest_hash = validated.manifest_hash();
+        let signed = chunks
+            .into_iter()
+            .enumerate()
+            .map(|(index, bytes)| {
+                let index = u32::try_from(index)
+                    .map_err(|_| "Sumeragi v2 chunk index overflow".to_owned())?;
+                let mut chunk = wire::PayloadChunk {
+                    manifest_hash,
+                    index,
+                    bytes,
+                    sender,
+                    signature: Vec::new(),
+                };
+                let preimage = validated
+                    .committed_chunk_signature_payload(index, sender)
+                    .map_err(|error| error.to_string())?
+                    .signature_preimage();
+                chunk.signature = Signature::try_new(self.key_pair.private_key(), &preimage)
+                    .map_err(|error| error.to_string())?
+                    .payload()
+                    .to_vec();
+                Ok::<wire::PayloadChunk, String>(chunk)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok((validated, signed))
     }
     /// Reserve output after a recovered Broadcast rejoins its LedgerV1 row,
     /// retaining that durable row as crash-recovery debt.
@@ -179,33 +323,17 @@ impl ProductionV2Services {
         proposal
             .validate(&self.context)
             .map_err(|error| error.to_string())?;
-        let (manifest, chunks) = payload.into_parts();
-        manifest
-            .validate(&self.context)
-            .map_err(|error| error.to_string())?;
-        let manifest_hash = HashOf::new(&manifest);
         let sender = proposal.proposer;
-        let mut chunk_messages = Vec::with_capacity(chunks.len());
-        for (index, bytes) in chunks.into_iter().enumerate() {
-            let mut chunk = wire::PayloadChunk {
-                manifest_hash,
-                index: u32::try_from(index)
-                    .map_err(|_| "cold recovered Proposal chunk index overflowed".to_owned())?,
-                bytes,
-                sender,
-                signature: Vec::new(),
-            };
-            let preimage = chunk
-                .signature_preimage(&self.context, &manifest)
-                .map_err(|error| error.to_string())?;
-            chunk.signature = Signature::try_new(self.key_pair.private_key(), &preimage)
-                .map_err(|error| error.to_string())?
-                .payload()
-                .to_vec();
-            chunk_messages.push(Self::preencode_v2_network_message(
-                wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::PayloadChunk(chunk)),
-            )?);
-        }
+        let (validated, signed_chunks) = self.sign_payload_chunks(payload, sender)?;
+        let manifest = validated.into_manifest();
+        let chunk_messages = signed_chunks
+            .into_iter()
+            .map(|chunk| {
+                Self::preencode_v2_network_message(wire::ConsensusMessageV2::new(
+                    wire::ConsensusMessageV2Payload::PayloadChunk(chunk),
+                ))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         let peers = self.remote_voters();
         let control = PendingExactFanout::claimed(
             vec![Self::preencode_v2_network_message(message)?],
@@ -314,33 +442,17 @@ impl ProductionV2Services {
             .ok_or_else(|| {
                 "recovered Proposal output could not retain its exact retry authority".to_owned()
             })?;
-        let (manifest, chunks) = payload.into_parts();
-        manifest
-            .validate(&self.context)
-            .map_err(|error| error.to_string())?;
-        let manifest_hash = HashOf::new(&manifest);
         let sender = proposal.proposer;
-        let mut chunk_messages = Vec::with_capacity(chunks.len());
-        for (index, bytes) in chunks.into_iter().enumerate() {
-            let mut chunk = wire::PayloadChunk {
-                manifest_hash,
-                index: u32::try_from(index)
-                    .map_err(|_| "recovered Proposal chunk index overflowed".to_owned())?,
-                bytes,
-                sender,
-                signature: Vec::new(),
-            };
-            let preimage = chunk
-                .signature_preimage(&self.context, &manifest)
-                .map_err(|error| error.to_string())?;
-            chunk.signature = Signature::try_new(self.key_pair.private_key(), &preimage)
-                .map_err(|error| error.to_string())?
-                .payload()
-                .to_vec();
-            chunk_messages.push(Self::preencode_v2_network_message(
-                wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::PayloadChunk(chunk)),
-            )?);
-        }
+        let (validated, signed_chunks) = self.sign_payload_chunks(payload, sender)?;
+        let manifest = validated.into_manifest();
+        let chunk_messages = signed_chunks
+            .into_iter()
+            .map(|chunk| {
+                Self::preencode_v2_network_message(wire::ConsensusMessageV2::new(
+                    wire::ConsensusMessageV2Payload::PayloadChunk(chunk),
+                ))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         let peers = self.remote_voters();
         let control = PendingExactFanout::claimed(
             vec![Self::preencode_v2_network_message(message)?],
@@ -1033,7 +1145,6 @@ impl ProductionV2Services {
         local_validator: Option<wire::ValidatorIndex>,
         key_pair: KeyPair,
         network: IrohaNetwork,
-        chunk_root: impl AsRef<Path>,
         body_store: V2BodyStore,
         state: Arc<crate::state::State>,
         queue: Arc<crate::queue::Queue>,
@@ -1075,9 +1186,9 @@ impl ProductionV2Services {
             validator_set_pops,
             local_peer,
             local_validator,
+            None,
             key_pair,
             network,
-            chunk_root,
             body_store,
             None,
             state,
@@ -1104,9 +1215,11 @@ impl ProductionV2Services {
         validator_set_pops: Vec<Vec<u8>>,
         local_peer: PeerId,
         local_validator: Option<wire::ValidatorIndex>,
+        kagemusha_mint_finality_authority: Option<
+            Arc<crate::zk::kagemusha_v1_recursion::KagemushaMintFinalityLocalAuthorityV1>,
+        >,
         key_pair: KeyPair,
         network: IrohaNetwork,
-        chunk_root: impl AsRef<Path>,
         body_store: V2BodyStore,
         payload_store_identity: CertifiedServePayloadStoreInstanceIdentity,
         state: Arc<crate::state::State>,
@@ -1137,9 +1250,9 @@ impl ProductionV2Services {
             validator_set_pops,
             local_peer,
             local_validator,
+            kagemusha_mint_finality_authority,
             key_pair,
             network,
-            chunk_root,
             body_store,
             Some(payload_store_identity),
             state,
@@ -1163,9 +1276,11 @@ impl ProductionV2Services {
         validator_set_pops: Vec<Vec<u8>>,
         local_peer: PeerId,
         local_validator: Option<wire::ValidatorIndex>,
+        kagemusha_mint_finality_authority: Option<
+            Arc<crate::zk::kagemusha_v1_recursion::KagemushaMintFinalityLocalAuthorityV1>,
+        >,
         key_pair: KeyPair,
         network: IrohaNetwork,
-        chunk_root: impl AsRef<Path>,
         body_store: V2BodyStore,
         lifecycle_payload_store_identity: Option<CertifiedServePayloadStoreInstanceIdentity>,
         state: Arc<crate::state::State>,
@@ -1193,9 +1308,6 @@ impl ProductionV2Services {
                 "Sumeragi v2 service tag is outside its immutable height context".to_owned(),
             );
         }
-        let context_chunk_root = chunk_root
-            .as_ref()
-            .join(hex::encode(context.id().0.as_ref()));
         let max_orphan_chunk_bytes = maximum_orphan_chunk_bytes(context.da_layout);
         let max_messages_per_fanout = usize::try_from(context.da_layout.max_chunk_count)
             .map_err(|_| "Sumeragi v2 outbound chunk count is not representable".to_owned())?
@@ -1238,7 +1350,6 @@ impl ProductionV2Services {
             max_peers_per_fanout,
             &frozen_semantic_targets,
         )?;
-        std::fs::create_dir_all(&context_chunk_root).map_err(|error| error.to_string())?;
         let durable_history = Arc::clone(&kura);
         let evidence_state = Arc::clone(&state);
         let certified_serve_validator_set_pops = validator_set_pops.clone();
@@ -1249,6 +1360,7 @@ impl ProductionV2Services {
             context.clone(),
             key_pair.clone(),
             local_validator,
+            kagemusha_mint_finality_authority,
             auxiliary_io_capacity,
             consensus_io_capacity,
             reply_route_source_capacity,
@@ -1264,7 +1376,6 @@ impl ProductionV2Services {
             network,
             archive_peer_cursor: AtomicUsize::new(0),
             kura: durable_history,
-            chunk_root: context_chunk_root,
             io: Some(io),
             lifecycle_body_store_identity: Some(lifecycle_body_store_identity),
             lifecycle_payload_store_identity,
@@ -1326,62 +1437,51 @@ impl ProductionV2Services {
         let sender = self
             .local_validator
             .ok_or_else(|| "observer cannot disperse a Sumeragi v2 proposal".to_owned())?;
-        let (manifest, chunks) = payload.into_parts();
-        manifest
-            .validate(&self.context)
-            .map_err(|error| error.to_string())?;
         let expected_round = wire::ConsensusRound {
             context_id: self.context.id(),
             height: self.context.height,
             view: owner.view(),
         };
-        if owner != self.active_tag || manifest.round != expected_round {
+        if owner != self.active_tag || payload.manifest().round != expected_round {
             return Err(
                 "Sumeragi v2 outbound payload is not owned by the active reducer incarnation"
                     .to_owned(),
             );
         }
-        let manifest_hash = HashOf::new(&manifest);
-        let mut messages = Vec::with_capacity(chunks.len());
-        for (index, bytes) in chunks.into_iter().enumerate() {
-            let mut chunk = wire::PayloadChunk {
-                manifest_hash,
-                index: u32::try_from(index)
-                    .map_err(|_| "Sumeragi v2 chunk index overflow".to_owned())?,
-                bytes,
-                sender,
-                signature: Vec::new(),
-            };
-            let preimage = chunk
-                .signature_preimage(&self.context, &manifest)
-                .map_err(|error| error.to_string())?;
-            chunk.signature = Signature::try_new(self.key_pair.private_key(), &preimage)
-                .map_err(|error| error.to_string())?
-                .payload()
-                .to_vec();
-            messages.push(wire::ConsensusMessageV2::new(
-                wire::ConsensusMessageV2Payload::PayloadChunk(chunk),
-            ));
+        let manifest_hash = HashOf::new(payload.manifest());
+        if let Some(existing) = self.outbound_chunks.get(&manifest_hash) {
+            if !existing.owns_manifest(owner, payload.manifest()) {
+                return Err("conflicting local Sumeragi v2 payload manifest".to_owned());
+            }
+            let manifest = payload.manifest().clone();
+            self.outbound_chunks
+                .retain(|hash, _| *hash == manifest_hash);
+            operation.complete();
+            return Ok(manifest);
         }
+        let (validated, signed_chunks) = self.sign_payload_chunks(payload, sender)?;
+        debug_assert_eq!(validated.manifest_hash(), manifest_hash);
+        let manifest = validated.into_manifest();
+        let messages = signed_chunks
+            .into_iter()
+            .map(|chunk| {
+                Self::preencode_v2_network_message(wire::ConsensusMessageV2::new(
+                    wire::ConsensusMessageV2Payload::PayloadChunk(chunk),
+                ))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         let retained = RetainedOutboundPayload {
             owner,
             round: manifest.round,
             subject: manifest.subject,
+            manifest: manifest.clone(),
             messages,
         };
-        if let Some(existing) = self.outbound_chunks.get(&manifest_hash) {
-            if existing != &retained {
-                return Err("conflicting local Sumeragi v2 payload manifest".to_owned());
-            }
-            self.outbound_chunks
-                .retain(|hash, _| *hash == manifest_hash);
-        } else {
-            // There is one local proposal intent for an exact reducer owner.
-            // A deterministic fallback or a higher same-tag lock supersedes
-            // its old chunks before the replacement can enter signing.
-            self.outbound_chunks.clear();
-            self.outbound_chunks.insert(manifest_hash, retained);
-        }
+        // There is one local proposal intent for an exact reducer owner. A
+        // deterministic fallback or a higher same-tag lock supersedes its old
+        // chunks before the replacement can enter signing.
+        self.outbound_chunks.clear();
+        self.outbound_chunks.insert(manifest_hash, retained);
         operation.complete();
         Ok(manifest)
     }
@@ -1445,7 +1545,7 @@ impl ProductionV2Services {
         if let Some(fetch) = live {
             match (fetch.task.manifest(), fetch.chunks.as_ref()) {
                 (Some(manifest), Some(session)) => {
-                    let expected_hash = HashOf::new(manifest);
+                    let expected_hash = session.validated_manifest().manifest_hash();
                     if session.manifest() != manifest
                         || indexed_manifests.len() != 1
                         || indexed_manifests.first() != Some(&expected_hash)
@@ -1965,7 +2065,7 @@ impl ProductionV2Services {
         ingress_ownership: FairV2IngressOwnershipEvidence,
     ) -> Result<PayloadChunkDisposition, String> {
         let chunk_message = BlockMessage::V2(wire::ConsensusMessageV2::new(
-            wire::ConsensusMessageV2Payload::PayloadChunk(chunk.clone()),
+            wire::ConsensusMessageV2Payload::PayloadChunk(chunk),
         ));
         if !ingress_ownership.validate_exact()
             || !ingress_ownership.matches_message(&chunk_message)
@@ -1973,6 +2073,13 @@ impl ProductionV2Services {
         {
             return Err("payload chunk carried altered fair-ingress ownership".to_owned());
         }
+        let chunk = match chunk_message {
+            BlockMessage::V2(wire::ConsensusMessageV2 {
+                payload: wire::ConsensusMessageV2Payload::PayloadChunk(chunk),
+                ..
+            }) => chunk,
+            _ => return Err("payload chunk ownership envelope changed variant".to_owned()),
+        };
         let manifest_hash = chunk.manifest_hash;
         if let Some(work_id) = self.fetch_work_for_manifest(manifest_hash) {
             return self.deliver_payload_chunk(executor, work_id, sender, chunk, ingress_ownership);
@@ -3407,7 +3514,6 @@ impl ProductionV2Services {
             let mut command = V2IoCommand::Retire(V2RetireCommand {
                 receipt,
                 cleanup: supervisor.submission(),
-                chunk_root: self.chunk_root.clone(),
             });
             let retirement_guard = Arc::clone(&self.output_guard);
             'enqueue: loop {
@@ -4872,6 +4978,66 @@ impl ProductionV2Services {
             permit,
         )
     }
+    /// Enqueue one worker-prepared historical body without actor-side body work.
+    pub(crate) fn post_prepared_historical_body_response_on_reply_routes_with_permit(
+        &self,
+        prepared: super::v2_block_sync::PreparedHistoricalBodyOutput,
+        permit: &ConsensusOutputPermit<'_>,
+    ) -> Result<super::v2_block_sync::PreparedHistoricalBodyPostOutcome, String> {
+        let retry = prepared.clone_for_exact_output_retry();
+        let (peer, reply_routes, ingress_ownership, message, proof) = prepared.into_post_parts();
+        if !ingress_ownership.validate_exact()
+            || !ingress_ownership.matches_reply_routes(Some(&reply_routes))
+            || reply_routes.semantic_target() != &peer
+            || proof.network_id() != self.context.network_id
+            || proof.source_round().height > self.context.height
+            || proof.responder() != &self.local_peer
+            || !proof.covers_message_in_network(&self.context.network_id, &message)
+        {
+            return Err(
+                "prepared historical body changed its worker-sealed output identity".to_owned(),
+            );
+        }
+        let rollover_claim = ExactOutputRolloverClaim::DurableCertifiedBodyResponse {
+            scope: self.exact_output_scope(),
+            target: peer.clone(),
+            network_id: self.context.network_id,
+            proof,
+        };
+        let messages = vec![message];
+        let peers = vec![peer];
+        rollover_claim.validate_fanout(&messages, &peers)?;
+        durable_history_source_covers(
+            &messages,
+            &rollover_claim,
+            &self.context.network_id,
+            self.context.height,
+            self.kura.as_ref(),
+        )?;
+        let ownership = self.enqueue_owned_exact_reply_routes_while_guarded(
+            messages
+                .into_iter()
+                .next()
+                .expect("prepared historical body is a singleton"),
+            peers
+                .into_iter()
+                .next()
+                .expect("prepared historical body has one target"),
+            reply_routes,
+            Some(ingress_ownership),
+            rollover_claim,
+            permit,
+        )?;
+        if ownership == ExactFanoutOwnership::SourceRetained {
+            iroha_logger::debug!(
+                "retained prepared historical Sumeragi v2 body for exact-output retry"
+            );
+            return Ok(
+                super::v2_block_sync::PreparedHistoricalBodyPostOutcome::SourceRetained(retry),
+            );
+        }
+        Ok(super::v2_block_sync::PreparedHistoricalBodyPostOutcome::Posted)
+    }
     fn post_durable_history_response_with_routes(
         &self,
         peer: PeerId,
@@ -4910,17 +5076,10 @@ impl ProductionV2Services {
                     response_hash: HashOf::new(response),
                 }
             }
-            wire::ConsensusMessageV2Payload::CertifiedBodyResponse(response)
-                if response.manifest.round.height <= self.context.height =>
-            {
-                ExactOutputRolloverClaim::DurableCertifiedBodyResponse {
-                    scope: self.exact_output_scope(),
-                    target: peer.clone(),
-                    responder: self.local_peer.clone(),
-                    source_round: response.manifest.round,
-                    source_subject: response.manifest.subject,
-                    response_hash: HashOf::new(response),
-                }
+            wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_) => {
+                return Err(
+                    "historical body output must cross the bounded prepared-worker seam".to_owned(),
+                );
             }
             _ => {
                 return Err(

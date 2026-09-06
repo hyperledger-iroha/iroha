@@ -2,6 +2,7 @@ package org.hyperledger.iroha.sdk.client.transport
 
 import java.net.URI
 import java.time.Duration
+import java.util.Collections
 import java.util.Locale
 
 /** SDK-owned transport request wrapper to decouple callers from `java.net.http.HttpRequest`. */
@@ -23,6 +24,7 @@ class TransportRequest(
     val replayPolicy: RequestReplayPolicy = deriveReplayPolicy(method, _headers, _body)
 
     init {
+        require(timeout == null || !timeout.isNegative) { "timeout must be non-negative" }
         require(maximumResponseBytes == null || maximumResponseBytes in 1..Int.MAX_VALUE.toLong()) {
             "maximumResponseBytes must be between 1 and ${Int.MAX_VALUE}"
         }
@@ -53,9 +55,9 @@ class TransportRequest(
         private fun copyHeaders(source: Map<String, List<String>>): Map<String, List<String>> {
             val copy = LinkedHashMap<String, List<String>>()
             for ((key, value) in source) {
-                copy[key] = value.toList()
+                copy[key] = Collections.unmodifiableList(ArrayList(value))
             }
-            return copy
+            return Collections.unmodifiableMap(copy)
         }
 
         private fun deriveReplayPolicy(

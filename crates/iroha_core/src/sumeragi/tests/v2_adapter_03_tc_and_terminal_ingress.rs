@@ -589,6 +589,29 @@ fn tc_reset_readmits_exact_locked_commit_once_per_consumer_tag() {
             "a durable Decision closes generation-scoped locked-vote retries"
         );
     }
+    let conflicting_decided_vote =
+        wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Vote(wire::Vote {
+            round: wire_round,
+            proposal_round: wire_round,
+            phase: wire::GlobalPhase::Commit,
+            subject: subject(0xDB),
+            execution_commitment: execution_commitment(0xDB),
+            signer: 0,
+            signature: vec![0xDB],
+        }));
+    let conflict = adapter
+        .receive_authenticated(AuthenticatedConsensusMessage::for_test(
+            conflicting_decided_vote,
+        ))
+        .expect("terminally absorb a newly discovered semantic conflict after Decision");
+    assert_eq!(
+        conflict.disposition(),
+        reducer::StepDisposition::Ignored(reducer::IgnoreReason::AlreadyDecided)
+    );
+    assert!(
+        conflict.effects().is_empty(),
+        "post-Decision conflicts cannot create diagnostic work ahead of Apply"
+    );
     assert_eq!(
         adapter
             .deferred_progress_inputs

@@ -86,6 +86,7 @@ public sealed partial class ToriiClientTests
         "f4c579858f567c505b44e7c3faae08b00eef6af8a7cef5940b4152c6deb032a5";
     private static readonly string SignedTransactionSchemaHashHex = new('e', 32);
     private static readonly string ContractCodeHashHex = new('a', 64);
+    private static readonly string GovernedContractCodeHashHex = new string('a', 62) + "ab";
     private static readonly string ContractAbiHashHex = new('b', 64);
     private const string ContractManifestCodeHashLiteral =
         "hash:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB#ABA2";
@@ -152,6 +153,128 @@ public sealed partial class ToriiClientTests
         Assert.Contains("Torii health response body must be valid UTF-8", error.Message, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData("/v1/health")]
+    [InlineData("/v1/version")]
+    [InlineData("/v1/explorer/health")]
+    [InlineData("/.well-known/sorafs/manifest")]
+    [InlineData("/v1/sorafs/cid/bafyroot")]
+    [InlineData("/sorafs/cid/bafyroot/assets/index.html")]
+    public async Task CanonicalCredentialsDoNotSignExplicitlyAnonymousPublicRoutes(string path)
+    {
+        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK));
+        using var client = new ToriiClient(
+            new Uri("https://torii.example"),
+            new HttpClient(handler),
+            new ToriiClientOptions
+            {
+                CanonicalRequestCredentials = new CanonicalRequestCredentials(
+                    CanonicalAccountId,
+                    CanonicalPrivateKeySeed),
+            },
+            TransactionSubmissionTransportAssurance.OneShotWithoutRedirectsOrRetries);
+
+        using var response = await client.SendAsync(
+            HttpMethod.Get,
+            path,
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(path, handler.LastRequest!.RequestUri!.AbsolutePath);
+        Assert.False(handler.LastRequest.Headers.Contains("X-Iroha-Account"));
+        Assert.False(handler.LastRequest.Headers.Contains("X-Iroha-Signature"));
+    }
+
+    [Fact]
+    public void CanonicalCredentialsRejectUnverifiedInjectedTransportAtConstruction()
+    {
+        using var handler = new RecordingHandler(_ =>
+            throw new InvalidOperationException("unverified signed request reached HTTP dispatch"));
+        var error = Assert.Throws<ArgumentException>(() => new ToriiClient(
+                new Uri("https://torii.example"),
+                new HttpClient(handler),
+                new ToriiClientOptions
+                {
+                    NetworkId = OnboardingFixtureNetworkId,
+                    CanonicalRequestCredentials = new CanonicalRequestCredentials(
+                        CanonicalAccountId,
+                        CanonicalPrivateKeySeed),
+                }));
+
+        Assert.Equal("options", error.ParamName);
+        Assert.Contains("SDK-managed one-shot transport", error.Message, StringComparison.Ordinal);
+        Assert.Null(handler.LastRequest);
+    }
+
+    [Fact]
+    public void BearerCredentialsRejectUnverifiedInjectedTransportAtConstruction()
+    {
+        using var handler = new RecordingHandler(_ =>
+            throw new InvalidOperationException("unverified authenticated request reached HTTP dispatch"));
+        using var httpClient = new HttpClient(handler);
+
+        var error = Assert.Throws<ArgumentException>(() => new ToriiClient(
+            new Uri("https://torii.example"),
+            httpClient,
+            new ToriiClientOptions { BearerToken = "dev-token" }));
+
+        Assert.Equal("options", error.ParamName);
+        Assert.Contains("SDK-managed one-shot transport", error.Message, StringComparison.Ordinal);
+        Assert.Null(handler.LastRequest);
+    }
+
+    [Fact]
+    public void CallerOwnedHttpClientRejectsDefaultOnboardingTokenWithoutMutation()
+    {
+        using var handler = new RecordingHandler(_ =>
+            throw new InvalidOperationException("request must not be dispatched"));
+        using var httpClient = new HttpClient(handler);
+        httpClient.DefaultRequestHeaders.TryAddWithoutValidation(
+            ToriiClient.AccountOnboardingTokenHeaderName,
+            ["stale-default-token-one", "stale-default-token-two"]);
+
+        var error = Assert.Throws<ArgumentException>(() => new ToriiClient(
+            new Uri("https://torii.example"),
+            httpClient));
+
+        Assert.Equal("httpClient", error.ParamName);
+        Assert.Equal(
+            ["stale-default-token-one", "stale-default-token-two"],
+            httpClient.DefaultRequestHeaders.GetValues(
+                ToriiClient.AccountOnboardingTokenHeaderName));
+        Assert.Null(handler.LastRequest);
+    }
+
+    [Theory]
+    [InlineData("/v1/explorer/accounts")]
+    [InlineData("/v1/contracts/state")]
+    [InlineData("/v1/events/sse")]
+    [InlineData("/v1/explorer/metrics")]
+    public async Task CanonicalCredentialsSignVisibilitySensitiveReadRoutes(string path)
+    {
+        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK));
+        using var client = new ToriiClient(
+            new Uri("https://torii.example"),
+            new HttpClient(handler),
+            new ToriiClientOptions
+            {
+                NetworkId = OnboardingFixtureNetworkId,
+                CanonicalRequestCredentials = new CanonicalRequestCredentials(
+                    CanonicalAccountId,
+                    CanonicalPrivateKeySeed),
+            },
+            TransactionSubmissionTransportAssurance.OneShotWithoutRedirectsOrRetries);
+
+        using var response = await client.SendAsync(
+            HttpMethod.Get,
+            path,
+            query: "cursor=cHJldg&limit=10",
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal($"{path}?cursor=cHJldg&limit=10", handler.LastRequest!.RequestUri!.PathAndQuery);
+        Assert.True(handler.LastRequest.Headers.Contains("X-Iroha-Account"));
+        Assert.True(handler.LastRequest.Headers.Contains("X-Iroha-Signature"));
+    }
+
     [Fact]
     public async Task GetMetricsAsyncReturnsTextResponse()
     {
@@ -182,47 +305,36 @@ public sealed partial class ToriiClientTests
     }
 
     [Fact]
-    public void ToriiClientOptionsSnapshotJsonSerializerOptionsOnInitAccessAndClientConstruction()
+    public void ToriiClientPublicSurfaceExposesOnlyTypedV1TransportInputs()
     {
-        var sourceOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web)
-        {
-            WriteIndented = true,
-        };
-        sourceOptions.Converters.Add(new SerializerProbeConverter());
+        var optionProperties = typeof(ToriiClientOptions)
+            .GetProperties(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public)
+            .Select(static property => property.Name)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
 
-        var options = new ToriiClientOptions
-        {
-            BearerToken = "dev-token",
-            JsonSerializerOptions = sourceOptions,
-        };
-
-        sourceOptions.WriteIndented = false;
-        sourceOptions.Converters.Clear();
-
-        Assert.True(options.JsonSerializerOptions.WriteIndented);
-        Assert.IsType<SerializerProbeConverter>(Assert.Single(options.JsonSerializerOptions.Converters));
-
-        var exposedOptions = options.JsonSerializerOptions;
-        exposedOptions.WriteIndented = false;
-        exposedOptions.Converters.Clear();
-
-        Assert.True(options.JsonSerializerOptions.WriteIndented);
-        Assert.IsType<SerializerProbeConverter>(Assert.Single(options.JsonSerializerOptions.Converters));
-
-        using var client = new ToriiClient(new Uri("https://torii.example"), options: options);
-
-        Assert.NotSame(options, client.Options);
-        Assert.Equal("dev-token", client.Options.BearerToken);
-        Assert.True(client.Options.JsonSerializerOptions.WriteIndented);
-        Assert.IsType<SerializerProbeConverter>(Assert.Single(client.Options.JsonSerializerOptions.Converters));
-
-        var exposedClientOptions = client.Options.JsonSerializerOptions;
-        exposedClientOptions.WriteIndented = false;
-        exposedClientOptions.Converters.Clear();
-
-        Assert.True(client.Options.JsonSerializerOptions.WriteIndented);
-        Assert.IsType<SerializerProbeConverter>(Assert.Single(client.Options.JsonSerializerOptions.Converters));
-        Assert.Throws<ArgumentNullException>(() => new ToriiClientOptions { JsonSerializerOptions = null! });
+        Assert.Equal(
+            ["BearerToken", "CanonicalRequestCredentials", "NetworkId"],
+            optionProperties);
+        Assert.Null(typeof(ToriiClient).GetProperty("HttpClient"));
+        Assert.Null(typeof(ToriiClient).GetProperty("Options"));
+        Assert.Null(typeof(ToriiClient).GetMethod("GetAsync"));
+        Assert.Null(typeof(ToriiClient).GetMethod("GetJsonDocumentAsync"));
+        Assert.Null(typeof(ToriiClient).GetMethod("PostAsync"));
+        Assert.Null(typeof(ToriiClient).GetMethod("PostJsonDocumentAsync"));
+        Assert.Null(typeof(ToriiClient).GetMethod("SendAsync"));
+        Assert.Null(typeof(ToriiClient).GetMethod("OpenEventSseAsync"));
+        Assert.Null(typeof(ToriiClient).GetMethod("OpenExplorerBlocksSseAsync"));
+        Assert.Null(typeof(ToriiClient).GetMethod("OpenExplorerTransactionsSseAsync"));
+        Assert.Null(typeof(ToriiClient).GetMethod("OpenExplorerInstructionsSseAsync"));
+        Assert.Null(typeof(ToriiClientOptions).Assembly.GetType(
+            "Hyperledger.Iroha.Torii.ToriiLocalSigningContext"));
+        Assert.Null(typeof(AccountAddress).Assembly.GetType(
+            "Hyperledger.Iroha.Address.AddressDisplayFormats"));
+        Assert.Null(typeof(Hyperledger.Iroha.Numeric.NumericV1).GetMethod("EncodeIntJson"));
+        Assert.Null(typeof(Hyperledger.Iroha.Numeric.NumericV1).GetMethod("EncodeDecimalJson"));
+        Assert.Null(typeof(Hyperledger.Iroha.Numeric.NumericV1).GetMethod("EncodeQuantityJson"));
+        Assert.Null(typeof(NoritoHeader).GetMethod("Deconstruct"));
     }
 
     [Theory]
@@ -265,12 +377,16 @@ public sealed partial class ToriiClientTests
         var options = new ToriiClientOptions
         {
             BearerToken = "dev-token",
-            LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId),
+            NetworkId = OnboardingFixtureNetworkId,
             CanonicalRequestCredentials = new CanonicalRequestCredentials(
                 CanonicalAccountId,
                 CanonicalPrivateKeySeed),
         };
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler), options);
+        using var client = new ToriiClient(
+            new Uri("https://torii.example"),
+            new HttpClient(handler),
+            options,
+            TransactionSubmissionTransportAssurance.OneShotWithoutRedirectsOrRetries);
         using var document = await client.GetJsonDocumentAsync("/v1/query", "gas_units=100&cursor_mode=stored", cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.True(document.RootElement.GetProperty("ok").GetBoolean());
@@ -304,23 +420,26 @@ public sealed partial class ToriiClientTests
     }
 
     [Fact]
-    public async Task PostJsonDocumentAsyncRejectsDuplicateJsonResponseKeys()
+    public async Task GetJsonDocumentAsyncRejectsUndeclaredResponsesBeyondEightMiB()
     {
-        using var handler = new RecordingHandler(request =>
+        using var handler = new RecordingHandler(_ =>
         {
-            Assert.Equal(HttpMethod.Post, request.Method);
-            Assert.Equal("/v1/raw", request.RequestUri!.AbsolutePath);
-            return new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new StringContent("""{"accepted":true,"accepted":false}"""),
-            };
+            var content = new StreamContent(new MemoryStream(
+                new byte[8 * 1024 * 1024 + 1],
+                writable: false));
+            content.Headers.ContentLength = null;
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = content };
         });
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = new ToriiClient(
+            new Uri("https://torii.example"),
+            new HttpClient(handler));
 
-        var error = await Assert.ThrowsAsync<JsonException>(() =>
-            client.PostJsonDocumentAsync("/v1/raw", ValidVerifyingKeyRegisterRequest(), cancellationToken: TestContext.Current.CancellationToken));
+        var error = await Assert.ThrowsAsync<InvalidDataException>(() =>
+            client.GetJsonDocumentAsync(
+                "/v1/query",
+                cancellationToken: TestContext.Current.CancellationToken));
 
-        Assert.Contains("accepted must not appear more than once", error.Message);
+        Assert.Contains("8388608-byte limit", error.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -390,11 +509,12 @@ public sealed partial class ToriiClientTests
             new ToriiClientOptions
             {
                 BearerToken = bearerToken,
-                LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId),
+                NetworkId = OnboardingFixtureNetworkId,
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),
-            });
+            },
+            TransactionSubmissionTransportAssurance.OneShotWithoutRedirectsOrRetries);
 
         var error = await Assert.ThrowsAsync<ArgumentException>(() =>
             client.GetJsonDocumentAsync("/v1/query", "gas_units=100", cancellationToken: TestContext.Current.CancellationToken));
@@ -420,11 +540,12 @@ public sealed partial class ToriiClientTests
             new ToriiClientOptions
             {
                 BearerToken = bearerToken,
-                LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId),
+                NetworkId = OnboardingFixtureNetworkId,
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),
-            });
+            },
+            TransactionSubmissionTransportAssurance.OneShotWithoutRedirectsOrRetries);
 
         using var document = await client.GetJsonDocumentAsync("/v1/query", "gas_units=100", cancellationToken: TestContext.Current.CancellationToken);
 
@@ -482,11 +603,12 @@ public sealed partial class ToriiClientTests
             new HttpClient(handler),
             new ToriiClientOptions
             {
-                LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId),
+                NetworkId = OnboardingFixtureNetworkId,
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),
-            });
+            },
+            TransactionSubmissionTransportAssurance.OneShotWithoutRedirectsOrRetries);
 
         var error = await Assert.ThrowsAsync<ArgumentException>(() => client.SendAsync(HttpMethod.Get, path!, cancellationToken: TestContext.Current.CancellationToken));
 
@@ -506,11 +628,12 @@ public sealed partial class ToriiClientTests
             new HttpClient(handler),
             new ToriiClientOptions
             {
-                LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId),
+                NetworkId = OnboardingFixtureNetworkId,
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),
-            });
+            },
+            TransactionSubmissionTransportAssurance.OneShotWithoutRedirectsOrRetries);
 
         var error = await Assert.ThrowsAsync<ArgumentException>(() =>
             client.SendAsync(new HttpMethod(method), "/v1/query", cancellationToken: TestContext.Current.CancellationToken));
@@ -533,11 +656,12 @@ public sealed partial class ToriiClientTests
             new HttpClient(handler),
             new ToriiClientOptions
             {
-                LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId),
+                NetworkId = OnboardingFixtureNetworkId,
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),
-            });
+            },
+            TransactionSubmissionTransportAssurance.OneShotWithoutRedirectsOrRetries);
 
         using var response = await client.SendAsync(new HttpMethod(method), "/v1/query", cancellationToken: TestContext.Current.CancellationToken);
 
@@ -579,11 +703,12 @@ public sealed partial class ToriiClientTests
             new HttpClient(handler),
             new ToriiClientOptions
             {
-                LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId),
+                NetworkId = OnboardingFixtureNetworkId,
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),
-            });
+            },
+            TransactionSubmissionTransportAssurance.OneShotWithoutRedirectsOrRetries);
 
         var error = await Assert.ThrowsAsync<ArgumentException>(() =>
             client.SendAsync(HttpMethod.Get, "/v1/query", query: query, cancellationToken: TestContext.Current.CancellationToken));
@@ -622,11 +747,12 @@ public sealed partial class ToriiClientTests
             new HttpClient(handler),
             new ToriiClientOptions
             {
-                LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId),
+                NetworkId = OnboardingFixtureNetworkId,
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),
-            });
+            },
+            TransactionSubmissionTransportAssurance.OneShotWithoutRedirectsOrRetries);
 
         var error = await Assert.ThrowsAsync<ArgumentException>(() =>
             client.SendAsync(HttpMethod.Get, "/v1/query", accept: accept, cancellationToken: TestContext.Current.CancellationToken));
@@ -651,11 +777,12 @@ public sealed partial class ToriiClientTests
             new HttpClient(handler),
             new ToriiClientOptions
             {
-                LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId),
+                NetworkId = OnboardingFixtureNetworkId,
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),
-            });
+            },
+            TransactionSubmissionTransportAssurance.OneShotWithoutRedirectsOrRetries);
 
         using var response = await client.SendAsync(HttpMethod.Get, "/v1/query", accept: accept, cancellationToken: TestContext.Current.CancellationToken);
 
@@ -676,11 +803,12 @@ public sealed partial class ToriiClientTests
             new ToriiClientOptions
             {
                 BearerToken = "dev-token",
-                LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId),
+                NetworkId = OnboardingFixtureNetworkId,
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),
-            });
+            },
+            TransactionSubmissionTransportAssurance.OneShotWithoutRedirectsOrRetries);
 
         using var response = await client.SendAsync(
             HttpMethod.Get,
@@ -712,11 +840,12 @@ public sealed partial class ToriiClientTests
             new ToriiClientOptions
             {
                 BearerToken = "dev-token",
-                LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId),
+                NetworkId = OnboardingFixtureNetworkId,
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),
-            });
+            },
+            TransactionSubmissionTransportAssurance.OneShotWithoutRedirectsOrRetries);
 
         var error = await Assert.ThrowsAsync<ArgumentException>(() =>
             client.SendAsync(
@@ -771,8 +900,6 @@ public sealed partial class ToriiClientTests
                   "archive_version": 1,
                   "blob_class_custom_id": 1001,
                   "checkpoint_contract_v1": true,
-                  "checkpoint_plan_v1": true,
-                  "checkpoint_publish_v1": true,
                   "codec": "application/x-iroha-query-shard+norito+zstd",
                   "compression": "zstd",
                   "da_v1_enabled": false,
@@ -860,8 +987,6 @@ public sealed partial class ToriiClientTests
         var projection = new ToriiNodeProjectionCapabilities
         {
             CheckpointContractV1 = true,
-            CheckpointPlanV1 = true,
-            CheckpointPublishV1 = true,
             ShardCatalogV1 = true,
             ArchiveExportV1 = true,
             ArchiveVersion = 1,
@@ -1277,14 +1402,8 @@ public sealed partial class ToriiClientTests
         };
         yield return new object?[]
         {
-            "query.projection.checkpoint_publish_v1",
-            NodeCapabilitiesResponseJson("query.projection.checkpoint_publish_v1", false),
-            "must match",
-        };
-        yield return new object?[]
-        {
             "query.projection.export_supported_resources",
-            NodeCapabilitiesResponseJsonWithProjectionFeatureFlags(false, false, false, false, new JsonArray("accounts")),
+            NodeCapabilitiesResponseJsonWithProjectionAvailability(false, false, new JsonArray("accounts")),
             "must be empty",
         };
         yield return new object?[]
@@ -3410,6 +3529,172 @@ public sealed partial class ToriiClientTests
     }
 
     [Fact]
+    public void ExplorerHistoryCursorMetadataUsesCanonicalWireOrderAndConsistency()
+    {
+        var pagination = new ToriiExplorerHistoryCursorMeta
+        {
+            Limit = 25,
+            SnapshotHeight = 42,
+            SnapshotHash = ExplorerBlockHashHex,
+            NextCursor = "bmV4dA",
+            HasMore = true,
+        };
+
+        var json = JsonSerializer.Serialize(pagination);
+        Assert.Equal(
+            $$"""{"limit":25,"snapshot_height":42,"snapshot_hash":"{{ExplorerBlockHashHex}}","next_cursor":"bmV4dA","has_more":true}""",
+            json);
+
+        var roundTrip = Assert.IsType<ToriiExplorerHistoryCursorMeta>(
+            JsonSerializer.Deserialize<ToriiExplorerHistoryCursorMeta>(json));
+        Assert.Equal((uint)25, roundTrip.Limit);
+        Assert.Equal((ulong)42, roundTrip.SnapshotHeight);
+        Assert.Equal(ExplorerBlockHashHex, roundTrip.SnapshotHash);
+        Assert.Equal("bmV4dA", roundTrip.NextCursor);
+        Assert.True(roundTrip.HasMore);
+    }
+
+    [Fact]
+    public void ExplorerHistoryCursorMetadataAcceptsEmptyChainSnapshot()
+    {
+        const string json =
+            """{"limit":20,"snapshot_height":0,"snapshot_hash":null,"next_cursor":null,"has_more":false}""";
+
+        var pagination = Assert.IsType<ToriiExplorerHistoryCursorMeta>(
+            JsonSerializer.Deserialize<ToriiExplorerHistoryCursorMeta>(json));
+
+        Assert.Equal((uint)20, pagination.Limit);
+        Assert.Equal((ulong)0, pagination.SnapshotHeight);
+        Assert.Null(pagination.SnapshotHash);
+        Assert.Null(pagination.NextCursor);
+        Assert.False(pagination.HasMore);
+    }
+
+    [Theory]
+    [InlineData(0UL, true)]
+    [InlineData(42UL, false)]
+    public void ExplorerHistoryCursorMetadataWriteRejectsInconsistentSnapshotAnchor(
+        ulong snapshotHeight,
+        bool includeSnapshotHash)
+    {
+        var pagination = new ToriiExplorerHistoryCursorMeta
+        {
+            Limit = 25,
+            SnapshotHeight = snapshotHeight,
+            SnapshotHash = includeSnapshotHash ? ExplorerBlockHashHex : null,
+            NextCursor = null,
+            HasMore = false,
+        };
+
+        var error = Assert.Throws<JsonException>(() => JsonSerializer.Serialize(pagination));
+
+        Assert.Contains("snapshot_hash", error.Message);
+        Assert.Contains("snapshot_height", error.Message);
+    }
+
+    [Fact]
+    public void ExplorerHistoryCursorMetadataWriteRejectsInconsistentContinuationFlag()
+    {
+        var pagination = new ToriiExplorerHistoryCursorMeta
+        {
+            Limit = 25,
+            SnapshotHeight = 42,
+            SnapshotHash = ExplorerBlockHashHex,
+            NextCursor = "bmV4dA",
+            HasMore = false,
+        };
+
+        var error = Assert.Throws<JsonException>(() => JsonSerializer.Serialize(pagination));
+
+        Assert.Contains("has_more", error.Message);
+        Assert.Contains("next_cursor", error.Message);
+    }
+
+    [Fact]
+    public void ExplorerHistoryCursorMetadataWriteRejectsContinuationForEmptySnapshot()
+    {
+        var pagination = new ToriiExplorerHistoryCursorMeta
+        {
+            Limit = 25,
+            SnapshotHeight = 0,
+            SnapshotHash = null,
+            NextCursor = "bmV4dA",
+            HasMore = true,
+        };
+
+        var error = Assert.Throws<JsonException>(() => JsonSerializer.Serialize(pagination));
+
+        Assert.Contains("next_cursor", error.Message);
+        Assert.Contains("snapshot_height", error.Message);
+    }
+
+    [Fact]
+    public void ExplorerHistoryPageWriteRejectsMoreItemsThanLimit()
+    {
+        var block = new ToriiExplorerBlock
+        {
+            Hash = ExplorerBlockHashHex,
+            Height = 42,
+            CreatedAt = "2026-03-29T00:00:00Z",
+            PreviousBlockHash = ExplorerPreviousBlockHashHex,
+            TransactionsHash = ExplorerTransactionsHashHex,
+            TransactionsRejected = 0,
+            TransactionsTotal = 1,
+        };
+        var page = new ToriiExplorerBlocksPage
+        {
+            Pagination = new ToriiExplorerHistoryCursorMeta
+            {
+                Limit = 1,
+                SnapshotHeight = 42,
+                SnapshotHash = ExplorerBlockHashHex,
+                NextCursor = null,
+                HasMore = false,
+            },
+            Items = new[] { block, block with { Height = 41 } },
+        };
+
+        var error = Assert.Throws<JsonException>(() => JsonSerializer.Serialize(page));
+
+        Assert.Contains("items", error.Message);
+        Assert.Contains("pagination.limit", error.Message);
+    }
+
+    [Fact]
+    public void ExplorerHistoryPageWriteRejectsItemsForEmptySnapshot()
+    {
+        var page = new ToriiExplorerBlocksPage
+        {
+            Pagination = new ToriiExplorerHistoryCursorMeta
+            {
+                Limit = 20,
+                SnapshotHeight = 0,
+                SnapshotHash = null,
+                NextCursor = null,
+                HasMore = false,
+            },
+            Items = new[]
+            {
+                new ToriiExplorerBlock
+                {
+                    Hash = ExplorerBlockHashHex,
+                    Height = 1,
+                    CreatedAt = "2026-03-29T00:00:00Z",
+                    PreviousBlockHash = null,
+                    TransactionsHash = ExplorerTransactionsHashHex,
+                    TransactionsRejected = 0,
+                    TransactionsTotal = 1,
+                },
+            },
+        };
+
+        var error = Assert.Throws<JsonException>(() => JsonSerializer.Serialize(page));
+
+        Assert.Contains("items", error.Message);
+        Assert.Contains("pagination.snapshot_height", error.Message);
+    }
+
+    [Fact]
     public void ToriiJsonNodesSnapshotInitAndAccessValues()
     {
         static JsonObject NewNode() => new()
@@ -4159,13 +4444,19 @@ public sealed partial class ToriiClientTests
     }
 
     [Fact]
-    public async Task GetExplorerBlocksAsyncAddsPaginationAndDeserializesPage()
+    public async Task GetExplorerBlocksAsyncAddsCursorAndDeserializesSnapshotPage()
     {
         using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
         {
             Content = new StringContent($$"""
                 {
-                  "pagination": { "page": 2, "per_page": 5, "total_pages": 3, "total_items": 12 },
+                  "pagination": {
+                    "limit": 5,
+                    "snapshot_height": 42,
+                    "snapshot_hash": "{{ExplorerBlockHashHex}}",
+                    "next_cursor": "bmV4dA",
+                    "has_more": true
+                  },
                   "items": [
                     {
                       "hash": "{{ExplorerBlockHashHex}}",
@@ -4182,16 +4473,70 @@ public sealed partial class ToriiClientTests
         });
 
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-        var page = await client.GetExplorerBlocksAsync(new ToriiExplorerPaginationQuery { Page = 2, PerPage = 5 }, cancellationToken: TestContext.Current.CancellationToken);
+        var page = await client.GetExplorerBlocksAsync(new ToriiExplorerCursorQuery
+        {
+            Cursor = "cHJldg",
+            Limit = 5,
+        }, cancellationToken: TestContext.Current.CancellationToken);
 
-        Assert.Equal((ulong)2, page.Pagination.Page);
-        Assert.Equal((ulong)5, page.Pagination.PerPage);
-        Assert.Equal((ulong)3, page.Pagination.TotalPages);
-        Assert.Equal((ulong)12, page.Pagination.TotalItems);
+        Assert.Equal((uint)5, page.Pagination.Limit);
+        Assert.Equal((ulong)42, page.Pagination.SnapshotHeight);
+        Assert.Equal(ExplorerBlockHashHex, page.Pagination.SnapshotHash);
+        Assert.Equal("bmV4dA", page.Pagination.NextCursor);
+        Assert.True(page.Pagination.HasMore);
         Assert.Single(page.Items);
         Assert.Equal(ExplorerBlockHashHex, page.Items[0].Hash);
         Assert.Equal((ulong)42, page.Items[0].Height);
-        Assert.Equal("/v1/explorer/blocks?page=2&per_page=5", handler.LastRequest!.RequestUri!.PathAndQuery);
+        Assert.Equal("/v1/explorer/blocks?cursor=cHJldg&limit=5", handler.LastRequest!.RequestUri!.PathAndQuery);
+    }
+
+    public static IEnumerable<object[]> ExplorerHistoryOperations()
+    {
+        yield return new object[] { "blocks" };
+        yield return new object[] { "transactions" };
+        yield return new object[] { "transactions-latest" };
+        yield return new object[] { "instructions" };
+        yield return new object[] { "instructions-latest" };
+    }
+
+    [Theory]
+    [MemberData(nameof(ExplorerHistoryOperations))]
+    public async Task ExplorerHistoryQueriesRejectNoncanonicalCursorBeforeDispatch(string operation)
+    {
+        using var handler = new RecordingHandler(_ =>
+            throw new InvalidOperationException("invalid Explorer history cursor reached HTTP dispatch"));
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+
+        var error = await Assert.ThrowsAsync<ArgumentException>(() =>
+            InvokeExplorerHistoryQueryAsync(
+                client,
+                operation,
+                "bmV4dA==",
+                10,
+                TestContext.Current.CancellationToken));
+
+        Assert.Contains("base64url", error.Message);
+        Assert.Null(handler.LastRequest);
+    }
+
+    [Theory]
+    [MemberData(nameof(ExplorerHistoryOperations))]
+    public async Task ExplorerHistoryQueriesRejectOutOfRangeLimitBeforeDispatch(string operation)
+    {
+        using var handler = new RecordingHandler(_ =>
+            throw new InvalidOperationException("invalid Explorer history limit reached HTTP dispatch"));
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+
+        var error = await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() =>
+            InvokeExplorerHistoryQueryAsync(
+                client,
+                operation,
+                "bmV4dA",
+                101,
+                TestContext.Current.CancellationToken));
+
+        Assert.Contains("between 1 and 100", error.Message);
+        Assert.Null(handler.LastRequest);
     }
 
     [Fact]
@@ -4834,7 +5179,13 @@ public sealed partial class ToriiClientTests
         {
             Content = new StringContent($$"""
                 {
-                  "pagination": { "page": 1, "per_page": 20, "total_pages": 2, "total_items": 21 },
+                  "pagination": {
+                    "limit": 20,
+                    "snapshot_height": 5,
+                    "snapshot_hash": "{{ExplorerBlockHashHex}}",
+                    "next_cursor": "bmV4dA",
+                    "has_more": true
+                  },
                   "items": [
                     {
                       "authority": "{{ExplorerTransactionAuthorityAccountId}}",
@@ -4852,20 +5203,24 @@ public sealed partial class ToriiClientTests
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
         var page = await client.GetExplorerTransactionsAsync(new ToriiExplorerTransactionsQuery
         {
-            Page = 1,
-            PerPage = 20,
+            Cursor = "cHJldg",
+            Limit = 20,
             Authority = ExplorerTransactionAuthorityAccountId,
             Block = 5,
             Status = ToriiExplorerTransactionStatusFilter.Committed,
             AssetId = "rose#wonderland.paynet",
         }, cancellationToken: TestContext.Current.CancellationToken);
 
-        Assert.Equal((ulong)21, page.Pagination.TotalItems);
+        Assert.Equal((uint)20, page.Pagination.Limit);
+        Assert.Equal((ulong)5, page.Pagination.SnapshotHeight);
+        Assert.Equal(ExplorerBlockHashHex, page.Pagination.SnapshotHash);
+        Assert.Equal("bmV4dA", page.Pagination.NextCursor);
+        Assert.True(page.Pagination.HasMore);
         Assert.Single(page.Items);
         Assert.Equal(ToriiTransactionHashHex, page.Items[0].Hash);
         Assert.Equal("Committed", page.Items[0].Status);
         Assert.Equal(
-            $"page=1&per_page=20&authority={Uri.EscapeDataString(ExplorerTransactionAuthorityAccountId)}&block=5&status=committed&asset_id=rose%23wonderland.paynet",
+            $"cursor=cHJldg&limit=20&authority={Uri.EscapeDataString(ExplorerTransactionAuthorityAccountId)}&block=5&status=committed&asset_id=rose%23wonderland.paynet",
             handler.LastRequest!.RequestUri!.Query.TrimStart('?'));
     }
 
@@ -4877,6 +5232,13 @@ public sealed partial class ToriiClientTests
             Content = new StringContent($$"""
                 {
                   "sampled_at": "2026-03-29T07:00:00Z",
+                  "pagination": {
+                    "limit": 3,
+                    "snapshot_height": 9,
+                    "snapshot_hash": "{{ExplorerBlockHashHex}}",
+                    "next_cursor": null,
+                    "has_more": false
+                  },
                   "items": [
                     {
                       "authority": "{{ExplorerTransactionAuthorityAccountId}}",
@@ -4894,14 +5256,17 @@ public sealed partial class ToriiClientTests
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
         var response = await client.GetExplorerLatestTransactionsAsync(new ToriiExplorerTransactionsQuery
         {
-            PerPage = 3,
+            Limit = 3,
             Status = ToriiExplorerTransactionStatusFilter.Committed,
         }, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal("2026-03-29T07:00:00Z", response.SampledAt);
+        Assert.Equal((ulong)9, response.Pagination.SnapshotHeight);
+        Assert.Equal(ExplorerBlockHashHex, response.Pagination.SnapshotHash);
+        Assert.False(response.Pagination.HasMore);
         Assert.Single(response.Items);
         Assert.Equal(ToriiTransactionHashHex, response.Items[0].Hash);
-        Assert.Equal("/v1/explorer/transactions/latest?per_page=3&status=committed", handler.LastRequest!.RequestUri!.PathAndQuery);
+        Assert.Equal("/v1/explorer/transactions/latest?limit=3&status=committed", handler.LastRequest!.RequestUri!.PathAndQuery);
     }
 
     [Fact]
@@ -5326,7 +5691,13 @@ public sealed partial class ToriiClientTests
         {
             Content = new StringContent($$"""
                 {
-                  "pagination": { "page": 3, "per_page": 10, "total_pages": 5, "total_items": 48 },
+                  "pagination": {
+                    "limit": 10,
+                    "snapshot_height": 12,
+                    "snapshot_hash": "{{ExplorerBlockHashHex}}",
+                    "next_cursor": "bmV4dA",
+                    "has_more": true
+                  },
                   "items": [
                     {
                       "authority": "{{ExplorerInstructionAuthorityAccountId}}",
@@ -5354,8 +5725,8 @@ public sealed partial class ToriiClientTests
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
         var page = await client.GetExplorerInstructionsAsync(new ToriiExplorerInstructionsQuery
         {
-            Page = 3,
-            PerPage = 10,
+            Cursor = "cHJldg",
+            Limit = 10,
             Authority = ExplorerInstructionAuthorityAccountId,
             Account = ExplorerInstructionAccountId,
             TransactionHash = "tx-ins",
@@ -5365,12 +5736,15 @@ public sealed partial class ToriiClientTests
             AssetId = "rose#wonderland.paynet",
         }, cancellationToken: TestContext.Current.CancellationToken);
 
-        Assert.Equal((ulong)48, page.Pagination.TotalItems);
+        Assert.Equal((uint)10, page.Pagination.Limit);
+        Assert.Equal((ulong)12, page.Pagination.SnapshotHeight);
+        Assert.Equal(ExplorerBlockHashHex, page.Pagination.SnapshotHash);
+        Assert.True(page.Pagination.HasMore);
         Assert.Single(page.Items);
         Assert.Equal("Transfer", page.Items[0].Kind);
         Assert.Equal(ToriiTransactionHashHex, page.Items[0].TransactionHash);
         Assert.Equal(
-            $"page=3&per_page=10&authority={Uri.EscapeDataString(ExplorerInstructionAuthorityAccountId)}&account={Uri.EscapeDataString(ExplorerInstructionAccountId)}&transaction_hash=tx-ins&transaction_status=committed&block=12&kind=transfer&asset_id=rose%23wonderland.paynet",
+            $"cursor=cHJldg&limit=10&authority={Uri.EscapeDataString(ExplorerInstructionAuthorityAccountId)}&account={Uri.EscapeDataString(ExplorerInstructionAccountId)}&transaction_hash=tx-ins&transaction_status=committed&block=12&kind=transfer&asset_id=rose%23wonderland.paynet",
             handler.LastRequest!.RequestUri!.Query.TrimStart('?'));
     }
 
@@ -5382,6 +5756,13 @@ public sealed partial class ToriiClientTests
             Content = new StringContent($$"""
                 {
                   "sampled_at": "2026-03-29T08:00:00Z",
+                  "pagination": {
+                    "limit": 4,
+                    "snapshot_height": 14,
+                    "snapshot_hash": "{{ExplorerBlockHashHex}}",
+                    "next_cursor": null,
+                    "has_more": false
+                  },
                   "items": [
                     {
                       "authority": "{{ExplorerInstructionAuthorityAccountId}}",
@@ -5409,14 +5790,17 @@ public sealed partial class ToriiClientTests
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
         var response = await client.GetExplorerLatestInstructionsAsync(new ToriiExplorerInstructionsQuery
         {
-            PerPage = 4,
+            Limit = 4,
             TransactionStatus = ToriiExplorerTransactionStatusFilter.Committed,
         }, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal("2026-03-29T08:00:00Z", response.SampledAt);
+        Assert.Equal((ulong)14, response.Pagination.SnapshotHeight);
+        Assert.Equal(ExplorerBlockHashHex, response.Pagination.SnapshotHash);
+        Assert.False(response.Pagination.HasMore);
         Assert.Single(response.Items);
         Assert.Equal(ToriiTransactionHashHex, response.Items[0].TransactionHash);
-        Assert.Equal("/v1/explorer/instructions/latest?per_page=4&transaction_status=committed", handler.LastRequest!.RequestUri!.PathAndQuery);
+        Assert.Equal("/v1/explorer/instructions/latest?limit=4&transaction_status=committed", handler.LastRequest!.RequestUri!.PathAndQuery);
     }
 
     [Fact]
@@ -5433,12 +5817,13 @@ public sealed partial class ToriiClientTests
             Assert.Same(original, Assert.Single(secondAccess));
         }
 
-        var pagination = new ToriiExplorerPaginationMeta
+        var pagination = new ToriiExplorerHistoryCursorMeta
         {
-            Page = 1,
-            PerPage = 10,
-            TotalPages = 1,
-            TotalItems = 1,
+            Limit = 10,
+            SnapshotHeight = 42,
+            SnapshotHash = ExplorerBlockHashHex,
+            NextCursor = null,
+            HasMore = false,
         };
         var block = new ToriiExplorerBlock
         {
@@ -5485,6 +5870,7 @@ public sealed partial class ToriiClientTests
         var latestTransactions = new ToriiExplorerLatestTransactionsResponse
         {
             SampledAt = "2026-03-29T07:00:00Z",
+            Pagination = pagination,
             Items = latestTransactionItems,
         };
 
@@ -5535,6 +5921,7 @@ public sealed partial class ToriiClientTests
         var latestInstructions = new ToriiExplorerLatestInstructionsResponse
         {
             SampledAt = "2026-03-29T08:00:00Z",
+            Pagination = pagination,
             Items = latestInstructionItems,
         };
 
@@ -6009,26 +6396,30 @@ public sealed partial class ToriiClientTests
 
     public static IEnumerable<object[]> InvalidRawExplorerPagePayloads()
     {
-        yield return new object[] { "blocks-page", "pagination", MissingExplorerField, "must not be null" };
-        yield return new object[] { "blocks-page", "pagination.page", 0, "positive" };
-        yield return new object[] { "blocks-page", "pagination.per_page", 0, "positive" };
-        yield return new object[] { "blocks-page", "items", MissingExplorerField, "must not be null" };
+        yield return new object[] { "blocks-page", "pagination", MissingExplorerField, "must be present" };
+        yield return new object[] { "blocks-page", "pagination.limit", 0, "between 1 and 100" };
+        yield return new object[] { "blocks-page", "pagination.snapshot_hash", ExplorerBlockHashHex[..63] + "A", "lowercase 32-byte hex string" };
+        yield return new object[] { "blocks-page", "pagination.page", 1, "not supported" };
+        yield return new object[] { "blocks-page", "items", MissingExplorerField, "must be present" };
         yield return new object[] { "blocks-page", "items[0].hash", "block-abc", "32-byte hex string" };
         yield return new object[] { "blocks-page", "items[0].created_at", MissingExplorerField, "must not be null" };
         yield return new object[] { "blocks-page", "items[0].height", MissingExplorerField, "must not be null" };
         yield return new object[] { "blocks-page", "items[0].transactions_total", MissingExplorerField, "must not be null" };
-        yield return new object[] { "transactions-page", "pagination", MissingExplorerField, "must not be null" };
-        yield return new object[] { "transactions-page", "pagination.page", 0, "positive" };
-        yield return new object[] { "transactions-page", "pagination.per_page", 0, "positive" };
-        yield return new object[] { "transactions-page", "items", MissingExplorerField, "must not be null" };
+        yield return new object[] { "transactions-page", "pagination", MissingExplorerField, "must be present" };
+        yield return new object[] { "transactions-page", "pagination.limit", 101, "between 1 and 100" };
+        yield return new object[] { "transactions-page", "pagination.has_more", false, "exactly when next_cursor" };
+        yield return new object[] { "transactions-page", "pagination.total_items", 1, "not supported" };
+        yield return new object[] { "transactions-page", "items", MissingExplorerField, "must be present" };
         yield return new object[] { "transactions-page", "items[0].authority", "merchant@sora", "canonical I105" };
         yield return new object[] { "transactions-page", "items[0].authority", "0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f", "canonical I105" };
         yield return new object[] { "transactions-page", "items[0].authority", "n753Xnﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛ", "canonical I105" };
         yield return new object[] { "transactions-page", "items[0].hash", "tx-abc", "32-byte hex string" };
         yield return new object[] { "transactions-page", "items[0].block", MissingExplorerField, "must not be null" };
         yield return new object[] { "transactions-page", "items[0].created_at", MissingExplorerField, "must not be null" };
-        yield return new object[] { "transactions-latest", "sampled_at", MissingExplorerField, "must not be null" };
-        yield return new object[] { "transactions-latest", "items", MissingExplorerField, "must not be null" };
+        yield return new object[] { "transactions-latest", "sampled_at", MissingExplorerField, "must be present" };
+        yield return new object[] { "transactions-latest", "pagination", MissingExplorerField, "must be present" };
+        yield return new object[] { "transactions-latest", "pagination.snapshot_height", 0, "null exactly when snapshot_height is zero" };
+        yield return new object[] { "transactions-latest", "items", MissingExplorerField, "must be present" };
         yield return new object[] { "transactions-latest", "items[0].authority", "merchant@sora", "canonical I105" };
         yield return new object[] { "transactions-latest", "items[0].created_at", MissingExplorerField, "must not be null" };
         yield return new object[] { "transactions-latest", "items[0].status", "Committed\u0001", "control characters" };
@@ -6039,10 +6430,11 @@ public sealed partial class ToriiClientTests
         yield return new object[] { "transaction-detail", "nonce", "9", "unsigned integer" };
         yield return new object[] { "transaction-detail", "rejection_reason.encoded", "0X01", "exact hex string" };
         yield return new object[] { "transaction-detail", "time_to_live.ms", "5000", "unsigned integer" };
-        yield return new object[] { "instructions-page", "pagination", MissingExplorerField, "must not be null" };
-        yield return new object[] { "instructions-page", "pagination.page", 0, "positive" };
-        yield return new object[] { "instructions-page", "pagination.per_page", 0, "positive" };
-        yield return new object[] { "instructions-page", "items", MissingExplorerField, "must not be null" };
+        yield return new object[] { "instructions-page", "pagination", MissingExplorerField, "must be present" };
+        yield return new object[] { "instructions-page", "pagination.next_cursor", "bmV4dA==", "base64url" };
+        yield return new object[] { "instructions-page", "pagination.snapshot_hash", null!, "null exactly when snapshot_height is zero" };
+        yield return new object[] { "instructions-page", "pagination.per_page", 10, "not supported" };
+        yield return new object[] { "instructions-page", "items", MissingExplorerField, "must be present" };
         yield return new object[] { "instructions-page", "items[0].authority", "merchant@sora", "canonical I105" };
         yield return new object[] { "instructions-page", "items[0].authority", "0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f", "canonical I105" };
         yield return new object[] { "instructions-page", "items[0].authority", "n753Xnﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛ", "canonical I105" };
@@ -6050,8 +6442,10 @@ public sealed partial class ToriiClientTests
         yield return new object[] { "instructions-page", "items[0].created_at", MissingExplorerField, "must not be null" };
         yield return new object[] { "instructions-page", "items[0].box", MissingExplorerField, "must not be null" };
         yield return new object[] { "instructions-page", "items[0].index", MissingExplorerField, "must not be null" };
-        yield return new object[] { "instructions-latest", "sampled_at", MissingExplorerField, "must not be null" };
-        yield return new object[] { "instructions-latest", "items", MissingExplorerField, "must not be null" };
+        yield return new object[] { "instructions-latest", "sampled_at", MissingExplorerField, "must be present" };
+        yield return new object[] { "instructions-latest", "pagination", MissingExplorerField, "must be present" };
+        yield return new object[] { "instructions-latest", "pagination.snapshot_height", MissingExplorerField, "must be present" };
+        yield return new object[] { "instructions-latest", "items", MissingExplorerField, "must be present" };
         yield return new object[] { "instructions-latest", "items[0].authority", "merchant@sora", "canonical I105" };
         yield return new object[] { "instructions-latest", "items[0].created_at", MissingExplorerField, "must not be null" };
         yield return new object[] { "instructions-latest", "items[0].box.encoded", "0X22", "exact hex string" };
@@ -6077,8 +6471,9 @@ public sealed partial class ToriiClientTests
 
     public static IEnumerable<object?[]> InvalidDirectExplorerWrapperMetadata()
     {
-        yield return new object?[] { "pagination", "Page", (ulong)0 };
-        yield return new object?[] { "pagination", "PerPage", (ulong)0 };
+        yield return new object?[] { "history-pagination", "Limit", (uint)0 };
+        yield return new object?[] { "history-pagination", "Limit", (uint)101 };
+        yield return new object?[] { "history-pagination", "SnapshotHash", ExplorerBlockHashHex[..63] + "A" };
         yield return new object?[] { "latest-transactions", "SampledAt", "" };
         yield return new object?[] { "latest-transactions", "SampledAt", " 2026-03-29T04:00:00Z" };
         yield return new object?[] { "latest-transactions", "SampledAt", "2026-03-29T04:00:00Z\u0001" };
@@ -6803,11 +7198,12 @@ public sealed partial class ToriiClientTests
             new HttpClient(handler),
             new ToriiClientOptions
             {
-                LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId),
+                NetworkId = OnboardingFixtureNetworkId,
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),
-            });
+            },
+            TransactionSubmissionTransportAssurance.OneShotWithoutRedirectsOrRetries);
 
         var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             InvokeVpnResponseOperationAsync(client, operation));
@@ -8970,7 +9366,9 @@ public sealed partial class ToriiClientTests
         });
         using var client = new ToriiClient(
             new Uri("https://torii.example"),
-            new HttpClient(handler));
+            new HttpClient(handler),
+            options: null,
+            TransactionSubmissionTransportAssurance.OneShotWithoutRedirectsOrRetries);
 
         var admission = await client.RegisterSoraFsPinManifestAsync(
             transaction,
@@ -8997,7 +9395,9 @@ public sealed partial class ToriiClientTests
             JsonResponse(response.ToJsonString(), HttpStatusCode.Accepted));
         using var client = new ToriiClient(
             new Uri("https://torii.example"),
-            new HttpClient(handler));
+            new HttpClient(handler),
+            options: null,
+            TransactionSubmissionTransportAssurance.OneShotWithoutRedirectsOrRetries);
 
         var error = await Assert.ThrowsAsync<JsonException>(() =>
             client.RegisterSoraFsPinManifestAsync(
@@ -9044,7 +9444,9 @@ public sealed partial class ToriiClientTests
             return response;
         });
 
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = new ToriiClient(
+            new Uri("https://torii.example"),
+            new HttpClient(handler));
         using var response = await client.OpenSoraFsCidContentAsync("bafyroot", cancellationToken: TestContext.Current.CancellationToken);
         var bytes = await response.Content.ReadAsByteArrayAsync(cancellationToken: TestContext.Current.CancellationToken);
 
@@ -9070,7 +9472,9 @@ public sealed partial class ToriiClientTests
             return response;
         });
 
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = new ToriiClient(
+            new Uri("https://torii.example"),
+            new HttpClient(handler));
         var content = await client.GetSoraFsCidContentAsync("bafynested", "assets/app main.js", cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal("/sorafs/cid/bafynested/assets/app%20main.js", handler.LastRequest!.RequestUri!.AbsolutePath);
@@ -9153,12 +9557,59 @@ public sealed partial class ToriiClientTests
             Content = new ByteArrayContent("payload"u8.ToArray()),
         });
 
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = new ToriiClient(
+            new Uri("https://torii.example"),
+            new HttpClient(handler));
         var content = await client.GetSoraFsCidContentAsync("bafyroot", cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal("/sorafs/cid/bafyroot", handler.LastRequest!.RequestUri!.AbsolutePath);
         Assert.Null(content.ContentCid);
         Assert.Equal("payload", System.Text.Encoding.UTF8.GetString(content.Bytes));
+    }
+
+    [Fact]
+    public async Task GetSoraFsCidContentAsyncRequiresAnExplicitBoundForBufferedReads()
+    {
+        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new ByteArrayContent("payload"u8.ToArray()),
+        });
+        using var client = new ToriiClient(
+            new Uri("https://torii.example"),
+            new HttpClient(handler));
+
+        var content = await client.GetSoraFsCidContentAsync(
+            "bafyroot",
+            maximumBytes: 7,
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal("payload", System.Text.Encoding.UTF8.GetString(content.Bytes));
+
+        var error = await Assert.ThrowsAsync<InvalidDataException>(() =>
+            client.GetSoraFsCidContentAsync(
+                "bafyroot",
+                maximumBytes: 6,
+                cancellationToken: TestContext.Current.CancellationToken));
+        Assert.Contains("6-byte limit", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task GetSoraFsCidContentAsyncRejectsBufferLimitsAboveSixteenMiBBeforeDispatch()
+    {
+        using var handler = new RecordingHandler(_ =>
+            throw new InvalidOperationException("oversized buffered read reached HTTP dispatch"));
+        using var client = new ToriiClient(
+            new Uri("https://torii.example"),
+            new HttpClient(handler));
+
+        var error = await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() =>
+            client.GetSoraFsCidContentAsync(
+                "bafyroot",
+                maximumBytes: 16 * 1024 * 1024 + 1,
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Equal("maximumBytes", error.ParamName);
+        Assert.Contains("16777216 bytes", error.Message, StringComparison.Ordinal);
+        Assert.Null(handler.LastRequest);
     }
 
     public static IEnumerable<object?[]> InvalidSoraFsContentCidHeaders()
@@ -9317,7 +9768,11 @@ public sealed partial class ToriiClientTests
             };
         });
 
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = new ToriiClient(
+            new Uri("https://torii.example"),
+            new HttpClient(handler),
+            options: null,
+            TransactionSubmissionTransportAssurance.OneShotWithoutRedirectsOrRetries);
         using var response = await client.SubmitSignedQueryAsync(queryBytes, query: "limit=1", cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal("Singular", response.RootElement.GetProperty("kind").GetString());
@@ -9355,7 +9810,11 @@ public sealed partial class ToriiClientTests
                 }
                 """),
         });
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = new ToriiClient(
+            new Uri("https://torii.example"),
+            new HttpClient(handler),
+            options: null,
+            TransactionSubmissionTransportAssurance.OneShotWithoutRedirectsOrRetries);
 
         var error = await Assert.ThrowsAsync<JsonException>(() =>
             client.SubmitSignedQueryAsync(queryBytes, query: "limit=1", cancellationToken: TestContext.Current.CancellationToken));
@@ -9392,7 +9851,6 @@ public sealed partial class ToriiClientTests
     {
         foreach (var methodName in new[]
         {
-            nameof(ToriiClient.OpenEventSseAsync),
             nameof(ToriiClient.StreamEventsAsync),
             nameof(ToriiClient.StreamPipelineEventsAsync),
             nameof(ToriiClient.StreamProofEventsAsync),
@@ -12795,7 +13253,11 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                 }
                 """);
         });
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = new ToriiClient(
+            new Uri("https://torii.example"),
+            new HttpClient(handler),
+            options: null,
+            TransactionSubmissionTransportAssurance.OneShotWithoutRedirectsOrRetries);
 
         using var details = await client.GetPipelineTransactionDetailsAsync(
             signedQuery,
@@ -13201,12 +13663,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
 
         using var httpClient = new HttpClient(handler);
         httpClient.DefaultRequestHeaders.TryAddWithoutValidation("X-API-Token", "global-api-token");
-        httpClient.DefaultRequestHeaders.TryAddWithoutValidation(
-            ToriiClient.AccountOnboardingTokenHeaderName,
-            ["stale-default-token-one", "stale-default-token-two"]);
         using var client = new ToriiClient(new Uri("https://torii.example"), httpClient);
-        Assert.False(httpClient.DefaultRequestHeaders.Contains(
-            ToriiClient.AccountOnboardingTokenHeaderName));
         var receipt = await client.PlanAccountOnboardingAsync(new ToriiAccountOnboardingPlanRequest
         {
             Alias = "Merchant@Banka.Paynet",
@@ -13871,7 +14328,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     {
         using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
         {
-            Content = new StringContent(ToriiTransactionHashResponseJson(field, value)),
+            Content = new StringContent(ToriiTransactionHashResponseJson(operation, field, value)),
         });
 
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
@@ -14654,269 +15111,164 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     }
 
     [Fact]
-    public async Task GetContractInstancesAsyncAddsFiltersAndDeserializesResponse()
+    public async Task GetGovernedContractAsyncSignsCanonicalReadAndDeserializesLifecycle()
     {
         using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
         {
             Content = new StringContent($$"""
                 {
-                  "namespace": "universal",
-                  "instances": [
-                    {
-                      "contract_id": "router::dex.universal",
-                      "code_hash_hex": "{{ContractCodeHashHex}}"
+                  "found": true,
+                  "contract_address": "{{ContractDraftAddress}}",
+                  "contract_subject_account": "{{ContractAuthorityAccountId}}",
+                  "dataspace": "universal",
+                  "active": true,
+                  "lifecycle": {
+                    "version": 1,
+                    "origin": "direct",
+                    "origin_account": "{{CanonicalAccountId}}",
+                    "origin_proposal_content_id_hex": null,
+                    "origin_governance_attempt_id_hex": null,
+                    "owner": "{{CanonicalAccountId}}",
+                    "pending_owner": "parliament",
+                    "parliament_delegated": true,
+                    "active_code_hash_hex": "{{GovernedContractCodeHashHex}}",
+                    "revision": 7,
+                    "emergency_hold": {
+                      "incident_digest_hex": "{{new string('1', 64)}}",
+                      "proposal_content_id_hex": "{{new string('2', 64)}}",
+                      "governance_attempt_id_hex": "{{new string('3', 64)}}",
+                      "reason": "incident response",
+                      "imposed_at_height": 100,
+                      "expires_at_height": 200
                     }
-                  ],
-                  "total": 3,
-                  "offset": 2,
-                  "limit": 5
+                  },
+                  "emergency_hold_active": true,
+                  "code_hash_hex": "{{GovernedContractCodeHashHex}}",
+                  "abi_hash_hex": "{{ContractAbiHashHex}}",
+                  "public_entrypoints": ["read_balance", "transfer"]
                 }
                 """),
         });
+        using var client = CreateSignedVpnClient(handler);
 
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-        var response = await client.GetContractInstancesAsync(
-            "universal",
-            new ToriiContractInstancesQuery
+        var response = await client.GetGovernedContractAsync(
+            ContractDraftAddress,
+            TestContext.Current.CancellationToken);
+
+        Assert.True(response.Found);
+        Assert.True(response.Active);
+        Assert.Equal(ContractDraftAddress, response.ContractAddress);
+        Assert.Equal(ContractAuthorityAccountId, response.ContractSubjectAccount);
+        Assert.Equal("direct", response.Lifecycle!.Origin);
+        Assert.Equal(CanonicalAccountId, response.Lifecycle.Owner);
+        Assert.Equal("parliament", response.Lifecycle.PendingOwner);
+        Assert.Equal((ulong)7, response.Lifecycle.Revision);
+        Assert.True(response.EmergencyHoldActive);
+        Assert.Equal(new[] { "read_balance", "transfer" }, response.PublicEntrypoints);
+        Assert.Equal(
+            $"/v1/gov/contracts/{Uri.EscapeDataString(ContractDraftAddress)}",
+            handler.LastRequest!.RequestUri!.AbsolutePath);
+        Assert.True(handler.LastRequest.Headers.Contains("X-Iroha-Account"));
+        Assert.True(handler.LastRequest.Headers.Contains("X-Iroha-Signature"));
+    }
+
+    [Fact]
+    public void GovernedContractMissingShapeRoundTripsWithoutLegacyPagination()
+    {
+        var response = Assert.IsType<ToriiGovernedContractResponse>(
+            JsonSerializer.Deserialize<ToriiGovernedContractResponse>($$"""
+                {
+                  "found": false,
+                  "contract_address": "{{ContractDraftAddress}}",
+                  "dataspace": "universal"
+                }
+                """));
+
+        Assert.False(response.Found);
+        Assert.Null(response.Lifecycle);
+        Assert.Equal(
+            $$"""{"found":false,"contract_address":"{{ContractDraftAddress}}","dataspace":"universal"}""",
+            JsonSerializer.Serialize(response));
+    }
+
+    [Theory]
+    [InlineData(0, "revision")]
+    [InlineData(1, "instances")]
+    public async Task GetGovernedContractAsyncRejectsMalformedOrLegacyResponse(
+        int mutation,
+        string expectedField)
+    {
+        var lifecycle = $$"""
             {
-                Contains = "dex",
-                HashPrefix = "aa",
-                Offset = 2,
-                Limit = 5,
-                Order = "hash_desc",
-            }, cancellationToken: TestContext.Current.CancellationToken);
-
-        Assert.Equal("universal", response.Namespace);
-        Assert.Single(response.Instances);
-        Assert.Equal("router::dex.universal", response.Instances[0].ContractId);
-        Assert.Equal((ulong)3, response.Total);
-        Assert.Equal("/v1/contracts/instances/universal?contains=dex&hash_prefix=aa&offset=2&limit=5&order=hash_desc", handler.LastRequest!.RequestUri!.PathAndQuery);
-    }
-
-    public static IEnumerable<object?[]> InvalidContractInstancesResponses()
-    {
-        yield return new object?[] { "namespace", null, "must not be null" };
-        yield return new object?[] { "namespace", "", "non-empty" };
-        yield return new object?[] { "namespace", " universal", "surrounding whitespace" };
-        yield return new object?[] { "namespace", "uni versal", "whitespace" };
-        yield return new object?[] { "namespace", "universal\u0001", "control characters" };
-        yield return new object?[] { "instances[0].contract_id", null, "must not be null" };
-        yield return new object?[] { "instances[0].contract_id", "", "non-empty" };
-        yield return new object?[] { "instances[0].contract_id", " router::dex", "surrounding whitespace" };
-        yield return new object?[] { "instances[0].contract_id", "router dex", "whitespace" };
-        yield return new object?[] { "instances[0].contract_id", "router::dex\u0001", "control characters" };
-        yield return new object?[] { "instances[0].code_hash_hex", null, "must not be null" };
-        yield return new object?[] { "limit", 0, "item count must be less than or equal to limit" };
-        yield return new object?[] { "offset", 2, "offset must be less than or equal to total" };
-        yield return new object?[] { "total", 0, "offset plus item count must be less than or equal to total" };
-    }
-
-    [Theory]
-    [MemberData(nameof(InvalidContractInstancesResponses))]
-    public async Task GetContractInstancesAsyncRejectsMalformedResponse(
-        string field,
-        object? value,
-        string expectedMessage)
-    {
-        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
-        {
-            Content = new StringContent(ContractInstancesResponseJson(field, value)),
-        });
-
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-
-        var error = await Assert.ThrowsAsync<JsonException>(() =>
-            client.GetContractInstancesAsync("universal", cancellationToken: TestContext.Current.CancellationToken));
-
-        Assert.Contains(field, error.Message);
-        Assert.Contains(expectedMessage, error.Message);
-    }
-
-    public static IEnumerable<object[]> MissingRequiredContractInstancesResponses()
-    {
-        yield return new object[] { "namespace", RemoveTopLevelJsonField(ContractInstancesRawResponseJson("namespace", "universal"), "namespace") };
-        yield return new object[] { "instances[0].contract_id", RemoveFirstArrayItemObjectJsonField(ContractInstancesRawResponseJson("total", 1), "instances", "contract_id") };
-        yield return new object[] { "instances[0].code_hash_hex", RemoveFirstArrayItemObjectJsonField(ContractInstancesRawResponseJson("total", 1), "instances", "code_hash_hex") };
-    }
-
-    [Theory]
-    [MemberData(nameof(MissingRequiredContractInstancesResponses))]
-    public async Task GetContractInstancesAsyncRejectsMissingRequiredStringResponse(
-        string expectedField,
-        string json)
-    {
+              "version": 1,
+              "origin": "direct",
+              "origin_account": "{{CanonicalAccountId}}",
+              "origin_proposal_content_id_hex": null,
+              "origin_governance_attempt_id_hex": null,
+              "owner": "{{CanonicalAccountId}}",
+              "pending_owner": null,
+              "parliament_delegated": false,
+              "active_code_hash_hex": null,
+              "revision": {{(mutation == 0 ? 0 : 1)}},
+              "emergency_hold": null
+            }
+            """;
+        var json = mutation == 0
+            ? $$"""
+                {
+                  "found": true,
+                  "contract_address": "{{ContractDraftAddress}}",
+                  "contract_subject_account": "{{ContractAuthorityAccountId}}",
+                  "dataspace": "universal",
+                  "active": false,
+                  "lifecycle": {{lifecycle}},
+                  "emergency_hold_active": false
+                }
+                """
+            : $$"""
+                {
+                  "found": false,
+                  "contract_address": "{{ContractDraftAddress}}",
+                  "dataspace": "universal",
+                  "instances": []
+                }
+                """;
         using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
         {
             Content = new StringContent(json),
         });
-
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = CreateSignedVpnClient(handler);
 
         var error = await Assert.ThrowsAsync<JsonException>(() =>
-            client.GetContractInstancesAsync("universal", cancellationToken: TestContext.Current.CancellationToken));
+            client.GetGovernedContractAsync(
+                ContractDraftAddress,
+                TestContext.Current.CancellationToken));
 
         Assert.Contains(expectedField, error.Message);
-        Assert.Contains("must not be null", error.Message);
-    }
-
-    public static IEnumerable<object[]> InvalidRawContractInstances()
-    {
-        yield return new object[] { "contract instance", "null", "must not be null" };
-        yield return new object[] { "contract instance", "[]", "object" };
-        yield return new object[]
-        {
-            "contract_id",
-            ContractInstanceDuplicatePropertyJson("contract_id"),
-            "must not appear more than once",
-        };
-        yield return new object[]
-        {
-            "contract instance.audit.nonce",
-            ContractInstanceUnknownExtensionDuplicateJson(),
-            "must not appear more than once",
-        };
-        yield return new object[] { "contract_id", ContractInstanceRawJson("contract_id", null), "must not be null" };
-        yield return new object[] { "contract_id", RemoveTopLevelJsonField(ContractInstanceRawJson("contract_id", "router::dex.universal"), "contract_id"), "must not be null" };
-        yield return new object[] { "contract_id", ContractInstanceRawJson("contract_id", "router dex"), "whitespace" };
-        yield return new object[] { "code_hash_hex", ContractInstanceRawJson("code_hash_hex", null), "must not be null" };
-        yield return new object[] { "code_hash_hex", RemoveTopLevelJsonField(ContractInstanceRawJson("code_hash_hex", ContractCodeHashHex), "code_hash_hex"), "must not be null" };
-        yield return new object[] { "code_hash_hex", ContractInstanceRawJson("code_hash_hex", 1), "string" };
-        yield return new object[] { "code_hash_hex", ContractInstanceRawJson("code_hash_hex", ContractCodeHashHex.ToUpperInvariant()), "lowercase" };
-    }
-
-    [Theory]
-    [MemberData(nameof(InvalidRawContractInstances))]
-    public void RawContractInstanceRejectsMalformedPayloads(
-        string expectedField,
-        string json,
-        string expectedMessage)
-    {
-        var error = Assert.Throws<JsonException>(() =>
-            JsonSerializer.Deserialize<ToriiContractInstance>(json));
-
-        Assert.Contains(expectedField, error.Message);
-        Assert.Contains(expectedMessage, error.Message);
-    }
-
-    public static IEnumerable<object[]> InvalidRawContractInstancesResponses()
-    {
-        yield return new object[] { "contract instances response", "null", "must not be null" };
-        yield return new object[] { "contract instances response", "[]", "object" };
-        yield return new object[]
-        {
-            "namespace",
-            ContractInstancesDuplicatePropertyJson("namespace"),
-            "must not appear more than once",
-        };
-        yield return new object[]
-        {
-            "contract instances response.audit.nonce",
-            ContractInstancesResponseUnknownExtensionDuplicateJson(),
-            "must not appear more than once",
-        };
-        yield return new object[] { "namespace", ContractInstancesRawResponseJson("namespace", null), "must not be null" };
-        yield return new object[] { "namespace", RemoveTopLevelJsonField(ContractInstancesRawResponseJson("namespace", "universal"), "namespace"), "must not be null" };
-        yield return new object[] { "namespace", ContractInstancesRawResponseJson("namespace", " universal"), "surrounding whitespace" };
-        yield return new object[] { "instances", ContractInstancesRawResponseJson("instances", null), "required" };
-        yield return new object[] { "instances", ContractInstancesRawResponseJson("instances", 1), "array" };
-        yield return new object[] { "instances[0]", ContractInstancesRawResponseJson("instances[0]", null), "object" };
-        yield return new object[]
-        {
-            "instances[0].code_hash_hex",
-            ContractInstancesDuplicateInstancePropertyJson("code_hash_hex"),
-            "must not appear more than once",
-        };
-        yield return new object[]
-        {
-            "contract instances response.instances[0].audit.nonce",
-            ContractInstancesResponseItemUnknownExtensionDuplicateJson(),
-            "must not appear more than once",
-        };
-        yield return new object[] { "instances[0].contract_id", ContractInstancesRawResponseJson("instances[0].contract_id", null), "must not be null" };
-        yield return new object[] { "instances[0].contract_id", RemoveFirstArrayItemObjectJsonField(ContractInstancesRawResponseJson("total", 1), "instances", "contract_id"), "must not be null" };
-        yield return new object[] { "instances[0].contract_id", ContractInstancesRawResponseJson("instances[0].contract_id", 1), "string" };
-        yield return new object[] { "instances[0].code_hash_hex", ContractInstancesRawResponseJson("instances[0].code_hash_hex", null), "must not be null" };
-        yield return new object[] { "instances[0].code_hash_hex", RemoveFirstArrayItemObjectJsonField(ContractInstancesRawResponseJson("total", 1), "instances", "code_hash_hex"), "must not be null" };
-        yield return new object[] { "instances[0].code_hash_hex", ContractInstancesRawResponseJson("instances[0].code_hash_hex", "0x" + ContractCodeHashHex), "32-byte hex string" };
-        yield return new object[] { "total", RemoveTopLevelJsonField(ContractInstancesRawResponseJson("total", 3UL), "total"), "must not be null" };
-        yield return new object[] { "total", ContractInstancesRawResponseJson("total", -1), "unsigned integer" };
-        yield return new object[] { "offset", RemoveTopLevelJsonField(ContractInstancesRawResponseJson("offset", 0UL), "offset"), "must not be null" };
-        yield return new object[] { "offset", ContractInstancesRawResponseJson("offset", "2"), "unsigned integer" };
-        yield return new object[] { "limit", RemoveTopLevelJsonField(ContractInstancesRawResponseJson("limit", 20UL), "limit"), "must not be null" };
-        yield return new object[] { "limit", ContractInstancesRawResponseJson("limit", 0), "item count must be less than or equal to limit" };
-        yield return new object[] { "offset", ContractInstancesRawResponseJson("offset", 4UL), "offset must be less than or equal to total" };
-        yield return new object[] { "total", ContractInstancesRawResponseJson("total", 0), "offset plus item count must be less than or equal to total" };
-    }
-
-    [Theory]
-    [MemberData(nameof(InvalidRawContractInstancesResponses))]
-    public void RawContractInstancesResponseRejectsMalformedPayloads(
-        string expectedField,
-        string json,
-        string expectedMessage)
-    {
-        var error = Assert.Throws<JsonException>(() =>
-            JsonSerializer.Deserialize<ToriiContractInstancesResponse>(json));
-
-        Assert.Contains(expectedField, error.Message);
-        Assert.Contains(expectedMessage, error.Message);
-    }
-
-    public static IEnumerable<object?[]> InvalidDirectContractInstancesMetadata()
-    {
-        yield return new object?[] { "instance", "ContractId", "router dex" };
-        yield return new object?[] { "instance", "CodeHashHex", "0x" + ContractCodeHashHex };
-        yield return new object?[] { "response", "Namespace", " universal" };
-    }
-
-    [Theory]
-    [MemberData(nameof(InvalidDirectContractInstancesMetadata))]
-    public void ContractInstancesDtosRejectMalformedDirectMetadata(
-        string operation,
-        string propertyName,
-        object? value)
-    {
-        var error = Assert.ThrowsAny<ArgumentException>(() =>
-            SetContractInstancesDirectMetadata(operation, propertyName, value));
-
-        Assert.Equal(propertyName, error.ParamName);
     }
 
     [Fact]
-    public void RawContractInstanceWriteRejectsMalformedHash()
+    public async Task GetGovernedContractAsyncRequiresCanonicalCredentialsBeforeDispatch()
     {
-        var response = ValidContractInstance();
-        SetPrivateField(response, "codeHashHex", ContractCodeHashHex.ToUpperInvariant());
+        using var handler = new RecordingHandler(_ =>
+            throw new InvalidOperationException("unsigned governed-contract read reached HTTP dispatch"));
+        using var client = new ToriiClient(
+            new Uri("https://torii.example"),
+            new HttpClient(handler));
 
-        var error = Assert.Throws<JsonException>(() => JsonSerializer.Serialize(response));
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            client.GetGovernedContractAsync(
+                ContractDraftAddress,
+                TestContext.Current.CancellationToken));
 
-        Assert.Contains("code_hash_hex", error.Message);
-        Assert.Contains("lowercase", error.Message);
-    }
-
-    [Fact]
-    public void RawContractInstancesResponseWriteRejectsInconsistentLimit()
-    {
-        var response = new ToriiContractInstancesResponse
-        {
-            Namespace = "universal",
-            Instances = new[] { new ToriiContractInstance { ContractId = "router::dex.universal", CodeHashHex = ContractCodeHashHex } },
-            Total = 1,
-            Offset = 0,
-            Limit = 0,
-        };
-
-        var error = Assert.Throws<JsonException>(() => JsonSerializer.Serialize(response));
-
-        Assert.Contains("instances item count", error.Message);
-        Assert.Contains("limit", error.Message);
+        Assert.Contains(nameof(ToriiClientOptions.CanonicalRequestCredentials), error.Message);
+        Assert.Null(handler.LastRequest);
     }
 
     public static IEnumerable<object[]> InvalidContractMetadataHashResponses()
     {
         yield return new object[] { "contract-code", "manifest.code_hash", " " + ContractManifestCodeHashLiteral, "surrounding whitespace" };
         yield return new object[] { "contract-code", "manifest.abi_hash", ContractManifestAbiHashLiteral + " ", "surrounding whitespace" };
-        yield return new object[] { "contract-instances", "instances[0].code_hash_hex", ContractCodeHashHex[..32] + " " + ContractCodeHashHex[32..], "whitespace" };
         yield return new object[] { "contract-code-view", "code_hash", new string('a', 63), "32-byte hex string" };
         yield return new object[] { "contract-code-view", "declared_code_hash", new string('g', 64), "32-byte hex string" };
         yield return new object[] { "explorer-instruction-contract-view", "abi_hash", "0x" + ContractAbiHashHex, "32-byte hex string" };
@@ -15306,68 +15658,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         Assert.NotNull(handler.LastRequest);
     }
 
-    public static IEnumerable<object?[]> InvalidContractInstancesQueries()
-    {
-        yield return new object?[] { null, null, "namespaceId", "null or whitespace" };
-        yield return new object?[] { " universal", null, "namespaceId", "whitespace" };
-        yield return new object?[] { "universal\u0001", null, "namespaceId", "control characters" };
-        yield return new object?[]
-        {
-            "universal",
-            new ToriiContractInstancesQuery { Contains = " dex" },
-            "Contains",
-            "whitespace",
-        };
-        yield return new object?[]
-        {
-            "universal",
-            new ToriiContractInstancesQuery { HashPrefix = "zz" },
-            "HashPrefix",
-            "hexadecimal",
-        };
-        yield return new object?[]
-        {
-            "universal",
-            new ToriiContractInstancesQuery { HashPrefix = new string('a', 65) },
-            "HashPrefix",
-            "hexadecimal",
-        };
-        yield return new object?[]
-        {
-            "universal",
-            new ToriiContractInstancesQuery { Limit = 0 },
-            "Limit",
-            "positive",
-        };
-        yield return new object?[]
-        {
-            "universal",
-            new ToriiContractInstancesQuery { Order = "hash desc" },
-            "Order",
-            "whitespace",
-        };
-    }
-
-    [Theory]
-    [MemberData(nameof(InvalidContractInstancesQueries))]
-    public async Task GetContractInstancesAsyncRejectsMalformedQueryBeforeDispatch(
-        string? namespaceId,
-        ToriiContractInstancesQuery? query,
-        string expectedParamName,
-        string expectedMessage)
-    {
-        using var handler = new RecordingHandler(_ =>
-            throw new InvalidOperationException("malformed contract instances query reached HTTP dispatch"));
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-
-        var error = await Assert.ThrowsAnyAsync<ArgumentException>(() =>
-            client.GetContractInstancesAsync(namespaceId!, query, cancellationToken: TestContext.Current.CancellationToken));
-
-        Assert.Equal(expectedParamName, error.ParamName);
-        Assert.Contains(expectedMessage, error.Message);
-        Assert.Null(handler.LastRequest);
-    }
-
     [Fact]
     public async Task GetContractStateAsyncAddsQueryAndDeserializesResponse()
     {
@@ -15491,28 +15781,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         var roundTripPolicies = Assert.IsType<ToriiIdentifierPoliciesResponse>(
             JsonSerializer.Deserialize<ToriiIdentifierPoliciesResponse>(JsonSerializer.Serialize(policies)));
         Assert.Equal("phone#retail", Assert.Single(roundTripPolicies.Items).PolicyId);
-
-        var instance = new ToriiContractInstance
-        {
-            ContractId = "router::dex.universal",
-            CodeHashHex = ContractCodeHashHex,
-        };
-        var replacementInstance = instance with { ContractId = "router::payments.universal" };
-        var instances = new List<ToriiContractInstance> { instance };
-        var instanceResponse = new ToriiContractInstancesResponse
-        {
-            Namespace = "universal",
-            Instances = instances,
-            Total = 1,
-            Offset = 0,
-            Limit = 1,
-        };
-
-        AssertSnapshot(instances, () => instanceResponse.Instances, instance, replacementInstance);
-        var roundTripInstances = Assert.IsType<ToriiContractInstancesResponse>(
-            JsonSerializer.Deserialize<ToriiContractInstancesResponse>(
-                JsonSerializer.Serialize(instanceResponse)));
-        Assert.Equal("router::dex.universal", Assert.Single(roundTripInstances.Instances).ContractId);
 
         var entry = new ToriiContractStateEntry
         {
@@ -16015,7 +16283,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                 request,
                 cancellationToken: TestContext.Current.CancellationToken));
 
-        Assert.Contains("LocalSigningContext", error.Message);
+        Assert.Contains(nameof(ToriiClientOptions.NetworkId), error.Message);
     }
 
     [Fact]
@@ -19243,6 +19511,24 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         Assert.DoesNotContain("\ufffd", exception.Message, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task SendAsyncBoundsErrorBodies()
+    {
+        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.BadGateway)
+        {
+            Content = new ByteArrayContent(new byte[64 * 1024 + 1]),
+        });
+        using var client = new ToriiClient(
+            new Uri("https://torii.example"),
+            new HttpClient(handler));
+
+        var exception = await Assert.ThrowsAsync<ToriiApiException>(() =>
+            client.GetHealthAsync(TestContext.Current.CancellationToken));
+
+        Assert.Equal(HttpStatusCode.BadGateway, exception.StatusCode);
+        Assert.Equal("<response body exceeds the 65536-byte limit>", exception.ResponseBody);
+    }
+
     private static Task InvokeContractCodeReadOperationAsync(
         ToriiClient client,
         string operation,
@@ -19265,7 +19551,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         return operation switch
         {
             "contract-code" => client.GetContractCodeAsync(ContractCodeHashHex),
-            "contract-instances" => client.GetContractInstancesAsync("universal"),
             "contract-code-view" => client.GetContractCodeViewAsync(ContractCodeHashHex),
             "explorer-instruction-contract-view" => client.GetExplorerInstructionContractViewAsync("tx-detail", 2),
             "contract-call" => client.CallContractAsync(ValidContractCallRequest()),
@@ -19356,6 +19641,49 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                 nameof(operation),
                 operation,
                 "Unknown explorer world-list operation."),
+        };
+    }
+
+    private static Task InvokeExplorerHistoryQueryAsync(
+        ToriiClient client,
+        string operation,
+        string? cursor,
+        uint? limit,
+        CancellationToken cancellationToken)
+    {
+        return operation switch
+        {
+            "blocks" => client.GetExplorerBlocksAsync(new ToriiExplorerCursorQuery
+            {
+                Cursor = cursor,
+                Limit = limit,
+            }, cancellationToken),
+            "transactions" => client.GetExplorerTransactionsAsync(new ToriiExplorerTransactionsQuery
+            {
+                Cursor = cursor,
+                Limit = limit,
+            }, cancellationToken),
+            "transactions-latest" => client.GetExplorerLatestTransactionsAsync(
+                new ToriiExplorerTransactionsQuery
+                {
+                    Cursor = cursor,
+                    Limit = limit,
+                }, cancellationToken),
+            "instructions" => client.GetExplorerInstructionsAsync(new ToriiExplorerInstructionsQuery
+            {
+                Cursor = cursor,
+                Limit = limit,
+            }, cancellationToken),
+            "instructions-latest" => client.GetExplorerLatestInstructionsAsync(
+                new ToriiExplorerInstructionsQuery
+                {
+                    Cursor = cursor,
+                    Limit = limit,
+                }, cancellationToken),
+            _ => throw new ArgumentOutOfRangeException(
+                nameof(operation),
+                operation,
+                "Unknown Explorer history operation."),
         };
     }
 
@@ -20226,51 +20554,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             FeePayment = EmptyAuthorityFeePayment,
             TransactionPayloadBase64 = MultisigTransactionPayloadBase64,
             SigningMessageBase64 = MultisigSigningMessageBase64,
-        };
-    }
-
-    private static void SetContractInstancesDirectMetadata(string operation, string propertyName, object? value)
-    {
-        object? constructed = (operation, propertyName) switch
-        {
-            ("instance", "ContractId") => ValidContractInstance() with
-            {
-                ContractId = RequiredStringValue(value),
-            },
-            ("instance", "CodeHashHex") => ValidContractInstance() with
-            {
-                CodeHashHex = RequiredStringValue(value),
-            },
-            ("response", "Namespace") => ValidContractInstancesResponse() with
-            {
-                Namespace = RequiredStringValue(value),
-            },
-            _ => throw new ArgumentOutOfRangeException(
-                nameof(propertyName),
-                propertyName,
-                "Unknown contract instances direct metadata field."),
-        };
-        GC.KeepAlive(constructed);
-    }
-
-    private static ToriiContractInstance ValidContractInstance()
-    {
-        return new ToriiContractInstance
-        {
-            ContractId = "router::dex.universal",
-            CodeHashHex = ContractCodeHashHex,
-        };
-    }
-
-    private static ToriiContractInstancesResponse ValidContractInstancesResponse()
-    {
-        return new ToriiContractInstancesResponse
-        {
-            Namespace = "universal",
-            Instances = [ValidContractInstance()],
-            Total = 1,
-            Offset = 0,
-            Limit = 1,
         };
     }
 
@@ -21273,28 +21556,32 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     {
         object? constructed = (operation, propertyName) switch
         {
-            ("pagination", "Page") => new ToriiExplorerPaginationMeta
+            ("history-pagination", "Limit") => new ToriiExplorerHistoryCursorMeta
             {
-                Page = RequiredUInt64Value(value),
-                PerPage = 10,
-                TotalPages = 3,
-                TotalItems = 25,
+                Limit = RequiredUInt32Value(value),
+                SnapshotHeight = 42,
+                SnapshotHash = ExplorerBlockHashHex,
+                NextCursor = null,
+                HasMore = false,
             },
-            ("pagination", "PerPage") => new ToriiExplorerPaginationMeta
+            ("history-pagination", "SnapshotHash") => new ToriiExplorerHistoryCursorMeta
             {
-                Page = 1,
-                PerPage = RequiredUInt64Value(value),
-                TotalPages = 3,
-                TotalItems = 25,
+                Limit = 10,
+                SnapshotHeight = 42,
+                SnapshotHash = RequiredStringValue(value),
+                NextCursor = null,
+                HasMore = false,
             },
             ("latest-transactions", "SampledAt") => new ToriiExplorerLatestTransactionsResponse
             {
                 SampledAt = RequiredStringValue(value),
+                Pagination = ValidExplorerHistoryCursorMeta(),
                 Items = new[] { ValidExplorerTransaction() },
             },
             ("latest-instructions", "SampledAt") => new ToriiExplorerLatestInstructionsResponse
             {
                 SampledAt = RequiredStringValue(value),
+                Pagination = ValidExplorerHistoryCursorMeta(),
                 Items = new[] { ValidExplorerInstruction() },
             },
             _ => throw new ArgumentOutOfRangeException(
@@ -21303,6 +21590,18 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                 "Unknown explorer wrapper direct metadata field."),
         };
         GC.KeepAlive(constructed);
+    }
+
+    private static ToriiExplorerHistoryCursorMeta ValidExplorerHistoryCursorMeta()
+    {
+        return new ToriiExplorerHistoryCursorMeta
+        {
+            Limit = 20,
+            SnapshotHeight = 42,
+            SnapshotHash = ExplorerBlockHashHex,
+            NextCursor = null,
+            HasMore = false,
+        };
     }
 
     private static void SetExplorerDirectoryInventoryDirectMetadata(
@@ -22013,11 +22312,12 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             new HttpClient(handler),
             new ToriiClientOptions
             {
-                LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId),
+                NetworkId = OnboardingFixtureNetworkId,
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),
-            });
+            },
+            TransactionSubmissionTransportAssurance.OneShotWithoutRedirectsOrRetries);
     }
 
     private static ToriiClient CreateVerifyingKeyClient(RecordingHandler handler)
@@ -22027,8 +22327,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             new HttpClient(handler),
             new ToriiClientOptions
             {
-                LocalSigningContext = new ToriiLocalSigningContext(
-                    NetworkId.Parse(CanonicalNetworkId)),
+                NetworkId = NetworkId.Parse(CanonicalNetworkId),
             });
     }
 
@@ -22644,8 +22943,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             ["archive_version"] = 1,
             ["blob_class_custom_id"] = 1001,
             ["checkpoint_contract_v1"] = true,
-            ["checkpoint_plan_v1"] = true,
-            ["checkpoint_publish_v1"] = true,
             ["codec"] = "application/x-iroha-query-shard+norito+zstd",
             ["compression"] = "zstd",
             ["da_v1_enabled"] = false,
@@ -22781,12 +23078,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             case "query.projection.da_v1_enabled":
                 projection["da_v1_enabled"] = JsonValueForMetadata(value);
                 break;
-            case "query.projection.checkpoint_plan_v1":
-                projection["checkpoint_plan_v1"] = JsonValueForMetadata(value);
-                break;
-            case "query.projection.checkpoint_publish_v1":
-                projection["checkpoint_publish_v1"] = JsonValueForMetadata(value);
-                break;
             case "query.projection.shard_catalog_v1":
                 projection["shard_catalog_v1"] = JsonValueForMetadata(value);
                 break;
@@ -22851,18 +23142,14 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         return response.ToJsonString();
     }
 
-    private static string NodeCapabilitiesResponseJsonWithProjectionFeatureFlags(
-        bool checkpointPlan,
-        bool checkpointPublish,
+    private static string NodeCapabilitiesResponseJsonWithProjectionAvailability(
         bool shardCatalog,
         bool archiveExport,
         JsonArray exportSupportedResources)
     {
-        var response = JsonNode.Parse(NodeCapabilitiesResponseJson("query.projection.checkpoint_plan_v1", checkpointPlan))!.AsObject();
+        var response = JsonNode.Parse(NodeCapabilitiesResponseJson("query.projection.shard_catalog_v1", shardCatalog))!.AsObject();
         var query = response["query"]!.AsObject();
         var projection = query["projection"]!.AsObject();
-        projection["checkpoint_publish_v1"] = checkpointPublish;
-        projection["shard_catalog_v1"] = shardCatalog;
         projection["archive_export_v1"] = archiveExport;
         projection["export_supported_resources"] = exportSupportedResources;
         return response.ToJsonString();
@@ -22903,8 +23190,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         yield return "query.aggregate.exact_results";
         yield return "query.projection.checkpoint_contract_v1";
         yield return "query.projection.da_v1_enabled";
-        yield return "query.projection.checkpoint_plan_v1";
-        yield return "query.projection.checkpoint_publish_v1";
         yield return "query.projection.shard_catalog_v1";
         yield return "query.projection.archive_export_v1";
         yield return "query.projection.archive_version";
@@ -22948,8 +23233,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         yield return ("aggregate", "exact_results");
         yield return ("projection", "checkpoint_contract_v1");
         yield return ("projection", "da_v1_enabled");
-        yield return ("projection", "checkpoint_plan_v1");
-        yield return ("projection", "checkpoint_publish_v1");
         yield return ("projection", "shard_catalog_v1");
         yield return ("projection", "archive_export_v1");
         yield return ("projection", "archive_version");
@@ -26134,11 +26417,29 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
 
         switch (field)
         {
+            case "pagination.limit":
+                ((JsonObject)root["pagination"]!)["limit"] = JsonValueForExplorer(value);
+                break;
+            case "pagination.snapshot_height":
+                ((JsonObject)root["pagination"]!)["snapshot_height"] = JsonValueForExplorer(value);
+                break;
+            case "pagination.snapshot_hash":
+                ((JsonObject)root["pagination"]!)["snapshot_hash"] = JsonValueForExplorer(value);
+                break;
+            case "pagination.next_cursor":
+                ((JsonObject)root["pagination"]!)["next_cursor"] = JsonValueForExplorer(value);
+                break;
+            case "pagination.has_more":
+                ((JsonObject)root["pagination"]!)["has_more"] = JsonValueForExplorer(value);
+                break;
             case "pagination.page":
                 ((JsonObject)root["pagination"]!)["page"] = JsonValueForExplorer(value);
                 break;
             case "pagination.per_page":
                 ((JsonObject)root["pagination"]!)["per_page"] = JsonValueForExplorer(value);
+                break;
+            case "pagination.total_items":
+                ((JsonObject)root["pagination"]!)["total_items"] = JsonValueForExplorer(value);
                 break;
             case "items":
                 root["items"] = JsonValueForExplorer(value);
@@ -26202,11 +26503,20 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     {
         switch (field)
         {
-            case "pagination.page":
-                ((JsonObject)root["pagination"]!).Remove("page");
+            case "pagination.limit":
+                ((JsonObject)root["pagination"]!).Remove("limit");
                 break;
-            case "pagination.per_page":
-                ((JsonObject)root["pagination"]!).Remove("per_page");
+            case "pagination.snapshot_height":
+                ((JsonObject)root["pagination"]!).Remove("snapshot_height");
+                break;
+            case "pagination.snapshot_hash":
+                ((JsonObject)root["pagination"]!).Remove("snapshot_hash");
+                break;
+            case "pagination.next_cursor":
+                ((JsonObject)root["pagination"]!).Remove("next_cursor");
+                break;
+            case "pagination.has_more":
+                ((JsonObject)root["pagination"]!).Remove("has_more");
                 break;
             case "pagination":
                 root.Remove("pagination");
@@ -26368,10 +26678,11 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         {
             ["pagination"] = new JsonObject
             {
-                ["page"] = 1,
-                ["per_page"] = 20,
-                ["total_pages"] = 1,
-                ["total_items"] = 1,
+                ["limit"] = 20,
+                ["snapshot_height"] = 42,
+                ["snapshot_hash"] = ExplorerBlockHashHex,
+                ["next_cursor"] = "bmV4dA",
+                ["has_more"] = true,
             },
             ["items"] = new JsonArray(item),
         };
@@ -26382,6 +26693,14 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         return new JsonObject
         {
             ["sampled_at"] = "2026-03-29T08:00:00Z",
+            ["pagination"] = new JsonObject
+            {
+                ["limit"] = 20,
+                ["snapshot_height"] = 42,
+                ["snapshot_hash"] = ExplorerBlockHashHex,
+                ["next_cursor"] = "bmV4dA",
+                ["has_more"] = true,
+            },
             ["items"] = new JsonArray(item),
         };
     }
@@ -27150,169 +27469,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
               }
             }
             """;
-    }
-
-    private static string ContractInstancesResponseJson(string field, object? value)
-    {
-        var response = ContractInstancesResponseJsonObject();
-        var instances = (JsonArray)response["instances"]!;
-        var instance = (JsonObject)instances[0]!;
-
-        switch (field)
-        {
-            case "namespace":
-            case "total":
-            case "offset":
-            case "limit":
-                response[field] = JsonValueForContractInstances(value);
-                break;
-            case "instances[0].contract_id":
-                instance["contract_id"] = JsonValueForContractInstances(value);
-                break;
-            case "instances[0].code_hash_hex":
-                instance["code_hash_hex"] = JsonValueForContractInstances(value);
-                break;
-            default:
-                throw new ArgumentOutOfRangeException(nameof(field), field, "Unknown contract instances response field.");
-        }
-
-        return response.ToJsonString();
-    }
-
-    private static JsonObject ContractInstanceJsonObject()
-    {
-        return new JsonObject
-        {
-            ["contract_id"] = "router::dex.universal",
-            ["code_hash_hex"] = ContractCodeHashHex,
-        };
-    }
-
-    private static string ContractInstanceRawJson(string field, object? value)
-    {
-        var instance = ContractInstanceJsonObject();
-        instance[field] = JsonValueForContractInstances(value);
-        return instance.ToJsonString();
-    }
-
-    private static string ContractInstanceDuplicatePropertyJson(string propertyName)
-    {
-        return $$"""
-            {
-              "{{propertyName}}": "router::dex.universal",
-              "{{propertyName}}": "router::dex.universal",
-              "code_hash_hex": "{{ContractCodeHashHex}}"
-            }
-            """;
-    }
-
-    private static string ContractInstanceUnknownExtensionDuplicateJson()
-    {
-        return JsonWithIgnoredAuditDuplicate(ContractInstanceRawJson("contract_id", "router::dex.universal"));
-    }
-
-    private static JsonObject ContractInstancesResponseJsonObject()
-    {
-        return new JsonObject
-        {
-            ["namespace"] = "universal",
-            ["instances"] = new JsonArray(ContractInstanceJsonObject()),
-            ["total"] = 1,
-            ["offset"] = 0,
-            ["limit"] = 1,
-        };
-    }
-
-    private static string ContractInstancesRawResponseJson(string field, object? value)
-    {
-        var response = ContractInstancesResponseJsonObject();
-        var instances = (JsonArray)response["instances"]!;
-
-        if (field == "instances[0]")
-        {
-            instances[0] = JsonValueForContractInstances(value);
-        }
-        else if (field.StartsWith("instances[0].", StringComparison.Ordinal))
-        {
-            var instance = (JsonObject)instances[0]!;
-            instance[field["instances[0].".Length..]] = JsonValueForContractInstances(value);
-        }
-        else
-        {
-            response[field] = JsonValueForContractInstances(value);
-        }
-
-        return response.ToJsonString();
-    }
-
-    private static string ContractInstancesDuplicatePropertyJson(string propertyName)
-    {
-        return $$"""
-            {
-              "{{propertyName}}": "universal",
-              "{{propertyName}}": "universal",
-              "instances": [
-                {
-                  "contract_id": "router::dex.universal",
-                  "code_hash_hex": "{{ContractCodeHashHex}}"
-                }
-              ],
-              "total": 1,
-              "offset": 0,
-              "limit": 1
-            }
-            """;
-    }
-
-    private static string ContractInstancesDuplicateInstancePropertyJson(string propertyName)
-    {
-        return $$"""
-            {
-              "namespace": "universal",
-              "instances": [
-                {
-                  "contract_id": "router::dex.universal",
-                  "{{propertyName}}": "{{ContractCodeHashHex}}",
-                  "{{propertyName}}": "{{ContractCodeHashHex}}"
-                }
-              ],
-              "total": 1,
-              "offset": 0,
-              "limit": 1
-            }
-            """;
-    }
-
-    private static string ContractInstancesResponseUnknownExtensionDuplicateJson()
-    {
-        return JsonWithIgnoredAuditDuplicate(ContractInstancesRawResponseJson("namespace", "universal"));
-    }
-
-    private static string ContractInstancesResponseItemUnknownExtensionDuplicateJson()
-    {
-        var json = ContractInstancesRawResponseJson("namespace", "universal");
-        var marker = $"\"code_hash_hex\":\"{ContractCodeHashHex}\"";
-        var index = json.IndexOf(marker, StringComparison.Ordinal);
-        if (index < 0)
-        {
-            throw new InvalidOperationException("Contract instances fixture is missing the nested code hash.");
-        }
-
-        return json.Insert(index + marker.Length, ",\"audit\":{\"nonce\":1,\"nonce\":2}");
-    }
-
-    private static JsonNode? JsonValueForContractInstances(object? value)
-    {
-        return value switch
-        {
-            null => null,
-            string text => JsonValue.Create(text),
-            int number => JsonValue.Create(number),
-            long number => JsonValue.Create(number),
-            ulong number => JsonValue.Create(number),
-            bool boolean => JsonValue.Create(boolean),
-            _ => throw new ArgumentOutOfRangeException(nameof(value), value, "Unsupported contract instances JSON value."),
-        };
     }
 
     private static string ContractCallViewResponseJson(string operation, string field, object? value)
@@ -28428,8 +28584,18 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         };
     }
 
-    private static string ToriiTransactionHashResponseJson(string field, string value)
+    private static string ToriiTransactionHashResponseJson(
+        string operation,
+        string field,
+        string value)
     {
+        if (string.Equals(operation, "contract-call", StringComparison.Ordinal))
+        {
+            var response = ContractCallResponseJsonObject();
+            response[field] = value;
+            return response.ToJsonString();
+        }
+
         return new JsonObject
         {
             ["ok"] = true,
@@ -28517,8 +28683,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             new HttpClient(handler),
             new ToriiClientOptions
             {
-                LocalSigningContext = new ToriiLocalSigningContext(
-                    NetworkId.Parse(CanonicalNetworkId)),
+                NetworkId = NetworkId.Parse(CanonicalNetworkId),
             });
 
     private static ToriiContractCallRequest TrustedContractCallRequest(
@@ -30796,20 +30961,4 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         }
     }
 
-    private sealed record SerializerProbe(string Value);
-
-    private sealed class SerializerProbeConverter : System.Text.Json.Serialization.JsonConverter<SerializerProbe>
-    {
-        public override SerializerProbe Read(
-            ref Utf8JsonReader reader,
-            Type typeToConvert,
-            JsonSerializerOptions options) =>
-            throw new NotSupportedException();
-
-        public override void Write(
-            Utf8JsonWriter writer,
-            SerializerProbe value,
-            JsonSerializerOptions options) =>
-            writer.WriteStringValue(value.Value);
-    }
 }

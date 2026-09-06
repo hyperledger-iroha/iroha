@@ -1,7 +1,4 @@
-# Signed RS16 DA telemetry fixture
-sumeragi_da_manifest_guard_total{result="allowed",reason="ok"} 1
-sumeragi_da_spool_cache_total{kind="commitments",result="hit"} 1
-sumeragi_da_votes_ingested_total 1
+# Sumeragi transport pressure telemetry fixture
 sumeragi_bg_post_queue_depth 14
 sumeragi_bg_post_queue_depth_by_peer{peer="1"} 18
 p2p_queue_dropped_total{kind="tx"} 0

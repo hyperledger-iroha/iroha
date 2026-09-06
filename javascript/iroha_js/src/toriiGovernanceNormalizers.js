@@ -35,7 +35,6 @@ export function createToriiGovernanceNormalizers({
   normalizeQuantityInput,
   normalizeRequiredBase64Payload,
   normalizeUint64DecimalString,
-  requireExactLowerHex32String,
   requireCanonicalTransactionHashString,
   requireExactNonEmptyString,
   requireExactTokenString,
@@ -43,6 +42,7 @@ export function createToriiGovernanceNormalizers({
   requireNonEmptyString,
 }) {
   const GOVERNANCE_DEPLOY_CONTRACT_REQUEST_KEYS = new Set([
+    "proposalOperator",
     "contractAddress",
     "contractAlias",
     "abiVersion",
@@ -57,6 +57,10 @@ export function createToriiGovernanceNormalizers({
   const GOVERNANCE_PROPOSAL_INSTRUCTION_DRAFT_KEYS = new Set([
     "wire_id",
     "payload_hex",
+  ]);
+  const GOVERNANCE_BALLOT_DRAFT_RESPONSE_KEYS = new Set([
+    "drafted",
+    "tx_instructions",
   ]);
   const GOVERNANCE_MANIFEST_PROVENANCE_KEYS = new Set(["signer", "signature"]);
   const GOVERNANCE_PLAIN_BALLOT_REQUEST_KEYS = new Set([
@@ -692,20 +696,25 @@ export function createToriiGovernanceNormalizers({
 
   function normalizeGovernanceBallotResponse(payload, context) {
     const record = ensureRecord(payload, context);
-    if (record.accepted === undefined) {
-      throw new TypeError(`${context}.accepted is required`);
+    assertSupportedOptionKeys(record, GOVERNANCE_BALLOT_DRAFT_RESPONSE_KEYS, context);
+    if (record.drafted !== true) {
+      throw new TypeError(`${context}.drafted must be exactly true`);
     }
-    const base = normalizeGovernanceDraftResponse(record, context);
-    const reason =
-      record.reason === undefined || record.reason === null
-        ? null
-        : requireNonEmptyString(record.reason, `${context}.reason`);
+    if (!Array.isArray(record.tx_instructions) || record.tx_instructions.length !== 1) {
+      throw new TypeError(`${context}.tx_instructions must contain exactly one instruction`);
+    }
+    const itemContext = `${context}.tx_instructions[0]`;
+    const item = ensureRecord(record.tx_instructions[0], itemContext);
+    assertSupportedOptionKeys(item, GOVERNANCE_PROPOSAL_INSTRUCTION_DRAFT_KEYS, itemContext);
     return {
-      ok: base.ok,
-      proposal_id: base.proposal_id,
-      tx_instructions: base.tx_instructions,
-      accepted: Boolean(record.accepted),
-      reason,
+      drafted: true,
+      tx_instructions: [{
+        wire_id: requireExactTokenString(item.wire_id, `${itemContext}.wire_id`),
+        payload_hex: requireExactLowercaseHex(
+          item.payload_hex,
+          `${itemContext}.payload_hex`,
+        ),
+      }],
     };
   }
 
@@ -714,6 +723,10 @@ export function createToriiGovernanceNormalizers({
     const record = ensureRecord(input, context);
     rejectGovernancePrivateKeyFieldsDeep(record, context);
     assertSupportedOptionKeys(record, GOVERNANCE_DEPLOY_CONTRACT_REQUEST_KEYS, context);
+    const proposalOperator = ensureCanonicalAccountId(
+      record.proposalOperator,
+      `${context}.proposalOperator`,
+    );
     const contractAddressValue = record.contractAddress ?? null;
     const contractAliasValue = record.contractAlias ?? null;
     if ((contractAddressValue == null) === (contractAliasValue == null)) {
@@ -738,6 +751,7 @@ export function createToriiGovernanceNormalizers({
       throw new TypeError("governanceProposeDeployContract.abiHash is required");
     }
     const payload = {
+      proposal_operator: proposalOperator,
       abi_version: abiVersion,
       code_hash: normalizeHex32String(
         codeHashValue,

@@ -53,7 +53,8 @@ async fn torii_start_blocks_until_shutdown_signal() {
         OnlinePeersProvider::new(peers_rx),
         None,
         MaybeTelemetry::disabled(),
-    );
+    )
+    .expect("valid Torii startup fixture");
     let shutdown = ShutdownSignal::new();
     let shutdown_for_task = shutdown.clone();
     let join_handle = tokio::spawn(async move { torii.start(shutdown_for_task).await });

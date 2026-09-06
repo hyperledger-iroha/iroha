@@ -123,30 +123,23 @@ class SorafsMultiFetchError(RuntimeError):
 
 
 def _coerce_positive_int(value: Any, field: str) -> int:
-    try:
-        integer = int(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"{field} must be a positive integer") from exc
-    if integer <= 0:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"{field} must be a positive integer")
+    if value <= 0:
         raise ValueError(f"{field} must be greater than zero")
-    return integer
+    if value > (1 << 64) - 1:
+        raise ValueError(f"{field} must fit an unsigned 64-bit integer")
+    return value
 
 
 def _coerce_non_negative_int(value: Any, field: str) -> int:
-    try:
-        integer = int(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"{field} must be a non-negative integer") from exc
-    if integer < 0:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"{field} must be a non-negative integer")
+    if value < 0:
         raise ValueError(f"{field} must be non-negative")
-    return integer
-
-
-def _first_present(mapping: Mapping[str, Any], *keys: str) -> Optional[Any]:
-    for key in keys:
-        if key in mapping:
-            return mapping[key]
-    return None
+    if value > (1 << 64) - 1:
+        raise ValueError(f"{field} must fit an unsigned 64-bit integer")
+    return value
 
 
 def _default_policy_payload() -> Mapping[str, Any]:
@@ -180,14 +173,29 @@ class SorafsAliasPolicy:
     governance_grace_secs: int
 
     def __post_init__(self) -> None:
+        for field in (
+            "positive_ttl_secs",
+            "refresh_window_secs",
+            "hard_expiry_secs",
+            "negative_ttl_secs",
+            "revocation_ttl_secs",
+            "rotation_max_age_secs",
+        ):
+            object.__setattr__(
+                self,
+                field,
+                _coerce_positive_int(getattr(self, field), field),
+            )
+        for field in ("successor_grace_secs", "governance_grace_secs"):
+            object.__setattr__(
+                self,
+                field,
+                _coerce_non_negative_int(getattr(self, field), field),
+            )
         if self.refresh_window_secs > self.positive_ttl_secs:
             raise ValueError("refresh_window_secs must not exceed positive_ttl_secs")
         if self.hard_expiry_secs < self.positive_ttl_secs:
             raise ValueError("hard_expiry_secs must be greater than or equal to positive_ttl_secs")
-        if self.successor_grace_secs < 0:
-            raise ValueError("successor_grace_secs must be non-negative")
-        if self.governance_grace_secs < 0:
-            raise ValueError("governance_grace_secs must be non-negative")
 
     @classmethod
     def defaults(cls) -> "SorafsAliasPolicy":
@@ -195,80 +203,40 @@ class SorafsAliasPolicy:
 
         defaults = _default_policy_payload()
         return cls(
-            positive_ttl_secs=_coerce_positive_int(
-                defaults.get("positive_ttl_secs"), "positive_ttl_secs"
-            ),
-            refresh_window_secs=_coerce_positive_int(
-                defaults.get("refresh_window_secs"), "refresh_window_secs"
-            ),
-            hard_expiry_secs=_coerce_positive_int(
-                defaults.get("hard_expiry_secs"), "hard_expiry_secs"
-            ),
-            negative_ttl_secs=_coerce_positive_int(
-                defaults.get("negative_ttl_secs"), "negative_ttl_secs"
-            ),
-            revocation_ttl_secs=_coerce_positive_int(
-                defaults.get("revocation_ttl_secs"), "revocation_ttl_secs"
-            ),
-            rotation_max_age_secs=_coerce_positive_int(
-                defaults.get("rotation_max_age_secs"), "rotation_max_age_secs"
-            ),
-            successor_grace_secs=_coerce_non_negative_int(
-                defaults.get("successor_grace_secs"), "successor_grace_secs"
-            ),
-            governance_grace_secs=_coerce_non_negative_int(
-                defaults.get("governance_grace_secs"), "governance_grace_secs"
-            ),
+            positive_ttl_secs=defaults["positive_ttl_secs"],
+            refresh_window_secs=defaults["refresh_window_secs"],
+            hard_expiry_secs=defaults["hard_expiry_secs"],
+            negative_ttl_secs=defaults["negative_ttl_secs"],
+            revocation_ttl_secs=defaults["revocation_ttl_secs"],
+            rotation_max_age_secs=defaults["rotation_max_age_secs"],
+            successor_grace_secs=defaults["successor_grace_secs"],
+            governance_grace_secs=defaults["governance_grace_secs"],
         )
 
     @classmethod
     def from_mapping(cls, mapping: Mapping[str, Any]) -> "SorafsAliasPolicy":
-        """Construct a policy from a mapping, accepting snake_case and camelCase keys."""
+        """Construct a policy from exact snake-case first-release fields."""
 
-        if isinstance(mapping, SorafsAliasPolicy):
-            return mapping
-        positive = _first_present(mapping, "positive_ttl_secs", "positiveTtlSecs")
-        refresh = _first_present(mapping, "refresh_window_secs", "refreshWindowSecs")
-        hard = _first_present(mapping, "hard_expiry_secs", "hardExpirySecs")
-        negative = _first_present(mapping, "negative_ttl_secs", "negativeTtlSecs")
-        revocation = _first_present(mapping, "revocation_ttl_secs", "revocationTtlSecs")
-        rotation = _first_present(mapping, "rotation_max_age_secs", "rotationMaxAgeSecs")
-        successor = _first_present(mapping, "successor_grace_secs", "successorGraceSecs")
-        governance = _first_present(mapping, "governance_grace_secs", "governanceGraceSecs")
+        if not isinstance(mapping, Mapping):
+            raise TypeError("SoraFS alias policy must be a mapping")
+        unknown = set(mapping).difference(_ALIAS_POLICY_DEFAULT_FIELDS)
+        if unknown:
+            names = ", ".join(sorted(str(name) for name in unknown))
+            raise ValueError(f"SoraFS alias policy contains unsupported fields: {names}")
         defaults_payload = _default_policy_payload()
+
+        def configured(field: str) -> Any:
+            return mapping[field] if field in mapping else defaults_payload[field]
+
         return cls(
-            positive_ttl_secs=_coerce_positive_int(
-                positive if positive is not None else defaults_payload.get("positive_ttl_secs"),
-                "positive_ttl_secs",
-            ),
-            refresh_window_secs=_coerce_positive_int(
-                refresh if refresh is not None else defaults_payload.get("refresh_window_secs"),
-                "refresh_window_secs",
-            ),
-            hard_expiry_secs=_coerce_positive_int(
-                hard if hard is not None else defaults_payload.get("hard_expiry_secs"),
-                "hard_expiry_secs",
-            ),
-            negative_ttl_secs=_coerce_positive_int(
-                negative if negative is not None else defaults_payload.get("negative_ttl_secs"),
-                "negative_ttl_secs",
-            ),
-            revocation_ttl_secs=_coerce_positive_int(
-                revocation if revocation is not None else defaults_payload.get("revocation_ttl_secs"),
-                "revocation_ttl_secs",
-            ),
-            rotation_max_age_secs=_coerce_positive_int(
-                rotation if rotation is not None else defaults_payload.get("rotation_max_age_secs"),
-                "rotation_max_age_secs",
-            ),
-            successor_grace_secs=_coerce_non_negative_int(
-                successor if successor is not None else defaults_payload.get("successor_grace_secs"),
-                "successor_grace_secs",
-            ),
-            governance_grace_secs=_coerce_non_negative_int(
-                governance if governance is not None else defaults_payload.get("governance_grace_secs"),
-                "governance_grace_secs",
-            ),
+            positive_ttl_secs=configured("positive_ttl_secs"),
+            refresh_window_secs=configured("refresh_window_secs"),
+            hard_expiry_secs=configured("hard_expiry_secs"),
+            negative_ttl_secs=configured("negative_ttl_secs"),
+            revocation_ttl_secs=configured("revocation_ttl_secs"),
+            rotation_max_age_secs=configured("rotation_max_age_secs"),
+            successor_grace_secs=configured("successor_grace_secs"),
+            governance_grace_secs=configured("governance_grace_secs"),
         )
 
     def to_mapping(self) -> Dict[str, int]:
@@ -382,11 +350,21 @@ def evaluate_alias_proof(
 ) -> SorafsAliasEvaluation:
     """Validate a base64-encoded alias proof bundle."""
 
-    policy_value = policy or SorafsAliasPolicy.defaults()
+    if policy is None:
+        policy_value = SorafsAliasPolicy.defaults()
+    elif isinstance(policy, SorafsAliasPolicy):
+        policy_value = policy
+    else:
+        raise TypeError("policy must be a SorafsAliasPolicy or None")
+    evaluated_at = (
+        None
+        if now_secs is None
+        else _coerce_non_negative_int(now_secs, "now_secs")
+    )
     result = _crypto.sorafs_evaluate_alias_proof(
         proof_b64,
         policy_value.to_mapping(),
-        now_secs,
+        evaluated_at,
     )
     if not isinstance(result, Mapping):
         raise TypeError("alias proof evaluation returned unexpected payload")

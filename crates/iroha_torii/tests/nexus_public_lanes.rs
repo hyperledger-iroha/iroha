@@ -17,9 +17,7 @@ use iroha_data_model::{
     account::{Account, AccountId},
     asset::{Asset, AssetDefinition, AssetDefinitionId, AssetId},
     block::BlockHeader,
-    consensus::{
-        ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus, HsmBinding,
-    },
+    consensus::{ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus},
     domain::{Domain, DomainId},
     isi::{
         Grant, RegisterPeerWithPop,
@@ -87,6 +85,7 @@ async fn nexus_public_lane_endpoints_exist() {
     .await
     .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
+    router.shutdown().await;
 }
 #[tokio::test]
 async fn nexus_public_lane_endpoints_list_records() {
@@ -134,6 +133,7 @@ async fn nexus_public_lane_endpoints_list_records() {
     .await
     .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
+    router.shutdown().await;
 }
 fn sample_world() -> (World, KeyPair, AccountId, AccountId, AccountId) {
     let domain_id: DomainId = DomainId::try_new("nexus", "universal").expect("domain id");
@@ -208,11 +208,6 @@ fn seed_public_lane_state(
         pop: Some(consensus_pop),
         activation_height: 1,
         expiry_height: None,
-        hsm: Some(HsmBinding {
-            provider: "softkey".to_string(),
-            key_label: "consensus-main".to_string(),
-            slot: None,
-        }),
         replaces: None,
         status: ConsensusKeyStatus::Active,
     };
@@ -251,7 +246,11 @@ fn seed_public_lane_state(
         .commit_world_overlay_for_testing()
         .expect("commit block");
 }
-fn build_test_router(state: Arc<State>, kura: &Arc<Kura>, local_peer_id: PeerId) -> axum::Router {
+fn build_test_router(
+    state: Arc<State>,
+    kura: &Arc<Kura>,
+    local_peer_id: PeerId,
+) -> iroha_torii::TestApiRouterRuntime {
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let queue_cfg = Queue::default();
     let (events_tx, _events_rx) = broadcast::channel(1);

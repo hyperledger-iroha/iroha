@@ -11,10 +11,6 @@ use crate::{
 };
 use hex::ToHex;
 #[cfg(feature = "local-quic-proxy")]
-use iroha_logger::info;
-#[cfg(feature = "local-quic-proxy")]
-use iroha_logger::warn;
-#[cfg(feature = "local-quic-proxy")]
 use iroha_telemetry::metrics::global_or_default;
 use norito::{NoritoDeserialize, NoritoSerialize, core::DecodeFromSlice};
 #[cfg(feature = "local-quic-proxy")]
@@ -52,6 +48,10 @@ use tokio::{
     task::JoinHandle,
     time::{Duration, timeout},
 };
+#[cfg(feature = "local-quic-proxy")]
+use tracing::info;
+#[cfg(feature = "local-quic-proxy")]
+use tracing::warn;
 #[cfg(feature = "local-quic-proxy")]
 use url::{Host, Url};
 #[cfg(feature = "local-quic-proxy")]

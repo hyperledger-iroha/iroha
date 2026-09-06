@@ -115,16 +115,16 @@ fn bench_merkle_build(c: &mut Criterion) {
     let data = vec![0u8; 32 * 1024];
     c.bench_function("byte_tree_from_bytes", |b| {
         b.iter(|| {
-            let _ = ByteMerkleTree::from_bytes(&data, 32);
+            let _ = ByteMerkleTree::from_bytes(&data, 32).unwrap();
         })
     });
 }
 fn bench_merkle_update(c: &mut Criterion) {
-    let tree = ByteMerkleTree::new(1024, 32);
+    let tree = ByteMerkleTree::new(1024, 32).unwrap();
     let chunk = [1u8; 32];
     c.bench_function("byte_tree_update_leaf", |b| {
         b.iter(|| {
-            tree.update_leaf(0, &chunk);
+            tree.update_leaf(0, &chunk).unwrap();
         })
     });
 }

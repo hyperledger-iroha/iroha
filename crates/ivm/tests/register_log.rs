@@ -110,7 +110,7 @@ fn replacing_vm_during_traced_host_callback_fails_closed() {
         "a retained detached log must be scrubbed before isolation is dropped"
     );
     assert_eq!(
-        retained_vm.execution_proof().register_log_len,
+        retained_vm.execution_summary().register_log_len,
         0,
         "post-failure diagnostics must not repopulate the retained invocation log"
     );
@@ -184,7 +184,7 @@ fn moved_detached_vm_cannot_adopt_the_outer_scratch_log() {
     );
     let retained_vm = host.retained_vm.as_mut().expect("callback retains old VM");
     assert!(retained_vm.register_log().is_empty());
-    assert_eq!(retained_vm.execution_proof().register_log_len, 0);
+    assert_eq!(retained_vm.execution_summary().register_log_len, 0);
 }
 
 #[test]

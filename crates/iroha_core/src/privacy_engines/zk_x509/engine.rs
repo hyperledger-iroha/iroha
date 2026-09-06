@@ -415,8 +415,8 @@ pub(crate) fn prove_zk_x509_credential_proof_v1_with_rng<R: TryCryptoRng>(
     Ok(encoded)
 }
 fn compiled_profile_fields_v1<'a>(
-    sha_schedule_digests: &'a [[u8; 32]; SHA_DISCLOSURE_SHAPE_COUNT_V1],
-    p256_schedule_digest: &'a [u8; 32],
+    sha_schedule_digests: &'a [[u8; 48]; SHA_DISCLOSURE_SHAPE_COUNT_V1],
+    p256_schedule_digest: &'a [u8; 48],
 ) -> [&'a [u8]; COMPILED_PROFILE_FIELD_COUNT_V1] {
     [
         ZK_X509_SUITE_V1,
@@ -451,15 +451,18 @@ fn compiled_profile_fields_v1<'a>(
     ]
 }
 fn compiled_profile_schedule_digests_v1()
--> Result<([[u8; 32]; SHA_DISCLOSURE_SHAPE_COUNT_V1], [u8; 32]), ZkX509EngineErrorV1> {
-    let mut sha = [[0_u8; 32]; SHA_DISCLOSURE_SHAPE_COUNT_V1];
+-> Result<([[u8; 48]; SHA_DISCLOSURE_SHAPE_COUNT_V1], [u8; 48]), ZkX509EngineErrorV1> {
+    let mut sha = [[0_u8; 48]; SHA_DISCLOSURE_SHAPE_COUNT_V1];
     for (disclosed_attributes, digest) in sha.iter_mut().enumerate() {
         *digest = zk_x509_sha_fixed_algebraic_schedule_v1(ZkX509ShaCallPublicShapeV1 {
             disclosed_attributes,
         })?
-        .descriptor_digest_v1();
+        .descriptor_digest_v1()
+        .to_le_bytes();
     }
-    let p256 = zk_x509_p256_fixed_algebraic_schedule_v1()?.descriptor_digest_v1();
+    let p256 = zk_x509_p256_fixed_algebraic_schedule_v1()?
+        .descriptor_digest_v1()
+        .to_le_bytes();
     Ok((sha, p256))
 }
 /// Recompute the sole exact 29-field compiled-profile digest.
@@ -513,9 +516,9 @@ mod tests {
     }
     #[test]
     fn compiled_profile_manifest_has_the_exact_29_field_order() {
-        let sha_digests: [[u8; 32]; SHA_DISCLOSURE_SHAPE_COUNT_V1] =
-            core::array::from_fn(|shape| [u8::try_from(0x31 + shape).expect("five shapes"); 32]);
-        let p256_digest = [0x41; 32];
+        let sha_digests: [[u8; 48]; SHA_DISCLOSURE_SHAPE_COUNT_V1] =
+            core::array::from_fn(|shape| [u8::try_from(0x31 + shape).expect("five shapes"); 48]);
+        let p256_digest = [0x41; 48];
         let fields = compiled_profile_fields_v1(&sha_digests, &p256_digest);
         let original_fields: [&[u8]; 20] = [
             ZK_X509_SUITE_V1,
@@ -569,9 +572,9 @@ mod tests {
     }
     #[test]
     fn compiled_profile_digest_exactly_binds_compact_ca_subproof_descriptor_pin() {
-        let sha_digests: [[u8; 32]; SHA_DISCLOSURE_SHAPE_COUNT_V1] =
-            core::array::from_fn(|shape| [u8::try_from(0x71 + shape).expect("five shapes"); 32]);
-        let p256_digest = [0x81; 32];
+        let sha_digests: [[u8; 48]; SHA_DISCLOSURE_SHAPE_COUNT_V1] =
+            core::array::from_fn(|shape| [u8::try_from(0x71 + shape).expect("five shapes"); 48]);
+        let p256_digest = [0x81; 48];
         let canonical_fields = compiled_profile_fields_v1(&sha_digests, &p256_digest);
         assert_eq!(
             canonical_fields[14],
@@ -592,9 +595,9 @@ mod tests {
     }
     #[test]
     fn compiled_profile_binds_every_algebraic_field_and_its_order() {
-        let sha_digests: [[u8; 32]; SHA_DISCLOSURE_SHAPE_COUNT_V1] =
-            core::array::from_fn(|shape| [u8::try_from(0x51 + shape).expect("five shapes"); 32]);
-        let p256_digest = [0x61; 32];
+        let sha_digests: [[u8; 48]; SHA_DISCLOSURE_SHAPE_COUNT_V1] =
+            core::array::from_fn(|shape| [u8::try_from(0x51 + shape).expect("five shapes"); 48]);
+        let p256_digest = [0x61; 48];
         let canonical_fields = compiled_profile_fields_v1(&sha_digests, &p256_digest);
         let canonical = independent_compiled_profile_digest_v1(&canonical_fields);
         let owned = canonical_fields

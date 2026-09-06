@@ -10,8 +10,8 @@ Signs a canonical aggregate SoraFS release manifest through the reviewed
 `authenticated_external_signer` provider with exact `software` backend, then
 verifies the manifest, raw public key, and 64-byte Ed25519 signature with a
 SHA256-pinned `sorafs-validate release-manifest` binary. A successful run emits
-`software-key-qualified`; it never emits an HSM-qualified claim. The provider
-boundary remains compatible with a later HSM adapter backed by new evidence.
+`software-key-qualified`. Iroha exposes no HSM-specific adapter or qualification
+claim; custody behind the authenticated external signer is deployment-owned.
 
 Required:
   --manifest <path>

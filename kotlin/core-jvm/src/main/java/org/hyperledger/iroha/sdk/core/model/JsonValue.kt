@@ -6,10 +6,17 @@ import java.nio.charset.StandardCharsets
 import org.hyperledger.iroha.sdk.client.JsonParser
 
 /** One canonical JSON value suitable for the signed Norito metadata wire. */
-@JvmInline
-value class JsonValue private constructor(val canonicalJson: String) {
+class JsonValue private constructor(val canonicalJson: String) {
+    override fun equals(other: Any?): Boolean =
+        other is JsonValue && canonicalJson == other.canonicalJson
+
+    override fun hashCode(): Int = canonicalJson.hashCode()
+
+    override fun toString(): String = canonicalJson
+
     companion object {
         /** Encodes a string as one canonical JSON value. */
+        @JvmStatic
         fun string(value: String): JsonValue {
             val sb = StringBuilder(value.length + 2)
             sb.append('"')
@@ -38,15 +45,19 @@ value class JsonValue private constructor(val canonicalJson: String) {
         }
 
         /** Encodes an integer as one canonical JSON value. */
+        @JvmStatic
         fun number(value: Long): JsonValue = JsonValue(value.toString())
 
         /** Encodes a boolean as one canonical JSON value. */
+        @JvmStatic
         fun bool(value: Boolean): JsonValue = JsonValue(if (value) "true" else "false")
 
         /** Returns the canonical JSON null value. */
+        @JvmStatic
         fun nullValue(): JsonValue = JsonValue("null")
 
         /** Parses a JSON document and discards every alternate lexical spelling. */
+        @JvmStatic
         fun parse(json: String): JsonValue = JsonValue(CanonicalMetadataJson.canonicalize(json))
 
         /**

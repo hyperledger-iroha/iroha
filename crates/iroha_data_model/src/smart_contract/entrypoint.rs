@@ -173,6 +173,8 @@ pub enum EntrypointValueTypeNodeV1 {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(crate::DeriveJsonSerialize))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1")]
 pub struct EntrypointValueTypeV1 {
     /// Preorder aggregate layout.
     pub nodes: Vec<EntrypointValueTypeNodeV1>,
@@ -184,6 +186,8 @@ pub struct EntrypointValueTypeV1 {
 #[cfg_attr(feature = "json", derive(crate::DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::smart_contract::entrypoint::DecodedEntrypointValueTypeV1")]
 struct DecodedEntrypointValueTypeV1 {
     nodes: Vec<EntrypointValueTypeNodeV1>,
 }
@@ -706,6 +710,8 @@ struct EntrypointTypeAnalysisV1 {
 }
 /// Flattened word role derived from a validated boundary schema.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::smart_contract::entrypoint::EntrypointValueWordKindV1")]
 pub enum EntrypointValueWordKindV1 {
     /// One active-only compiler-owned Option/Result handle.
     Sum,
@@ -716,6 +722,8 @@ pub enum EntrypointValueWordKindV1 {
 }
 /// Canonical wire atom in a public entrypoint value record.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::smart_contract::entrypoint::EntrypointValueAtomV1")]
 pub enum EntrypointValueAtomV1 {
     /// Option/Result tag.
     Tag(bool),
@@ -735,6 +743,8 @@ pub enum EntrypointValueAtomV1 {
 }
 /// Schema-bound canonical Norito payload supplied to a public entrypoint wrapper.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::smart_contract::entrypoint::EntrypointArgumentRecordV1")]
 pub struct EntrypointArgumentRecordV1 {
     /// Domain-separated hash of the exact encoded schema.
     pub schema_hash: [u8; 32],
@@ -743,6 +753,8 @@ pub struct EntrypointArgumentRecordV1 {
 }
 /// Schema-bound canonical Norito payload returned by a nested contract call.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::smart_contract::entrypoint::EntrypointReturnRecordV1")]
 pub struct EntrypointReturnRecordV1 {
     /// Domain-separated hash of the exact encoded return value schema.
     pub schema_hash: [u8; 32],
@@ -1907,3 +1919,6 @@ mod tests {
         assert!(!duplicate_fields.validate());
     }
 }
+
+#[cfg(test)]
+mod captured_entrypoint_schema_tests;

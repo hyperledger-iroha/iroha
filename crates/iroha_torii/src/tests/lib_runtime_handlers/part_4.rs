@@ -152,16 +152,132 @@ async fn execute_torii_proxy_request_across_candidates_returns_last_retryable_re
     assert_eq!(body.as_ref(), b"retry-later");
 }
 #[cfg(feature = "connect")]
+fn generic_proxy_request_for_test(request_id: Hash) -> ToriiProxyRequestV1 {
+    ToriiProxyRequestV1 {
+        schema_version: TORII_PROXY_REQUEST_VERSION_V1,
+        request_id,
+        deadline_unix_ms: super::torii_proxy_test_deadline_unix_ms(),
+        hop_count: 1,
+        max_hops: 3,
+        visited_peer_ids: Vec::new(),
+        request: ToriiProxyRequestKindV1::HostedHttp(ToriiHostedHttpProxyRequestV1 {
+            service_name: "capacity-failover".to_owned(),
+            service_version: "v1".to_owned(),
+            replica_slot: 0,
+            request_path: "/health".to_owned(),
+            method: "GET".to_owned(),
+            query_string: None,
+            headers: Vec::new(),
+            body: Vec::new(),
+            remote_ip: None,
+        }),
+    }
+}
+#[cfg(feature = "connect")]
+#[tokio::test]
+async fn generic_proxy_retries_exact_capacity_429_on_next_candidate() {
+    let first_peer_id =
+        checked_torii_test_peer_id(0x98, "derive capacity-limited proxy peer fixture key");
+    let second_peer_id =
+        checked_torii_test_peer_id(0x99, "derive healthy fallback proxy peer fixture key");
+    let route = RoutingDecision::new(LaneId::new(8), DataSpaceId::new(9));
+    let attempts = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let attempts_ref = attempts.clone();
+    let first_peer_id_for_attempt = first_peer_id.clone();
+    let response = super::execute_torii_proxy_request_across_candidates(
+        vec![
+            ToriiProxyCandidate::P2p(first_peer_id),
+            ToriiProxyCandidate::P2p(second_peer_id),
+        ],
+        route,
+        generic_proxy_request_for_test(Hash::new(b"generic-proxy-capacity-failover")),
+        TORII_PROXY_REQUEST_MAX_ENCODED_BYTES_V1,
+        Duration::from_millis(20),
+        move |candidate, _request| {
+            let attempts = attempts_ref.clone();
+            let first_peer_id = first_peer_id_for_attempt.clone();
+            async move {
+                attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                if candidate.peer_id() == &first_peer_id {
+                    return Ok(ToriiProxyHttpResponseV1 {
+                        status_code: StatusCode::TOO_MANY_REQUESTS.as_u16(),
+                        headers: vec![iroha_core::torii_proxy::ToriiProxyHeaderV1 {
+                            name: "x-iroha-reject-code".to_owned(),
+                            value: b"proxy_capacity_exceeded".to_vec(),
+                        }],
+                        body: b"candidate proxy slot is occupied".to_vec(),
+                    });
+                }
+                Ok(ToriiProxyHttpResponseV1 {
+                    status_code: StatusCode::OK.as_u16(),
+                    headers: Vec::new(),
+                    body: b"healthy-fallback".to_vec(),
+                })
+            }
+        },
+        |_request_id| async move {},
+    )
+    .await;
+
+    assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 2);
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = torii_body_bytes(response, "healthy fallback response should be readable").await;
+    assert_eq!(body.as_ref(), b"healthy-fallback");
+}
+#[cfg(feature = "connect")]
+#[tokio::test]
+async fn generic_proxy_does_not_retry_an_unstructured_429() {
+    let first_peer_id =
+        checked_torii_test_peer_id(0x9A, "derive rate-limited proxy peer fixture key");
+    let second_peer_id =
+        checked_torii_test_peer_id(0x9B, "derive unused fallback proxy peer fixture key");
+    let route = RoutingDecision::new(LaneId::new(10), DataSpaceId::new(11));
+    let attempts = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let attempts_ref = attempts.clone();
+    let response = super::execute_torii_proxy_request_across_candidates(
+        vec![
+            ToriiProxyCandidate::P2p(first_peer_id),
+            ToriiProxyCandidate::P2p(second_peer_id),
+        ],
+        route,
+        generic_proxy_request_for_test(Hash::new(b"generic-proxy-definitive-429")),
+        TORII_PROXY_REQUEST_MAX_ENCODED_BYTES_V1,
+        Duration::from_millis(20),
+        move |_candidate, _request| {
+            let attempts = attempts_ref.clone();
+            async move {
+                attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(ToriiProxyHttpResponseV1 {
+                    status_code: StatusCode::TOO_MANY_REQUESTS.as_u16(),
+                    headers: Vec::new(),
+                    body: b"rate-limited".to_vec(),
+                })
+            }
+        },
+        |_request_id| async move {},
+    )
+    .await;
+
+    assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    let body = torii_body_bytes(response, "definitive 429 response should be readable").await;
+    assert_eq!(body.as_ref(), b"rate-limited");
+}
+#[cfg(feature = "connect")]
 #[tokio::test]
 async fn queue_plan_outcome_unknown_survives_both_retryable_completion_orders() {
     let expected_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::new(
         b"outcome-unknown-retryable-order",
     ));
+    let expected_signed_hash =
+        HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::from(expected_hash.clone()));
     let expected_hash_literal = expected_hash.to_string();
+    let expected_signed_hash_literal = expected_signed_hash.to_string();
     for unknown_arrives_first in [true, false] {
         let mut strongest = None;
         let unknown = super::queue_plan_outcome_unknown_response(
             expected_hash.clone(),
+            Some(expected_signed_hash.clone()),
             "authoritative cleanup sync outcome is unknown",
         );
         let retryable = super::torii_proxy_error_response(
@@ -183,18 +299,40 @@ async fn queue_plan_outcome_unknown_survives_both_retryable_completion_orders() 
             Some("PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN"),
             "ordinary retryable failures must never overwrite an indeterminate admission"
         );
+        assert_eq!(
+            torii_response_header(&response, "x-iroha-entrypoint-hash"),
+            Some(expected_hash_literal.as_str())
+        );
+        assert_eq!(
+            torii_response_header(&response, "x-iroha-signed-transaction-hash"),
+            Some(expected_signed_hash_literal.as_str())
+        );
+        assert_eq!(
+            torii_response_header(&response, "x-iroha-queue-depth"),
+            None
+        );
+        assert_eq!(
+            torii_response_header(&response, "x-iroha-queue-capacity"),
+            None
+        );
+        assert_eq!(
+            torii_response_header(&response, "x-iroha-queue-state"),
+            None
+        );
         let body = torii_body_bytes(response, "read preserved outcome-unknown response").await;
         let envelope: ErrorEnvelope =
             norito::decode_from_bytes(&body).expect("decode outcome-unknown error envelope");
         assert_eq!(envelope.code(), "queue_plan_journal_outcome_unknown");
+        let details = envelope.details.expect("outcome-unknown details");
         assert_eq!(
-            envelope
-                .details
-                .expect("outcome-unknown details")
-                .tx_hash
-                .as_deref(),
+            details.entrypoint_hash.as_deref(),
             Some(expected_hash_literal.as_str())
         );
+        assert_eq!(
+            details.tx_hash.as_deref(),
+            Some(expected_signed_hash_literal.as_str())
+        );
+        assert!(details.queue.is_none());
     }
 }
 #[cfg(feature = "connect")]
@@ -203,11 +341,14 @@ async fn queue_plan_outcome_unknown_dominates_nonretryable_failure_in_both_compl
     let expected_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::new(
         b"outcome-unknown-nonretryable-order",
     ));
-    let expected_hash_literal = expected_hash.to_string();
+    let expected_signed_hash =
+        HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::from(expected_hash.clone()));
+    let expected_signed_hash_literal = expected_signed_hash.to_string();
     for unknown_arrives_first in [true, false] {
         let mut strongest = None;
         let unknown = super::queue_plan_outcome_unknown_response(
             expected_hash.clone(),
+            Some(expected_signed_hash.clone()),
             "authority may have durably admitted before response loss",
         );
         let nonretryable = super::torii_proxy_error_response(
@@ -238,7 +379,7 @@ async fn queue_plan_outcome_unknown_dominates_nonretryable_failure_in_both_compl
                 .expect("outcome-unknown details")
                 .tx_hash
                 .as_deref(),
-            Some(expected_hash_literal.as_str())
+            Some(expected_signed_hash_literal.as_str())
         );
     }
     for candidate_zero_arrives_first in [true, false] {
@@ -281,14 +422,24 @@ async fn queue_plan_outcome_unknown_rejects_forged_reconciliation_hash() {
         incoming_proxy_submit_fixture(0xad, ToriiProxyTransactionAdmissionV1::QueuePlanSynced);
     let expected_hash = super::queue_plan_synced_entrypoint_hash(&request.request)
         .expect("strict request exposes a typed reconciliation identity");
+    let expected_signed_hash = super::queue_plan_synced_acceptance_expectation(&request)
+        .expect("strict request expectation must be valid")
+        .expect("strict request must have an expectation")
+        .signed_transaction_hash
+        .expect("external strict request must have a signed transaction hash");
     let forged_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::new(
         b"forged-outcome-unknown-reconciliation-hash",
     ));
     assert_ne!(forged_hash, expected_hash);
     let expected_hash_literal = expected_hash.to_string();
+    let expected_signed_hash_literal = expected_signed_hash.to_string();
+    let forged_signed_hash = HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::new(
+        b"forged-outcome-unknown-signed-transaction-hash",
+    ));
     let forged_snapshot = super::response_to_torii_proxy_snapshot(
         super::queue_plan_outcome_unknown_response(
             forged_hash,
+            Some(forged_signed_hash),
             "forged authoritative reconciliation identity",
         ),
         usize::MAX,
@@ -316,15 +467,125 @@ async fn queue_plan_outcome_unknown_rejects_forged_reconciliation_hash() {
     let envelope: ErrorEnvelope =
         norito::decode_from_bytes(&body).expect("decode rebuilt outcome-unknown envelope");
     assert_eq!(envelope.code(), "queue_plan_journal_outcome_unknown");
+    let details = envelope.details.expect("rebuilt outcome-unknown details");
     assert_eq!(
-        envelope
-            .details
-            .expect("rebuilt outcome-unknown details")
-            .tx_hash
-            .as_deref(),
+        details.entrypoint_hash.as_deref(),
         Some(expected_hash_literal.as_str()),
-        "a forged authority hash must be replaced with the submitted transaction identity"
+        "a forged authority entrypoint hash must be replaced with the submitted identity"
     );
+    assert_eq!(
+        details.tx_hash.as_deref(),
+        Some(expected_signed_hash_literal.as_str()),
+        "a forged authority signed hash must be replaced with the submitted identity"
+    );
+}
+#[cfg(feature = "connect")]
+#[tokio::test]
+async fn queue_plan_outcome_unknown_validates_distinct_sealed_reveal_identities() {
+    let (app, request) =
+        incoming_proxy_submit_fixture(0xae, ToriiProxyTransactionAdmissionV1::QueuePlanSynced);
+    let ToriiProxyRequestKindV1::SubmitTransaction {
+        transaction: TransactionEntrypoint::External(signed_transaction),
+        ..
+    } = &request.request
+    else {
+        panic!("strict proxy fixture must contain an external signed transaction");
+    };
+    let signed_transaction = signed_transaction.clone();
+    let signed_transaction_hash = signed_transaction.hash();
+    let network_id = *app.state.network_id_ref();
+    let salt = [0xA9; 32];
+    let commitment =
+        compute_sealed_transaction_commitment(&network_id, &signed_transaction, salt, 17);
+    let entrypoint = TransactionEntrypoint::SealedReveal(SealedTransactionReveal::new(
+        commitment,
+        signed_transaction,
+        salt,
+    ));
+    let entrypoint_hash = entrypoint.hash();
+    assert_ne!(
+        Hash::from(entrypoint_hash.clone()),
+        Hash::from(signed_transaction_hash.clone()),
+        "sealed-reveal outer and inner identities must differ for this regression"
+    );
+
+    let routing_plan =
+        RoutingPlan::single(RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL));
+    let admission_context = app
+        .queue
+        .plan_admission_context_with_state(app.state.as_ref(), &routing_plan)
+        .expect("sealed-reveal QueuePlan admission context");
+    let admission_binding = QueuePlanAdmissionBindingV1::new(
+        &network_id,
+        &entrypoint,
+        &routing_plan,
+        admission_context,
+        app.queue.queue_plan_admission_timestamp_ms(),
+    )
+    .expect("sealed-reveal QueuePlan admission binding");
+    let expected = super::QueuePlanSyncedAcceptanceExpectation {
+        entrypoint_hash: entrypoint_hash.clone(),
+        signed_transaction_hash: Some(signed_transaction_hash.clone()),
+        admission_binding,
+        durability_threshold: 1,
+    };
+
+    let outer_hash_mislabelled_as_signed =
+        HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::from(entrypoint_hash.clone()));
+    let mut invalid_snapshot = super::response_to_torii_proxy_snapshot(
+        super::queue_plan_outcome_unknown_response(
+            entrypoint_hash.clone(),
+            Some(outer_hash_mislabelled_as_signed),
+            "authority confused the sealed-reveal outer and inner identities",
+        ),
+        usize::MAX,
+    )
+    .await;
+    invalid_snapshot
+        .headers
+        .iter_mut()
+        .find(|header| {
+            header
+                .name
+                .eq_ignore_ascii_case("x-iroha-signed-transaction-hash")
+        })
+        .expect("outcome-unknown response must carry its signed identity header")
+        .value = signed_transaction_hash.to_string().into_bytes();
+    assert!(
+        matches!(
+            super::validate_queue_plan_outcome_unknown_evidence(&invalid_snapshot, &expected),
+            super::QueuePlanOutcomeUnknownEvidenceValidation::Invalid(
+                "error-envelope transaction hash does not match the submitted transaction"
+            )
+        ),
+        "the outcome-evidence validator must compare the body tx_hash with the inner signed identity"
+    );
+    let response = super::queue_plan_synced_snapshot_to_response(invalid_snapshot, &expected);
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let expected_entrypoint_hash = entrypoint_hash.to_string();
+    let expected_signed_transaction_hash = signed_transaction_hash.to_string();
+    assert_eq!(
+        torii_response_header(&response, "x-iroha-entrypoint-hash"),
+        Some(expected_entrypoint_hash.as_str())
+    );
+    assert_eq!(
+        torii_response_header(&response, "x-iroha-signed-transaction-hash"),
+        Some(expected_signed_transaction_hash.as_str())
+    );
+    let body = torii_body_bytes(response, "read rebuilt sealed-reveal outcome").await;
+    let envelope: ErrorEnvelope =
+        norito::decode_from_bytes(&body).expect("decode sealed-reveal outcome envelope");
+    let details = envelope.details.expect("sealed-reveal outcome details");
+    assert_eq!(
+        details.entrypoint_hash.as_deref(),
+        Some(expected_entrypoint_hash.as_str())
+    );
+    assert_eq!(
+        details.tx_hash.as_deref(),
+        Some(expected_signed_transaction_hash.as_str()),
+        "the proxy must validate the inner signed hash rather than the distinct outer hash"
+    );
+    assert!(details.queue.is_none());
 }
 #[cfg(feature = "connect")]
 #[tokio::test]
@@ -1721,14 +1982,6 @@ async fn runtime_metrics_and_node_capabilities_ok() {
     assert!(caps.query.projection.checkpoint_contract_v1);
     assert!(!caps.query.projection.da_v1_enabled);
     assert_eq!(
-        caps.query.projection.checkpoint_plan_v1,
-        cfg!(feature = "app_api")
-    );
-    assert_eq!(
-        caps.query.projection.checkpoint_publish_v1,
-        cfg!(feature = "app_api")
-    );
-    assert_eq!(
         caps.query.projection.shard_catalog_v1,
         cfg!(feature = "app_api")
     );
@@ -1846,311 +2099,6 @@ async fn node_query_projection_checkpoint_handler_returns_persisted_payload() {
     assert_eq!(checkpoint.shards[0].resource, "accounts");
 }
 #[cfg(feature = "app_api")]
-async fn projection_checkpoint_request_for_app(
-    app: &SharedAppState,
-    emitted_at_unix: u64,
-    archive_emitted_at_unix: u64,
-    manifest_seed: u8,
-    ticket_seed: u8,
-) -> crate::runtime::NodeProjectionCheckpointPublishRequest {
-    let mut shards = Vec::new();
-    let mut next_seed = 0u8;
-    for resource in crate::generic_query::projection_export_supported_resources() {
-        let catalog = crate::runtime::handle_node_query_projection_shard_catalog(
-            app.state.clone(),
-            (*resource).to_owned(),
-            crate::runtime::NodeProjectionShardCatalogQuery {
-                asset_definition_id: None,
-                offset: None,
-                limit: None,
-            },
-        )
-        .await
-        .expect("build projection shard catalog");
-        for entry in catalog.entries {
-            shards.push(crate::runtime::NodeProjectionCheckpointPublishShardRef {
-                resource: (*resource).to_owned(),
-                partition_id: entry.partition_id,
-                asset_definition_id: entry.asset_definition_id,
-                archive_emitted_at_unix,
-                manifest_digest_hex: hex::encode([manifest_seed.wrapping_add(next_seed); 32]),
-                storage_ticket_hex: hex::encode([ticket_seed.wrapping_add(next_seed); 32]),
-            });
-            next_seed = next_seed.wrapping_add(1);
-        }
-    }
-    crate::runtime::NodeProjectionCheckpointPublishRequest {
-        emitted_at_unix: Some(emitted_at_unix),
-        shards,
-    }
-}
-#[cfg(feature = "app_api")]
-async fn projection_checkpoint_request_for_app_with_real_manifests(
-    app: &SharedAppState,
-    emitted_at_unix: u64,
-    archive_emitted_at_unix: u64,
-    ticket_seed: u8,
-) -> crate::runtime::NodeProjectionCheckpointPublishRequest {
-    let mut shards = Vec::new();
-    let mut next_seed = 0u8;
-    for resource in crate::generic_query::projection_export_supported_resources() {
-        let catalog = crate::runtime::handle_node_query_projection_shard_catalog(
-            app.state.clone(),
-            (*resource).to_owned(),
-            crate::runtime::NodeProjectionShardCatalogQuery {
-                asset_definition_id: None,
-                offset: None,
-                limit: None,
-            },
-        )
-        .await
-        .expect("build projection shard catalog");
-        for entry in catalog.entries {
-            let archive = match *resource {
-                "accounts" => crate::runtime::build_accounts_projection_shard_archive(
-                    app.state.as_ref(),
-                    entry.partition_id,
-                    archive_emitted_at_unix,
-                ),
-                "account_assets" => crate::runtime::build_account_assets_projection_shard_archive(
-                    app.state.as_ref(),
-                    entry.partition_id,
-                    archive_emitted_at_unix,
-                ),
-                "asset_holders" => crate::runtime::build_asset_holders_projection_shard_archive(
-                    app.state.as_ref(),
-                    entry
-                        .asset_definition_id
-                        .as_deref()
-                        .expect("asset_holders catalog entry asset definition"),
-                    entry.partition_id,
-                    archive_emitted_at_unix,
-                ),
-                "asset_definitions" => {
-                    crate::runtime::build_asset_definitions_projection_shard_archive(
-                        app.state.as_ref(),
-                        entry.partition_id,
-                        archive_emitted_at_unix,
-                    )
-                }
-                "domains" => crate::runtime::build_domains_projection_shard_archive(
-                    app.state.as_ref(),
-                    entry.partition_id,
-                    archive_emitted_at_unix,
-                ),
-                other => panic!("unsupported projection checkpoint test resource: {other}"),
-            }
-            .expect("build projection shard archive");
-            let (_, _, manifest) =
-                crate::routing::query_projection_archive_storage_artifacts(&archive)
-                    .expect("build projection archive storage artifacts");
-            let manifest_digest_hex = hex::encode(
-                manifest
-                    .digest()
-                    .expect("digest projection archive manifest")
-                    .as_bytes(),
-            );
-            shards.push(crate::runtime::NodeProjectionCheckpointPublishShardRef {
-                resource: (*resource).to_owned(),
-                partition_id: entry.partition_id,
-                asset_definition_id: entry.asset_definition_id,
-                archive_emitted_at_unix,
-                manifest_digest_hex,
-                storage_ticket_hex: hex::encode([ticket_seed.wrapping_add(next_seed); 32]),
-            });
-            next_seed = next_seed.wrapping_add(1);
-        }
-    }
-    crate::runtime::NodeProjectionCheckpointPublishRequest {
-        emitted_at_unix: Some(emitted_at_unix),
-        shards,
-    }
-}
-#[cfg(feature = "app_api")]
-#[tokio::test]
-async fn node_query_projection_checkpoint_plan_handler_returns_preview_payload() {
-    use iroha_data_model::Registrable;
-    use iroha_data_model::prelude::{Account, Domain, DomainId};
-    let authority =
-        checked_torii_test_ed25519_keypair(0x99, "derive projection plan authority fixture key");
-    let alice =
-        checked_torii_test_ed25519_keypair(0x9a, "derive projection plan alice fixture key");
-    let authority_id = iroha_data_model::account::AccountId::new(authority.public_key().clone());
-    let alice_id = iroha_data_model::account::AccountId::new(alice.public_key().clone());
-    let domain_id = DomainId::try_new("projection-plan-handler", "universal").expect("domain");
-    let world = iroha_core::state::World::with(
-        [Domain::new(domain_id).build(&authority_id)],
-        [
-            Account::new(authority_id.clone()).build(&authority_id),
-            Account::new(alice_id.clone()).build(&authority_id),
-        ],
-        [],
-    );
-    let app = mk_app_state_for_tests_with_world(world);
-    let request =
-        projection_checkpoint_request_for_app(&app, 1_714_002_111, 1_714_002_000, 0x21, 0x31).await;
-    let response = super::handler_node_query_projection_checkpoint_plan(
-        State(app.clone()),
-        HeaderMap::new(),
-        crate::loopback_connect_info(),
-        None,
-        crate::utils::extractors::NoritoJson(request),
-    )
-    .await
-    .expect("ok");
-    assert_eq!(response.status(), axum::http::StatusCode::OK);
-    assert_eq!(
-        response.headers().get(axum::http::header::CONTENT_TYPE),
-        Some(&axum::http::HeaderValue::from_static(
-            crate::utils::NORITO_MIME_TYPE,
-        ))
-    );
-    let body = torii_body_bytes(response, "body").await;
-    let checkpoint: crate::runtime::NodeProjectionCheckpointResponse =
-        norito::decode_from_bytes(&body).expect("decode default Norito response");
-    assert_eq!(checkpoint.emitted_at_unix, 1_714_002_111);
-    assert!(
-        !checkpoint.shards.is_empty(),
-        "checkpoint preview must include the canonical live shard set"
-    );
-    assert!(
-        app.state.query_projection_checkpoint_snapshot().is_none(),
-        "plan route must not persist checkpoint state"
-    );
-}
-#[cfg(feature = "app_api")]
-#[tokio::test]
-async fn node_query_projection_checkpoint_publish_handler_persists_payload() {
-    use iroha_data_model::Registrable;
-    use iroha_data_model::prelude::{Account, Domain, DomainId};
-    let authority =
-        checked_torii_test_ed25519_keypair(0x9b, "derive projection publish authority fixture key");
-    let alice =
-        checked_torii_test_ed25519_keypair(0x9c, "derive projection publish alice fixture key");
-    let authority_id = iroha_data_model::account::AccountId::new(authority.public_key().clone());
-    let alice_id = iroha_data_model::account::AccountId::new(alice.public_key().clone());
-    let domain_id = DomainId::try_new("projection-publish-handler", "universal").expect("domain");
-    let world = iroha_core::state::World::with(
-        [Domain::new(domain_id).build(&authority_id)],
-        [
-            Account::new(authority_id.clone()).build(&authority_id),
-            Account::new(alice_id.clone()).build(&authority_id),
-        ],
-        [],
-    );
-    let app = mk_app_state_for_tests_with_world(world);
-    let request =
-        projection_checkpoint_request_for_app(&app, 1_714_002_333, 1_714_002_222, 0x41, 0x51).await;
-    let response = super::handler_node_query_projection_checkpoint_publish(
-        State(app.clone()),
-        HeaderMap::new(),
-        crate::loopback_connect_info(),
-        None,
-        crate::utils::extractors::NoritoJson(request),
-    )
-    .await
-    .expect("ok");
-    assert_eq!(response.status(), axum::http::StatusCode::OK);
-    assert_eq!(
-        response.headers().get(axum::http::header::CONTENT_TYPE),
-        Some(&axum::http::HeaderValue::from_static(
-            crate::utils::NORITO_MIME_TYPE,
-        ))
-    );
-    let body = torii_body_bytes(response, "body").await;
-    let checkpoint: crate::runtime::NodeProjectionCheckpointResponse =
-        norito::decode_from_bytes(&body).expect("decode default Norito response");
-    assert_eq!(checkpoint.emitted_at_unix, 1_714_002_333);
-    assert!(
-        !checkpoint.shards.is_empty(),
-        "checkpoint publish must persist the canonical live shard set"
-    );
-    assert_eq!(
-        app.state
-            .query_projection_checkpoint_snapshot()
-            .expect("persisted")
-            .emitted_at_unix,
-        1_714_002_333
-    );
-}
-#[cfg(feature = "app_api")]
-#[tokio::test]
-async fn node_query_projection_checkpoint_publish_handler_seeds_local_projection_store() {
-    use iroha_data_model::Registrable;
-    use iroha_data_model::prelude::{Account, Domain, DomainId};
-    let authority = checked_torii_test_ed25519_keypair(
-        0x9d,
-        "derive durable projection publish authority fixture key",
-    );
-    let alice = checked_torii_test_ed25519_keypair(
-        0x9e,
-        "derive durable projection publish alice fixture key",
-    );
-    let authority_id = iroha_data_model::account::AccountId::new(authority.public_key().clone());
-    let alice_id = iroha_data_model::account::AccountId::new(alice.public_key().clone());
-    let domain_id = DomainId::try_new("projection-publish-durable", "universal").expect("domain");
-    let world = iroha_core::state::World::with(
-        [Domain::new(domain_id).build(&authority_id)],
-        [
-            Account::new(authority_id.clone()).build(&authority_id),
-            Account::new(alice_id.clone()).build(&authority_id),
-        ],
-        [],
-    );
-    let app = mk_app_state_for_tests_with_world(world);
-    let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
-    let storage_dir = tempfile::tempdir().expect("temp storage dir");
-    let canonical_storage_root = storage_dir
-        .path()
-        .canonicalize()
-        .expect("canonical temp storage root");
-    inner.sorafs_node = sorafs_node::NodeHandle::new(
-        sorafs_node::config::StorageConfig::builder()
-            .enabled(true)
-            .data_dir(canonical_storage_root.join("storage"))
-            .build(),
-    );
-    let app = Arc::new(inner);
-    let request = projection_checkpoint_request_for_app_with_real_manifests(
-        &app,
-        1_714_002_555,
-        1_714_002_444,
-        0x61,
-    )
-    .await;
-    let response = super::handler_node_query_projection_checkpoint_publish(
-        State(app.clone()),
-        HeaderMap::new(),
-        crate::loopback_connect_info(),
-        None,
-        crate::utils::extractors::NoritoJson(request),
-    )
-    .await
-    .expect("ok");
-    assert_eq!(response.status(), axum::http::StatusCode::OK);
-    assert_eq!(
-        response.headers().get(axum::http::header::CONTENT_TYPE),
-        Some(&axum::http::HeaderValue::from_static(
-            crate::utils::NORITO_MIME_TYPE,
-        ))
-    );
-    let body = torii_body_bytes(response, "body").await;
-    let checkpoint: crate::runtime::NodeProjectionCheckpointResponse =
-        norito::decode_from_bytes(&body).expect("decode default Norito response");
-    for shard in &checkpoint.shards {
-        let manifest_digest_bytes =
-            hex::decode(&shard.manifest_digest_hex).expect("decode manifest digest");
-        let manifest_digest =
-            <[u8; 32]>::try_from(manifest_digest_bytes.as_slice()).expect("manifest digest length");
-        assert!(
-            app.sorafs_node
-                .manifest_metadata_by_digest(&manifest_digest)
-                .is_ok(),
-            "published checkpoint shard should seed local SoraFS storage"
-        );
-    }
-}
-#[cfg(feature = "app_api")]
 #[tokio::test]
 async fn node_query_projection_shard_catalog_handler_returns_catalog_payload() {
     let app = mk_app_state_for_tests();
@@ -2230,7 +2178,7 @@ async fn core_info_handlers_ok() {
     .into_response();
     assert_eq!(resp.status(), axum::http::StatusCode::OK);
     let config_bytes = torii_body_bytes(resp, "config body").await;
-    let config: ConfigGetDTO =
+    let config: Configuration =
         norito::json::from_slice(&config_bytes).expect("decode config payload");
     assert!(
         !config
@@ -2285,15 +2233,21 @@ async fn core_info_handlers_ok() {
     let health = decode_torii_json(resp, "health body", "decode health payload").await;
     assert_eq!(
         health
-            .get("cash_handoff_capability")
+            .get("kagemusha_handoff_capability")
             .and_then(norito::json::Value::as_str),
-        Some("cash_handoff_v1")
+        Some("kagemusha_handoff_v1")
     );
     assert_eq!(
         health
-            .get("required_bridge_abi_version")
+            .get("wire_version")
             .and_then(norito::json::Value::as_u64),
-        Some(23)
+        Some(1)
+    );
+    assert_eq!(
+        health
+            .get("device_lifecycle_version")
+            .and_then(norito::json::Value::as_u64),
+        Some(1)
     );
     assert_eq!(
         health.get("ready").and_then(norito::json::Value::as_bool),

@@ -65,7 +65,7 @@ fallback, and provider-readback integrity surfaces respectively; a later
 journal-abort failure must not hide the original observation.
 
 The service constructs the complete seed-receipt payload and expiry before
-calling the deployment signing provider. HSM/KMS or threshold adapters return
+calling the deployment signing provider. External or threshold adapters return
 only broker-controller approvals. Wrong-payload signatures, non-controller or
 duplicate approvals, and broker/backend identity substitutions are permanent
 provider faults; an explicitly retryable signing-provider outage returns a
@@ -301,7 +301,7 @@ resume process through compare-and-set.
    fail-closed state.
 2. Check the deployment-owned HTTPS listener, TLS identity, qualified durable
    clock source and private root, durable replay journal and its separate root, broker
-   HSM/signer, seed-ingress backend, permanent pin/replication coordinator, and
+   signer, seed-ingress backend, permanent pin/replication coordinator, and
    provider readback adapters independently. Use the durable journal for
    restart-persistent service state; the bundled in-memory journal remains only
    for development/tests. The storage backend must independently query

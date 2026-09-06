@@ -22,16 +22,27 @@ use norito::core::{self as ncore, DecodeFromSlice};
 #[cfg(feature = "json")]
 use norito::json::{self, FastJsonWrite, JsonDeserialize};
 use std::{cell::RefCell, format, string::String, vec, vec::Vec};
+use zeroize::Zeroize;
 ffi::ffi_item! {
     /// Represents a signature of the data (`Block` or `Transaction` for example).
     #[derive(
         Clone, PartialEq, Eq, PartialOrd, Ord, getset::Getters, derive_more::Debug, Hash, IntoSchema,
     )]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_crypto::signature::Signature")]
     #[cfg_attr(feature = "ffi_export", ffi_type(opaque))]
     #[repr(transparent)]
     #[debug("{{ {} }}", hex::encode_upper(payload))]
     pub struct Signature {
         payload: ConstVec<u8>
+    }
+}
+
+impl Zeroize for Signature {
+    fn zeroize(&mut self) {
+        let mut bytes = core::mem::take(&mut self.payload).into_vec();
+        bytes.zeroize();
+        self.payload = ConstVec::from(bytes);
     }
 }
 const PUBLIC_KEY_FULL_CACHE_LIMIT: usize = 128;
@@ -589,6 +600,11 @@ impl<T> Clone for SignatureOf<T> {
         Self(self.0.clone(), PhantomData)
     }
 }
+impl<T> Zeroize for SignatureOf<T> {
+    fn zeroize(&mut self) {
+        self.0.zeroize();
+    }
+}
 #[allow(clippy::unconditional_recursion)] // False-positive
 impl<T> PartialEq for SignatureOf<T> {
     fn eq(&self, other: &Self) -> bool {
@@ -667,6 +683,14 @@ impl<'a> norito::core::DecodeFromSlice<'a> for Signature {
         Ok((Signature { payload }, used))
     }
 }
+impl<T: norito::NoritoSchema> norito::NoritoSchema for SignatureOf<T> {
+    fn nominal_name() -> String {
+        norito::schema::identity::generic_name(
+            "iroha_crypto::signature::SignatureOf",
+            &[T::nominal_name()],
+        )
+    }
+}
 impl<T> norito::core::NoritoSerialize for SignatureOf<T> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         // Delegate to inner Signature so SignatureOf has identical on-wire bytes.
@@ -720,6 +744,15 @@ impl<'a, T> DecodeFromSlice<'a> for SignatureOf<T> {
     }
 }
 impl<T> SignatureOf<T> {
+    /// Wipe signature bytes before discarding a confidential typed copy.
+    ///
+    /// The signature intentionally becomes invalid and must not be used after
+    /// this call. This is for restricted plaintext containers in which an
+    /// otherwise-public signature is itself confidential metadata.
+    pub fn zeroize_for_confidential_discard(&mut self) {
+        <Self as Zeroize>::zeroize(self);
+    }
+
     /// Fallibly create [`SignatureOf`] from the given hash with [`crate::KeyPair::private_key`].
     ///
     /// # Errors

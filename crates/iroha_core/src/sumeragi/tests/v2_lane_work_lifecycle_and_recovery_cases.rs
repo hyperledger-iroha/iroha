@@ -647,6 +647,8 @@ fn autonomous_payload_and_new_view_ingress_are_exact_and_contiguous() {
         NonZeroU64::new(adapter.context.height).expect("fixture boundary height is non-zero");
     let mut npos_parameters = SumeragiNposParameters::default();
     npos_parameters.epoch_length_blocks = epoch_length;
+    npos_parameters.evidence_horizon_blocks = epoch_length.get().saturating_mul(2);
+    npos_parameters.slashing_delay_blocks = epoch_length.get();
     npos_parameters
         .validate()
         .expect("short fixture NPoS epoch remains valid");
@@ -667,7 +669,6 @@ fn autonomous_payload_and_new_view_ingress_are_exact_and_contiguous() {
             pop: Some(replacement_pop.clone()),
             activation_height: successor_height,
             expiry_height: None,
-            hsm: None,
             replaces: None,
             status: ConsensusKeyStatus::Pending,
         };
@@ -720,8 +721,17 @@ fn autonomous_payload_and_new_view_ingress_are_exact_and_contiguous() {
     let mut boundary_context = adapter.context.clone();
     boundary_context.epoch = current_epoch;
     boundary_context.epoch_end_height = boundary_context.height;
+    let next_epoch = current_epoch.checked_add(1).expect("successor epoch");
+    let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
+        crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
+            boundary_context.network_id,
+            next_epoch,
+            &successor_roster,
+        );
     boundary_context.next_epoch_snapshot = Some(wire::finality::FinalizedNextEpochSnapshot {
-        epoch: current_epoch.checked_add(1).expect("successor epoch"),
+        epoch: next_epoch,
+        kagemusha_mint_finality_epoch_id,
+        kagemusha_mint_finality_epoch_roster,
         epoch_end_height: boundary_context
             .height
             .checked_add(epoch_length.get())

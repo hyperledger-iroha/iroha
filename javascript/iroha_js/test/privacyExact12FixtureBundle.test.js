@@ -365,6 +365,39 @@ test("Exact12 encoder authenticates every byte-complete row field", () => {
   );
 });
 
+test("Exact12 envelope requires the final marker and every catalog lane", () => {
+  const bundle = noritoDecodePrivacyExact12FixtureBundleV1(BUNDLE_BYTES);
+  const original = Buffer.from(bundle.rows[0].envelopeNorito);
+  const frame = validateNoritoFrame(original);
+  const payloadStart = original.length - frame.payload.length;
+  const marker = readCompactField(frame.payload, 0, "wire magic");
+  const catalog = readCompactField(frame.payload, marker.next, "catalog commitment");
+  assert.equal(marker.end - marker.payloadStart, 8);
+  assert.equal(catalog.end - catalog.payloadStart, 48);
+  for (const [field, offsets, expected] of [
+    [marker, [0, 7], /wire marker/],
+    [catalog, [0, 8, 16, 24, 32, 40, 47], /catalog commitment/],
+  ]) {
+    for (const offset of offsets) {
+      const mutated = cloneBundle(bundle);
+      const envelope = Buffer.from(original);
+      envelope[payloadStart + field.payloadStart + offset] ^= 1;
+      rewriteOuterCrc(envelope);
+      mutated.rows[0].envelopeNorito = envelope;
+      assert.throws(() => noritoEncodePrivacyExact12FixtureBundleV1(mutated), expected);
+    }
+  }
+  const retired = cloneBundle(bundle);
+  const envelope = Buffer.concat([
+    original.subarray(0, payloadStart),
+    frame.payload.subarray(catalog.next),
+  ]);
+  envelope.writeBigUInt64LE(BigInt(frame.payload.length - catalog.next), 23);
+  rewriteOuterCrc(envelope);
+  retired.rows[0].envelopeNorito = envelope;
+  assert.throws(() => noritoEncodePrivacyExact12FixtureBundleV1(retired));
+});
+
 test("source, distribution, and browser-leaf Exact12 codecs stay byte-identical", async () => {
   const originalBuffer = globalThis.Buffer;
   const browserBuild = await build({

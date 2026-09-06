@@ -18,6 +18,23 @@ fn install_unavailable_local_read_runtime(
     );
 }
 #[tokio::test]
+async fn hosted_connection_driver_panic_is_contained_to_the_proxy_request() {
+    let task = super::spawn_soracloud_hosted_connection_driver(async {
+        assert!(
+            iroha_core::panic_hook::is_suppressed(),
+            "the physical hosted connection driver must suppress the process shutdown hook"
+        );
+        panic!("injected hosted connection driver panic");
+        #[allow(unreachable_code)]
+        Ok::<(), &'static str>(())
+    });
+    assert!(matches!(task.await, Ok(Err(_))));
+    assert!(
+        !iroha_core::panic_hook::is_suppressed(),
+        "hosted driver suppression must not leak into the request task"
+    );
+}
+#[tokio::test]
 async fn soracloud_public_split_app_routes_hosted_live_and_ordered_vault_updates_on_one_node() {
     use tower::ServiceExt as _;
     let TravelSplitTopologyFixture {
@@ -532,6 +549,7 @@ async fn soracloud_public_hosted_http_route_streams_sse_bodies() {
                 world,
                 &hosted_validator_account_id,
                 &hosted_peer_id.to_string(),
+                current_height,
                 |lane_id| state_view.is_lane_active_for_authority(lane_id),
             ),
             "hosted SSE validator must retain its canonical active peer binding"
@@ -2697,6 +2715,7 @@ async fn one_lane_without_authoritative_binding_returns_route_unavailable() {
     let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
     let request = ToriiProxyRequestKindV1::Read(super::torii_read_request(
         ToriiReadEndpointV1::AccountGet,
+        ToriiFanoutRouteScopeV1::AllDataspaces,
         route,
         vec![
             checked_torii_test_account_id(
@@ -3229,6 +3248,7 @@ async fn incoming_proxy_reads_and_fanout_are_terminal_when_route_ownership_is_st
     };
     let read_request = ToriiProxyRequestKindV1::Read(super::torii_read_request(
         ToriiReadEndpointV1::AccountGet,
+        ToriiFanoutRouteScopeV1::AllDataspaces,
         route,
         vec![
             checked_torii_test_account_id(
@@ -3305,6 +3325,7 @@ async fn incoming_read_proxy_response_for_route(
         visited_peer_ids: vec![ingress_peer_id],
         request: ToriiProxyRequestKindV1::Read(super::torii_read_request(
             ToriiReadEndpointV1::AccountGet,
+            ToriiFanoutRouteScopeV1::AllDataspaces,
             route,
             vec![
                 checked_torii_test_account_id(

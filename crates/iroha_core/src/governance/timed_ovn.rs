@@ -23,8 +23,15 @@ use iroha_crypto::{
     },
     tle::{TleError, TleMasterPublicKey, TleReleaseIdentityV1},
 };
+pub use iroha_data_model::governance::types::{
+    PARLIAMENT_TIMED_OVN_BALLOT_RECORD_BYTES_V1 as TIMED_OVN_BALLOT_RECORD_BYTES_V1,
+    PARLIAMENT_TIMED_OVN_REGISTRATION_RECORD_BYTES_V1 as TIMED_OVN_REGISTRATION_RECORD_BYTES_V1,
+};
 use iroha_data_model::{
-    governance::types::{PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1, TleKeySessionId},
+    governance::types::{
+        MIN_PARLIAMENT_HIDDEN_BALLOT_ANONYMITY_V1,
+        PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1, TleKeySessionId,
+    },
     parliament_casting::ParliamentTimedOvnRegistrationCorpusCommitmentV1,
 };
 use norito::{
@@ -40,10 +47,6 @@ use crate::tle_release::{
 
 /// Fixed version of the public timed-OVN evidence format.
 pub const TIMED_OVN_EVIDENCE_VERSION_V1: u16 = 1;
-/// Exact canonical byte length of one timed-OVN registration record.
-pub const TIMED_OVN_REGISTRATION_RECORD_BYTES_V1: usize = 3_624;
-/// Exact canonical byte length of one timed-OVN masked-ballot record.
-pub const TIMED_OVN_BALLOT_RECORD_BYTES_V1: usize = 2_858;
 
 /// Derive the canonical fixed-suite parameter digest for every timed-OVN v1 attempt.
 ///
@@ -184,9 +187,9 @@ impl TimedOvnReleaseIdentityPublicV1 {
             self.body_instance_id,
             self.ballot_attempt_id,
             self.survivor_corpus_root,
-            // `TleReleaseIdentityV1` retains a generic compatibility slot for
-            // protocols that have a recovery corpus. Timed OVN has none: the
-            // only value admitted here is the replay-derived no-recovery sentinel.
+            // `TleReleaseIdentityV1` reserves this slot for protocols with a
+            // recovery corpus. Timed OVN has none: the only value admitted here
+            // is the replay-derived no-recovery sentinel.
             self.no_recovery_root,
             self.target_finalized_height,
             self.parameter_hash,
@@ -2786,7 +2789,9 @@ fn validate_survivor_count(
     survivor_ids: &[[u8; 32]],
     registration_count: usize,
 ) -> Result<(), TimedOvnEvidenceError> {
-    if survivor_ids.is_empty()
+    let survivor_count = u32::try_from(survivor_ids.len())
+        .map_err(|_| TimedOvnEvidenceError::InvalidEvidenceSize)?;
+    if survivor_count < MIN_PARLIAMENT_HIDDEN_BALLOT_ANONYMITY_V1
         || survivor_ids.len() > registration_count
         || survivor_ids.len() > TIMED_OVN_MAX_PARTICIPANTS_V1
     {
@@ -3255,15 +3260,10 @@ mod tests {
                 .err(),
             Some(TimedOvnEvidenceError::InvalidParticipantDecision)
         );
-        let TimedOvnLifecycleStateV1::SurvivorsFrozen(dropout_frozen) = one_dropout
-            .freeze_survivors(&tle.key)
-            .expect("dropout survivor freeze")
-        else {
-            panic!("expected survivor-frozen state");
-        };
         assert_eq!(
-            dropout_frozen.survivor_participant_hashes(),
-            &participant_ids[1..]
+            one_dropout.freeze_survivors(&tle.key).err(),
+            Some(TimedOvnEvidenceError::InvalidEvidenceSize),
+            "two survivors must fail before any ballot can be accepted"
         );
         let lifecycle = registration_closed
             .freeze_survivors(&tle.key)

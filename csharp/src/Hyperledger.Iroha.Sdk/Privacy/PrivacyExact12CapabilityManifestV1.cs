@@ -378,6 +378,7 @@ public sealed class PrivacyExact12CapabilityManifestV1
         }
         RequireExactNoritoContentType(response.Content.Headers.ContentType);
         var archive = await ReadBoundedManifestAsync(response.Content, cancellationToken);
+        PrivacyNative.RequireValidCapabilityArchive(archive);
         var decoded = PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(
             archive,
             localCatalog);

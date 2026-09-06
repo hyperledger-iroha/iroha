@@ -1,6 +1,9 @@
 // User-facing transaction-history visibility and authentication configuration.
+const TX_HISTORY_JWT_HMAC_SECRET_MAX_BYTES: usize = 4 * 1024;
+
 /// Transaction-history visibility/auth configuration for Torii app API endpoints.
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub struct ToriiTxHistory {
     /// Optional dataspace-keyed mandatory-alias policy file.
     pub mandatory_aliases_path: Option<PathBuf>,
@@ -13,47 +16,90 @@ pub struct ToriiTxHistory {
     pub jwt: Option<ToriiTxHistoryJwt>,
 }
 impl ToriiTxHistory {
-    fn parse(self) -> actual::ToriiTxHistory {
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::ToriiTxHistory {
         if !(1..=defaults::torii::tx_history::MANDATORY_ALIASES_MAX_FILE_BYTES_V1)
             .contains(&self.mandatory_aliases_max_file_bytes)
         {
-            panic!(
-                "torii.tx_history.mandatory_aliases_max_file_bytes must be between 1 and {}",
-                defaults::torii::tx_history::MANDATORY_ALIASES_MAX_FILE_BYTES_V1
+            emit_torii_config_error(
+                emitter,
+                format!(
+                    "torii.tx_history.mandatory_aliases_max_file_bytes must be between 1 and {}",
+                    defaults::torii::tx_history::MANDATORY_ALIASES_MAX_FILE_BYTES_V1
+                ),
             );
         }
-        self.mandatory_aliases_max_file_bytes
+        if self
+            .mandatory_aliases_max_file_bytes
             .checked_mul(defaults::torii::tx_history::MANDATORY_ALIASES_MEMORY_PHASE_UNITS)
             .and_then(|bytes| {
                 bytes.checked_add(
                     defaults::torii::tx_history::MANDATORY_ALIASES_NORMALIZATION_TRANSIENT_BYTES,
                 )
             })
-            .unwrap_or_else(|| {
-                panic!(
-                    "torii.tx_history.mandatory_aliases_max_file_bytes does not fit the startup memory envelope"
-                )
-            });
-        let allowed_asset_definition_id = self.allowed_asset_definition_id.map(|value| {
-            parse_asset_definition_selector_literal(
-                "torii.tx_history.allowed_asset_definition_id",
-                &value,
-            )
-        });
+            .is_none()
+        {
+            emit_torii_config_error(
+                emitter,
+                "torii.tx_history.mandatory_aliases_max_file_bytes does not fit the startup memory envelope",
+            );
+        }
+        let allowed_asset_definition_id = self
+            .allowed_asset_definition_id
+            .and_then(|value| parse_tx_history_asset_selector(value, emitter));
         actual::ToriiTxHistory {
             mandatory_aliases_path: self.mandatory_aliases_path,
             mandatory_aliases_max_file_bytes: self.mandatory_aliases_max_file_bytes,
             allowed_asset_definition_id,
-            jwt: self.jwt.map(ToriiTxHistoryJwt::parse),
+            jwt: self.jwt.and_then(|jwt| jwt.parse(emitter)),
+        }
+    }
+}
+fn parse_tx_history_asset_selector(
+    value: String,
+    emitter: &mut Emitter<ParseError>,
+) -> Option<String> {
+    const FIELD: &str = "torii.tx_history.allowed_asset_definition_id";
+    if value.trim() != value {
+        emit_torii_config_error(
+            emitter,
+            format!("{FIELD} must not contain surrounding whitespace"),
+        );
+        return None;
+    }
+    if let Ok(asset_definition_id) = AssetDefinitionId::parse_address_literal(&value) {
+        let canonical = asset_definition_id.canonical_address();
+        if canonical == value {
+            return Some(value);
+        }
+        emit_torii_config_error(
+            emitter,
+            format!("{FIELD} must use the canonical Base58 spelling `{canonical}`"),
+        );
+        return None;
+    }
+    match AssetDefinitionAlias::from_str(&value) {
+        Ok(_) => Some(value),
+        Err(err) => {
+            emit_torii_config_error(
+                emitter,
+                format!(
+                    "invalid {FIELD} `{value}`: {err}; expected a canonical Base58 asset definition id or on-chain asset alias literal"
+                ),
+            );
+            None
         }
     }
 }
 /// JWT bearer verification inputs for transaction-history endpoints.
-#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+#[derive(ReadConfig, Clone, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub struct ToriiTxHistoryJwt {
     /// Expected JWT algorithm label (for example `RS256` or `HS256`).
     pub algorithm: String,
     /// Shared-secret material used for HMAC JWT algorithms.
+    ///
+    /// V1 requires at least 32/48/64 bytes for HS256/384/512 respectively and
+    /// caps retained key material at 4 KiB.
     pub secret: Option<String>,
     /// PEM-encoded public key used for asymmetric JWT algorithms.
     pub public_key_pem: Option<String>,
@@ -62,53 +108,173 @@ pub struct ToriiTxHistoryJwt {
     /// Optional audience constraint.
     pub audience: Option<String>,
 }
+impl Debug for ToriiTxHistoryJwt {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ToriiTxHistoryJwt")
+            .field("algorithm", &self.algorithm)
+            .field(
+                "secret",
+                &self
+                    .secret
+                    .as_ref()
+                    .map(|_| "[REDACTED transaction-history JWT secret]"),
+            )
+            .field(
+                "public_key_pem",
+                &self
+                    .public_key_pem
+                    .as_ref()
+                    .map(|_| "[REDACTED transaction-history JWT key]"),
+            )
+            .field("issuer", &self.issuer)
+            .field("audience", &self.audience)
+            .finish()
+    }
+}
 impl ToriiTxHistoryJwt {
-    fn parse(self) -> actual::ToriiTxHistoryJwt {
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::ToriiTxHistoryJwt> {
         let algorithm = self.algorithm;
-        if algorithm.is_empty() {
-            panic!("torii.tx_history.jwt.algorithm must not be empty");
-        }
-        match algorithm.as_str() {
+        let issuer =
+            parse_tx_history_jwt_constraint("torii.tx_history.jwt.issuer", self.issuer, emitter);
+        let audience = parse_tx_history_jwt_constraint(
+            "torii.tx_history.jwt.audience",
+            self.audience,
+            emitter,
+        );
+        let mut valid = issuer.is_ok() && audience.is_ok();
+        let issuer = issuer.ok().flatten();
+        let audience = audience.ok().flatten();
+        let (secret, public_key_pem) = match algorithm.as_str() {
             "HS256" | "HS384" | "HS512" => {
-                let secret = self.secret.filter(|value| !value.trim().is_empty());
-                if secret.is_none() {
-                    panic!("torii.tx_history.jwt.secret must be set for HMAC JWT algorithms");
+                if self.public_key_pem.is_some() {
+                    emit_torii_config_error(
+                        emitter,
+                        "torii.tx_history.jwt.public_key_pem must be absent for HMAC JWT algorithms",
+                    );
+                    valid = false;
                 }
-                actual::ToriiTxHistoryJwt {
-                    algorithm,
-                    secret,
-                    public_key_pem: None,
-                    issuer: self.issuer.filter(|value| !value.trim().is_empty()),
-                    audience: self.audience.filter(|value| !value.trim().is_empty()),
+                let minimum_secret_bytes = match algorithm.as_str() {
+                    "HS256" => 32,
+                    "HS384" => 48,
+                    "HS512" => 64,
+                    _ => {
+                        emit_torii_config_error(
+                            emitter,
+                            "torii.tx_history.jwt.algorithm is not a supported HMAC algorithm",
+                        );
+                        return None;
+                    }
+                };
+                match self.secret {
+                    Some(secret)
+                        if (minimum_secret_bytes..=TX_HISTORY_JWT_HMAC_SECRET_MAX_BYTES)
+                            .contains(&secret.len())
+                            && !secret.trim().is_empty() =>
+                    {
+                        (Some(secret), None)
+                    }
+                    Some(_) => {
+                        emit_torii_config_error(
+                            emitter,
+                            format!(
+                                "torii.tx_history.jwt.secret for {algorithm} must contain {minimum_secret_bytes}..={TX_HISTORY_JWT_HMAC_SECRET_MAX_BYTES} bytes of non-whitespace key material"
+                            ),
+                        );
+                        valid = false;
+                        (None, None)
+                    }
+                    None => {
+                        emit_torii_config_error(
+                            emitter,
+                            format!(
+                                "torii.tx_history.jwt.secret is required for {algorithm} and must contain {minimum_secret_bytes}..={TX_HISTORY_JWT_HMAC_SECRET_MAX_BYTES} bytes"
+                            ),
+                        );
+                        valid = false;
+                        (None, None)
+                    }
                 }
             }
             "RS256" | "RS384" | "RS512" | "PS256" | "PS384" | "PS512" | "ES256" | "ES384"
             | "EdDSA" => {
-                let public_key_pem = self.public_key_pem.filter(|value| !value.trim().is_empty());
-                if public_key_pem.is_none() {
-                    panic!(
-                        "torii.tx_history.jwt.public_key_pem must be set for asymmetric JWT algorithms"
+                if self.secret.is_some() {
+                    emit_torii_config_error(
+                        emitter,
+                        "torii.tx_history.jwt.secret must be absent for asymmetric JWT algorithms",
                     );
+                    valid = false;
                 }
-                actual::ToriiTxHistoryJwt {
-                    algorithm,
-                    secret: None,
-                    public_key_pem,
-                    issuer: self.issuer.filter(|value| !value.trim().is_empty()),
-                    audience: self.audience.filter(|value| !value.trim().is_empty()),
+                match self.public_key_pem {
+                    Some(public_key_pem) if !public_key_pem.trim().is_empty() => {
+                        (None, Some(public_key_pem))
+                    }
+                    _ => {
+                        emit_torii_config_error(
+                            emitter,
+                            "torii.tx_history.jwt.public_key_pem must be set to non-whitespace material for asymmetric JWT algorithms",
+                        );
+                        valid = false;
+                        (None, None)
+                    }
                 }
             }
-            other => panic!(
-                "invalid torii.tx_history.jwt.algorithm `{other}`; expected an exact HS256/384/512, RS256/384/512, PS256/384/512, ES256/384, or EdDSA label"
-            ),
+            other => {
+                emit_torii_config_error(
+                    emitter,
+                    format!(
+                        "invalid torii.tx_history.jwt.algorithm `{other}`; expected an exact HS256/384/512, RS256/384/512, PS256/384/512, ES256/384, or EdDSA label"
+                    ),
+                );
+                return None;
+            }
+        };
+        if !valid {
+            return None;
         }
+        Some(actual::ToriiTxHistoryJwt {
+            algorithm,
+            secret,
+            public_key_pem,
+            issuer,
+            audience,
+        })
     }
+}
+fn parse_tx_history_jwt_constraint(
+    field: &str,
+    value: Option<String>,
+    emitter: &mut Emitter<ParseError>,
+) -> core::result::Result<Option<String>, ()> {
+    if let Some(value) = value.as_ref()
+        && (value.is_empty() || value.trim() != value || value.chars().any(char::is_control))
+    {
+        emit_torii_config_error(
+            emitter,
+            format!(
+                "{field} must be non-empty and must not contain surrounding whitespace or control characters"
+            ),
+        );
+        return Err(());
+    }
+    Ok(value)
 }
 #[cfg(test)]
 mod torii_tx_history_tests {
     use super::*;
+
+    fn parse_error(config: ToriiTxHistory) -> String {
+        let mut emitter = Emitter::new();
+        let _ = config.parse(&mut emitter);
+        let error = emitter
+            .into_result()
+            .expect_err("configuration must be rejected");
+        format!("{error:?}")
+    }
+
     #[test]
     fn torii_tx_history_parse_accepts_asset_alias_selector() {
+        let mut emitter = Emitter::new();
         let parsed = ToriiTxHistory {
             mandatory_aliases_path: None,
             mandatory_aliases_max_file_bytes:
@@ -116,7 +282,10 @@ mod torii_tx_history_tests {
             allowed_asset_definition_id: Some("xor#universal".to_owned()),
             jwt: None,
         }
-        .parse();
+        .parse(&mut emitter);
+        emitter
+            .into_result()
+            .expect("canonical history configuration must be accepted");
         assert_eq!(
             parsed.allowed_asset_definition_id.as_deref(),
             Some("xor#universal")
@@ -128,17 +297,19 @@ mod torii_tx_history_tests {
     }
     #[test]
     fn torii_tx_history_parse_rejects_invalid_asset_selector() {
-        let panic = std::panic::catch_unwind(|| {
-            ToriiTxHistory {
+        for selector in ["not a selector", " xor#universal", "xor#universal "] {
+            let report = parse_error(ToriiTxHistory {
                 mandatory_aliases_path: None,
                 mandatory_aliases_max_file_bytes:
                     defaults::torii::tx_history::MANDATORY_ALIASES_MAX_FILE_BYTES,
-                allowed_asset_definition_id: Some("not a selector".to_owned()),
+                allowed_asset_definition_id: Some(selector.to_owned()),
                 jwt: None,
-            }
-            .parse();
-        });
-        assert!(panic.is_err(), "expected invalid selector to panic");
+            });
+            assert!(
+                report.contains("allowed_asset_definition_id"),
+                "unexpected error for {selector:?}: {report}"
+            );
+        }
     }
     #[test]
     fn torii_tx_history_parse_rejects_invalid_alias_policy_memory_geometry() {
@@ -147,18 +318,15 @@ mod torii_tx_history_tests {
             defaults::torii::tx_history::MANDATORY_ALIASES_MAX_FILE_BYTES_V1 + 1,
             usize::MAX,
         ] {
-            let panic = std::panic::catch_unwind(|| {
-                ToriiTxHistory {
-                    mandatory_aliases_path: None,
-                    mandatory_aliases_max_file_bytes: maximum,
-                    allowed_asset_definition_id: None,
-                    jwt: None,
-                }
-                .parse();
+            let report = parse_error(ToriiTxHistory {
+                mandatory_aliases_path: None,
+                mandatory_aliases_max_file_bytes: maximum,
+                allowed_asset_definition_id: None,
+                jwt: None,
             });
             assert!(
-                panic.is_err(),
-                "expected invalid maximum {maximum} to panic"
+                report.contains("mandatory_aliases_max_file_bytes"),
+                "unexpected error for invalid maximum {maximum}: {report}"
             );
         }
     }
@@ -172,10 +340,181 @@ mod torii_tx_history_tests {
                 issuer: None,
                 audience: None,
             };
-            assert!(
-                std::panic::catch_unwind(|| jwt.parse()).is_err(),
-                "{algorithm:?} must fail closed"
+            let mut emitter = Emitter::new();
+            assert!(jwt.parse(&mut emitter).is_none());
+            let report = format!(
+                "{:?}",
+                emitter
+                    .into_result()
+                    .expect_err("noncanonical algorithm must fail closed")
             );
+            assert!(report.contains("jwt.algorithm"), "{algorithm:?}: {report}");
         }
+    }
+
+    #[test]
+    fn torii_tx_history_jwt_accepts_exact_hmac_binding() {
+        let secret = "s".repeat(32);
+        let jwt = ToriiTxHistoryJwt {
+            algorithm: "HS256".to_owned(),
+            secret: Some(secret.clone()),
+            public_key_pem: None,
+            issuer: Some("issuer".to_owned()),
+            audience: Some("audience".to_owned()),
+        };
+        let mut emitter = Emitter::new();
+        let parsed = jwt
+            .parse(&mut emitter)
+            .expect("exact HMAC binding should parse");
+        emitter
+            .into_result()
+            .expect("exact HMAC binding should not emit an error");
+        assert_eq!(parsed.algorithm, "HS256");
+        assert_eq!(parsed.secret.as_deref(), Some(secret.as_str()));
+        assert!(parsed.public_key_pem.is_none());
+        assert_eq!(parsed.issuer.as_deref(), Some("issuer"));
+        assert_eq!(parsed.audience.as_deref(), Some("audience"));
+    }
+
+    #[test]
+    fn torii_tx_history_jwt_enforces_algorithm_key_strength_and_ceiling() {
+        for (algorithm, minimum) in [("HS256", 32), ("HS384", 48), ("HS512", 64)] {
+            for accepted_length in [minimum, TX_HISTORY_JWT_HMAC_SECRET_MAX_BYTES] {
+                let mut emitter = Emitter::new();
+                let parsed = ToriiTxHistoryJwt {
+                    algorithm: algorithm.to_owned(),
+                    secret: Some("s".repeat(accepted_length)),
+                    public_key_pem: None,
+                    issuer: None,
+                    audience: None,
+                }
+                .parse(&mut emitter)
+                .expect("in-range HMAC secret should parse");
+                emitter
+                    .into_result()
+                    .expect("in-range HMAC secret should not emit an error");
+                assert_eq!(
+                    parsed.secret.as_ref().map(String::len),
+                    Some(accepted_length)
+                );
+            }
+
+            for rejected_length in [minimum - 1, TX_HISTORY_JWT_HMAC_SECRET_MAX_BYTES + 1] {
+                let mut emitter = Emitter::new();
+                assert!(
+                    ToriiTxHistoryJwt {
+                        algorithm: algorithm.to_owned(),
+                        secret: Some("s".repeat(rejected_length)),
+                        public_key_pem: None,
+                        issuer: None,
+                        audience: None,
+                    }
+                    .parse(&mut emitter)
+                    .is_none()
+                );
+                let report = format!(
+                    "{:?}",
+                    emitter
+                        .into_result()
+                        .expect_err("out-of-range HMAC secret must be rejected")
+                );
+                assert!(report.contains(algorithm), "{algorithm}: {report}");
+            }
+
+            let mut emitter = Emitter::new();
+            assert!(
+                ToriiTxHistoryJwt {
+                    algorithm: algorithm.to_owned(),
+                    secret: Some(" ".repeat(minimum)),
+                    public_key_pem: None,
+                    issuer: None,
+                    audience: None,
+                }
+                .parse(&mut emitter)
+                .is_none()
+            );
+            emitter
+                .into_result()
+                .expect_err("whitespace-only HMAC secret must be rejected");
+        }
+    }
+
+    #[test]
+    fn torii_tx_history_jwt_rejects_contradictory_or_empty_inputs() {
+        let cases = [
+            ToriiTxHistoryJwt {
+                algorithm: "HS256".to_owned(),
+                secret: Some("secret".to_owned()),
+                public_key_pem: Some("public key".to_owned()),
+                issuer: None,
+                audience: None,
+            },
+            ToriiTxHistoryJwt {
+                algorithm: "RS256".to_owned(),
+                secret: Some("secret".to_owned()),
+                public_key_pem: Some("public key".to_owned()),
+                issuer: None,
+                audience: None,
+            },
+            ToriiTxHistoryJwt {
+                algorithm: "HS256".to_owned(),
+                secret: Some("   ".to_owned()),
+                public_key_pem: None,
+                issuer: None,
+                audience: None,
+            },
+            ToriiTxHistoryJwt {
+                algorithm: "EdDSA".to_owned(),
+                secret: None,
+                public_key_pem: Some(String::new()),
+                issuer: None,
+                audience: None,
+            },
+        ];
+        for jwt in cases {
+            let mut emitter = Emitter::new();
+            assert!(jwt.parse(&mut emitter).is_none());
+            emitter
+                .into_result()
+                .expect_err("contradictory or empty JWT inputs must fail closed");
+        }
+    }
+
+    #[test]
+    fn torii_tx_history_jwt_rejects_noncanonical_claim_constraints() {
+        for (issuer, audience) in [
+            (Some(String::new()), None),
+            (Some(" issuer".to_owned()), None),
+            (None, Some("audience ".to_owned())),
+            (Some("issuer\u{7f}".to_owned()), None),
+        ] {
+            let jwt = ToriiTxHistoryJwt {
+                algorithm: "HS256".to_owned(),
+                secret: Some("s".repeat(32)),
+                public_key_pem: None,
+                issuer,
+                audience,
+            };
+            let mut emitter = Emitter::new();
+            assert!(jwt.parse(&mut emitter).is_none());
+            emitter
+                .into_result()
+                .expect_err("noncanonical claim constraint must fail closed");
+        }
+    }
+
+    #[test]
+    fn torii_tx_history_jwt_debug_redacts_key_material() {
+        let jwt = ToriiTxHistoryJwt {
+            algorithm: "HS256".to_owned(),
+            secret: Some("do-not-log-this-secret".to_owned()),
+            public_key_pem: Some("do-not-log-this-key".to_owned()),
+            issuer: Some("issuer".to_owned()),
+            audience: Some("audience".to_owned()),
+        };
+        let debug = format!("{jwt:?}");
+        assert!(debug.contains("REDACTED"), "{debug}");
+        assert!(!debug.contains("do-not-log-this-secret"), "{debug}");
+        assert!(!debug.contains("do-not-log-this-key"), "{debug}");
     }
 }

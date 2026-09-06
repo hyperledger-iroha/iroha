@@ -262,9 +262,18 @@ Operator access (Torii)
   access set, so fee debits, gas settlement, and Nexus receipts cannot reorder
   around each other silently. The detached merge path now replays fee/gas/Nexus
   postprocessing for simple transparent single-transfer deltas in the same
-  `StateTransaction`; fee-bearing deltas with data-trigger ordering concerns or
-  unsupported detached effects continue to report the `fee_postprocessing`
-  fallback reason.
+  `StateTransaction`; unsupported fee-bearing detached effects continue to
+  report the `fee_postprocessing` fallback reason.
+- A block with active data triggers or any trigger-lifecycle mutation uses a
+  candidate-wide serialization fence and reports detached fallback as
+  `durable_state`. Accountable prepared-overlay gas reaches the parent block
+  exactly once on commit or rollback, independently of
+  `pipeline.parallel_apply`. The authored/base amount is precharged before a
+  prepared effect can reach State, nested trigger/host work is retained rather
+  than replaced during settlement, and no later transaction executes once the
+  configured parent-block cap has been consumed. A mixed live batch that trips
+  only the overlay-size/instruction bound remains fee-exempt but still adds its
+  already-attempted gas to that same block budget.
 - IVM dynamic access scheduling uses the overlay prepass output when available:
   the VM run that builds the overlay can also capture the host state access log,
   avoiding a separate dynamic access VM run before DAG construction.
@@ -325,8 +334,9 @@ Iroha can group signatures by scheme during block validation and verify them in 
   - These pre‑verifications do not skip per‑transaction validation yet; they are wired for early rejection and future fast paths.
 ### Torii Endpoints (Operator Aids)
 
-- Evidence audit (non‑consensus):
-  - `GET /v1/sumeragi/evidence/count` — `{ "count": <u64> }` for in‑memory evidence store.
-- `GET /v1/sumeragi/evidence` — `{ "total": <u64>, "items": [...] }` with the frozen context and exact signed-artifact summary for `SumeragiV2Equivocation` evidence.
+- Committed evidence audit:
+  - `GET /v1/sumeragi/evidence/count` — `{ "count": <u64> }` for the bounded evidence table retained in WSV.
+  - `GET /v1/sumeragi/evidence` — `{ "total": <u64>, "items": [...] }` with the frozen context and exact signed-artifact summary for committed `SumeragiV2Equivocation` evidence.
+  - Both routes are read-only projections of persisted consensus state. Node-local proofs awaiting block admission are deliberately excluded.
 - Python SDK shortcuts: `iroha_python.ToriiClient.get_pipeline_recovery(height)` fetches the JSON sidecar, and `stream_pipeline_transactions`/`stream_pipeline_blocks`/`stream_pipeline_witnesses`/`stream_pipeline_merges` expose the SSE feeds with Norito-backed filters.
-  - Purpose: quick inspection during development and ops. Data is node‑local and not persisted.
+  - Purpose: quick inspection during development and operations.

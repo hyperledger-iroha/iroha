@@ -39,7 +39,6 @@ pub const ZK_VERIFIER_BACKEND_REGISTRY_LABELS_V1: &[&str] = &[
     "halo2/pasta/kaigi-roster-v1",
     "halo2/pasta/kaigi-usage-v1",
     "halo2/pasta/ivm-execution-v1",
-    "halo2/pasta/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
     "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
     "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
     "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
@@ -94,6 +93,8 @@ pub const OPEN_VERIFY_DEFAULT_MAX_AUX_BYTES: usize = 64 * 1024;
 /// this enum. They have protocol-specific data-model types and must not be
 /// inferred from aliases or free-form catalog labels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::zk::BackendTag")]
 pub enum BackendTag {
     /// Halo2 IPA over Pasta curves.
     Halo2IpaPasta,
@@ -137,7 +138,6 @@ pub fn verifier_backend_registry_tag_v1(label: &str) -> Option<BackendTag> {
         | "halo2/pasta/kaigi-roster-v1"
         | "halo2/pasta/kaigi-usage-v1"
         | "halo2/pasta/ivm-execution-v1"
-        | "halo2/pasta/kagemusha-topup-shield-merkle16-axiom-poseidon-v3"
         | "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3"
         | "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3"
         | "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4" => {
@@ -313,6 +313,8 @@ impl std::error::Error for OpenVerifyEnvelopeValidationError {}
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::zk::OpenVerifyEnvelope")]
 pub struct OpenVerifyEnvelope {
     /// Backend tag string (e.g., `halo2-ipa-pasta`).
     pub backend: BackendTag,
@@ -520,6 +522,8 @@ pub fn open_verify_circuit_id_uses_reserved_privacy_protocol_namespace_v1(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::zk::StarkFriOpenProofV1")]
 pub struct StarkFriOpenProofV1 {
     /// Version tag for format evolution.
     pub version: u16,
@@ -540,6 +544,8 @@ pub struct StarkFriOpenProofV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::zk::ZkAcePrivacyPublicInputsV1", frame = "iroha.privacy.zk-ace.public-inputs.v1")]
 pub struct ZkAcePrivacyPublicInputsV1 {
     /// Public-input schema version.
     pub version: u16,
@@ -555,6 +561,8 @@ pub struct ZkAcePrivacyPublicInputsV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::zk::ZkAcePackedBytesV1")]
 pub struct ZkAcePackedBytesV1 {
     /// Original byte length before padding.
     pub length: u64,
@@ -931,7 +939,7 @@ mod tests {
     }
     #[test]
     fn verifier_backend_registry_is_closed_exact_and_engine_typed() {
-        assert_eq!(ZK_VERIFIER_BACKEND_REGISTRY_LABELS_V1.len(), 9);
+        assert_eq!(ZK_VERIFIER_BACKEND_REGISTRY_LABELS_V1.len(), 8);
         let mut unique = std::collections::BTreeSet::new();
         for &label in ZK_VERIFIER_BACKEND_REGISTRY_LABELS_V1 {
             assert!(unique.insert(label), "duplicate registry label: {label}");
@@ -961,8 +969,6 @@ mod tests {
             "halo2/pasta/ivm-execution-v1\0",
             "halo2/pasta/ipa-pasta-cycle-v1",
             "halo2/pasta/ivm-overlay-bind",
-            "halo2/pasta/kagemusha-recursive-spend-step-eq-two-parent-operation-protocol-v2",
-            "halo2/pasta/kagemusha-recursive-spend-step-ep-two-parent-operation-protocol-v2",
             "halo2/pasta/tiny-add",
             "stark",
             "stark/fri",
@@ -1477,3 +1483,6 @@ mod tests {
         assert_json_roundtrip(&open_proof);
     }
 }
+
+#[cfg(test)]
+mod captured_zk_schema_tests;

@@ -91,7 +91,7 @@ impl ModerationCheckpointStoreRecordV1 {
 /// provider and must never appear in records, configuration, or diagnostics.
 pub trait ModerationCheckpointStoreV1: ModerationRuntimeProviderV1 {
     /// Return the archive-lifetime-stable Ed25519 trust anchor authenticating
-    /// terminal-set attestations. HSM-internal rotation must preserve it in V1.
+    /// terminal-set attestations. Provider-internal key rotation must preserve it in V1.
     fn attestation_public_key(&self) -> [u8; 32];
     /// Load the latest committed record for this configured moderation namespace.
     fn load_latest(

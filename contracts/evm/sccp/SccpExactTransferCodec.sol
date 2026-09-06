@@ -212,26 +212,13 @@ library SccpExactTransferCodec {
         return _isAdmittedEd25519Key(canonical, 4);
     }
 
-    /**
-     * Validate a canonical public-Taira AccountId admitted by the V1 routes.
-     *
-     * AccountAddress layout and policy checks exactly mirror Rust's V1
-     * `AccountId` encoding. The contract-side controller set is deliberately
-     * closed to Ed25519 and compressed secp256k1 keys, including canonical
-     * multisig policies composed from those keys. Other Rust controller curves
-     * stay fail-closed until the destination contracts can perform their full
-     * public-key admission checks instead of accepting length-shaped material.
-     */
+    /** Validate the sole canonical Taira AccountId provable by V1 routes. */
     function isCanonicalTairaAccountRange(
         bytes memory value,
         uint256 start,
         uint256 length
     ) internal pure returns (bool) {
-        if (length == 0 || length > MAX_TEXT_BYTES || start > value.length
-            || value.length - start < length) return false;
-        uint256 end = start + length;
-        return _hasPrefix(value, start, end, "test")
-            && _isCanonicalI105Payload(value, start + 4, end);
+        return isCanonicalTairaRecipientRange(value, start, length);
     }
 
     function _isPrintableAsciiText(bytes memory value) private pure returns (bool) {

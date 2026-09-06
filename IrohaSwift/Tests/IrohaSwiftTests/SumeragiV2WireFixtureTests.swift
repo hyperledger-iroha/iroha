@@ -80,8 +80,8 @@ final class SumeragiV2WireFixtureTests: XCTestCase {
             parentStateRoot: hash(0x21),
             postStateRoot: hash(0x23),
             ordinaryWritesRoot: hash(0x25),
-            topUpAnchorRoot: nil,
-            topUpAnchorCount: 0,
+            kagemushaTopUpRoot: nil,
+            kagemushaTopUpCount: 0,
             nativeAmxApplicationManifestVersion: 1,
             nativeAmxApplicationManifestRoot: emptyManifestRoot,
             nativeAmxApplicationManifestCount: 0,
@@ -96,8 +96,8 @@ final class SumeragiV2WireFixtureTests: XCTestCase {
             parentStateRoot: base.parentStateRoot,
             postStateRoot: base.postStateRoot,
             ordinaryWritesRoot: base.ordinaryWritesRoot,
-            topUpAnchorRoot: nil,
-            topUpAnchorCount: 0,
+            kagemushaTopUpRoot: nil,
+            kagemushaTopUpCount: 0,
             nativeAmxApplicationManifestVersion:
                 base.nativeAmxApplicationManifestVersion,
             nativeAmxApplicationManifestRoot: base.nativeAmxApplicationManifestRoot,
@@ -650,7 +650,7 @@ final class SumeragiV2WireFixtureTests: XCTestCase {
         XCTAssertThrowsError(try SumeragiV2Status.decodeCanonical(invalidBoolean))
     }
 
-    func testExecutionCommitmentRejectsNoncanonicalTopUpProjection() throws {
+    func testExecutionCommitmentRejectsNoncanonicalKagemushaTopUpProjection() throws {
         let row = try XCTUnwrap(
             fixtureRows().first {
                 $0.kind == "message" && $0.name == "commit_certificate_response"
@@ -670,8 +670,8 @@ final class SumeragiV2WireFixtureTests: XCTestCase {
                 parentStateRoot: commitment.parentStateRoot,
                 postStateRoot: commitment.postStateRoot,
                 ordinaryWritesRoot: commitment.ordinaryWritesRoot,
-                topUpAnchorRoot: commitment.parentStateRoot,
-                topUpAnchorCount: 0,
+                kagemushaTopUpRoot: commitment.parentStateRoot,
+                kagemushaTopUpCount: 0,
                 nativeAmxApplicationManifestVersion:
                     commitment.nativeAmxApplicationManifestVersion,
                 nativeAmxApplicationManifestRoot:
@@ -687,8 +687,52 @@ final class SumeragiV2WireFixtureTests: XCTestCase {
                 parentStateRoot: commitment.parentStateRoot,
                 postStateRoot: commitment.postStateRoot,
                 ordinaryWritesRoot: commitment.ordinaryWritesRoot,
-                topUpAnchorRoot: nil,
-                topUpAnchorCount: 1,
+                kagemushaTopUpRoot: nil,
+                kagemushaTopUpCount: 1,
+                nativeAmxApplicationManifestVersion:
+                    commitment.nativeAmxApplicationManifestVersion,
+                nativeAmxApplicationManifestRoot:
+                    commitment.nativeAmxApplicationManifestRoot,
+                nativeAmxApplicationManifestCount:
+                    commitment.nativeAmxApplicationManifestCount,
+                executedBlockWireLen: commitment.executedBlockWireLen,
+                executedBlockWireHash: commitment.executedBlockWireHash
+            )
+        )
+        let largeCount: UInt32 = 1_000
+        var postStatePreimage = Data("iroha:kagemusha:v1:post-state-root".utf8)
+        postStatePreimage.append(0)
+        postStatePreimage.append(UInt8(truncatingIfNeeded: largeCount))
+        postStatePreimage.append(UInt8(truncatingIfNeeded: largeCount >> 8))
+        postStatePreimage.append(UInt8(truncatingIfNeeded: largeCount >> 16))
+        postStatePreimage.append(UInt8(truncatingIfNeeded: largeCount >> 24))
+        postStatePreimage.append(commitment.ordinaryWritesRoot.bytes)
+        postStatePreimage.append(commitment.parentStateRoot.bytes)
+        let largePostStateRoot = try SumeragiV2Hash(IrohaHash.hash(postStatePreimage))
+        let largeCommitment = try SumeragiV2ExecutionCommitment(
+            parentStateRoot: commitment.parentStateRoot,
+            postStateRoot: largePostStateRoot,
+            ordinaryWritesRoot: commitment.ordinaryWritesRoot,
+            kagemushaTopUpRoot: commitment.parentStateRoot,
+            kagemushaTopUpCount: largeCount,
+            nativeAmxApplicationManifestVersion:
+                commitment.nativeAmxApplicationManifestVersion,
+            nativeAmxApplicationManifestRoot:
+                commitment.nativeAmxApplicationManifestRoot,
+            nativeAmxApplicationManifestCount:
+                commitment.nativeAmxApplicationManifestCount,
+            executedBlockWireLen: commitment.executedBlockWireLen,
+            executedBlockWireHash: commitment.executedBlockWireHash
+        )
+        XCTAssertEqual(largeCommitment.kagemushaTopUpCount, largeCount)
+        XCTAssertEqual(largeCommitment.kagemushaTopUpRoot, commitment.parentStateRoot)
+        XCTAssertThrowsError(
+            try SumeragiV2ExecutionCommitment(
+                parentStateRoot: commitment.parentStateRoot,
+                postStateRoot: commitment.postStateRoot,
+                ordinaryWritesRoot: commitment.ordinaryWritesRoot,
+                kagemushaTopUpRoot: commitment.parentStateRoot,
+                kagemushaTopUpCount: 1,
                 nativeAmxApplicationManifestVersion:
                     commitment.nativeAmxApplicationManifestVersion,
                 nativeAmxApplicationManifestRoot:
@@ -704,42 +748,8 @@ final class SumeragiV2WireFixtureTests: XCTestCase {
                 parentStateRoot: commitment.parentStateRoot,
                 postStateRoot: commitment.postStateRoot,
                 ordinaryWritesRoot: commitment.ordinaryWritesRoot,
-                topUpAnchorRoot: commitment.parentStateRoot,
-                topUpAnchorCount: SumeragiV2ExecutionCommitment.maximumTopUpAnchorCount + 1,
-                nativeAmxApplicationManifestVersion:
-                    commitment.nativeAmxApplicationManifestVersion,
-                nativeAmxApplicationManifestRoot:
-                    commitment.nativeAmxApplicationManifestRoot,
-                nativeAmxApplicationManifestCount:
-                    commitment.nativeAmxApplicationManifestCount,
-                executedBlockWireLen: commitment.executedBlockWireLen,
-                executedBlockWireHash: commitment.executedBlockWireHash
-            )
-        )
-        XCTAssertThrowsError(
-            try SumeragiV2ExecutionCommitment(
-                parentStateRoot: commitment.parentStateRoot,
-                postStateRoot: commitment.postStateRoot,
-                ordinaryWritesRoot: commitment.ordinaryWritesRoot,
-                topUpAnchorRoot: commitment.parentStateRoot,
-                topUpAnchorCount: 1,
-                nativeAmxApplicationManifestVersion:
-                    commitment.nativeAmxApplicationManifestVersion,
-                nativeAmxApplicationManifestRoot:
-                    commitment.nativeAmxApplicationManifestRoot,
-                nativeAmxApplicationManifestCount:
-                    commitment.nativeAmxApplicationManifestCount,
-                executedBlockWireLen: commitment.executedBlockWireLen,
-                executedBlockWireHash: commitment.executedBlockWireHash
-            )
-        )
-        XCTAssertThrowsError(
-            try SumeragiV2ExecutionCommitment(
-                parentStateRoot: commitment.parentStateRoot,
-                postStateRoot: commitment.postStateRoot,
-                ordinaryWritesRoot: commitment.ordinaryWritesRoot,
-                topUpAnchorRoot: commitment.topUpAnchorRoot,
-                topUpAnchorCount: commitment.topUpAnchorCount,
+                kagemushaTopUpRoot: commitment.kagemushaTopUpRoot,
+                kagemushaTopUpCount: commitment.kagemushaTopUpCount,
                 nativeAmxApplicationManifestVersion:
                     commitment.nativeAmxApplicationManifestVersion,
                 nativeAmxApplicationManifestRoot:
@@ -777,8 +787,8 @@ final class SumeragiV2WireFixtureTests: XCTestCase {
                 parentStateRoot: commitment.parentStateRoot,
                 postStateRoot: commitment.postStateRoot,
                 ordinaryWritesRoot: commitment.ordinaryWritesRoot,
-                topUpAnchorRoot: nil,
-                topUpAnchorCount: 0,
+                kagemushaTopUpRoot: nil,
+                kagemushaTopUpCount: 0,
                 nativeAmxApplicationManifestVersion:
                     SumeragiV2ExecutionCommitment
                         .canonicalNativeAmxApplicationManifestVersion + 1,
@@ -794,8 +804,8 @@ final class SumeragiV2WireFixtureTests: XCTestCase {
                 parentStateRoot: commitment.parentStateRoot,
                 postStateRoot: commitment.postStateRoot,
                 ordinaryWritesRoot: commitment.ordinaryWritesRoot,
-                topUpAnchorRoot: nil,
-                topUpAnchorCount: 0,
+                kagemushaTopUpRoot: nil,
+                kagemushaTopUpCount: 0,
                 nativeAmxApplicationManifestVersion:
                     SumeragiV2ExecutionCommitment
                         .canonicalNativeAmxApplicationManifestVersion,
@@ -810,8 +820,8 @@ final class SumeragiV2WireFixtureTests: XCTestCase {
                 parentStateRoot: commitment.parentStateRoot,
                 postStateRoot: commitment.postStateRoot,
                 ordinaryWritesRoot: commitment.ordinaryWritesRoot,
-                topUpAnchorRoot: nil,
-                topUpAnchorCount: 0,
+                kagemushaTopUpRoot: nil,
+                kagemushaTopUpCount: 0,
                 nativeAmxApplicationManifestVersion:
                     SumeragiV2ExecutionCommitment
                         .canonicalNativeAmxApplicationManifestVersion,
@@ -827,8 +837,8 @@ final class SumeragiV2WireFixtureTests: XCTestCase {
                 parentStateRoot: commitment.parentStateRoot,
                 postStateRoot: commitment.postStateRoot,
                 ordinaryWritesRoot: commitment.ordinaryWritesRoot,
-                topUpAnchorRoot: nil,
-                topUpAnchorCount: 0,
+                kagemushaTopUpRoot: nil,
+                kagemushaTopUpCount: 0,
                 nativeAmxApplicationManifestVersion:
                     SumeragiV2ExecutionCommitment
                         .canonicalNativeAmxApplicationManifestVersion,
@@ -919,7 +929,6 @@ final class SumeragiV2WireFixtureTests: XCTestCase {
         "commit_quorum_certificate_reproposal",
         "timeout_vote",
         "timeout_certificate",
-        "payload_manifest",
         "payload_chunk",
         "certified_body_request",
         "certified_body_response",

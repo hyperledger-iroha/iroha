@@ -202,7 +202,7 @@ fn live_lifecycle_validation_marker_promotes_idempotently_and_authorizes_vote_si
 
     let conflicting = ValidatedBodyReceipt::for_test_with_commitment(
         durable,
-        wire::ExecutionCommitment::without_topups_or_merge_carrier(
+        wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
             Hash::new(b"conflicting live marker parent state"),
             Hash::new(b"conflicting live marker post state"),
             Hash::new(b"conflicting live marker writes"),
@@ -259,13 +259,14 @@ fn vote_signing_requires_the_exact_fsynced_execution_commitment() {
         fixture.manifest.clone(),
     );
     let mut drifted_vote = vote(&fixture);
-    drifted_vote.execution_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
-        Hash::new(b"drifted effects fixture parent state"),
-        Hash::new(b"drifted effects fixture post state"),
-        Hash::new(b"drifted effects fixture ordinary writes"),
-        1,
-        Hash::new(b"drifted effects fixture executed block wire"),
-    );
+    drifted_vote.execution_commitment =
+        wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+            Hash::new(b"drifted effects fixture parent state"),
+            Hash::new(b"drifted effects fixture post state"),
+            Hash::new(b"drifted effects fixture ordinary writes"),
+            1,
+            Hash::new(b"drifted effects fixture executed block wire"),
+        );
     assert!(matches!(
         drift.consume_effects(
             vec![AdapterEffect::Sign {
@@ -553,8 +554,10 @@ fn authenticated_chunk_reconstruction_rejection_retries_exact_proposal_fetch_non
     let fetch_task = services.fetch_tasks[0].clone();
     let work_id = fetch_task.id();
     services.reject_authenticated_chunks = true;
+    let validated = wire::ValidatedPayloadManifest::new(&fixture.context, fixture.manifest.clone())
+        .expect("validate chunk manifest once");
     let mut chunk = wire::PayloadChunk {
-        manifest_hash: HashOf::new(&fixture.manifest),
+        manifest_hash: validated.manifest_hash(),
         index: 0,
         bytes: fixture.encoded_chunks[0].clone(),
         sender: 0,
@@ -563,8 +566,9 @@ fn authenticated_chunk_reconstruction_rejection_retries_exact_proposal_fetch_non
     chunk.signature = Signature::new(
         fixture.validator_keys[0].private_key(),
         &chunk
-            .signature_preimage(&fixture.context, &fixture.manifest)
-            .expect("chunk preimage"),
+            .signature_payload(&validated)
+            .expect("chunk signature payload")
+            .signature_preimage(),
     )
     .payload()
     .to_vec();
@@ -1496,10 +1500,10 @@ fn recovered_decision_fetch_fences_later_ordinary_body_coordinates() {
         first_recovered_ordinal,
         "coalescence must retain the original physical row",
     );
-    assert_ne!(
+    assert_eq!(
         phase_a_identity,
         refreshed_target.ingress_identity(),
-        "coalescence must refresh recovered ownership history without replacing its row",
+        "coalescence refreshes the queue witness without replacing the persisted physical identity",
     );
     drop(refreshed_probe);
     drop(refreshed_target);

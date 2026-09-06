@@ -193,6 +193,38 @@ get fun `test forest leaf count covers every stored nonempty shard root`() {
     expect(replayTestForestValidationExitCode(forest)).toEqual(0);
 }
 
+@test.fail_with(93)
+get fun `test runtime forest rejects inconsistent update sequence`() {
+    var forest = emptySccpReplayForestV1().load();
+    forest.updateSequence = 1;
+    sccpReplayValidateRuntimeForestV1(forest);
+}
+
+get fun `test runtime shard access rejects invalid stored roots`() {
+    var forest = emptySccpReplayForestV1().load();
+    forest.leafCount = 1;
+    forest.updateSequence = 1;
+    forest.nonemptyShardRoots.set(7, 0);
+    var error = 0;
+    try {
+        sccpReplayShardRootV1(forest, 7);
+    } catch (code) {
+        error = code;
+    }
+    expect(error).toEqual(SccpErrors.InvalidReplayForest as int);
+    forest.nonemptyShardRoots.set(7, SCCP_REPLAY_EMPTY_ROOT_V1);
+    error = 0;
+    try {
+        sccpReplayShardRootV1(forest, 7);
+    } catch (code) {
+        error = code;
+    }
+    expect(error).toEqual(SccpErrors.InvalidReplayForest as int);
+    forest.nonemptyShardRoots.set(7, 1);
+    expect(sccpReplayShardRootV1(forest, 7)).toEqual(1);
+    expect(sccpReplayShardRootV1(forest, 8)).toEqual(SCCP_REPLAY_EMPTY_ROOT_V1);
+}
+
 get fun `test fresh occupation and identical membership keep counters stable`() {
     var forest = emptySccpReplayForestV1().load();
     val record = replayTestRecord();

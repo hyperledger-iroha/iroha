@@ -114,6 +114,8 @@ define_spentness_digest!(
 /// a hand-written exact-cardinality decoder for the same reason.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[norito(decode_from_slice)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::confidential::spentness::ConfidentialSpentnessPathV1")]
 pub struct ConfidentialSpentnessPathV1(
     [GoldilocksDigest384V1; CONFIDENTIAL_SPENTNESS_TREE_DEPTH_V1],
 );
@@ -251,6 +253,8 @@ impl norito::json::JsonDeserialize for ConfidentialSpentnessPathV1 {
     feature = "json",
     norito(tag = "state", content = "value", deny_unknown_fields)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::confidential::spentness::ConfidentialSpentnessStateKindV1")]
 pub enum ConfidentialSpentnessStateKindV1 {
     /// The position is empty and has never been consumed.
     Unspent,
@@ -269,6 +273,8 @@ pub enum ConfidentialSpentnessStateKindV1 {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::confidential::spentness::ConfidentialSpentnessStateV1")]
 pub struct ConfidentialSpentnessStateV1 {
     kind: ConfidentialSpentnessStateKindV1,
     transaction_intent_digest: PrivacyTransactionIntentDigestV1,
@@ -351,6 +357,8 @@ impl ConfidentialSpentnessStateV1 {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::confidential::spentness::ConfidentialSpentnessCheckpointV1")]
 pub struct ConfidentialSpentnessCheckpointV1 {
     network_id: NetworkId,
     asset_definition_id: AssetDefinitionId,
@@ -483,6 +491,8 @@ impl ConfidentialSpentnessCheckpointV1 {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::confidential::spentness::ConfidentialSpentnessProofV1")]
 pub struct ConfidentialSpentnessProofV1 {
     checkpoint_digest: ConfidentialSpentnessCheckpointDigestV1,
     nullifier: PrivacyNullifierV1,
@@ -935,3 +945,6 @@ mod tests {
         assert!(norito::json::from_str::<ConfidentialSpentnessPathV1>(&long).is_err());
     }
 }
+
+#[cfg(test)]
+mod captured_spentness_schema_tests;

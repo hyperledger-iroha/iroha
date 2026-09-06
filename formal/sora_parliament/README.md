@@ -8,16 +8,28 @@ The model covers these consensus bindings:
 
 - the eligible-citizen snapshot is frozen before a strictly future finalized
   threshold-beacon pulse, and the initially required bodies are consumed as one
-  simultaneous draw batch. A sortition pulse may be classified unavailable
-  only strictly after its exact height and only while no authoritative pulse is
-  known. That objective failure records `NoRoster`; a retry supersedes the
+  simultaneous draw batch. Live consensus makes every committed Parliament
+  pulse request mandatory and cannot advance past an absent pulse. The reducer
+  model deliberately over-approximates malformed or restored state: there, a
+  sortition pulse may be classified unavailable only strictly after its exact
+  height and only while no authoritative pulse is known. That fail-closed
+  branch records `NoRoster`; a retry supersedes the
   complete failed initial generation, freezes a fresh snapshot, uses the exact
   next sequence no earlier than the failure height, and the final permitted
   sequence rejects the governance attempt. For a hidden body, an empty or
-  singleton live electorate instead records typed `NoRoster` capacity evidence
+  live electorate below three instead records typed `NoRoster` capacity evidence
   at the request height without revealing or consuming a pulse. A capacity
   retry must use the exact next generation in a later block, and exhaustion of
-  that same bounded sequence rejects the attempt;
+  that same bounded sequence rejects the attempt. Independently of each nested
+  retry counter, one proposal-wide redraw budget covers every fresh randomness
+  choice: a successor governance attempt's first sortition, every later
+  sortition generation (including Confirmation), and every timed-OVN ballot
+  retry. The first proposal attempt's simultaneous initial draw and each
+  body's sequence-zero ballot are baselines. Exact request/session transport
+  replays are state-idempotent and consume no redraw unit. Reaching the shared
+  ceiling makes the next objective no-roster or ballot failure terminal, and a
+  required Confirmation draw at an already exhausted ceiling fails closed as
+  terminal `NoResult` without committing a partial Policy binding;
 - active timed-OVN ballots reserve both heavy-work windows in one global
   checked set. Admission rejects a duplicate, an intersecting reservation, or
   the first entry beyond the exact capacity without changing the committed
@@ -55,23 +67,28 @@ The model covers these consensus bindings:
   objectively eligible for `CommitmentDeadlineExpired`. Release consumption
   and aggregate finalization remain inside the inclusive
   `release_height + opening_phase_blocks` window;
-- a missed deadline or an objectively absent finalized release pulse becomes
-  `NoResult`; finalized-pulse availability is authoritative, a still-awaiting
+- a missed deadline becomes `NoResult`; the model also retains an objectively
+  absent finalized release pulse as a fail-closed malformed-state
+  over-approximation that fresh consensus cannot reach. Finalized-pulse
+  availability is authoritative, a still-awaiting
   or opening ballot becomes eligible for deadline failure after the frozen
   window, an invalid aggregate opening is rejected without mutating state, and
   no plaintext, manual-opening, or fallback transition exists;
 - a retry uses the exact next sequence, remains within the frozen retry bound,
   and consumes a fresh TLE session no earlier than its predecessor failure;
-  failure of the final permitted ballot sequence rejects the governance
-  attempt instead of leaving an unretryable active attempt;
-- a narrow approved Policy tally with zero or one fresh candidate outside the
+  failure of either the final permitted ballot sequence or the final shared
+  proposal redraw rejects the governance attempt instead of leaving an
+  unretryable active attempt;
+- a narrow approved Policy tally with fewer than three fresh candidates outside the
   sealed Policy Jury becomes terminal `NoResult` in the same transition: the
   Policy binding, Confirmation requirement, and Confirmation request all
-  remain uncommitted. With at least two fresh candidates, the same transition
+  remain uncommitted. With at least three fresh candidates, the same transition
   commits the Policy binding and Confirmation requirement together with the
   sequence-zero Confirmation request, whose request height equals the Policy
-  result height and whose pulse is strictly future. The finite model uses the
-  value `2` as the equivalence class for “two or more” candidates;
+  result height and whose pulse is strictly future, but only while one shared
+  redraw unit remains. Exhaustion instead atomically records terminal
+  `NoResult` and leaves all three bindings uncommitted. The finite model uses
+  the value `3` as the equivalence class for “three or more” candidates;
 - Core automatically constructs a certificate only from an approved aggregate
   result and fixes `enact_at_height = certified_at_height +
   min_enactment_delay` in the native execution boundary; and
@@ -108,15 +125,21 @@ safety and does not prove that weak-fairness assumption.
 
 The small configuration uses two abstract bodies, two seated assignments, two
 competing public-finding roots, a two-block public-finding deadline, three TLE
-sessions (two with an authoritative release pulse and one with an objectively
-absent pulse), a two-block commitment window, a two-block opening window, and
+sessions (two with an authoritative release pulse and one modeling the
+fail-closed malformed-state absent-pulse branch), a two-block commitment
+window, a two-block opening window, and
 two permitted sortition retries plus two permitted ballot retries. Its three
 abstract resource reservations include one symmetric conflict pair and an exact
-capacity of two. It is
+capacity of two. A shared redraw ceiling of two is explored from both the first
+attempt's zero prefix and abstract successor-attempt prefixes; the latter model
+whether the inherited proposal history has consumed zero or one unit before
+the successor's initial draw. `AttemptPrefixFrame` keeps those inherited
+coordinates immutable within each finite trace; successor attempts are the
+separate bounded `Init` alternatives, not an in-trace reset. It is
 intentionally large enough to explore self-absence, early impossible-root
 rejection, conflicting and quorum-matching endorsements, post-deadline
 non-response rejection, successful and unavailable sortition pulses, fresh
-sortition retries, empty and singleton hidden-electorate capacity failures,
+sortition retries, sub-three hidden-electorate capacity failures,
 exhausted sortition rejection, both terminal and successful atomic
 Policy-to-Confirmation capacity branches, private deadline/release failure,
 exhausted ballot retry rejection, stale-head supersession, and rollback-isolated
@@ -152,9 +175,14 @@ The source contract is deliberately structural. It detects accidental removal
 of the code-side guards represented by the model and separately pins the
 authority-bound registration/dropout and reducer-derived registration/survivor
 boundaries, authority-bound absence and public-finding endorsements. The model
-contract also fails if empty/singleton hidden-electorate evidence starts
+contract also fails if sub-three hidden-electorate evidence starts
 consuming a pulse, or if a narrow Policy result can commit only part of its
-Confirmation handoff. It also
+Confirmation handoff. It pins the proposal-wide redraw ceiling, exact successor
+prefix lineage, the derived sortition/ballot accounting, and the separate
+guards for fresh sortition, Confirmation, and timed-OVN retries. It requires
+exact committed transport replay to remain state-idempotent and binds
+shared-budget exhaustion to terminal rejection without adding a plaintext
+fallback. It also
 structurally pins the opaque Core release authorization, independently verified
 runtime partial, canonical combiner, authenticated bodyless local-partial route,
 non-enumerable multi-session software custody seam, and bounded public broker
@@ -166,9 +194,14 @@ key-session/transcript/seat checks. The projection is not evidence of
 committed-state origin, and the capability reply is only a point-in-time lookup
 rather than proof of future liveness. Those operating seams are outside the TLA
 state machine and the check is not a refinement proof.
-Release still requires a settled source revision, focused Rust tests, qualified
-live finalized-pulse production, consensus-enforced TLE key rotation, a genuine
-authenticated broker/HSM share provider, four-peer timed-release/restart/retry
-evidence, and the independently reviewed timed-OVN publication manifest
-described in the roadmap. Zeroizing software buffers are not secure-erasure or
-hardware-custody evidence.
+For this formal-model corridor, release qualification still requires a settled
+source revision, an exhaustive same-source pinned TLC 2.19 run and archive, and
+qualification of mandatory finalized-pulse production and consensus-enforced
+global-beacon and TLE key-rotation paths. The repository-wide gate inventory in
+the [SORA Parliament hardening roadmap](../../roadmap.md#product-services-and-deployment)
+additionally requires focused and four-peer execution evidence, a genuine
+authenticated deployment-selected share provider, and independent review of the
+timed-OVN publication manifest. Qualified software custody or an authenticated
+external broker satisfies this provider boundary; hardware custody remains an
+optional deployment choice. Zeroizing software buffers alone are not
+secure-erasure evidence.

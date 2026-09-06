@@ -1,7 +1,7 @@
 use ivm::Memory;
 #[test]
 fn memory_root_and_path_combined_matches_separate() {
-    let mut mem = Memory::new(0);
+    let mut mem = Memory::new();
     // Write a pattern spanning multiple chunks
     let addr0 = Memory::HEAP_START;
     let addr1 = Memory::HEAP_START + 64;
@@ -9,10 +9,10 @@ fn memory_root_and_path_combined_matches_separate() {
     mem.store_u64(addr1, 0xAA_BB_CC_DD_EE_FF_00_99).unwrap();
     mem.commit();
     // Separate calls
-    let p0 = mem.merkle_path(addr0);
+    let p0 = mem.merkle_path(addr0).unwrap();
     let r0 = mem.current_root();
     // Combined call
-    let (rc, pc) = mem.merkle_root_and_path(addr0);
+    let (rc, pc) = mem.merkle_root_and_path(addr0).unwrap();
     assert_eq!(r0, rc);
     assert_eq!(p0, pc);
 }

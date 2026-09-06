@@ -93,7 +93,7 @@ fn kaigi_ed25519_fixture_uses_checked_key_generation() {
     assert_eq!(algorithm, Algorithm::Ed25519);
 }
 fn build_app() -> (
-    axum::Router,
+    iroha_torii::TestApiRouterRuntime,
     AccountId,
     AccountId,
     KeyPair,
@@ -214,9 +214,12 @@ fn build_app() -> (
             Some(telemetry_handle),
             iroha_config::parameters::actual::TelemetryProfile::Operator,
         ),
-    );
+    )
+    .expect("valid Torii Kaigi fixture");
     (
-        torii.api_router_for_tests(),
+        torii
+            .api_router_for_tests()
+            .expect("test Torii router initializes"),
         relay_id,
         owner_id,
         operator_key_pair,
@@ -291,6 +294,7 @@ async fn kaigi_endpoints_report_metadata() {
     let health = norito_json_body(health_resp).await;
     assert_eq!(health["healthy_total"].as_u64(), Some(1));
     assert!(!health["domains"].as_array().unwrap().is_empty());
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn kaigi_endpoints_emit_i105_literals() {
@@ -315,6 +319,7 @@ async fn kaigi_endpoints_emit_i105_literals() {
     );
     assert_eq!(detail["relay"]["status"].as_str(), Some("healthy"));
     assert_eq!(detail["reported_by"].as_str(), Some(owner_literal.as_str()));
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn kaigi_endpoints_honor_json_accept_header() {
@@ -373,6 +378,7 @@ async fn kaigi_endpoints_honor_json_accept_header() {
     let health = json_body(health_resp).await;
     assert_eq!(health["healthy_total"].as_u64(), Some(1));
     assert!(!health["domains"].as_array().unwrap().is_empty());
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn kaigi_endpoints_honor_norito_accept_header() {
@@ -431,6 +437,7 @@ async fn kaigi_endpoints_honor_norito_accept_header() {
     let health = norito_json_body(health_resp).await;
     assert_eq!(health["healthy_total"].as_u64(), Some(1));
     assert!(health["reports_total"].as_u64().unwrap() >= 1);
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn kaigi_endpoints_reject_unsupported_accept_header() {
@@ -446,6 +453,7 @@ async fn kaigi_endpoints_reject_unsupported_accept_header() {
         let body = text_body(resp).await;
         assert!(body.contains("unsupported Accept header"), "{body}");
     }
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn kaigi_endpoints_reject_invalid_accept_quality() {
@@ -460,6 +468,7 @@ async fn kaigi_endpoints_reject_invalid_accept_quality() {
     assert_eq!(resp.status(), StatusCode::NOT_ACCEPTABLE);
     let body = text_body(resp).await;
     assert!(body.contains("invalid q-value in Accept header"), "{body}");
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn kaigi_endpoints_reject_out_of_range_accept_quality() {
@@ -477,6 +486,7 @@ async fn kaigi_endpoints_reject_out_of_range_accept_quality() {
             "{accept}: {body}"
         );
     }
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn kaigi_endpoints_reject_when_supported_media_types_have_zero_quality() {
@@ -491,6 +501,7 @@ async fn kaigi_endpoints_reject_when_supported_media_types_have_zero_quality() {
     assert_eq!(resp.status(), StatusCode::NOT_ACCEPTABLE);
     let body = text_body(resp).await;
     assert!(body.contains("unsupported Accept header"), "{body}");
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn kaigi_endpoints_reject_retired_text_json_alias() {
@@ -503,6 +514,7 @@ async fn kaigi_endpoints_reject_retired_text_json_alias() {
     )
     .await;
     assert_eq!(response.status(), StatusCode::NOT_ACCEPTABLE);
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn kaigi_endpoints_accept_json_compatible_media_ranges() {
@@ -529,6 +541,7 @@ async fn kaigi_endpoints_accept_json_compatible_media_ranges() {
             "{accept}"
         );
     }
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn kaigi_endpoints_accept_case_insensitive_media_types_with_parameters() {
@@ -568,6 +581,7 @@ async fn kaigi_endpoints_accept_case_insensitive_media_types_with_parameters() {
         summary["items"][0]["relay_id"].as_str(),
         Some(relay_literal.as_str())
     );
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn kaigi_endpoints_select_response_format_by_accept_quality() {
@@ -624,6 +638,7 @@ async fn kaigi_endpoints_select_response_format_by_accept_quality() {
         summary["items"][0]["relay_id"].as_str(),
         Some(relay_literal.as_str())
     );
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn kaigi_relay_detail_rejects_invalid_relay_path_literal() {
@@ -640,6 +655,7 @@ async fn kaigi_relay_detail_rejects_invalid_relay_path_literal() {
         resp.headers().get(CONTENT_TYPE),
         Some(&HeaderValue::from_static(JSON_CONTENT_TYPE))
     );
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn kaigi_relay_detail_returns_not_found_for_unregistered_relay() {
@@ -657,6 +673,7 @@ async fn kaigi_relay_detail_returns_not_found_for_unregistered_relay() {
         resp.headers().get(CONTENT_TYPE),
         Some(&HeaderValue::from_static(JSON_CONTENT_TYPE))
     );
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn kaigi_sse_accepts_i105_relay_filter() {
@@ -673,6 +690,7 @@ async fn kaigi_sse_accepts_i105_relay_filter() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn kaigi_sse_rejects_invalid_relay_filter() {
@@ -688,4 +706,5 @@ async fn kaigi_sse_rejects_invalid_relay_filter() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    app.shutdown().await;
 }

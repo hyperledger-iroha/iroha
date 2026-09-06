@@ -11,9 +11,8 @@ from typing import Any, Sequence
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent.parent
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
-
+# The authenticated release runner preloads this exact captured dependency
+# graph; this helper deliberately never places the repository on ``sys.path``.
 from scripts.fastpq import wrap_benchmark
 
 

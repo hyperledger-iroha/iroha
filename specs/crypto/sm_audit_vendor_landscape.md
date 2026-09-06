@@ -72,7 +72,7 @@ consistent.
   tables, and hardware feature gates (e.g., NEON, SM4 instructions) to ensure
   Rust and FFI dispatch remain deterministic across supported hardware.
 - **FFI and provider integration:** review OpenSSL/Tongsuo bindings,
-  PKCS#11/HSM adapters, and error propagation paths for consensus safety.
+  deployment-owned provider boundaries, and error propagation paths for consensus safety.
 - **Test and fixture coverage:** assess fuzz harnesses, Norito round-trips,
   deterministic smoke tests, and recommend differential testing where gaps
   appear.

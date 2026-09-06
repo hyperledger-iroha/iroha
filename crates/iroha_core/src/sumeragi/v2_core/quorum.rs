@@ -79,7 +79,12 @@ impl Quorum {
         context: &HeightContext,
         signers: impl IntoIterator<Item = ValidatorId>,
     ) -> Result<(Self, Vec<ValidatorId>), QuorumError> {
-        let ordered: BTreeSet<_> = signers.into_iter().collect();
+        let mut ordered = BTreeSet::new();
+        for signer in signers {
+            if !ordered.insert(signer) {
+                return Err(QuorumError::DuplicateSigner(signer));
+            }
+        }
         let ordered: Vec<_> = ordered.into_iter().collect();
         let quorum = Self::calculate(context, &ordered)?;
         Ok((quorum, ordered))
@@ -108,6 +113,8 @@ pub enum QuorumError {
     HighestPrepareFromFuture,
     /// A signer does not belong to the voting roster.
     UnknownValidator(ValidatorId),
+    /// An iterator supplied the same signer more than once.
+    DuplicateSigner(ValidatorId),
     /// Signers contain a duplicate or are not in canonical ascending order.
     SignersNotStrictlyOrdered,
     /// The redundant unit-vote projection could not be represented.
@@ -163,6 +170,9 @@ impl fmt::Display for QuorumError {
             Self::UnknownValidator(validator) => {
                 write!(formatter, "unknown validator {validator}")
             }
+            Self::DuplicateSigner(validator) => {
+                write!(formatter, "duplicate signer {validator}")
+            }
             Self::SignersNotStrictlyOrdered => {
                 formatter.write_str("signers are not strictly ordered")
             }
@@ -195,3 +205,63 @@ impl fmt::Display for QuorumError {
     }
 }
 impl Error for QuorumError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sumeragi::v2_core::{ContextId, Digest, NetworkId, Validator, VotingMode};
+
+    fn validator_id(marker: u8) -> ValidatorId {
+        ValidatorId::repeat(marker)
+    }
+
+    fn context() -> HeightContext {
+        HeightContext::new(
+            ContextId::repeat(0x10),
+            NetworkId::repeat(0x11),
+            1,
+            None,
+            0,
+            (1..=4)
+                .map(|marker| Validator::new(validator_id(marker), VotingPower::new(1)))
+                .collect(),
+            VotingMode::Permissioned,
+            Digest::repeat(0x12),
+            Digest::repeat(0x13),
+            Digest::repeat(0x14),
+            Digest::repeat(0x15),
+        )
+        .expect("valid quorum test context")
+    }
+
+    #[test]
+    fn from_iter_rejects_duplicate_signers() {
+        let context = context();
+        let duplicate = validator_id(2);
+
+        assert_eq!(
+            Quorum::from_iter(
+                &context,
+                [validator_id(3), duplicate, validator_id(1), duplicate],
+            ),
+            Err(QuorumError::DuplicateSigner(duplicate))
+        );
+    }
+
+    #[test]
+    fn from_iter_canonicalizes_unordered_distinct_signers() {
+        let context = context();
+        let (quorum, ordered) = Quorum::from_iter(
+            &context,
+            [validator_id(3), validator_id(1), validator_id(2)],
+        )
+        .expect("distinct known signers form a canonical quorum projection");
+
+        assert_eq!(
+            ordered,
+            vec![validator_id(1), validator_id(2), validator_id(3)]
+        );
+        assert_eq!(quorum.signer_count(), 3);
+        assert_eq!(quorum.voting_power(), VotingPower::new(3));
+    }
+}

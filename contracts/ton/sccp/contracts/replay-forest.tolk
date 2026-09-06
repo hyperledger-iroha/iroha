@@ -463,7 +463,19 @@ fun emptySccpReplayForestV1(): Cell<SccpReplayForestV1> {
     }.toCell();
 }
 
+/// Check contract-owned append-only state without scanning unrelated shards.
+/// Canonical initialization and admission preserve every stored root; each
+/// accessed root is checked separately by sccpReplayShardRootV1.
+fun sccpReplayValidateRuntimeForestV1(forest: SccpReplayForestV1) {
+    assert (
+        forest.updateSequence == forest.leafCount &&
+        ((forest.leafCount == 0) == forest.nonemptyShardRoots.isEmpty())
+    ) throw SccpErrors.InvalidReplayForest;
+}
+
+/// Fully validate a supplied forest, including every stored shard root.
 fun sccpReplayValidateForestV1(forest: SccpReplayForestV1) {
+    sccpReplayValidateRuntimeForestV1(forest);
     var entry = forest.nonemptyShardRoots.findFirst();
     var nonemptyShardRootCount = 0;
     while (entry.isFound) {
@@ -482,7 +494,7 @@ fun sccpReplayValidateForestV1(forest: SccpReplayForestV1) {
 }
 
 fun sccpReplayShardRootV1(forest: SccpReplayForestV1, shard: uint8): uint256 {
-    sccpReplayValidateForestV1(forest);
+    sccpReplayValidateRuntimeForestV1(forest);
     if (!forest.nonemptyShardRoots.exists(shard)) {
         return SCCP_REPLAY_EMPTY_ROOT_V1;
     }
@@ -515,7 +527,8 @@ fun sccpReplayAdmitV1(
         );
         assert (oldRoot == currentRoot) throw SccpErrors.InvalidReplayPath;
         assert (
-            newRoot != 0 && newRoot != oldRoot && forest.leafCount != 0xffffffffffffffff &&
+            newRoot != 0 && newRoot != SCCP_REPLAY_EMPTY_ROOT_V1 && newRoot != oldRoot &&
+            forest.leafCount != 0xffffffffffffffff &&
             forest.updateSequence != 0xffffffffffffffff
         ) throw SccpErrors.ReplayCounterExhausted;
         forest.nonemptyShardRoots.set(shard, newRoot);

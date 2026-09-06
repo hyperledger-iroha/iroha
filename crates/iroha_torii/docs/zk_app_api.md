@@ -56,7 +56,7 @@ Notes
   its projected error and content-type fields are capped at 4 KiB and 256
   bytes respectively. Retention and garbage collection scan one shard at a
   time.
-- Base directory is configured with `torii.data_dir`; tests/dev harnesses can override with `data_dir::OverrideGuard`.
+- Base directory is configured with `torii.data_dir`; tests/dev harnesses can override with `data_dir::OverrideGuard`. The directory must be owned by the Torii operator and exclusively writable by the Torii process owner; a shared or less-privileged writable data directory is unsupported.
 - IVM derive/prove require bytecode with the IVM ZK mode bit set (`mode & ZK != 0`) and a required typed `fee_payment` intent whose `gas_limit` is set. Obtain the exact intent from `POST /v1/fees/quote`; legacy `fee_sponsor`, `gas_limit`, and `gas_asset_id` metadata keys are rejected.
 - `/v1/zk/ivm/derive` accepts verifying keys with backend `halo2/ipa` or `stark/fri` (including `stark/fri/...` variants) (must be compatible with `ivm-execution-v1`).
 - `/v1/zk/ivm/prove` accepts `vk_ref.backend` `halo2/ipa` and `stark/fri` (including `stark/fri/...` variants) when the node is built with `zk-stark`.
@@ -105,7 +105,7 @@ All runtime behavior is configured via `iroha_config` (Torii section). The follo
   - Default: 1000.
 - `torii.zk_prover_enabled` (bool)
   - Enables the background prover scan worker. When disabled, no new local diagnostic reports are created.
-  - Default: false.
+  - Default: true (idle until attachments exist).
 - `torii.zk_prover_scan_period_secs` (u64)
   - Scan period for the background prover.
   - Default: 30 seconds.
@@ -158,20 +158,20 @@ Tip: These keys map to the `iroha_config::parameters::user::Torii` section and a
 - Sanitization: gzip/zstd payloads are expanded within configured limits and only allowlisted types are stored; sanitizer metadata is captured in `provenance` and compressed-origin exports are re‑sanitized. POST and export GET acquire the same bounded physical-work lease before handler work, and cancellation keeps that lease in every blocking worker, child process, and stdout reader until it actually exits.
 - Subprocess isolation: Torii rejects the node binary and differently named helpers, clears the child environment to the three sanitizer protocol variables, exposes only the helper and runtime libraries inside the filesystem sandbox, and caps both request and response streams. Official release bundles and container images ship the helper; Linux images also ship Bubblewrap.
 - GC cadence: attachment GC runs every minute and removes entries older than `attachments_ttl_secs`.
-- Storage hygiene: deleting an attachment removes both `.bin` and `.json`; report retention removes the corresponding node-local files under `zk_prover/reports`.
-- Quota recovery: node-global accounting scans at most 20,000 tenant-root entries and 40,000 aggregate child entries, counts malformed/raw entries against those bounds, and fails closed. An enabled prover starts only after any pending attachment quota transaction is recovered successfully.
+- Storage hygiene: deleting an attachment durably journals the mutation before removing its `.bin`, `.json`, live processing reference, and last-reference receipt; incomplete deletes are hidden and replayed before Torii serves the store. Report retention removes the corresponding node-local files under `zk_prover/reports`.
+- Mutation recovery: every attachment write or delete uses one closed, versioned mutation journal. Startup replays that single authoritative operation before reconciling attachment pairs and prover receipts, so quota eviction and explicit/TTL deletion converge after any crash boundary. Node-global accounting scans at most 20,000 tenant-root entries and 40,000 aggregate child entries, counts malformed/raw entries against those bounds, and fails closed.
 - Payloads: the prover expects `ProofAttachment`/`ProofAttachmentList` payloads (Norito or JSON). ZK1/TLV envelopes are tagged but rejected as top‑level payloads. The first-release ZK1 structural profile permits at most 64 TLVs per envelope, and repeated tags are stored once in report metadata.
-- Key bytes: when a registry entry omits stored VK bytes, the prover loads bytes from `torii.zk_prover_keys_dir` using `<backend>__<name>.vk` naming.
+- Key bytes: when a registry entry omits stored VK bytes, the prover loads bytes from `torii.zk_prover_keys_dir` using `zkid-v1-<id-hash>.vk` naming. `id-hash` is lowercase hexadecimal SHA-256 over `"iroha:torii:zk-key-id:v1" || u32_be(len(backend_utf8)) || backend_utf8 || u32_be(len(name_utf8)) || name_utf8`, using the exact unnormalised registry ID bytes.
 - VK commitments are domain-separated SHA-256 hashes over the `iroha:zk:v1:vk`
   domain plus length-prefixed backend and VK bytes. Generic ledger
   `VerifyProof` and specialized proof instructions require a registry `vk_ref`;
   proof attachments do not carry verifying-key bytes.
-- Proving keys: for `halo2/ipa`, the IVM prove helper (`/v1/zk/ivm/prove`) loads proving key bytes from the same directory using `<backend>__<name>.pk` naming.
+- Proving keys: for `halo2/ipa`, the IVM prove helper (`/v1/zk/ivm/prove`) loads proving key bytes from the same directory using the same `zkid-v1-<id-hash>` stem with a `.pk` extension.
   The `.pk` file is one canonical, uncompressed Norito archive containing the Halo2 `SerdeFormat::Processed` proving key plus the canonical circuit family and verifier-key commitment, and must be generated by `iroha app zk ivm derive-pk`.
   Decoding is capped at 64 MiB with explicit Norito collection, allocation, and nesting budgets; circuit-family labels are capped at 256 bytes. The commitment binds a local proving key to the registered verifier key but does not replace filesystem authenticity, so operators must protect the key directory from untrusted writes.
   The Halo2 prover emits only the `ivm-execution-v1` circuit family; other circuit ids are rejected before key parsing or proof creation.
-  Halo2/Pasta uses transparent IPA parameters, not an SRS ceremony. Its generators are deterministically derived by the vendored Halo2 IPA implementation with the fixed `Halo2-Parameters` hash-to-curve domain and indexed generator inputs. Each admitted V1 circuit has one compiled domain exponent (`k=7` for IVM execution, `k=8` for Kaigi, and `k=13` for the confidential-transfer, unshield, and Kagemusha top-up circuits). Verifier-key envelopes must contain exactly one exponent (`IPAK`), circuit binding (`CID1`), and processed key (`H2VK`), in that order; the fixed exponent is checked against the `H2VK` header before deterministic generators are constructed, and the processed key is checked against the compiled circuit.
-  Kagemusha's signed release archive also carries parameter encodings for artifact identity and packaging, not independent setup entropy. The first-release degree is fixed at `k=16`; every parameter payload is consumed under its signed length and SHA-256 commitment, then the runtime derives the transparent parameters locally and requires its canonical encoding to have the exact committed digest before use.
+  Halo2/Pasta uses transparent IPA parameters, not an SRS ceremony. Its generators are deterministically derived by the vendored Halo2 IPA implementation with the fixed `Halo2-Parameters` hash-to-curve domain and indexed generator inputs. Each admitted V1 circuit has one compiled domain exponent (`k=7` for IVM execution, `k=8` for Kaigi, and `k=13` for the confidential-transfer and unshield circuits). Verifier-key envelopes must contain exactly one exponent (`IPAK`), circuit binding (`CID1`), and processed key (`H2VK`), in that order; the fixed exponent is checked against the `H2VK` header before deterministic generators are constructed, and the processed key is checked against the compiled circuit.
+  KAGEMUSHA V1's authenticated release archive carries the paired Pasta state, mint-finality, platform-credential, and GuardBundle artifacts. Its first-release degree is fixed at `k=16`; every parameter payload is consumed under its signed length and SHA-256 commitment, then the runtime derives the transparent parameters locally and requires its canonical encoding to have the exact committed digest before use.
   The STARK/FRI path is also transparent and does not require a separate `.pk` or SRS artifact; its FRI domain, blowup, query, Merkle, and hash parameters are authenticated by the registered verifier key and validated against consensus floors and ceilings.
 - Privacy: neither `/v1/zk/ivm/derive` nor `/v1/zk/ivm/prove` expose plaintext gas usage (`gas_used`). Gas usage is committed inside `gas_policy_commitment`.
 - Execution semantics: `/v1/zk/ivm/prove` executes bytecode from the request (`authority`, `metadata`, `bytecode`) and derives the authoritative `IvmProved` payload on-node before generating `ivm-execution-v1` proof attachments (`halo2/ipa` or `stark/fri`).
@@ -201,7 +201,7 @@ iroha app zk attachments delete --id <id>
 iroha app zk ivm prove --json ./ivm_prove_request.json --wait
 iroha app zk ivm get --job-id <job_id>
 iroha app zk ivm delete --job-id <job_id>
-iroha app zk ivm derive-pk --vk ./halo2_ipa__ivm-exec-v1.vk --out ./halo2_ipa__ivm-exec-v1.pk
+iroha app zk ivm derive-pk --vk ./zkid-v1-319239c9cb2dadb7426bc1a4d33b8e9fb133220e6cd25b2ee38dbd7f75506aa0.vk --out ./zkid-v1-319239c9cb2dadb7426bc1a4d33b8e9fb133220e6cd25b2ee38dbd7f75506aa0.pk
 ```
 
 See also: the ZK vote tally convenience endpoint (`POST /v1/zk/vote/tally`) and CLI helper `iroha app zk vote tally` for inspecting election tallies. Successful tally responses include `evaluated_block_height` and `evaluated_block_hash` from the same immutable state view used for lookup; unknown election identifiers return `404`.

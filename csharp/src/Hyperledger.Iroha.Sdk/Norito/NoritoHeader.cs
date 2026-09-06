@@ -44,18 +44,25 @@ public readonly record struct NoritoHeader
 
     public byte Flags { get; init; }
 
-    public void Deconstruct(
-        out byte[] schemaHash,
-        out NoritoCompression compression,
-        out ulong length,
-        out ulong checksum,
-        out byte flags)
+    public bool Equals(NoritoHeader other) =>
+        Compression == other.Compression
+        && Length == other.Length
+        && Checksum == other.Checksum
+        && Flags == other.Flags
+        && (schemaHash ?? []).AsSpan().SequenceEqual(other.schemaHash ?? []);
+
+    public override int GetHashCode()
     {
-        schemaHash = SchemaHash;
-        compression = Compression;
-        length = Length;
-        checksum = Checksum;
-        flags = Flags;
+        var hash = new HashCode();
+        hash.Add(Compression);
+        hash.Add(Length);
+        hash.Add(Checksum);
+        hash.Add(Flags);
+        foreach (var value in schemaHash ?? [])
+        {
+            hash.Add(value);
+        }
+        return hash.ToHashCode();
     }
 
     public byte[] Encode()

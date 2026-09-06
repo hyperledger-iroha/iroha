@@ -6,12 +6,13 @@ import zlib
 public enum IrohaPeerWireProfileV1: UInt16, CaseIterable, Sendable {
     /// Reserved on the wire so a zero-filled or omitted profile is never accepted.
     case reject = 0
-    case kagemusha = 2
+    /// KAGEMUSHA V1 aggregate-balance handoffs.
+    case kagemushaV1 = 1
 }
 
 /// Wire-stable transfer phases carried by an `IPM1` peer message.
 public enum IrohaPeerWireKindV1: UInt8, CaseIterable, Sendable {
-    case receiveRequest = 1
+    case request = 1
     case payment = 2
     case acknowledgement = 3
 }
@@ -25,23 +26,42 @@ public extension IrohaPeerWireProfileV1 {
     var requiredSchemaVersion: UInt16 {
         switch self {
         case .reject: return 0
-        case .kagemusha: return 0x0102
+        case .kagemushaV1: return 1
         }
     }
 }
 
 public extension IrohaPeerWireKindV1 {
-    /// Exact native archive schema admitted for this Kagemusha IPM1 kind.
-    /// In particular, RECEIVE_REQUEST commits to the complete portable offer,
-    /// not only its nested signed payment request.
+    /// Exact KAGEMUSHA V1 schema admitted for this peer-message kind.
     var requiredKagemushaCanonicalSchema: String {
         switch self {
-        case .receiveRequest:
-            return KagemushaRecursiveSpend.recipientReceiveOfferWireName
+        case .request:
+            return "iroha_data_model::kagemusha::kagemusha_v1::KagemushaPaymentRequestV1"
         case .payment:
-            return KagemushaRecursiveSpend.peerPaymentWireNameV4
+            return "iroha_data_model::kagemusha::kagemusha_v1::KagemushaPaymentV1"
         case .acknowledgement:
-            return KagemushaRecursiveSpend.acknowledgementWireName
+            return "iroha_data_model::kagemusha::kagemusha_v1::KagemushaAcknowledgementV1"
+        }
+    }
+
+    /// Exact payload alignment used by the authoritative Norito model.
+    var requiredKagemushaPayloadAlignment: Int {
+        switch self {
+        case .request: return 16
+        case .payment: return 16
+        case .acknowledgement: return 2
+        }
+    }
+
+    /// Exact per-message raw cap from the authoritative KAGEMUSHA V1 model.
+    var maximumKagemushaCanonicalBytes: Int {
+        switch self {
+        case .request:
+            return KagemushaWireV1.maximumPaymentRequestBytes
+        case .payment:
+            return KagemushaWireV1.maximumPaymentBytes
+        case .acknowledgement:
+            return KagemushaWireV1.maximumAcknowledgementBytes
         }
     }
 }
@@ -62,16 +82,15 @@ public enum IrohaPeerWireCompressionPolicyV1: Sendable {
 
 /// Allocation limits applied before an untrusted body is decompressed.
 public struct IrohaPeerWireLimitsV1: Equatable, Sendable {
-    /// The binary IPM1 Kagemusha profile deliberately admits one complete
-    /// portable receiver-lineage offer on the smallest shared NFC rail. Text
-    /// and static-QR codecs retain their independent, smaller rail limits.
-    public static let maximumKagemushaProfileBytes = 24_576
+    /// Maximum single KAGEMUSHA V1 peer message carried by IPM1.
+    public static let maximumKagemushaProfileBytes =
+        KagemushaWireV1.maximumPaymentBytes
 
     public let maximumCanonicalBytes: Int
     public let maximumKagemushaEncodedBytes: Int
 
     public init(
-        maximumCanonicalBytes: Int = 32 * 1024,
+        maximumCanonicalBytes: Int = Self.maximumKagemushaProfileBytes,
         maximumKagemushaEncodedBytes: Int = Self.maximumKagemushaProfileBytes
     ) {
         precondition(
@@ -90,7 +109,7 @@ public struct IrohaPeerWireLimitsV1: Equatable, Sendable {
         maximumCanonicalBytes: Int,
         maximumKagemushaEncodedBytes: Int
     ) -> Bool {
-        (1...(32 * 1_024)).contains(maximumCanonicalBytes) &&
+        (1...maximumKagemushaProfileBytes).contains(maximumCanonicalBytes) &&
             (1...maximumKagemushaProfileBytes).contains(maximumKagemushaEncodedBytes)
     }
 
@@ -98,7 +117,7 @@ public struct IrohaPeerWireLimitsV1: Equatable, Sendable {
         switch profile {
         case .reject:
             throw IrohaPeerWireMessageErrorV1.invalidProfile(profile.rawValue)
-        case .kagemusha:
+        case .kagemushaV1:
             return maximumKagemushaEncodedBytes
         }
     }
@@ -420,18 +439,18 @@ public struct IrohaPeerWireMessageV1: Equatable, Sendable {
         kind: IrohaPeerWireKindV1,
         canonicalPayload: Data
     ) throws {
-        guard profile == .kagemusha else { return }
-        do {
-            // Transport acceptance is deliberately native-independent:
-            // canonical compact Norito framing, checksum, and the exact
-            // kind-specific ABI-21 schema. Deeper semantic validation remains
-            // in IrohaPeerKagemushaAdapterV1/KagemushaPeerPayload.
-            try KagemushaRecursiveSpend.requireArchive(
-                canonicalPayload,
-                schema: kind.requiredKagemushaCanonicalSchema,
-                field: "ipm1.kagemusha.\(kind)"
-            )
-        } catch {
+        guard profile == .kagemushaV1 else { return }
+        guard canonicalPayload.count <= kind.maximumKagemushaCanonicalBytes,
+              let decoded = noritoDecodeFrame(canonicalPayload),
+              decoded.header.compression == .none,
+              decoded.header.flags == NoritoHeader.compactLen,
+              decoded.header.schema == noritoSchemaHash(
+                forTypeName: kind.requiredKagemushaCanonicalSchema
+              ),
+              decoded.paddingLength == noritoHeaderPaddingLength(
+                payloadAlignment: kind.requiredKagemushaPayloadAlignment
+              ),
+              !decoded.payload.isEmpty else {
             throw IrohaPeerWireMessageErrorV1.invalidCanonicalPayload(
                 profile: profile,
                 kind: kind

@@ -7,6 +7,7 @@ use iroha_data_model::nexus::DataSpaceId;
 use iroha_executor_data_model::permission::account::{
     AccountAliasPermissionScope, CanManageAccountAlias,
 };
+use iroha_executor_data_model::permission::trigger::CanRegisterGlobalDataTrigger;
 use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, gen_account_in};
 use std::time::{Duration, Instant};
@@ -14,12 +15,18 @@ use tokio::task::spawn_blocking;
 const ASSET_VALUE_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const ASSET_VALUE_TIMEOUT: Duration = Duration::from_secs(30);
 async fn start_network(context: &'static str) -> Result<Option<sandbox::SerializedNetwork>> {
-    sandbox::start_network_async_or_skip(NetworkBuilder::new(), context).await
+    start_custom_network(NetworkBuilder::new(), context).await
 }
 async fn start_custom_network(
     builder: NetworkBuilder,
     context: &'static str,
 ) -> Result<Option<sandbox::SerializedNetwork>> {
+    let builder = builder.with_genesis_instruction(Grant::account_permission(
+        Permission::from(CanRegisterGlobalDataTrigger {
+            authority: ALICE_ID.clone(),
+        }),
+        ALICE_ID.clone(),
+    ));
     sandbox::start_network_async_or_skip(builder, context).await
 }
 async fn run_or_skip<F, Fut>(context: &'static str, test: F) -> Result<()>
@@ -218,6 +225,218 @@ async fn two_non_intersecting_execution_paths() -> Result<()> {
     })
     .await
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn four_peer_scoped_one_shot_data_triggers_roll_back_atomically() -> Result<()> {
+    const VALIDATOR_COUNT: usize = 4;
+    let context = stringify!(four_peer_scoped_one_shot_data_triggers_roll_back_atomically);
+    let network = sandbox::start_network_async_or_skip(
+        NetworkBuilder::new()
+            .with_peers(VALIDATOR_COUNT)
+            .with_auto_populated_trusted_peers(),
+        context,
+    )
+    .await?;
+    let Some(network) = sandbox::enforce_network_start_requirement(network, context)? else {
+        return Ok(());
+    };
+    assert_eq!(network.peers().len(), VALIDATOR_COUNT);
+    network.ensure_blocks(1).await?;
+    let client = network.client();
+    run_or_skip(context, || async {
+        let rose_definition = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("wonderland", "universal")?,
+            "rose".parse()?,
+        );
+        let rose = AssetId::new(rose_definition, ALICE_ID.clone());
+        let scoped_marker: Name = "scoped_one_shot_marker".parse()?;
+        let unrelated_marker: Name = "unrelated_account_event".parse()?;
+        let scope_trigger_id: TriggerId = "00_scoped_one_shot".parse()?;
+        let scope_trigger = Register::trigger(Trigger::new(
+            scope_trigger_id.clone(),
+            Action::new(
+                [SetKeyValue::account(
+                    ALICE_ID.clone(),
+                    scoped_marker.clone(),
+                    Json::from(true),
+                )],
+                Repeats::Exactly(1),
+                ALICE_ID.clone(),
+                AssetEventFilter::new().for_asset(rose.clone()),
+            )
+            .expect("exact owned-asset data-trigger action is valid"),
+        ));
+        spawn_blocking({
+            let client = client.clone();
+            move || {
+                client.submit_blocking(
+                    scope_trigger,
+                    FeePaymentIntent::authority(Vec::new(), None),
+                )
+            }
+        })
+        .await??;
+
+        spawn_blocking({
+            let client = client.clone();
+            let unrelated_marker = unrelated_marker.clone();
+            move || {
+                client.submit_blocking(
+                    SetKeyValue::account(
+                        ALICE_ID.clone(),
+                        unrelated_marker,
+                        Json::from("probe"),
+                    ),
+                    FeePaymentIntent::authority(Vec::new(), None),
+                )
+            }
+        })
+        .await??;
+        let account = spawn_blocking({
+            let client = client.clone();
+            move || client.query_single(FindAccountById::new(ALICE_ID.clone()))
+        })
+        .await??;
+        assert!(
+            account.metadata().get(&scoped_marker).is_none(),
+            "an unrelated account event must not fire an exact asset-scoped trigger"
+        );
+        let active = spawn_blocking({
+            let client = client.clone();
+            move || client.query(FindActiveTriggerIds).execute_all()
+        })
+        .await??;
+        assert!(active.contains(&scope_trigger_id));
+
+        spawn_blocking({
+            let client = client.clone();
+            let rose = rose.clone();
+            move || {
+                client.submit_blocking(
+                    Mint::asset_quantity(1_u32, rose),
+                    FeePaymentIntent::authority(Vec::new(), None),
+                )
+            }
+        })
+        .await??;
+        let account = spawn_blocking({
+            let client = client.clone();
+            move || client.query_single(FindAccountById::new(ALICE_ID.clone()))
+        })
+        .await??;
+        assert_eq!(
+            account.metadata().get(&scoped_marker),
+            Some(&Json::from(true)),
+            "the exact owned-asset event must fire the scoped trigger"
+        );
+        let active = spawn_blocking({
+            let client = client.clone();
+            move || client.query(FindActiveTriggerIds).execute_all()
+        })
+        .await??;
+        assert!(
+            !active.contains(&scope_trigger_id),
+            "the one-shot trigger must be depleted after exactly one matching event"
+        );
+
+        let ordering_witness: Name = "data_trigger_ordering_witness".parse()?;
+        let create_witness_id: TriggerId = "10_create_ordering_witness".parse()?;
+        let consume_then_fail_id: TriggerId = "20_consume_then_fail".parse()?;
+        let wonderland = DomainId::try_new("wonderland", "universal")?;
+        let create_witness = Register::trigger(Trigger::new(
+            create_witness_id.clone(),
+            Action::new(
+                [SetKeyValue::account(
+                    ALICE_ID.clone(),
+                    ordering_witness.clone(),
+                    Json::from(true),
+                )],
+                Repeats::Exactly(1),
+                ALICE_ID.clone(),
+                AssetEventFilter::new().for_asset(rose.clone()),
+            )
+            .expect("ordering-witness data-trigger action is valid"),
+        ));
+        let consume_then_fail = Register::trigger(Trigger::new(
+            consume_then_fail_id.clone(),
+            Action::new(
+                [
+                    InstructionBox::from(RemoveKeyValue::account(
+                        ALICE_ID.clone(),
+                        ordering_witness.clone(),
+                    )),
+                    InstructionBox::from(Register::domain(Domain::new(wonderland.clone()))),
+                ],
+                Repeats::Exactly(1),
+                ALICE_ID.clone(),
+                AssetEventFilter::new().for_asset(rose.clone()),
+            )
+            .expect("failing data-trigger action is valid"),
+        ));
+        spawn_blocking({
+            let client = client.clone();
+            move || {
+                client.submit_all_blocking(
+                    [create_witness, consume_then_fail],
+                    FeePaymentIntent::authority(Vec::new(), None),
+                )
+            }
+        })
+        .await??;
+
+        let rose_before = spawn_blocking({
+            let client = client.clone();
+            let rose = rose.clone();
+            move || asset_value(&client, &rose)
+        })
+        .await??;
+        let error = spawn_blocking({
+            let client = client.clone();
+            let rose = rose.clone();
+            move || {
+                client.submit_blocking(
+                    Mint::asset_quantity(1_u32, rose),
+                    FeePaymentIntent::authority(Vec::new(), None),
+                )
+            }
+        })
+        .await?
+        .expect_err("the second canonically ordered data trigger must reject the transaction");
+        assert!(
+            format!("{error:?}").contains(&wonderland.to_string()),
+            "the rejection must come from the duplicate-domain instruction after the first trigger created and the second consumed its witness: {error:?}"
+        );
+
+        let rose_after = spawn_blocking({
+            let client = client.clone();
+            let rose = rose.clone();
+            move || asset_value(&client, &rose)
+        })
+        .await??;
+        assert_eq!(
+            rose_after, rose_before,
+            "a failed data-trigger cascade must roll back its originating mint"
+        );
+        let account = spawn_blocking({
+            let client = client.clone();
+            move || client.query_single(FindAccountById::new(ALICE_ID.clone()))
+        })
+        .await??;
+        assert!(account.metadata().get(&ordering_witness).is_none());
+        let active = spawn_blocking({
+            let client = client.clone();
+            move || client.query(FindActiveTriggerIds).execute_all()
+        })
+        .await??;
+        assert!(
+            active.contains(&create_witness_id) && active.contains(&consume_then_fail_id),
+            "atomic rollback must preserve both one-shot repeat budgets"
+        );
+        Ok(())
+    })
+    .await
+}
+
 /// # Scenario
 ///
 /// 1. Capture the current maximum execution depth.

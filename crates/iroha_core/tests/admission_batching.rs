@@ -434,48 +434,57 @@ fn bls_multi_message_verification_ok() {
         assert!(multi >= 1, "expected multi-message verification to be used");
         assert_eq!(det, 0, "unexpected deterministic count");
     }
-    #[cfg(feature = "sm")]
-    #[test]
-    fn sm2_transactions_rejected_when_sm_disabled() {
-        let (mut state, authority, network_id, signer) = setup_world_with_account(Algorithm::Sm2);
-        let leader = checked_random_keypair();
-        let block = build_block_with_txs(&signer, &signer, &leader, &authority, &network_id);
-        let peer = PeerId::from(leader.public_key().clone());
-        let topology = iroha_core::sumeragi::network_topology::Topology::new(vec![peer]);
-        let result = ValidBlock::validate_sumeragi_v2_fixture(
-            block,
-            &topology,
-            &authority,
-            &iroha_primitives::time::TimeSource::new_system(),
-            &mut state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0)),
-        )
-        .unpack(|_| {});
-        assert!(
-            result.is_err(),
-            "SM2 block should be rejected when SM is disabled"
+}
+#[cfg(feature = "sm")]
+#[test]
+fn sm2_transactions_rejected_when_sm_disabled() {
+    let (state, authority, network_id, signer) = setup_world_with_account(Algorithm::Sm2);
+    let mut crypto_cfg = (*state.crypto()).clone();
+    crypto_cfg
+        .allowed_signing
+        .retain(|algorithm| *algorithm != Algorithm::Sm2);
+    crypto_cfg.allowed_curve_ids =
+        iroha_config::parameters::defaults::crypto::derive_curve_ids_from_algorithms(
+            &crypto_cfg.allowed_signing,
         );
-    }
-    #[cfg(feature = "sm")]
-    #[test]
-    fn sm2_transactions_accepted() {
-        let (mut state, authority, network_id, signer) = setup_world_with_account(Algorithm::Sm2);
-        let leader = checked_random_keypair();
-        let block = build_block_with_txs(&signer, &signer, &leader, &authority, &network_id);
-        let peer = PeerId::from(leader.public_key().clone());
-        let topology = iroha_core::sumeragi::network_topology::Topology::new(vec![peer]);
-        let result = ValidBlock::validate_sumeragi_v2_fixture(
-            block,
-            &topology,
-            &authority,
-            &iroha_primitives::time::TimeSource::new_system(),
-            &mut state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0)),
-        )
-        .unpack(|_| {});
-        assert!(
-            result.is_ok(),
-            "SM2 block should be accepted when SM is enabled"
-        );
-    }
+    state.set_crypto(crypto_cfg);
+    let leader = checked_random_keypair();
+    let block = build_block_with_txs(&signer, &signer, &leader, &authority, &network_id);
+    let peer = PeerId::from(leader.public_key().clone());
+    let topology = iroha_core::sumeragi::network_topology::Topology::new(vec![peer]);
+    let result = ValidBlock::validate_sumeragi_v2_fixture(
+        block,
+        &topology,
+        &authority,
+        &iroha_primitives::time::TimeSource::new_system(),
+        &mut state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0)),
+    )
+    .unpack(|_| {});
+    assert!(
+        result.is_err(),
+        "SM2 block should be rejected when SM is disabled"
+    );
+}
+#[cfg(feature = "sm")]
+#[test]
+fn sm2_transactions_accepted() {
+    let (state, authority, network_id, signer) = setup_world_with_account(Algorithm::Sm2);
+    let leader = checked_random_keypair();
+    let block = build_block_with_txs(&signer, &signer, &leader, &authority, &network_id);
+    let peer = PeerId::from(leader.public_key().clone());
+    let topology = iroha_core::sumeragi::network_topology::Topology::new(vec![peer]);
+    let result = ValidBlock::validate_sumeragi_v2_fixture(
+        block,
+        &topology,
+        &authority,
+        &iroha_primitives::time::TimeSource::new_system(),
+        &mut state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0)),
+    )
+    .unpack(|_| {});
+    assert!(
+        result.is_ok(),
+        "SM2 block should be accepted when SM is enabled"
+    );
 }
 /// Distinct-message admission must preserve the validity of each transaction
 /// signature, rather than relying on a verdict over their combined point.

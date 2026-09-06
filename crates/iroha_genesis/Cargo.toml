@@ -12,7 +12,10 @@ license.workspace = true
 workspace = true
 
 [features]
+default = ["sm"]
 dev-tools = []
+sm = ["iroha_config/sm", "iroha_crypto/sm", "iroha_data_model/sm"]
+sm-ffi-openssl = ["sm", "iroha_config/sm-ffi-openssl", "iroha_crypto/sm-ffi-openssl"]
 
 [[bin]]
 name = "account_literal"

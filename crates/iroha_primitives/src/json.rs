@@ -25,14 +25,19 @@ pub const MAX_JSON_NESTING_DEPTH: usize = json::MAX_JSON_VALUE_NESTING_DEPTH;
 /// Use [`Json::new`] to serialize a value and establish the canonical lexical invariant.
 #[derive(Debug, Display, Clone, PartialOrd, PartialEq, Ord, Eq)]
 #[display("{_0}")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_primitives::json::Json")]
 pub struct Json(Arc<String>);
 // Canonical Json is one self-delimiting string field. The borrowed serializer
 // avoids copying the shared text, while the owned helper provides a strict
 // slice decoder that reports the parsed prefix.
-#[derive(Encode)]
+#[derive(Encode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_primitives::json::JsonWireRef")]
 struct JsonWireRef<'a>(Cow<'a, str>);
 #[derive(Encode, Decode)]
 #[norito(decode_from_slice)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_primitives::json::JsonWireOwned")]
 struct JsonWireOwned {
     value: String,
 }
@@ -1098,3 +1103,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "schema_identity/json.rs"]
+pub(crate) mod schema_identity;

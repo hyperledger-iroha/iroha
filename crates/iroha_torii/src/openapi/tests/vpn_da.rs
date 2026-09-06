@@ -1,7 +1,7 @@
 const OPENAPI_STATIC_CONTRACT_ASSET_VERSION: &str = "IROHA_STATIC_CONTRACT_ROWS_V1";
-const OPENAPI_STATIC_CONTRACT_ASSET_LEN: usize = 114_226;
+const OPENAPI_STATIC_CONTRACT_ASSET_LEN: usize = 99_460;
 const OPENAPI_STATIC_CONTRACT_ASSET_SHA256: &str =
-    "465b0aff19f513d054ed75d716bc638712dfa21887c093116d597e7a2c98d5bb";
+    "15b62dac653dfdc14b93bc1fb1a2ca5f6d18f8af6ba13c735c70071099536d47";
 const OPENAPI_STATIC_CONTRACT_ASSET: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/src/openapi/tests/openapi_static_contracts_v1.txt"
@@ -1399,6 +1399,32 @@ fn parliament_attempt_openapi_is_closed_authenticated_and_bounded() {
     assert!(casting_response_headers.contains_key("Cache-Control"));
     assert!(casting_response_headers.contains_key("Vary"));
 
+    fn assert_no_secret_properties(schema_name: &str, value: &Value) {
+        match value {
+            Value::Object(object) => {
+                if let Some(Value::Object(properties)) = object.get("properties") {
+                    for property in properties.keys() {
+                        for secret in ["private_key", "privateKey", "seed", "mnemonic"] {
+                            assert!(
+                                !property.contains(secret),
+                                "{schema_name} leaked signing material field {property}"
+                            );
+                        }
+                    }
+                }
+                for child in object.values() {
+                    assert_no_secret_properties(schema_name, child);
+                }
+            }
+            Value::Array(array) => {
+                for child in array {
+                    assert_no_secret_properties(schema_name, child);
+                }
+            }
+            _ => {}
+        }
+    }
+
     for schema_name in [
         "DeployContractProposalDraftRequestV1",
         "DeployContractProposalDraftResponseV1",
@@ -1429,18 +1455,12 @@ fn parliament_attempt_openapi_is_closed_authenticated_and_bounded() {
             Some(&Value::Bool(false)),
             "{schema_name} must reject unknown fields"
         );
-        let encoded = norito::json::to_json(
+        assert_no_secret_properties(
+            schema_name,
             schemas
                 .get(schema_name)
                 .unwrap_or_else(|| panic!("missing {schema_name}")),
-        )
-        .expect("encode Parliament schema");
-        for secret in ["private_key", "privateKey", "seed", "mnemonic"] {
-            assert!(
-                !encoded.contains(secret),
-                "{schema_name} leaked signing material field {secret}"
-            );
-        }
+        );
     }
 
     let casting_context = schemas
@@ -1821,7 +1841,120 @@ fn parliament_attempt_openapi_is_closed_authenticated_and_bounded() {
         .and_then(|schema| schema.get("oneOf"))
         .and_then(Value::as_array)
         .expect("Parliament proposal variants");
-    assert_eq!(proposal_variants.len(), 7);
+    let proposal_tags = proposal_variants
+        .iter()
+        .map(|variant| {
+            variant
+                .get("properties")
+                .and_then(Value::as_object)
+                .and_then(|properties| properties.get("kind"))
+                .and_then(Value::as_object)
+                .and_then(|kind| kind.get("const"))
+                .and_then(Value::as_str)
+                .expect("closed proposal tag")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        proposal_tags,
+        [
+            "DeployContract",
+            "RuntimeUpgrade",
+            "SccpRouteGovernance",
+            "ValidationFeePolicy",
+            "ValidationFeePayoutLifecycle",
+            "MusubiRegistryGovernance",
+            "SorafsProviderGovernance",
+            "ContractLifecycleGovernance",
+            "ContractEmergencyHold",
+            "GlobalDataTriggerPermissionGovernance",
+        ]
+    );
+    let proposal_payload_refs = proposal_variants
+        .iter()
+        .map(|variant| {
+            variant
+                .get("properties")
+                .and_then(Value::as_object)
+                .and_then(|properties| properties.get("payload"))
+                .and_then(Value::as_object)
+                .and_then(|payload| payload.get("$ref"))
+                .and_then(Value::as_str)
+                .expect("typed Parliament proposal payload reference")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        proposal_payload_refs,
+        [
+            "#/components/schemas/GovernanceParliamentProposalPayloadDeployContractV1",
+            "#/components/schemas/GovernanceParliamentProposalPayloadRuntimeUpgradeV1",
+            "#/components/schemas/GovernanceParliamentProposalPayloadSccpRouteGovernanceV1",
+            "#/components/schemas/GovernanceParliamentProposalPayloadValidationFeePolicyProposalV1",
+            "#/components/schemas/GovernanceParliamentProposalPayloadValidationFeePayoutLifecycleV1",
+            "#/components/schemas/GovernanceParliamentProposalPayloadMusubiRegistryActionV1",
+            "#/components/schemas/GovernanceParliamentProposalPayloadSorafsProviderV1",
+            "#/components/schemas/GovernanceParliamentProposalPayloadContractLifecycleV1",
+            "#/components/schemas/GovernanceParliamentProposalPayloadContractEmergencyHoldV1",
+            "#/components/schemas/GovernanceParliamentProposalPayloadGlobalDataTriggerPermissionV1",
+        ]
+    );
+    for payload_ref in proposal_payload_refs {
+        let root = payload_ref
+            .strip_prefix(COMPONENT_SCHEMA_REF_PREFIX)
+            .expect("Parliament payload component reference");
+        let mut pending = std::collections::VecDeque::from([root.to_owned()]);
+        let mut reachable = std::collections::BTreeSet::new();
+        while let Some(component) = pending.pop_front() {
+            if !reachable.insert(component.clone()) {
+                continue;
+            }
+            assert_ne!(
+                component, "JsonValue",
+                "Parliament proposal payloads must stay transitively typed"
+            );
+            let schema = schemas
+                .get(&component)
+                .unwrap_or_else(|| panic!("missing Parliament payload component {component}"));
+            let mut references = std::collections::BTreeSet::new();
+            collect_component_refs(schema, &mut references);
+            pending.extend(references);
+        }
+    }
+
+    let contract_lifecycle_action_variants = schemas
+        .get("GovernanceParliamentProposalPayloadContractLifecycleActionV1")
+        .and_then(Value::as_object)
+        .and_then(|schema| schema.get("oneOf"))
+        .and_then(Value::as_array)
+        .expect("closed contract lifecycle action variants");
+    let contract_lifecycle_action_tags = contract_lifecycle_action_variants
+        .iter()
+        .map(|variant| {
+            assert_eq!(
+                variant.get("additionalProperties").and_then(Value::as_bool),
+                Some(false),
+                "each contract lifecycle action must reject unknown fields"
+            );
+            variant
+                .get("properties")
+                .and_then(Value::as_object)
+                .and_then(|properties| properties.get("action"))
+                .and_then(Value::as_object)
+                .and_then(|action| action.get("const"))
+                .and_then(Value::as_str)
+                .expect("closed contract lifecycle action tag")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        contract_lifecycle_action_tags,
+        [
+            "Activate",
+            "Deactivate",
+            "OfferOwnership",
+            "CancelOwnershipOffer",
+            "AcceptParliamentOwnership",
+            "CompleteEmergencyHoldRetrospective",
+        ]
+    );
 
     let transition_variants = schemas
         .get("GovernanceParliamentLifecycleTransitionV1")
@@ -2010,7 +2143,7 @@ fn parliament_attempt_openapi_is_closed_authenticated_and_bounded() {
         .expect("no-result audit variants");
     assert_eq!(
         no_result_variants.len(),
-        9,
+        10,
         "no-result audit class must remain closed"
     );
     assert_eq!(
@@ -2036,6 +2169,7 @@ fn parliament_attempt_openapi_is_closed_authenticated_and_bounded() {
             "BallotOpeningDeadlineExpired",
             "SortitionRetriesExhausted",
             "ConfirmationJuryCapacityUnavailable",
+            "RandomnessRedrawBudgetExhausted",
         ],
         "no-result OpenAPI tags must match the closed codec inventory"
     );

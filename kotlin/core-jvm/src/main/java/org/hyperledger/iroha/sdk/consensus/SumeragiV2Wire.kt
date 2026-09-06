@@ -7,6 +7,7 @@ import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.charset.StandardCharsets
+import java.util.Collections
 import org.hyperledger.iroha.sdk.core.model.NetworkId
 import org.hyperledger.iroha.sdk.crypto.IrohaHash
 
@@ -14,10 +15,8 @@ import org.hyperledger.iroha.sdk.crypto.IrohaHash
 object SumeragiV2Wire {
     /** The only protocol revision accepted by live consensus. */
     const val PROTOCOL_VERSION: Int = 4
-    /** Maximum number of real Kagemusha top-up leaves committed by one block. */
-    const val MAX_KAGEMUSHA_TOPUP_ANCHORS_PER_BLOCK: Long = 16
-    private val KAGEMUSHA_TOPUP_POST_STATE_ROOT_DOMAIN =
-        "iroha:kagemusha:v2:post-state-root".toByteArray(StandardCharsets.UTF_8)
+    private val KAGEMUSHA_TOP_UP_POST_STATE_ROOT_DOMAIN =
+        "iroha:kagemusha:v1:post-state-root".toByteArray(StandardCharsets.UTF_8)
     /** Canonical Native AMX application-manifest wire version. */
     const val NATIVE_AMX_APPLICATION_MANIFEST_VERSION: Int = 1
     /** Exact first-release merge-carrier projection version. */
@@ -210,8 +209,8 @@ object SumeragiV2Wire {
         @JvmField val parentStateRoot: Hash32,
         @JvmField val postStateRoot: Hash32,
         @JvmField val ordinaryWritesRoot: Hash32,
-        @JvmField val topupAnchorRoot: Hash32?,
-        @JvmField val topupAnchorCount: Long,
+        @JvmField val kagemushaTopUpRoot: Hash32?,
+        @JvmField val kagemushaTopUpCount: Long,
         @JvmField val nativeAmxApplicationManifestVersion: Int,
         @JvmField val nativeAmxApplicationManifestRoot: Hash32,
         @JvmField val nativeAmxApplicationManifestCount: Long,
@@ -221,27 +220,24 @@ object SumeragiV2Wire {
         @JvmField val executedBlockWireHash: Hash32,
     ) : WireValue() {
         init {
-            require(topupAnchorCount in 0..0xffff_ffffL) {
-                "topupAnchorCount must fit in an unsigned 32-bit integer"
+            require(kagemushaTopUpCount in 0..0xffff_ffffL) {
+                "kagemushaTopUpCount must fit in an unsigned 32-bit integer"
             }
-            if (topupAnchorCount == 0L) {
-                require(topupAnchorRoot == null) {
-                    "zero top-up count must not carry an anchor root"
+            if (kagemushaTopUpCount == 0L) {
+                require(kagemushaTopUpRoot == null) {
+                    "zero KAGEMUSHA top-up count must not carry a root"
                 }
             } else {
-                require(topupAnchorRoot != null) {
-                    "non-zero top-up count requires an anchor root"
-                }
-                require(topupAnchorCount <= MAX_KAGEMUSHA_TOPUP_ANCHORS_PER_BLOCK) {
-                    "top-up anchor count exceeds the consensus bound"
+                require(kagemushaTopUpRoot != null) {
+                    "non-zero KAGEMUSHA top-up count requires a root"
                 }
                 require(
-                    postStateRoot == topupPostStateRoot(
-                        topupAnchorCount,
+                    postStateRoot == kagemushaTopUpPostStateRoot(
+                        kagemushaTopUpCount,
                         ordinaryWritesRoot,
-                        topupAnchorRoot,
+                        kagemushaTopUpRoot,
                     ),
-                ) { "post-state root does not bind the top-up anchor projection" }
+                ) { "post-state root does not bind the KAGEMUSHA top-up projection" }
             }
             require(
                 nativeAmxApplicationManifestVersion ==
@@ -268,8 +264,8 @@ object SumeragiV2Wire {
             parentStateRoot.bytes(),
             postStateRoot.bytes(),
             ordinaryWritesRoot.bytes(),
-            option(topupAnchorRoot?.bytes()),
-            u32(topupAnchorCount),
+            option(kagemushaTopUpRoot?.bytes()),
+            u32(kagemushaTopUpCount),
             u16(nativeAmxApplicationManifestVersion),
             nativeAmxApplicationManifestRoot.bytes(),
             u32(nativeAmxApplicationManifestCount),
@@ -281,7 +277,7 @@ object SumeragiV2Wire {
 
         companion object {
             @JvmStatic
-            fun withoutTopups(
+            fun withoutKagemushaTopUps(
                 parentStateRoot: Hash32,
                 postStateRoot: Hash32,
                 ordinaryWritesRoot: Hash32,
@@ -308,20 +304,20 @@ object SumeragiV2Wire {
                 Hash32(IrohaHash.prehash(NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT_DOMAIN))
 
             @JvmStatic
-            fun topupPostStateRoot(
-                topupAnchorCount: Long,
+            fun kagemushaTopUpPostStateRoot(
+                kagemushaTopUpCount: Long,
                 ordinaryWritesRoot: Hash32,
-                topupAnchorRoot: Hash32,
+                kagemushaTopUpRoot: Hash32,
             ): Hash32 {
-                require(
-                    topupAnchorCount in 1..MAX_KAGEMUSHA_TOPUP_ANCHORS_PER_BLOCK,
-                ) { "top-up anchor count must fit the non-empty consensus bound" }
+                require(kagemushaTopUpCount in 1..0xffff_ffffL) {
+                    "KAGEMUSHA top-up count must fit a non-zero unsigned 32-bit integer"
+                }
                 val preimage = ByteArrayOutputStream()
-                preimage.write(KAGEMUSHA_TOPUP_POST_STATE_ROOT_DOMAIN)
+                preimage.write(KAGEMUSHA_TOP_UP_POST_STATE_ROOT_DOMAIN)
                 preimage.write(0)
-                preimage.write(u32(topupAnchorCount))
+                preimage.write(u32(kagemushaTopUpCount))
                 preimage.write(ordinaryWritesRoot.bytes())
-                preimage.write(topupAnchorRoot.bytes())
+                preimage.write(kagemushaTopUpRoot.bytes())
                 return Hash32(IrohaHash.prehash(preimage.toByteArray()))
             }
 
@@ -333,11 +329,12 @@ object SumeragiV2Wire {
                         Hash32(reader.field("execution.post_state_root") { it.hash() })
                     val ordinaryWritesRoot =
                         Hash32(reader.field("execution.ordinary_writes_root") { it.hash() })
-                    val topupAnchorRoot =
-                        reader.field("execution.topup_anchor_root") { optionHash(it) }
-                    val topupAnchorCount = reader.field("execution.topup_anchor_count") {
-                        it.u32Only("execution.topup_anchor_count")
-                    }
+                    val kagemushaTopUpRoot =
+                        reader.field("execution.kagemusha_top_up_root") { optionHash(it) }
+                    val kagemushaTopUpCount =
+                        reader.field("execution.kagemusha_top_up_count") {
+                            it.u32Only("execution.kagemusha_top_up_count")
+                        }
                     val manifestVersion =
                         reader.field("execution.native_amx_application_manifest_version") {
                             it.u16Only("execution.native_amx_application_manifest_version")
@@ -371,8 +368,8 @@ object SumeragiV2Wire {
                         parentStateRoot,
                         postStateRoot,
                         ordinaryWritesRoot,
-                        topupAnchorRoot,
-                        topupAnchorCount,
+                        kagemushaTopUpRoot,
+                        kagemushaTopUpCount,
                         manifestVersion,
                         manifestRoot,
                         manifestCount,
@@ -482,7 +479,7 @@ object SumeragiV2Wire {
         signers: List<Long>,
         aggregateSignature: ByteArray,
     ) : WireValue() {
-        @JvmField val signers: List<Long> = signers.toList()
+        @JvmField val signers: List<Long> = ownWireList(signers)
         private val aggregateSignatureValue = aggregateSignature.copyOf()
 
         init {
@@ -566,11 +563,10 @@ object SumeragiV2Wire {
         signers: List<Long>,
         aggregateSignature: ByteArray,
     ) : WireValue() {
-        @JvmField val signers: List<Long> = signers.toList()
+        @JvmField val signers: List<Long> = ownWireList(signers, "timeout group must contain a signer")
         private val aggregateSignatureValue = aggregateSignature.copyOf()
 
         init {
-            require(this.signers.isNotEmpty()) { "timeout group must contain a signer" }
             requireStrictlyIncreasing(this.signers, "timeout group signers")
         }
 
@@ -602,10 +598,10 @@ object SumeragiV2Wire {
         @JvmField val round: ConsensusRound,
         groups: List<TimeoutVoteGroup>,
     ) : WireValue() {
-        @JvmField val groups: List<TimeoutVoteGroup> = groups.toList()
+        @JvmField val groups: List<TimeoutVoteGroup> =
+            ownWireList(groups, "timeout certificate must contain a group")
 
         init {
-            require(this.groups.isNotEmpty()) { "timeout certificate must contain a group" }
             val seen = HashSet<Long>()
             this.groups.forEach { group ->
                 group.signers.forEach { signer ->
@@ -790,11 +786,8 @@ object SumeragiV2Wire {
         chunkHashes: List<Hash32>,
         @JvmField val chunkRoot: Hash32,
     ) : WireValue() {
-        @JvmField val chunkHashes: List<Hash32> = chunkHashes.toList()
-
-        init {
-            require(this.chunkHashes.isNotEmpty()) { "payload manifest must contain a chunk hash" }
-        }
+        @JvmField val chunkHashes: List<Hash32> =
+            ownWireList(chunkHashes, "payload manifest must contain a chunk hash")
 
         override fun encode(): ByteArray = struct(
             round.encode(),
@@ -1122,7 +1115,7 @@ object SumeragiV2Wire {
         }
     }
 
-    /** Canonical v2 network payload variants, in Rust declaration order. */
+    /** Client-facing payload subset retaining Rust tags 0..9; validator-internal beacon shares use tag 10. */
     sealed class ConsensusPayload : WireValue() {
         class ProposalMessage(@JvmField val value: Proposal) : ConsensusPayload() {
             override fun encode(): ByteArray = enumPayload(0, value.encode())
@@ -1144,32 +1137,28 @@ object SumeragiV2Wire {
             override fun encode(): ByteArray = enumPayload(4, value.encode())
         }
 
-        class PayloadManifestMessage(@JvmField val value: PayloadManifest) : ConsensusPayload() {
+        class PayloadChunkMessage(@JvmField val value: PayloadChunk) : ConsensusPayload() {
             override fun encode(): ByteArray = enumPayload(5, value.encode())
         }
 
-        class PayloadChunkMessage(@JvmField val value: PayloadChunk) : ConsensusPayload() {
+        class CertifiedBodyRequestMessage(@JvmField val value: CertifiedBodyRequest) : ConsensusPayload() {
             override fun encode(): ByteArray = enumPayload(6, value.encode())
         }
 
-        class CertifiedBodyRequestMessage(@JvmField val value: CertifiedBodyRequest) : ConsensusPayload() {
-            override fun encode(): ByteArray = enumPayload(7, value.encode())
-        }
-
         class CertifiedBodyResponseMessage(@JvmField val value: CertifiedBodyResponse) : ConsensusPayload() {
-            override fun encode(): ByteArray = enumPayload(8, value.encode())
+            override fun encode(): ByteArray = enumPayload(7, value.encode())
         }
 
         class CommitCertificateRequestMessage(
             @JvmField val value: CommitCertificateRequest,
         ) : ConsensusPayload() {
-            override fun encode(): ByteArray = enumPayload(9, value.encode())
+            override fun encode(): ByteArray = enumPayload(8, value.encode())
         }
 
         class CommitCertificateResponseMessage(
             @JvmField val value: CommitCertificateResponse,
         ) : ConsensusPayload() {
-            override fun encode(): ByteArray = enumPayload(10, value.encode())
+            override fun encode(): ByteArray = enumPayload(9, value.encode())
         }
 
         companion object {
@@ -1184,12 +1173,11 @@ object SumeragiV2Wire {
                     2L -> QuorumCertificateMessage(QuorumCertificate.decode(payload))
                     3L -> TimeoutVoteMessage(TimeoutVote.decode(payload))
                     4L -> TimeoutCertificateMessage(TimeoutCertificate.decode(payload))
-                    5L -> PayloadManifestMessage(PayloadManifest.decode(payload))
-                    6L -> PayloadChunkMessage(PayloadChunk.decode(payload))
-                    7L -> CertifiedBodyRequestMessage(CertifiedBodyRequest.decode(payload))
-                    8L -> CertifiedBodyResponseMessage(CertifiedBodyResponse.decode(payload))
-                    9L -> CommitCertificateRequestMessage(CommitCertificateRequest.decode(payload))
-                    10L -> CommitCertificateResponseMessage(CommitCertificateResponse.decode(payload))
+                    5L -> PayloadChunkMessage(PayloadChunk.decode(payload))
+                    6L -> CertifiedBodyRequestMessage(CertifiedBodyRequest.decode(payload))
+                    7L -> CertifiedBodyResponseMessage(CertifiedBodyResponse.decode(payload))
+                    8L -> CommitCertificateRequestMessage(CommitCertificateRequest.decode(payload))
+                    9L -> CommitCertificateResponseMessage(CommitCertificateResponse.decode(payload))
                     else -> throw IllegalArgumentException("Unknown Sumeragi v2 payload: $tag")
                 }
             }
@@ -1730,17 +1718,24 @@ object SumeragiV2Wire {
     /** Authoritative progress diagnostics for the active height. */
     class LivenessStatus(
         @JvmField val generation: Long,
-        @JvmField val prepareQuorums: List<VoteQuorumStatus>,
-        @JvmField val commitQuorums: List<VoteQuorumStatus>,
-        @JvmField val timeoutQuorums: List<TimeoutQuorumStatus>,
-        @JvmField val outboundIntents: List<OutboundIntentStatus>,
+        prepareQuorums: List<VoteQuorumStatus>,
+        commitQuorums: List<VoteQuorumStatus>,
+        timeoutQuorums: List<TimeoutQuorumStatus>,
+        outboundIntents: List<OutboundIntentStatus>,
         @JvmField val work: WorkStatus,
-        @JvmField val queues: List<QueueStatus>,
+        queues: List<QueueStatus>,
         @JvmField val lastProgress: ProgressTransitionStatus?,
         @JvmField val noProgressAgeMs: Long,
         @JvmField val blocker: LivenessBlocker?,
-        @JvmField val ignoreCounts: List<IgnoreCount>,
+        ignoreCounts: List<IgnoreCount>,
     ) : WireValue() {
+        @JvmField val prepareQuorums: List<VoteQuorumStatus> = ownWireList(prepareQuorums)
+        @JvmField val commitQuorums: List<VoteQuorumStatus> = ownWireList(commitQuorums)
+        @JvmField val timeoutQuorums: List<TimeoutQuorumStatus> = ownWireList(timeoutQuorums)
+        @JvmField val outboundIntents: List<OutboundIntentStatus> = ownWireList(outboundIntents)
+        @JvmField val queues: List<QueueStatus> = ownWireList(queues)
+        @JvmField val ignoreCounts: List<IgnoreCount> = ownWireList(ignoreCounts)
+
         override fun encode(): ByteArray = struct(
             u64(generation), vector(prepareQuorums) { it.encode() },
             vector(commitQuorums) { it.encode() }, vector(timeoutQuorums) { it.encode() },
@@ -2136,6 +2131,16 @@ object SumeragiV2Wire {
         val value = decode(reader)
         reader.finish("struct")
         return value
+    }
+
+    /** Snapshot public wire collections before validation and prevent later mutation. */
+    private fun <T : Any> ownWireList(values: List<T?>, nonEmptyMessage: String? = null): List<T> {
+        if (nonEmptyMessage != null) {
+            require(values.isNotEmpty()) { nonEmptyMessage }
+        }
+        return Collections.unmodifiableList(values.map {
+            requireNotNull(it) { "Sumeragi wire collections must not contain null entries" }
+        })
     }
 
     private fun requireStrictlyIncreasing(values: List<Long>, label: String) {

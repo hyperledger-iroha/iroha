@@ -344,6 +344,8 @@ pub struct BscNativeSourceProofV1 {
 pub struct ValidatedBscNativeFinalityV1 {
     /// Governed anchor hash.
     pub anchor_hash: H256,
+    /// Execution block number authenticated by the governed anchor.
+    pub anchor_block_number: u64,
     /// Finalized target block number.
     pub block_number: u64,
     /// Finalized target block hash.
@@ -1331,7 +1333,7 @@ fn anchor_state(
     let roster = validate_anchor_roster(anchor, &header)?;
     let votes = validate_anchor_votes(anchor, &header, &parsed_extra, &roster)?;
     let anchor_bytes =
-        norito::to_bytes(anchor).map_err(|_| BscNativeFinalityError::AnchorEncoding)?;
+        norito::encode_canonical(anchor).map_err(|_| BscNativeFinalityError::AnchorEncoding)?;
     let anchor_hash = prefixed_blake2b(BSC_NATIVE_ANCHOR_PREFIX_V1, &anchor_bytes);
     Ok((
         ParliaState {
@@ -1357,17 +1359,6 @@ fn anchor_state(
         anchor_hash,
         params,
     ))
-}
-/// Return the canonical execution block number of a valid governed Parlia anchor.
-///
-/// # Errors
-///
-/// Returns a finality error when the anchor header is malformed or non-canonical.
-pub fn bsc_native_anchor_block_number(
-    anchor: &BscNativeParliaAnchorV1,
-) -> Result<u64, BscNativeFinalityError> {
-    let header = parse_header(&anchor.header_rlp)?;
-    Ok(header.number)
 }
 // Seed table and generator used by Go 1's `math/rand.NewSource`. Parlia's
 // out-of-turn delay is consensus-visible and therefore cannot be replaced by
@@ -1907,6 +1898,7 @@ fn verify_bsc_native_finality_counted(
     let target_index = usize::from(proof.target_header_index);
     work.secp256k1_recoveries = work.secp256k1_recoveries.saturating_add(1);
     let (mut state, anchor_hash, params) = anchor_state(&proof.anchor)?;
+    let anchor_block_number = state.number;
     if anchor_hash != expected_anchor_hash {
         return Err(BscNativeFinalityError::AnchorHashMismatch);
     }
@@ -1948,6 +1940,7 @@ fn verify_bsc_native_finality_counted(
             }
             return Ok(ValidatedBscNativeFinalityV1 {
                 anchor_hash,
+                anchor_block_number,
                 block_number,
                 block_hash,
                 state_root,
@@ -2845,11 +2838,20 @@ mod tests {
         assert_ne!(changed, hash);
     }
     #[test]
-    fn governed_anchor_has_stable_norito_and_json_roundtrips() {
+    fn governed_anchor_hash_and_roundtrip_ignore_ambient_norito_layout() {
         let anchor = anchor();
-        let encoded = norito::to_bytes(&anchor).unwrap();
+        let hash = bsc_native_anchor_hash(&anchor).expect("canonical anchor hash");
+        let encoded = norito::encode_canonical(&anchor).expect("canonical anchor encoding");
         let decoded: BscNativeParliaAnchorV1 = norito::decode_from_bytes(&encoded).unwrap();
         assert_eq!(decoded, anchor);
+
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+        let alternate = norito::to_bytes(&anchor).expect("alternate-layout anchor encoding");
+        assert_ne!(alternate, encoded);
+        assert_eq!(bsc_native_anchor_hash(&anchor), Ok(hash));
+
         let json = norito::json::to_json(&anchor).unwrap();
         let decoded_json: BscNativeParliaAnchorV1 = norito::json::from_json(&json).unwrap();
         assert_eq!(decoded_json, anchor);
@@ -3341,6 +3343,7 @@ mod tests {
             fixture.anchor_hash,
         )
         .unwrap();
+        assert_eq!(result.anchor_block_number, 1_001);
         assert_eq!(result.block_number, 1_002);
         assert_eq!(result.block_hash, fixture.header1_hash);
         assert_eq!(result.resulting_finalized_number, 1_002);

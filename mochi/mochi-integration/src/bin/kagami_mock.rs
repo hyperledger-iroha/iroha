@@ -1,10 +1,14 @@
 //! Minimal stand-in for the `kagami` binary used by the MOCHI supervisor integration tests.
 use color_eyre::{Result, eyre::eyre};
 use iroha_crypto::{ExposedPrivateKey, KeyPair, PublicKey};
-use iroha_data_model::{NetworkId, parameter::system::SumeragiConsensusMode, prelude::ChainId};
+use iroha_data_model::{
+    NetworkId, isi::kagemusha_v1::KagemushaMintFinalityGenesisParametersV1,
+    parameter::system::SumeragiConsensusMode, prelude::ChainId,
+};
 use mochi_core::{GenesisProfile, sign_kagami_stub_genesis_from_config};
 use mochi_integration::kagami_default_manifest_json;
 use std::{env, fs, path::PathBuf, process};
+const KAGEMUSHA_MINT_FINALITY_PARAMETERS_MAX_BYTES: u64 = 1024 * 1024;
 fn main() {
     if let Err(err) = run() {
         eprintln!("kagami_mock: {err:?}");
@@ -137,15 +141,33 @@ struct GenerateArgs {
     genesis_public_key: String,
     chain_id: String,
     consensus_mode: SumeragiConsensusMode,
+    kagemusha_mint_finality_parameters: PathBuf,
 }
 fn generate(args: Vec<String>) -> Result<()> {
     let parsed = parse_generate_args(&args)?;
     let public_key = parse_genesis_public_key(&parsed.genesis_public_key)?;
+    let parameter_metadata = fs::symlink_metadata(&parsed.kagemusha_mint_finality_parameters)?;
+    if parameter_metadata.file_type().is_symlink()
+        || !parameter_metadata.is_file()
+        || parameter_metadata.len() > KAGEMUSHA_MINT_FINALITY_PARAMETERS_MAX_BYTES
+    {
+        return Err(eyre!(
+            "KAGEMUSHA mint-finality parameters must be a regular file no larger than {} bytes",
+            KAGEMUSHA_MINT_FINALITY_PARAMETERS_MAX_BYTES
+        ));
+    }
+    let parameter_bytes = fs::read(&parsed.kagemusha_mint_finality_parameters)?;
+    let kagemusha_mint_finality: KagemushaMintFinalityGenesisParametersV1 =
+        norito::json::from_slice(&parameter_bytes)?;
+    kagemusha_mint_finality
+        .validate()
+        .map_err(|error| eyre!("invalid KAGEMUSHA mint-finality parameters: {error}"))?;
     let manifest = kagami_default_manifest_json(
         &public_key,
         &parsed.ivm_dir,
         parsed.chain_id,
         parsed.consensus_mode,
+        &kagemusha_mint_finality,
     )?;
     println!("{manifest}");
     Ok(())
@@ -160,6 +182,7 @@ fn parse_generate_args(args: &[String]) -> Result<GenerateArgs> {
     let mut genesis_public_key = None;
     let mut chain_id = None;
     let mut consensus_mode = None;
+    let mut kagemusha_mint_finality_parameters = None;
     let mut profile = None;
     let mut vrf_seed_hex = None;
     let mut saw_default = false;
@@ -188,6 +211,18 @@ fn parse_generate_args(args: &[String]) -> Result<GenerateArgs> {
                 let value =
                     parse_consensus_mode(next_arg_value(args, &mut index, "--consensus-mode")?)?;
                 set_once(&mut consensus_mode, "--consensus-mode", value)?;
+            }
+            "--kagemusha-mint-finality-parameters" => {
+                let value = PathBuf::from(next_arg_value(
+                    args,
+                    &mut index,
+                    "--kagemusha-mint-finality-parameters",
+                )?);
+                set_once(
+                    &mut kagemusha_mint_finality_parameters,
+                    "--kagemusha-mint-finality-parameters",
+                    value,
+                )?;
             }
             "--profile" => {
                 let raw = next_arg_value(args, &mut index, "--profile")?;
@@ -223,6 +258,8 @@ fn parse_generate_args(args: &[String]) -> Result<GenerateArgs> {
         chain_id: chain_id.ok_or_else(|| eyre!("missing `--chain-id` argument"))?,
         consensus_mode: consensus_mode
             .ok_or_else(|| eyre!("missing `--consensus-mode` argument"))?,
+        kagemusha_mint_finality_parameters: kagemusha_mint_finality_parameters
+            .ok_or_else(|| eyre!("missing `--kagemusha-mint-finality-parameters` argument"))?,
     })
 }
 fn set_once<T>(slot: &mut Option<T>, flag: &str, value: T) -> Result<()> {
@@ -324,16 +361,20 @@ fn verify(args: Vec<String>) -> Result<()> {
 mod tests {
     use super::*;
     use iroha_crypto::{Algorithm, KeyPair, bls_normal_pop_prove};
-    use iroha_data_model::{block::decode_framed_signed_block, peer::PeerId};
+    use iroha_data_model::{
+        block::decode_framed_signed_block,
+        isi::kagemusha_v1::{
+            KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterTemplateV1,
+        },
+        peer::PeerId,
+    };
     use iroha_genesis::{GenesisTopologyEntry, RawGenesisTransaction};
     use mochi_core::kagami_stub_genesis_policies_from_config;
     use norito::json::Value;
     const GENESIS_EXPECTED_HASH_PLACEHOLDER: &str = "REPLACE_WITH_GENESIS_EXPECTED_HASH";
 
-    fn with_valid_topology(manifest_json: String) -> String {
-        let manifest: RawGenesisTransaction =
-            norito::json::from_str(&manifest_json).expect("decode mock manifest");
-        let topology = (0..4)
+    fn test_topology() -> Vec<GenesisTopologyEntry> {
+        (0..4)
             .map(|_| {
                 let validator = KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
                     .expect("generate validator key");
@@ -341,12 +382,55 @@ mod tests {
                     .expect("generate validator proof of possession");
                 GenesisTopologyEntry::new(PeerId::new(validator.public_key().clone()), pop)
             })
+            .collect()
+    }
+
+    fn test_kagemusha_mint_finality_parameters(
+        topology: &[GenesisTopologyEntry],
+    ) -> KagemushaMintFinalityGenesisParametersV1 {
+        let mut validators = topology
+            .iter()
+            .map(|entry| entry.peer.clone())
+            .collect::<Vec<_>>();
+        validators.sort();
+        let validators = validators
+            .into_iter()
+            .enumerate()
+            .map(|(index, validator)| {
+                iroha_core::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
+                    &[0xA0_u8.wrapping_add(u8::try_from(index).expect("test index fits u8")); 32],
+                    0,
+                    validator,
+                )
+                .expect("derive mock mint-finality validator keys")
+            })
             .collect();
+        let parameters = KagemushaMintFinalityGenesisParametersV1 {
+            epoch_roster: KagemushaMintFinalityEpochRosterTemplateV1 {
+                version: KAGEMUSHA_CHAIN_VERSION_V1,
+                epoch: 0,
+                validators,
+            },
+            next_epoch_roster: None,
+        };
+        parameters
+            .validate()
+            .expect("mock mint-finality parameters are valid");
+        parameters
+    }
+
+    fn with_valid_topology(manifest_json: String) -> String {
+        let manifest: RawGenesisTransaction =
+            norito::json::from_str(&manifest_json).expect("decode mock manifest");
+        let topology = test_topology();
+        let kagemusha_mint_finality = test_kagemusha_mint_finality_parameters(&topology);
         let manifest = manifest
             .into_builder()
+            .with_kagemusha_mint_finality_genesis_parameters(kagemusha_mint_finality)
             .next_transaction()
             .set_topology(topology)
-            .build_raw();
+            .build_raw()
+            .expect("rebuild complete mock manifest");
         norito::json::to_json_pretty(&manifest).expect("encode mock manifest")
     }
 
@@ -399,6 +483,8 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             key_pair.public_key().to_string(),
             "--chain-id".to_owned(),
             "local-chain".to_owned(),
+            "--kagemusha-mint-finality-parameters".to_owned(),
+            "/tmp/kagemusha.json".to_owned(),
             "--profile".to_owned(),
             "iroha3-dev".to_owned(),
             "--consensus-mode".to_owned(),
@@ -425,6 +511,8 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             "strict-chain".to_owned(),
             "--consensus-mode".to_owned(),
             "permissioned".to_owned(),
+            "--kagemusha-mint-finality-parameters".to_owned(),
+            "/tmp/kagemusha.json".to_owned(),
             "default".to_owned(),
         ];
         for flag in [
@@ -432,6 +520,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             "--genesis-public-key",
             "--chain-id",
             "--consensus-mode",
+            "--kagemusha-mint-finality-parameters",
         ] {
             let mut missing = base.clone();
             let index = missing.iter().position(|arg| arg == flag).expect("flag");
@@ -478,6 +567,8 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                 "strict-chain".to_owned(),
                 "--consensus-mode".to_owned(),
                 "npos".to_owned(),
+                "--kagemusha-mint-finality-parameters".to_owned(),
+                "/tmp/kagemusha.json".to_owned(),
             ];
             if let Some(profile) = profile {
                 args.extend(["--profile".to_owned(), profile.to_owned()]);
@@ -530,11 +621,14 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
     fn generate_emits_manifest_with_requested_chain_id() {
         let key_pair = KeyPair::random();
         let ivm_dir = tempfile::tempdir().expect("tempdir");
+        let topology = test_topology();
+        let kagemusha_mint_finality = test_kagemusha_mint_finality_parameters(&topology);
         let manifest = kagami_default_manifest_json(
             key_pair.public_key(),
             ivm_dir.path(),
             "custom-chain",
             SumeragiConsensusMode::Permissioned,
+            &kagemusha_mint_finality,
         )
         .expect("generate mock manifest");
         let value: Value = norito::json::from_str(&manifest).expect("parse manifest json");
@@ -551,6 +645,15 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
     fn generate_accepts_current_supervisor_flags() {
         let key_pair = KeyPair::random();
         let ivm_dir = tempfile::tempdir().expect("tempdir");
+        let parameters_path = ivm_dir.path().join("kagemusha.json");
+        let topology = test_topology();
+        let kagemusha_mint_finality = test_kagemusha_mint_finality_parameters(&topology);
+        fs::write(
+            &parameters_path,
+            norito::json::to_vec_pretty(&kagemusha_mint_finality)
+                .expect("encode mint-finality parameters"),
+        )
+        .expect("write mint-finality parameters");
         let args = vec![
             "--ivm-dir".to_owned(),
             ivm_dir.path().display().to_string(),
@@ -560,6 +663,8 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             "supervisor-chain".to_owned(),
             "--consensus-mode".to_owned(),
             "permissioned".to_owned(),
+            "--kagemusha-mint-finality-parameters".to_owned(),
+            parameters_path.display().to_string(),
             "default".to_owned(),
         ];
         generate(args).expect("generate manifest via mock kagami");
@@ -634,12 +739,16 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         let private_key = temp.path().join("genesis.key");
         let config = temp.path().join("peer.toml");
         let key_pair = KeyPair::random();
+        let initial_topology = test_topology();
+        let initial_kagemusha_mint_finality =
+            test_kagemusha_mint_finality_parameters(&initial_topology);
         let manifest_json = with_valid_topology(
             kagami_default_manifest_json(
                 key_pair.public_key(),
                 temp.path(),
                 "mock-sign-chain",
                 SumeragiConsensusMode::Permissioned,
+                &initial_kagemusha_mint_finality,
             )
             .expect("build manifest"),
         );
@@ -711,12 +820,16 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         let private_key = temp.path().join("genesis.key");
         let config = temp.path().join("peer.toml");
         let key_pair = KeyPair::random();
+        let initial_topology = test_topology();
+        let initial_kagemusha_mint_finality =
+            test_kagemusha_mint_finality_parameters(&initial_topology);
         let manifest_json = with_valid_topology(
             kagami_default_manifest_json(
                 key_pair.public_key(),
                 temp.path(),
                 "mock-sign-failure-chain",
                 SumeragiConsensusMode::Permissioned,
+                &initial_kagemusha_mint_finality,
             )
             .expect("build manifest"),
         );

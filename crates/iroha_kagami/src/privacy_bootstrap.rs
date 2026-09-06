@@ -46,10 +46,10 @@ enum Command {
     /// Validate an emitted exact-12 instruction set and its digest inventory.
     #[command(name = "validate-taira-v1")]
     ValidateTairaV1(ValidateTairaV1Args),
-    /// Validate a reviewed Taira NEVO unsigned genesis without creating release artifacts.
+    /// Validate a reviewed Taira NEVO genesis source template without creating release artifacts.
     #[command(name = "validate-taira-nevo-review-v1")]
     ValidateTairaNevoReviewV1(release::ValidateTairaNevoReviewV1Args),
-    /// Compose a complete secret-free Taira release plan, config, and genesis.
+    /// Compose a secret-free Taira release plan, config, and non-signable genesis source template.
     #[command(name = "render-taira-release-v1")]
     RenderTairaReleaseV1(Box<release::RenderTairaReleaseV1Args>),
 }

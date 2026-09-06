@@ -14,7 +14,7 @@ import org.hyperledger.iroha.sdk.sccp.SccpV1
  * Exact first-release request payload for POST /v1/bridge/proofs/submit.
  * Detached signed submission is outside this surface; only unsigned preparation is representable.
  */
-class SccpDestinationProofSubmitRequest(
+internal class SccpDestinationProofSubmitRequest(
     authority: String,
     destinationProofB64: String,
     feePayment: FeePaymentIntent,
@@ -43,7 +43,7 @@ class SccpDestinationProofSubmitRequest(
  * Exact first-release native-proof request payload for POST /v1/bridge/messages.
  * Detached signed submission is outside this surface; only unsigned preparation is representable.
  */
-class SccpNativeMessageSubmitRequest(
+internal class SccpNativeMessageSubmitRequest(
     authority: String,
     nativeProofB64: String,
     replayWitnessB64: String,

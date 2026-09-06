@@ -40,6 +40,16 @@ fn ipa_open_envelope_verifies() {
     // Verify via IVM helper
     let ok = verify_open_envelope(&bytes).expect("verifier ran");
     assert!(ok, "expected verification success");
+    let mut unsupported = env;
+    unsupported.params.curve_id = h2::ZkCurveId::Goldilocks.as_u16();
+    unsupported.public.curve_id = h2::ZkCurveId::Goldilocks.as_u16();
+    let bytes = norito::to_bytes(&unsupported).expect("encode unsupported field identity");
+    assert!(matches!(
+        verify_open_envelope(&bytes),
+        Err(h2::Error::UnsupportedBackend {
+            backend: h2::ZkCurveId::Goldilocks
+        })
+    ));
 }
 #[test]
 fn ipa_open_envelope_rejects_wrong_t() {

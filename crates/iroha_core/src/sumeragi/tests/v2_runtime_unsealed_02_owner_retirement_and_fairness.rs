@@ -21,7 +21,7 @@ fn decision_retirement_releases_queued_leader_wire_runtime_owner() {
         runtime.leader_wire_runtime_receipts.get(&ordinal),
         Some(&fixture.receipt)
     );
-    let commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
+    let commitment = wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
         Hash::new(b"leader-wire Decision state root"),
         Hash::new(b"leader-wire Decision event root"),
         Hash::new(b"leader-wire Decision reject root"),
@@ -1484,7 +1484,7 @@ fn decision_commitment_mismatch_fails_closed_before_retirement() {
         HashOf::new(&manifest),
     );
     let validated = ValidatedBodyReceipt::for_test(durable.clone());
-    let conflicting_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
+    let conflicting_commitment = wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
         Hash::new(b"decision mismatch parent state"),
         Hash::new(b"decision mismatch post state"),
         Hash::new(b"decision mismatch ordinary writes"),
@@ -1668,7 +1668,7 @@ fn unbound_direct_prepare_and_commit_votes_are_recoverable_from_durable_validati
             runtime.can_admit_network_message(&signed_vote),
             "the retained fair-ingress {phase:?} vote becomes drainable after validation"
         );
-        let conflicting_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
+        let conflicting_commitment = wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
             Hash::new(b"conflicting early vote parent state"),
             Hash::new(b"conflicting early vote post state"),
             Hash::new(b"conflicting early vote ordinary writes"),
@@ -1750,7 +1750,8 @@ fn exact_authenticated_network_retransmission_obeys_runtime_boundaries() {
     let original = signed_runtime_proposal(&context, &keys, 1);
     let second = signed_runtime_proposal(&context, &keys, 2);
     let third = signed_runtime_proposal(&context, &keys, 3);
-    let authenticated_peer = super::super::authenticated_peer_for_test();
+    let transport_key = KeyPair::random();
+    let authenticated_peer = PeerId::new(transport_key.public_key().clone());
     let enqueue_network = |runtime: &mut SerializedV2Runtime<SumeragiV2Adapter>,
                            message: wire::ConsensusMessageV2| {
         let ownership = fair_runtime_ownership(
@@ -1769,12 +1770,17 @@ fn exact_authenticated_network_retransmission_obeys_runtime_boundaries() {
         );
         runtime.can_admit_network_message_with_ingress_ownership(message, &ownership)
     };
-    let transport = match &original.payload {
-        wire::ConsensusMessageV2Payload::Proposal(proposal) => wire::ConsensusMessageV2::new(
-            wire::ConsensusMessageV2Payload::PayloadManifest(proposal.manifest.clone()),
-        ),
-        _ => unreachable!("fixture is a proposal"),
-    };
+    let transport = wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::PayloadChunk(
+        wire::PayloadChunk {
+            manifest_hash: HashOf::from_untyped_unchecked(Hash::new(
+                b"runtime retransmission orphan chunk",
+            )),
+            index: 0,
+            bytes: Vec::new(),
+            sender: 0,
+            signature: vec![1],
+        },
+    ));
     let owner_tag = enqueue_network(&mut runtime, original.clone())
         .expect("first authenticated proposal owns one normal slot");
     assert_eq!(runtime.queued_commands(), 1);

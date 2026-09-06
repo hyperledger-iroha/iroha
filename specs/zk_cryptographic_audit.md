@@ -1,6 +1,10 @@
 # Iroha ZK Cryptographic Audit
 
-Date: 2026-08-23
+Original findings: 2026-08-23. Current implementation reconciliation: 2026-09-06.
+
+This is a repository-owned finding and disposition record, not an independent
+cryptographic audit certificate. Remediation statements describe source changes
+and scoped regressions; they do not qualify a mutable working tree for release.
 
 This report audits Iroha-owned zero-knowledge verifier code and proof-bearing runtime
 integrations. Vendored Halo2, curve, hash, encoding, and arithmetic libraries are
@@ -24,13 +28,18 @@ Merkle opening checks, Fiat--Shamir query derivation, FRI folding checks, and
 AIR composition checks. Generic circuits bind `OpenVerifyEnvelope` metadata.
 The separate typed `PrivacyProofEnvelopeV1` path adds compiled-profile,
 governed-policy, signed-transaction-intent, trusted-genesis, transfer, and
-replay-nullifier binding. ZK-ACE activation is nevertheless unavailable: its
-current four-word public commitment has only a one-field, roughly 32-bit
-generic collision ceiling.
+replay-nullifier binding. Native STARK commitments and transcripts now use the
+canonical six independent Goldilocks Poseidon-x7 lanes. ZK-ACE identity and
+replay outputs use the same independent-lane construction. ZK-ACE activation
+remains unavailable pending an independent qROM Fiat--Shamir reduction,
+artifact-bound collision/multi-target accounting, and implementation review.
 
 The Iroha-owned IPA/Halo2 stack is a transparent IPA verifier wrapper. Production
-IPA bases are independently mapped with domain-separated hash-to-curve; the
-additive Goldilocks compatibility backend is rejected by runtime verification.
+IPA bases are independently mapped with domain-separated hash-to-curve. The
+additive Goldilocks IPA module, types, decoded variants, and feature have been
+removed from Halo2, Core, IVM, and Torii. Goldilocks remains a STARK field
+identity; selecting it for IPA unconditionally returns an unsupported-backend
+error.
 This audit does not source-audit vendored Halo2 or curve crates; it audits Iroha's
 generator derivation, transcript labels, public-input shape checks, metadata
 binding, registry limits, batch dispatch, and runtime guardrails.
@@ -170,28 +179,32 @@ Regression coverage: `zk_subrouter_smoke` asserts that both retired routes retur
 `404 Not Found`; the existing `zk_verify_batch_*` integration suites cover the
 remaining bounded diagnostic verifier.
 
-### ZK-AUDIT-03: ZK-ACE v0 commitment does not meet its compiled security target
+### ZK-AUDIT-03: ZK-ACE commitment and complete-system security qualification
 
 Severity: Critical if activated; fail-closed in the current tree.
 
-Status: Disabled pending redesign. The algebraic candidate uses a 4,096-row
-masked trace, 65,536-row low-degree extension, quartic Goldilocks challenges,
-108 unique FRI queries, binary folding and SHA-256 Merkle paths. Its public
-commitment, however, exposes four sequential `state[0]` values from one
-rate-two, capacity-one Goldilocks sponge. Multiple outputs do not raise the
-generic binding above the one-field capacity, so the end-to-end profile cannot
-inherit the STARK layer's theorem-derived 128-bit classical-ROM bound.
+Status: Independent-lane replacement implemented; production qualification
+remains unavailable. The original sequential outputs of one capacity-one
+sponge did not establish the claimed commitment strength. The sole V1 AIR now
+constrains six independently initialized and parameterized Poseidon-x7 lanes
+for identity commitments and six separately domain-bound lanes for replay
+nullifiers. Native Merkle trees, public transcripts, DEEP challenges, and FRI
+use the same typed 48-byte digest; SHA-256 remains only an artifact checksum.
+
+The compiled geometry is a 4,096-row, 88-column masked trace, 32,768-row LDE
+(8x blowup), quartic Goldilocks challenges, 136 distinct queries, and eleven
+binary folds to a complete 16-element terminal domain of degree at most two.
 
 `ZK_ACE_FULL_ENGINE_AVAILABLE_V1` is therefore false. Proving, verification,
 and compiled-profile activation return `EngineUnavailable` before processing
-proof material. The candidate relation and fixed 1,341,142-byte proof wire stay
+proof material. The candidate relation and exact 2,131,222-byte `ZKA1` wire stay
 testable, but are not an executable privacy protocol.
 
-Required remediation: derive the four commitment words from independent
-domain-separated invocations, or replace the commitment with a construction
-having at least 128-bit collision binding. The resulting wider AIR schedule,
-trace domain, masking geometry, FRI profile, profile digest, fixtures, and
-security certificate must all be regenerated and requalified before activation.
+Required evidence: independently review the complete qROM Fiat--Shamir
+reduction and six-lane collision/multi-target accounting, then qualify the AIR,
+masking, transcript, wire, fixtures, witness lifecycle, hardware parity, and
+deployment against the final compiled profile and artifacts. The local
+classical-ROM arithmetic certificate is not that independent evidence.
 
 ### ZK-AUDIT-04: BN254/Halo2 naming must remain segregated from ledger-grade IPA policy
 
@@ -203,6 +216,12 @@ identifiers, while registry/runtime policy rejects trusted-setup and non-IPA lab
 Recommendation: keep production backend identifiers narrow and explicit, for example
 `halo2/ipa/pallas`; continue rejecting KZG/Groth16/SRS/PTAU-style labels in registry
 and runtime dispatch.
+
+The additive Goldilocks IPA implementation and its build feature are removed.
+Always-on Core and Torii regressions submit a structurally valid IPA envelope
+with the field selector changed to Goldilocks and require rejection. The
+Goldilocks selector remains identifiable for STARK metadata without admitting
+an alternate IPA group.
 
 ### ZK-AUDIT-05: Fixed binding-AIR residual weights admitted a public kernel
 
@@ -233,16 +252,18 @@ exact zero-root rule.
 
 Severity: Medium; proof malleability and canonical-wire boundary failure.
 
-Status: Remediated. FASTPQ proof fields are serialized as `u64` or 32-byte
-field containers, while field arithmetic and Poseidon reduce modulo the
-Goldilocks prime. The verifier could therefore treat a Merkle sibling encoded as
-`p` as the same field value as canonical zero.
+Status: Canonical field checks implemented. The original field decoder could
+treat a Merkle sibling encoded as `p` as canonical zero after reduction. V1
+uses canonical base-field scalars, four-coefficient Fp4 values, and six-word
+48-byte digests. Every coefficient and digest word must be strictly below the
+Goldilocks prime.
 
 After resource limits, and before semantic or transcript work, verification now
 rejects every noncanonical proof-carried field scalar, Merkle sibling, AIR/FRI
 opening, Poseidon root, and permission-field hash. Opaque public hash bytes are
 not misclassified as field elements. Public and container-completeness
-regressions pin the preflight and the `value < p` 32-byte decoder rule.
+regressions pin the preflight and reject noncanonical scalar, Fp4, and digest
+representations.
 
 ### ZK-AUDIT-07: BN254 radix-2 transforms omitted input bit reversal
 
@@ -264,15 +285,14 @@ ordering. Hardware qualification remains part of release evidence.
 
 Severity: Medium; proof malleability and transcript ambiguity.
 
-Status: Remediated. Native STARK Poseidon digests occupy one Goldilocks field
-element in a 32-byte container. The decoder previously required only that the
-upper 24 bytes were zero, so the low word `p` entered hashing as the same field
-element as canonical zero. Digest decoding now also requires `value < p`.
-Value-leaf and AIR-row Merkle regressions authenticate a zero sibling and reject
-the otherwise equivalent sibling encoded as `p`. Because a one-field root has
-only about 32 bits of generic collision binding, canonical ledger verifier keys
-now require SHA-256. Hash selector `2` remains available only to the raw
-compatibility verifier and is not ledger-grade.
+Status: The sole V1 decoder rejects noncanonical words. Every native-STARK
+root, sibling, and transcript digest is `GoldilocksDigest384V1`, encoded as six
+canonical little-endian Goldilocks words. Its constructor and decoder reject
+any word greater than or equal to `p`; no modulo-reducing digest decoder is
+accepted. Merkle hashing also binds the catalog, profile, tree role, level, and
+index. Native-STARK parameter and verifier-key wires have no hash selector,
+and selector-bearing layouts fail canonical decoding. The fixed profile is
+`stark/fri/poseidon-x7-goldilocks-6x64-v1`; no SHA-256 native-STARK path remains.
 
 ### ZK-AUDIT-09: Native FRI used the wrong point for bit-reversed pairs
 
@@ -290,6 +310,13 @@ initial degree bound or authenticate a bounded-degree terminal polynomial.
 Consequently this audit does not assign the advertised proximity/security claim
 to private explicit-AIR generic proofs. The verifier-owned Binding profile is
 separately protected by exact canonical trace-root reconstruction.
+
+Geometry prevalidation now computes the binary layer count directly and
+rejects all invalid wire exponents/arities before any shift. Domain-point
+derivation also requires the subgroup size to divide `p - 1`, excluding
+nonexistent domains beyond Goldilocks' two-adicity. Exhaustive exponent/arity
+and exact-order subgroup regressions cover these checks. They do not close
+the missing low-degree argument.
 
 ### ZK-AUDIT-10: FASTPQ FRI folded contiguous chunks without domain points
 
@@ -316,11 +343,16 @@ parts of the relation.
 The current FASTPQ verifier also reconstructs the complete batch trace, checks
 its base constraints, and recomputes its trace/AIR commitments. That current
 boundary prevents the FRI layer from becoming the sole semantic batch check.
-A commitment/transcript design with at least 128-bit security and an independent
-quantitative analysis of the implemented FRI profile remain release blockers.
-The implementation now exposes no inert Fp2, security-label, or grinding
-parameter fields. The base-field construction has no grinding step and its
-one-field commitment remains limited to roughly 32-bit collision security.
+An independent security analysis of the commitment/transcript construction
+and implemented FRI profile remains a release blocker.
+The sole parameter record is `fastpq-state-transition-stark-v1`: an 8x LDE,
+Fp4 challenges, 136 distinct queries, and at most eighteen binary reductions.
+The compiled domain follows `2^19 -> ... -> 2`, with terminal degree strictly
+below one. Every commitment and transcript uses six independent Goldilocks
+Poseidon-x7 lanes. The exact local accounting selects the 128-bit target with
+54 aggregate artifacts and `Q <= 2^32`; this arithmetic does not establish the
+missing protocol-specific qROM reduction or independent digest review.
+`FastpqProductionQualificationV1` therefore remains `Unavailable`.
 
 ### ZK-AUDIT-11: Exact Halo2 production labels bypassed the outer envelope
 
@@ -370,9 +402,11 @@ regressions. There is no independent pre-release parameter-version field.
 Descriptors now call it dense-MDS Goldilocks Poseidon `x^7`; it is not
 Poseidon2.
 
-This change removes the concrete non-permutation collision but does not upgrade
-a one-Goldilocks-element root to 128-bit collision resistance. FASTPQ remains
-release-blocked, and ZK-ACE remains unavailable under ZK-AUDIT-03.
+The concrete non-permutation collision is removed, and V1 also replaces the
+single-state commitment with six independent lanes. That construction still
+requires independent parameter, collision/multi-target, and full-protocol
+review. FASTPQ remains release-blocked, and ZK-ACE remains unavailable under
+ZK-AUDIT-03.
 
 ### ZK-AUDIT-14: BFV public-padding sampling did not bind hidden trace columns
 
@@ -403,6 +437,12 @@ hardened overwrite. The shared masked-trace helper also rejects noncanonical
 mask residues before field subtraction, avoiding a debug underflow/panic on
 malformed internal input.
 
+The current ZK-ACE prover additionally owns raw witness packing, trace rows,
+columns, masked LDE buffers, FRI random coefficients/evaluations, and DEEP
+coefficient buffers through `Zeroizing` guards. Base and extension-field
+`Zeroize` implementations erase every limb on success, error, and unwind.
+This source-level cleanup is not a side-channel or physical-memory audit.
+
 ### ZK-AUDIT-16: Halo2 outer schema bytes were not authenticated by generic dispatch
 
 Severity: High metadata-substitution risk for direct production verifier calls.
@@ -430,8 +470,8 @@ Severity: Medium transcript-domain-separation weakness.
 Status: Remediated. The generic native-STARK prover and verifier derived each
 FRI beta from the parameter set, transcript label, and current layer root, but
 omitted the layer number. Equal roots at two depths therefore reused the same
-challenge. The shared derivation now absorbs the exact little-endian `u32`
-round in proof construction, shape validation, and final verification. The
+challenge. The shared six-lane derivation now binds the round as the typed
+`u64` level domain in proof construction, shape validation, and final verification. The
 `fri_challenges_bind_the_exact_round` regression pins both determinism within a
 round and separation across rounds.
 
@@ -511,12 +551,11 @@ the alleged next trace row at `index + blowup_factor`. That index was not the
 evaluation point obtained by multiplying the current point by the trace
 generator, so the transition composition was formed over the wrong row pair.
 
-The trace roots are now derived as `lde_root^blowup_factor` for both catalogue
-entries, and `Planner::new` fails fast if individually primitive roots do not
-satisfy that relation. Parameter versions advanced from `3/4` to `5/6`, and
-proof/transcript fixtures were regenerated. Catalogue tests independently pin
+The sole V1 trace root is derived as `lde_root^blowup_factor`, and
+`Planner::new` fails fast if individually primitive roots do not satisfy that
+relation. Catalogue tests independently pin
 exact orders, outside-subgroup cosets, and the cross-domain equality. Canonical
-version admission now compares the complete parameter record instead of only
+admission compares the complete parameter record instead of only
 its name, and rejects a same-name mutation before trace planning.
 
 The same audit found that the reusable Merkle verifier ignored index bits above
@@ -549,12 +588,11 @@ the exact retry counter/attempt sequence, and bounded exhaustion.
 
 Severity: Low profile-misconfiguration availability risk.
 
-Status: Remediated. SHA-256 transcript frames encode their domain length as a
-`u16`, but Merkle tree construction and path/multiproof verification formerly
-checked only that their node domain was nonempty. A statically configured domain
-longer than 65,535 bytes could therefore reach `sha256_merkle_node_v1` and panic
-at its infallible framing assertion instead of returning a profile or proof
-error.
+Status: Domain checks retained by the sole six-lane implementation. Merkle
+tree construction and path/multiproof verification formerly checked only
+that node domains were nonempty, allowing an oversized configured domain to
+reach an infallible framing assertion. The typed context and role validation
+now enforce nonempty, `u16`-bounded domains before six-lane hashing.
 
 Aggregate and proof-managed domain validation now rejects every empty or
 oversized framed role. Full-tree, streaming-tree, single-path, and canonical
@@ -569,8 +607,9 @@ construction, and verification boundaries.
 Severity: Critical authorization-boundary failure.
 
 Status: Contained for standalone IVM admission; handle-backed authorization
-remains release-blocked. FASTPQ's current catalogue honestly declares a
-roughly 32-bit commitment ceiling. Its transfer verifier also reconstructs the
+remains release-blocked. FASTPQ's current catalogue uses six independent
+Goldilocks digest lanes and explicitly lacks complete production
+qualification. Its transfer verifier reconstructs the
 complete caller-carried batch, transcript, SMT witness, trace, lookup material,
 and commitments. That deterministic replay checks transfer arithmetic and root
 chaining, but it does not make caller-supplied `old_root`, `new_root`, or
@@ -578,13 +617,14 @@ transaction-set context an authoritative finalized source-state statement.
 Several trace fields—including key/asset identity, path-node, running-counter,
 and permission columns—are enforced by that replay rather than by every column
 appearing in the sampled AIR residue vector. The replay is therefore mandatory
-for current correctness and does not upgrade the commitment's security level.
+for current correctness and does not supply the missing protocol-specific
+qROM reduction or authoritative source-state anchor.
 
 Production CoreHost formerly let `AXT_VERIFY_DS_PROOF` expose successful FASTPQ
 verification to a contract and record/cache the proof without matching its
 roots and transaction set to a finalized/QC-backed source anchor. A valid
-caller-carried witness could therefore be mistaken for authorization at only
-the proof system's approximately 32-bit binding strength. Non-null standalone
+caller-carried witness could therefore be mistaken for authorization without
+a finalized source-state anchor. Non-null standalone
 admission now returns `PermissionDenied` with `AxtRejectReason::Proof` before
 recording proof state or touching an existing verified-proof cache entry. A
 zero pointer remains an explicit proof-clear operation. The adversarial
@@ -600,10 +640,54 @@ state. Those paths do not derive authority from generic syscall success. The
 issuer-signed asset handle path is narrower but not release-qualified: its
 signature covers capability and asset identity, not the
 `RemoteSpendIntent`, proof bytes, or effective amount. Exact intent and amount
-still rely on FASTPQ metadata and the approximately 32-bit commitment. The
+still rely on FASTPQ metadata and its unqualified complete protocol. The
 handle path must remain outside production release authorization until those
-facts have at least 128-bit binding or are independently matched to an
+facts have independently qualified binding or are matched to an
 authoritative finalized source-state statement.
+
+### ZK-AUDIT-26: ZK-ACE composition used terminal size as the next-row stride
+
+Severity: High; inconsistent AIR quotient and honest-proof rejection.
+
+Status: Shared trace-stride calculation implemented; full-proof qualification
+pending. The sole V1 profile has an 8x LDE and a 16-element FRI terminal
+domain. Composition construction used `index + 16`, while query openings and
+the DEEP relation used `index + 8` and multiplication by the trace generator.
+The composition therefore committed a different next-row polynomial.
+
+Composition, query construction, and verification now share
+`trace_next_lde_index_v1`; the vanishing-residue schedule also uses the 8x
+trace stride. Independent subgroup translation and synthetic `f(X) = X`
+quotient regressions cover interior indices and wraparound. The exact-shape
+full-proof roundtrip remains required in addition to these local checks.
+Production activation remains unavailable under ZK-AUDIT-03.
+
+### ZK-AUDIT-27: FASTPQ transcript layout and Fp4 wire were not fixed
+
+Severity: High for deterministic transcript agreement and canonical proof decoding.
+
+Status: Canonical layout and exact field codec implemented; focused local
+regressions pass. Ordering and transcript initialization inherited ambient
+Norito layout flags, so identical logical inputs could produce different
+commitments and challenges. Both now explicitly select the canonical default
+layout. Ordering, transcript, and complete raw-proof regressions each failed
+before this correction and pass afterward under altered ambient layout flags.
+
+The V1 Fp4 codec now writes exactly four little-endian canonical coefficients
+(32 bytes), checks every coefficient before archive or slice decoding, and
+rejects truncation and the removed struct-framed carrier. Slice decoding
+reports exactly 32 consumed bytes so the enclosing decoder owns suffix checks.
+Seven field tests, two proof codec tests, the typed FRI commitment-binding
+regression, and four canonical-preflight tests pass locally. Fixture
+regeneration and combined downstream validation remain separate obligations;
+these tests do not establish independent cryptographic qualification.
+
+The generic native-STARK `GoldilocksFp4V1` carrier now delegates to the same
+exact field codec. It also rejects noncanonical coefficients on serialization.
+Three extracted-source regressions pass against the built FASTPQ/Norito
+dependencies, covering byte equality, archive/slice canonicality, truncation,
+and rejection of the removed struct frame under the same schema name. A
+combined Core build remains required to qualify integration.
 
 ## Dependency Assumptions
 
@@ -645,8 +729,9 @@ backend enablement and maximum envelope/proof sizes before dispatch.
 
 ## Native STARK/FRI and ZK-ACE AIR
 
-The native STARK verifier uses Goldilocks modulus `2^64 - 2^32 + 1`, rejects
-noncanonical field elements, validates verifier parameters, verifies Merkle openings,
+The native STARK verifier uses Goldilocks modulus `2^64 - 2^32 + 1`, six
+independent Poseidon-x7 digest lanes, and Fp4 binary folds. It rejects
+noncanonical field elements and digest words, validates verifier parameters, verifies Merkle openings,
 derives Fiat-Shamir query indices from bound transcript material, binds every
 FRI folding challenge to its exact round, checks FRI folds, and binds AIR
 trace/composition/public digests. Generic binding-AIR verification
@@ -675,7 +760,7 @@ genesis, matching statement and policy epochs, a valid native proof, and an
 unused replay nullifier. The compiled profile is currently unavailable, so this
 validation shape cannot activate or execute a ZK-ACE proof.
 
-The disabled candidate prover independently masks the execution trace and the
+The unavailable candidate prover independently masks the execution trace and the
 full FRI batching space before transcript challenges, links the AIR at a
 quartic-extension DEEP point, and self-verifies each produced proof. Adversarial
 tests mutate typed public bindings, witness relations, mask geometry, DEEP
@@ -683,18 +768,26 @@ openings, query schedules, and FRI paths.
 
 ## Parameter Security
 
-ZK-ACE v0 fixes its candidate algebraic profile in the compiled engine
-descriptor rather than a caller- or registry-supplied VK payload. The descriptor
-commits the Goldilocks base and quartic extension, degree-two AIR, 4,096-row
-trace, 65,536-row LDE, trace and FRI masks, one DEEP point, 108 unique queries,
-twelve binary FRI rounds, SHA-256 domains, fixed proof wire, and
-work-normalized classical-ROM STARK bound. It also records the sequential
-one-field-output commitment and disabled activation state.
+The sole ZK-ACE V1 profile is fixed in the compiled engine descriptor. It has
+no caller-selected parameter record or verifier key. The descriptor commits
+the Goldilocks base and quartic extension, degree-two AIR, 4,096-row trace,
+88 columns, 32,768-row LDE, 512 trace-mask coefficients, an independently
+committed FRI mask, one DEEP point, 136 unique queries, eleven binary FRI
+rounds, terminal size 16 with degree at most two, all six-lane digest domains,
+and the exact 2,131,222-byte wire.
 
-Security interpretation: the theorem-derived certificate covers the candidate
-STARK/FRI geometry, not the weaker public commitment that defines its statement.
-The complete ZK-ACE system therefore has only the commitment's roughly 32-bit
-binding ceiling and is unavailable. No qROM claim is made.
+Its parameter asset checksum is
+`84c5055b47cc7289835e0a5f31d4563849244ffddbf51f5d67b1db95222ce3e6`
+(SHA3-256). The complete profile artifact checksum is
+`8b597ef641d2a7e80a0bc72b29748b5b1871f4898f0a199928a0f87400239060`
+(SHA-256). These checksums identify artifacts; they are not STARK hashes or
+independent audit endorsements.
+
+Security interpretation: the local exact-integer certificate describes a
+128-bit work-normalized classical-ROM target for its stated model. It does
+not prove the missing qROM Fiat--Shamir reduction or independently qualify
+the six-lane construction, AIR implementation, leakage behavior, or hardware
+paths. The complete ZK-ACE engine remains unavailable.
 
 ## IPA/Halo2 Verification
 
@@ -731,6 +824,14 @@ widths, next-row openings, FRI roots, folded values, and query chains. A bounded
 preflight first rejects noncanonical representations in every proof-carried
 Goldilocks scalar and field container.
 
+Its canonical capacity is a 65,536-row trace and 524,288-row LDE, with blowup
+8, 136 distinct queries, no grinding, and eighteen binary folds to two
+terminal evaluations of degree strictly below one. FRI challenges, folds,
+and openings use Fp4; column mixing and the twenty AIR composition
+coefficients remain in the base field. Verification reconstructs the complete
+batch, transcript, SMT witness, trace, LDE, and roots. This audit assigns no
+standalone succinct AIR soundness claim to that mandatory full-replay path.
+
 AXT/FASTPQ binding checks canonical binding normalization, dataspace, manifest root,
 payload size, batch parameter, batch public dataspace, concrete execution batch,
 source transaction commitment, embedded binding metadata, claim digest, witness and
@@ -761,12 +862,12 @@ counterexamples.
 | STARK domain tag is bound | Satisfied | derived STARK domain tag checked against inner envelope |
 | Malformed STARK proof rejection | Satisfied by code shape and tests | decode, parameter, Merkle, AIR, and FRI checks |
 | ZK-ACE replay rejected | Satisfied; verifier-failure trust bypass remediated | signed transaction intent, governed policy, and replay-nullifier checks; see ZK-AUDIT-01 |
-| ZK-ACE privacy strength | Unavailable; candidate commitment has a roughly 32-bit binding ceiling | fail-closed engine flag, independent-lane remediation descriptor, legacy-collision regression; see ZK-AUDIT-03 and ZK-AUDIT-13 |
+| ZK-ACE privacy strength | Unavailable pending independent qROM reduction, digest accounting, and implementation review | six-lane profile and fail-closed engine flag; see ZK-AUDIT-03 and ZK-AUDIT-13 |
 | IPA metadata binding | Satisfied for Iroha-owned wrapper | generator DST, transcript limits, shape checks, canonical outer schema, strict ZK1 carrier, VK/envelope checks |
 | Trusted setup fail-closed | Satisfied in audited policy | registry and runtime label rejection |
 | Diagnostic endpoint not ledger-grade | Satisfied in code; documentation risk | Torii attachment/prover worker are report-only; see ZK-AUDIT-02 |
 | FASTPQ transfer replay and lane claim binding | Satisfied only with mandatory full verifier replay; standalone IVM admission unavailable | `ensure_public_io_matches`, transcript/SMT replay, `verify_batch_matches_binding`, finalized lane claim checks; see ZK-AUDIT-25 |
-| AXT remote-spend authorization strength | Unavailable for release; generic proof admission fails closed and handle intent/amount binding remains roughly 32 bits | non-mutating `AXT_VERIFY_DS_PROOF` rejection, inline authenticated-handle tests, release blocker; see ZK-AUDIT-25 |
+| AXT remote-spend authorization strength | Unavailable for release; generic proof admission fails closed and handle intent/amount binding depends on unqualified FASTPQ | non-mutating `AXT_VERIFY_DS_PROOF` rejection, inline authenticated-handle tests, missing source anchor and independent proof qualification; see ZK-AUDIT-25 |
 
 ## Verification Plan
 
@@ -780,7 +881,7 @@ cargo test -p iroha_zkp_halo2
 cargo test -p fastpq_prover
 ```
 
-The broad `zk::` library slice keeps heavyweight Kagemusha non-native
+The broad `zk::` library slice keeps heavyweight KAGEMUSHA V1 non-native
 MockProver subtests behind `#[ignore]`; run those explicitly with `--ignored`
 when circuit-synthesis evidence is required. The default slice still exercises
 the fast builder, preflight, public-input substitution, transcript, range, and
@@ -790,7 +891,7 @@ Audit-driven regression coverage includes the retired ZK-ACE trust-flag
 bypass, diagnostic success not creating ledger proof records, continued
 backend-label rejection, compiled-profile substitution, typed-statement
 mutation, governed-policy drift, and malformed dedicated STARK proofs.
-Additional trust-boundary regressions cover tampered Kagemusha and
+Additional trust-boundary regressions cover tampered KAGEMUSHA V1 and
 confidential-transfer proofs when committed-result trust is set. Add further
 regressions only for newly confirmed gaps.
 

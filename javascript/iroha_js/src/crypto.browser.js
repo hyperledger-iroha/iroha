@@ -9,6 +9,15 @@ import {
   validateMnemonic,
 } from "@scure/bip39";
 import { wordlist as englishWordlist } from "@scure/bip39/wordlists/english.js";
+import {
+  CRYPTO_ALGORITHMS,
+  normalizeCryptoAlgorithm,
+} from "./cryptoAlgorithms.js";
+
+export {
+  CRYPTO_ALGORITHMS,
+  normalizeCryptoAlgorithm,
+};
 
 const ED25519_SEED_LENGTH = 32;
 const ED25519_PUBLIC_KEY_LENGTH = 32;
@@ -47,60 +56,6 @@ export const PRIVACY_FFI_ERROR_MALFORMED_NORITO = 2;
 export const PRIVACY_FFI_ERROR_UNSUPPORTED_ALGORITHM = 3;
 export const PRIVACY_FFI_ERROR_PRODUCTION_DISABLED = 4;
 export const PRIVACY_FFI_ERROR_INVALID_REQUEST = 5;
-export const CRYPTO_ALGORITHMS = Object.freeze({
-  ED25519: "ed25519",
-  SECP256K1: "secp256k1",
-  ML_DSA: "ml-dsa",
-  BLS_NORMAL: "bls_normal",
-  BLS_SMALL: "bls_small",
-  GOST_2012_256_A: "gost3410-2012-256-paramset-a",
-  GOST_2012_256_B: "gost3410-2012-256-paramset-b",
-  GOST_2012_256_C: "gost3410-2012-256-paramset-c",
-  GOST_2012_512_A: "gost3410-2012-512-paramset-a",
-  GOST_2012_512_B: "gost3410-2012-512-paramset-b",
-  SM2: "sm2",
-});
-
-export const SUPPORTED_CRYPTO_ALGORITHMS = Object.freeze([
-  CRYPTO_ALGORITHMS.ED25519,
-  CRYPTO_ALGORITHMS.SECP256K1,
-  CRYPTO_ALGORITHMS.BLS_NORMAL,
-  CRYPTO_ALGORITHMS.BLS_SMALL,
-  CRYPTO_ALGORITHMS.ML_DSA,
-  CRYPTO_ALGORITHMS.GOST_2012_256_A,
-  CRYPTO_ALGORITHMS.GOST_2012_256_B,
-  CRYPTO_ALGORITHMS.GOST_2012_256_C,
-  CRYPTO_ALGORITHMS.GOST_2012_512_A,
-  CRYPTO_ALGORITHMS.GOST_2012_512_B,
-  CRYPTO_ALGORITHMS.SM2,
-]);
-
-const CRYPTO_ALGORITHM_ALIASES = new Map([
-  ["ed25519", CRYPTO_ALGORITHMS.ED25519],
-  ["ed", CRYPTO_ALGORITHMS.ED25519],
-  ["eddsa", CRYPTO_ALGORITHMS.ED25519],
-  ["secp256k1", CRYPTO_ALGORITHMS.SECP256K1],
-  ["secp", CRYPTO_ALGORITHMS.SECP256K1],
-  ["secpk1", CRYPTO_ALGORITHMS.SECP256K1],
-  ["mldsa", CRYPTO_ALGORITHMS.ML_DSA],
-  ["mldsa65", CRYPTO_ALGORITHMS.ML_DSA],
-  ["blsnormal", CRYPTO_ALGORITHMS.BLS_NORMAL],
-  ["bls12381g1", CRYPTO_ALGORITHMS.BLS_NORMAL],
-  ["blssmall", CRYPTO_ALGORITHMS.BLS_SMALL],
-  ["bls12381g2", CRYPTO_ALGORITHMS.BLS_SMALL],
-  ["gost256a", CRYPTO_ALGORITHMS.GOST_2012_256_A],
-  ["gost34102012256paramseta", CRYPTO_ALGORITHMS.GOST_2012_256_A],
-  ["gost256b", CRYPTO_ALGORITHMS.GOST_2012_256_B],
-  ["gost34102012256paramsetb", CRYPTO_ALGORITHMS.GOST_2012_256_B],
-  ["gost256c", CRYPTO_ALGORITHMS.GOST_2012_256_C],
-  ["gost34102012256paramsetc", CRYPTO_ALGORITHMS.GOST_2012_256_C],
-  ["gost512a", CRYPTO_ALGORITHMS.GOST_2012_512_A],
-  ["gost34102012512paramseta", CRYPTO_ALGORITHMS.GOST_2012_512_A],
-  ["gost512b", CRYPTO_ALGORITHMS.GOST_2012_512_B],
-  ["gost34102012512paramsetb", CRYPTO_ALGORITHMS.GOST_2012_512_B],
-  ["sm2", CRYPTO_ALGORITHMS.SM2],
-]);
-
 function normalizeSeed(seed) {
   const buffer = toBuffer(seed, "seed");
   if (buffer.length !== ED25519_SEED_LENGTH) {
@@ -154,33 +109,13 @@ function unsupported(operation) {
   throw new Error(`${operation} is unavailable in browser-only crypto builds.`);
 }
 
-function cryptoAlgorithmAliasKey(value) {
-  const raw = String(value);
-  if (!/^[A-Za-z0-9_-]+$/.test(raw)) {
-    throw new Error(`unsupported crypto algorithm: ${raw}`);
-  }
-  return raw.toLowerCase().replace(/[-_]/g, "");
-}
-
 export function supportedCryptoAlgorithms() {
-  return [...SUPPORTED_CRYPTO_ALGORITHMS];
+  return [CRYPTO_ALGORITHMS.ED25519];
 }
-
-export function normalizeCryptoAlgorithm(algorithm = CRYPTO_ALGORITHMS.ED25519) {
-  if (algorithm === undefined || algorithm === null) {
-    return CRYPTO_ALGORITHMS.ED25519;
-  }
-  const normalized = CRYPTO_ALGORITHM_ALIASES.get(cryptoAlgorithmAliasKey(algorithm));
-  if (!normalized) {
-    throw new Error(`unsupported crypto algorithm: ${algorithm}`);
-  }
-  return normalized;
-}
-
 
 /**
  * Generate an Ed25519 key pair. Seed material is hashed to 32 bytes when needed.
- * @param {{seed?: ArrayBufferView | ArrayBuffer | Buffer, algorithm?: string}} [options]
+ * @param {{seed?: ArrayBufferView | ArrayBuffer | Buffer, algorithm?: import("../index.js").CryptoAlgorithm}} [options]
  * @returns {{algorithm: "ed25519", publicKey: Buffer, privateKey: Buffer}}
  */
 export function generateKeyPair(options = {}) {
@@ -188,7 +123,10 @@ export function generateKeyPair(options = {}) {
   if (algorithm !== CRYPTO_ALGORITHMS.ED25519) {
     return unsupported(`generateKeyPair(${algorithm})`);
   }
-  const seed = options.seed ? normalizeSeed(options.seed) : Buffer.from(ed25519.utils.randomPrivateKey());
+  const seed =
+    options.seed === undefined
+      ? Buffer.from(ed25519.utils.randomPrivateKey())
+      : normalizeSeed(options.seed);
   return {
     algorithm: "ed25519",
     publicKey: Buffer.from(ed25519.getPublicKey(seed)),
@@ -199,7 +137,7 @@ export function generateKeyPair(options = {}) {
 /**
  * Derive the public key for a given private key (32-byte seed or 64-byte seed+public concatenation).
  * @param {ArrayBufferView | ArrayBuffer | Buffer} privateKey
- * @param {{algorithm?: string}} [options]
+ * @param {{algorithm?: import("../index.js").CryptoAlgorithm}} [options]
  * @returns {Buffer}
  */
 export function publicKeyFromPrivate(privateKey, options = {}) {

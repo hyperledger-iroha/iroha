@@ -277,6 +277,37 @@ pub(in crate::sumeragi) struct PreparedRecoveredDecisionFetchBodyCompletionV1 {
 pub(in crate::sumeragi) struct PreparedLifecycleValidateCompletionV1 {
     guarded: Box<GuardedLifecycleValidateWorkerResultV1>,
     queue: Arc<V2IoCommandQueue>,
+    physical_completion: LifecycleValidatePhysicalCompletionV1,
+}
+/// Process-local proof that one exact lifecycle Validate result entered the
+/// guarded worker-completion queue at this monotonic instant.
+///
+/// The value is minted only while transferring the matching queue owner. It
+/// is intentionally neither serialized nor reconstructed during recovery.
+#[derive(Clone, Copy, Debug)]
+pub(in crate::sumeragi) struct LifecycleValidatePhysicalCompletionV1 {
+    key: LifecycleValidateDispatchKeyV1,
+    retained_at: std::time::Instant,
+}
+impl LifecycleValidatePhysicalCompletionV1 {
+    /// Construct process-local completion timing authority for focused join tests.
+    #[cfg(test)]
+    pub(crate) const fn for_test(
+        key: LifecycleValidateDispatchKeyV1,
+        retained_at: std::time::Instant,
+    ) -> Self {
+        Self { key, retained_at }
+    }
+
+    /// Return the exact worker dispatch whose result was retained.
+    pub(in crate::sumeragi) const fn dispatch_key(self) -> LifecycleValidateDispatchKeyV1 {
+        self.key
+    }
+
+    /// Return the worker queue's exact monotonic retention instant.
+    pub(in crate::sumeragi) const fn retained_at(self) -> std::time::Instant {
+        self.retained_at
+    }
 }
 /// Guarded lifecycle Serve completion retained through LedgerV1 and reply delivery.
 #[must_use = "Certified-Serve completion must be settled and acknowledged"]
@@ -291,9 +322,15 @@ impl PreparedLifecycleValidateCompletionV1 {
         ownership_position: usize,
     ) -> Option<Self> {
         let key = guarded.key();
-        (guarded.result().matches_dispatch_key(key)
-            && queue.transfer_lifecycle_validate_completion(key, ownership_position))
-        .then_some(Self { guarded, queue })
+        if !guarded.result().matches_dispatch_key(key) {
+            return None;
+        }
+        let retained_at = queue.transfer_lifecycle_validate_completion(key, ownership_position)?;
+        Some(Self {
+            guarded,
+            queue,
+            physical_completion: LifecycleValidatePhysicalCompletionV1 { key, retained_at },
+        })
     }
 
     /// Split the executed dispatch from its still-armed queue/publication owner.
@@ -303,7 +340,11 @@ impl PreparedLifecycleValidateCompletionV1 {
         ExecutedDurableValidateDispatch,
         LifecycleValidateCompletionAckV1,
     ) {
-        let Self { guarded, queue } = self;
+        let Self {
+            guarded,
+            queue,
+            physical_completion,
+        } = self;
         let (key, dispatch, drop_guard) = (*guarded).into_parts();
         (
             dispatch,
@@ -311,6 +352,7 @@ impl PreparedLifecycleValidateCompletionV1 {
                 key,
                 queue,
                 drop_guard,
+                physical_completion,
             },
         )
     }
@@ -321,8 +363,17 @@ pub(in crate::sumeragi) struct LifecycleValidateCompletionAckV1 {
     key: LifecycleValidateDispatchKeyV1,
     queue: Arc<V2IoCommandQueue>,
     drop_guard: LifecycleValidateCompletionDropGuardV1,
+    physical_completion: LifecycleValidatePhysicalCompletionV1,
 }
 impl LifecycleValidateCompletionAckV1 {
+    /// Borrow the exact worker-retention evidence before publication consumes
+    /// this acknowledgement owner.
+    pub(in crate::sumeragi) const fn physical_completion(
+        &self,
+    ) -> LifecycleValidatePhysicalCompletionV1 {
+        self.physical_completion
+    }
+
     /// Retire the exact command index only after registry/coordinator publication.
     pub(in crate::sumeragi) fn acknowledge_after_publication(mut self) {
         self.queue.acknowledge_lifecycle_validate(self.key);
@@ -1056,7 +1107,6 @@ impl CleanupWorkerIdentity {
 struct PostFinalityCleanupJob {
     identity: CleanupWorkerIdentity,
     bodies: V2BodyRetirementJob,
-    chunk_root: PathBuf,
 }
 const POST_FINALITY_CLEANUP_QUEUE_CAPACITY: usize = 4;
 #[derive(Clone)]
@@ -1174,18 +1224,6 @@ fn execute_post_finality_cleanup(job: PostFinalityCleanupJob) {
             &error.to_string(),
         );
     }
-    match std::fs::remove_dir_all(&job.chunk_root) {
-        Ok(()) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => report_post_finality_cleanup_warning(
-            job.identity,
-            PostFinalityCleanupTarget::PayloadChunks,
-            &format!(
-                "failed to remove Sumeragi v2 chunk root {}: {error}",
-                job.chunk_root.display()
-            ),
-        ),
-    }
 }
 fn report_post_finality_cleanup_warning(
     identity: CleanupWorkerIdentity,
@@ -1208,6 +1246,9 @@ impl V2IoHandle {
         context: wire::HeightContext,
         key_pair: KeyPair,
         local_validator: Option<wire::ValidatorIndex>,
+        kagemusha_mint_finality_authority: Option<
+            Arc<crate::zk::kagemusha_v1_recursion::KagemushaMintFinalityLocalAuthorityV1>,
+        >,
         auxiliary_queue_capacity: usize,
         consensus_queue_capacity: usize,
         observer_serve_capacity: usize,
@@ -1255,7 +1296,6 @@ impl V2IoHandle {
                                 retire.cleanup.try_submit(PostFinalityCleanupJob {
                                     identity: CleanupWorkerIdentity::from_receipt(&retire.receipt),
                                     bodies,
-                                    chunk_root: retire.chunk_root,
                                 })
                             }) else {
                                 break;
@@ -1303,15 +1343,13 @@ impl V2IoHandle {
                                         task,
                                         restore_outbound_payload,
                                     } => {
-                                        apply_service
-                                            .require_committed_kagemusha_runtime_effective_config(
-                                            )?;
-                                        sign_consensus_task(
+                                        sign_consensus_task_with_kagemusha_authority(
                                             body_store
                                                 .as_ref()
                                                 .expect("body store remains live before Retire"),
                                             &context,
                                             &key_pair,
+                                            kagemusha_mint_finality_authority.as_deref(),
                                             task,
                                             restore_outbound_payload,
                                         )
@@ -1431,15 +1469,13 @@ impl V2IoHandle {
                                             }
                                         }),
                                     V2IoCommand::RecoveredLifecycleSign(task) => {
-                                        apply_service
-                                            .require_committed_kagemusha_runtime_effective_config(
-                                            )?;
-                                        sign_recovered_lifecycle_task(
+                                        sign_recovered_lifecycle_task_with_kagemusha_authority(
                                             body_store
                                                 .as_ref()
                                                 .expect("body store remains live before Retire"),
                                             &context,
                                             &key_pair,
+                                            kagemusha_mint_finality_authority.as_deref(),
                                             task,
                                         )
                                         .map(|result| {

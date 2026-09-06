@@ -19,7 +19,7 @@ pub use finality::{
 //    Musubi receipt shapes disjoint. The finalized reader can seal the local provider's exact
 //    opaque completed-row claim, and a fresh verifier result can derive an externally inert
 //    approval request. A runtime driver must still perform that fresh verifier pass and submit the
-//    request only to an approval-only HSM/KMS or threshold provider;
+//    request only to an approval-only qualified software, remote, hardware, or threshold provider;
 // 2. the approved provider attestation has a bounded journal and an inert, root-fenced local
 //    two-slot CAS adapter with a fixed 128 MiB checkpoint/payload ceiling on Linux/macOS. Its bound
 //    cross-process composite operation lease authenticates the committed initialization-lock
@@ -39,7 +39,7 @@ pub use finality::{
 // The publication protocol core, publication-service durable clock and replay journal, typed
 // supervisor dependency, provider-attestation journal, inert local two-slot store with its bound
 // composite operation lease, and read-only authoritative archive-registration reader are complete.
-// The finalized-completion capture/reconciliation driver, qualified replay-stable HSM signer,
+// The finalized-completion capture/reconciliation driver, qualified replay-stable signer,
 // authenticated inventory adapter, daemon wiring, external rollback-resistant
 // provider/session/singleton deployment, and production fault/platform qualification are not.
 // Until every boundary above is implemented and deployment-qualified, stock `irohad` must keep the
@@ -170,7 +170,7 @@ pub trait MusubiPublicationPrivateServiceRunnerV1: Send + 'static {
     /// body before allocation, strip only their configured private mount prefix, and pass the
     /// exact uppercase method plus path/header/body values to
     /// `iroha::musubi_runtime::MusubiPublicationPrivateServiceV1`.
-    /// The runner owns that core together with its injected durable journal, HSM/signer, and
+    /// The runner owns that core together with its injected durable journal, signer, and
     /// `SoraFS` backends; `irohad` never receives those secrets or dependency objects.
     fn serve(self: Box<Self>, shutdown: ShutdownSignal) -> MusubiPublicationPrivateIngressFutureV1;
 }

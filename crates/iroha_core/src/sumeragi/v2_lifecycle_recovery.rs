@@ -1671,6 +1671,7 @@ pub(crate) fn reconcile_autonomous_lifecycle_startup(
                             payload.network_id,
                             payload.epoch,
                         )
+                        .map(|_| ())
                     }
                     .map_err(|error| {
                         lifecycle_error("retired replica release completion failed", error)

@@ -1,6 +1,6 @@
 #[cfg(all(test, feature = "app_api"))]
 #[test]
-fn account_filter_candidate_ids_extracts_safe_exact_constraints() {
+fn exact_field_filter_candidates_extracts_safe_account_constraints() {
     let first = AccountId::new(
         checked_routing_fixture_keypair(
             0xF0,
@@ -23,7 +23,7 @@ fn account_filter_candidate_ids_extracts_safe_exact_constraints() {
         FieldPath("id".to_owned()),
         norito::json::Value::from(first.to_string()),
     );
-    let candidates = account_filter_candidate_ids(Some(&exact))
+    let candidates = exact_field_filter_candidates::<AccountId>(Some(&exact), "id")
         .expect("account id equality should produce direct lookup candidates");
     assert_eq!(candidates, BTreeSet::from([first.clone()]));
     let combined = FilterExpr::And(vec![
@@ -33,7 +33,7 @@ fn account_filter_candidate_ids_extracts_safe_exact_constraints() {
             norito::json::Value::from(false),
         ),
     ]);
-    let candidates = account_filter_candidate_ids(Some(&combined))
+    let candidates = exact_field_filter_candidates::<AccountId>(Some(&combined), "id")
         .expect("AND should preserve safe account id candidates");
     assert_eq!(candidates, BTreeSet::from([first]));
     let many = FilterExpr::In(
@@ -43,8 +43,8 @@ fn account_filter_candidate_ids_extracts_safe_exact_constraints() {
             norito::json::Value::from(second.to_string()),
         ],
     );
-    let candidates =
-        account_filter_candidate_ids(Some(&many)).expect("account id IN should produce candidates");
+    let candidates = exact_field_filter_candidates::<AccountId>(Some(&many), "id")
+        .expect("account id IN should produce candidates");
     assert_eq!(candidates, BTreeSet::from([second]));
     let unsafe_or = FilterExpr::Or(vec![
         exact,
@@ -53,5 +53,5 @@ fn account_filter_candidate_ids_extracts_safe_exact_constraints() {
             norito::json::Value::from(false),
         ),
     ]);
-    assert!(account_filter_candidate_ids(Some(&unsafe_or)).is_none());
+    assert!(exact_field_filter_candidates::<AccountId>(Some(&unsafe_or), "id").is_none());
 }

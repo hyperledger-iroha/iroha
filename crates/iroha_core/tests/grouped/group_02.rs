@@ -2,10 +2,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #[path = "../gov_min_duration.rs"]
 mod gov_min_duration;
-#[path = "../gov_parliament_bodies.rs"]
-mod gov_parliament_bodies;
-#[path = "../gov_parliament_term_state.rs"]
-mod gov_parliament_term_state;
 #[path = "../gov_plain_ballot.rs"]
 mod gov_plain_ballot;
 #[path = "../gov_plain_conviction.rs"]
@@ -40,7 +36,7 @@ mod gov_zk_ballot_lock_verified;
 mod gov_zk_ballot_real_vk;
 #[path = "../gov_zk_ballot_vk_status.rs"]
 mod gov_zk_ballot_vk_status;
-#[path = "../gov_zk_create_inserts_referendum.rs"]
-mod gov_zk_create_inserts_referendum;
+#[path = "../gov_zk_election_admission.rs"]
+mod gov_zk_election_admission;
 #[path = "../gov_zk_create_rejects_plain_conflict.rs"]
 mod gov_zk_create_rejects_plain_conflict;

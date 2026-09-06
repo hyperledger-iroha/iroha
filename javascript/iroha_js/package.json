@@ -11,13 +11,19 @@
       "types": "./index.d.ts"
     },
     "./address": {
-      "import": "./dist/address.js",
-      "types": "./index.d.ts"
+      "browser": "./dist/public/address.js",
+      "import": "./dist/public/address.js",
+      "types": "./address.d.ts"
     },
     "./browser": {
       "browser": "./dist/browser.js",
       "import": "./dist/browser.js",
       "types": "./browser.d.ts"
+    },
+    "./kagemusha": {
+      "browser": "./dist/kagemusha.js",
+      "import": "./dist/kagemusha.js",
+      "types": "./kagemusha.d.ts"
     },
     "./privacy-capabilities": {
       "browser": "./dist/privacyCapabilities.js",
@@ -29,9 +35,14 @@
       "import": "./dist/bootleLanternIssuance.js",
       "types": "./bootle-lantern-issuance.d.ts"
     },
+    "./atomic-private-settlement": {
+      "browser": "./dist/atomicPrivateSettlement.js",
+      "import": "./dist/atomicPrivateSettlement.js",
+      "types": "./atomic-private-settlement.d.ts"
+    },
     "./transaction-codec": {
-      "browser": "./dist/transactionCodec.js",
-      "import": "./dist/transactionCodec.js",
+      "browser": "./dist/public/transactionCodec.js",
+      "import": "./dist/public/transactionCodec.js",
       "types": "./transaction-codec.d.ts"
     },
     "./contract-payload": {
@@ -45,14 +56,14 @@
       "types": "./smart-contract-deployment.d.ts"
     },
     "./normalizers": {
-      "browser": "./dist/normalizers.js",
-      "import": "./dist/normalizers.js",
-      "types": "./index.d.ts"
+      "browser": "./dist/public/normalizers.js",
+      "import": "./dist/public/normalizers.js",
+      "types": "./normalizers.d.ts"
     },
     "./blake2b": {
       "browser": "./dist/blake2b.js",
       "import": "./dist/blake2b.js",
-      "types": "./index.d.ts"
+      "types": "./blake2b.d.ts"
     },
     "./ivm-artifact": {
       "browser": "./dist/ivmArtifact.js",
@@ -61,17 +72,16 @@
     },
     "./instruction-builders": {
       "import": "./dist/instructionBuilders.js",
-      "types": "./index.d.ts"
+      "types": "./instruction-builders.d.ts"
     },
     "./torii": {
-      "browser": "./dist/toriiBrowserClient.js",
       "import": "./dist/toriiClient.js",
-      "types": "./index.d.ts"
+      "types": "./torii.d.ts"
     },
     "./torii-browser": {
       "import": "./dist/toriiBrowserClient.js",
       "browser": "./dist/toriiBrowserClient.js",
-      "types": "./index.d.ts"
+      "types": "./torii-browser.d.ts"
     },
     "./sumeragi-typed": {
       "browser": "./dist/sumeragiTyped.js",
@@ -79,8 +89,8 @@
       "types": "./sumeragi-typed.d.ts"
     },
     "./norito": {
-      "import": "./dist/norito.js",
-      "types": "./index.d.ts"
+      "import": "./dist/public/norito.js",
+      "types": "./norito.d.ts"
     },
     "./canonical-request": {
       "browser": "./dist/canonicalRequest.js",
@@ -89,16 +99,16 @@
     },
     "./sccp": {
       "import": "./dist/sccp.js",
-      "types": "./index.d.ts"
+      "types": "./sccp.d.ts"
     },
     "./sorafs": {
-      "import": "./dist/sorafs.js",
-      "types": "./index.d.ts"
+      "import": "./dist/public/sorafs.js",
+      "types": "./sorafs.d.ts"
     },
     "./crypto": {
-      "browser": "./dist/crypto.browser.js",
-      "import": "./dist/crypto.js",
-      "types": "./index.d.ts"
+      "browser": "./dist/public/crypto.browser.js",
+      "import": "./dist/public/crypto.js",
+      "types": "./crypto.d.ts"
     },
     "./connect-browser": {
       "import": "./dist/connect.browser.js",
@@ -118,16 +128,22 @@
   "typesVersions": {
     "*": {
       "address": [
-        "./index.d.ts"
+        "./address.d.ts"
       ],
       "browser": [
         "./browser.d.ts"
+      ],
+      "kagemusha": [
+        "./kagemusha.d.ts"
       ],
       "privacy-capabilities": [
         "./privacy-capabilities.d.ts"
       ],
       "bootle-lantern-issuance": [
         "./bootle-lantern-issuance.d.ts"
+      ],
+      "atomic-private-settlement": [
+        "./atomic-private-settlement.d.ts"
       ],
       "transaction-codec": [
         "./transaction-codec.d.ts"
@@ -139,40 +155,40 @@
         "./smart-contract-deployment.d.ts"
       ],
       "normalizers": [
-        "./index.d.ts"
+        "./normalizers.d.ts"
       ],
       "blake2b": [
-        "./index.d.ts"
+        "./blake2b.d.ts"
       ],
       "ivm-artifact": [
         "./ivm-artifact.d.ts"
       ],
       "instruction-builders": [
-        "./index.d.ts"
+        "./instruction-builders.d.ts"
       ],
       "torii": [
-        "./index.d.ts"
+        "./torii.d.ts"
       ],
       "torii-browser": [
-        "./index.d.ts"
+        "./torii-browser.d.ts"
       ],
       "sumeragi-typed": [
         "./sumeragi-typed.d.ts"
       ],
       "norito": [
-        "./index.d.ts"
+        "./norito.d.ts"
       ],
       "canonical-request": [
         "./canonical-request.d.ts"
       ],
       "sccp": [
-        "./index.d.ts"
+        "./sccp.d.ts"
       ],
       "sorafs": [
-        "./index.d.ts"
+        "./sorafs.d.ts"
       ],
       "crypto": [
-        "./index.d.ts"
+        "./crypto.d.ts"
       ],
       "connect-browser": [
         "./connect.browser.d.ts"
@@ -207,7 +223,6 @@
     "prepublishOnly": "npm run check:changelog && npm run build:dist && npm run lint:test && npm run bundle:check && npm run test:pack-install && npm run release:provenance",
     "test:integration": "node ./scripts/run_integration.mjs",
     "test:integration:qualification": "node ./scripts/run_integration.mjs --qualification",
-    "test:taira-kagemusha-read-only": "node ./scripts/run-test-profile.mjs taira-kagemusha-read-only",
     "report:bundle-size": "node ./scripts/report-bundle-size.mjs"
   },
   "keywords": [
@@ -232,10 +247,22 @@
     "README.md",
     "LICENSE",
     "browser.d.ts",
+    "kagemusha.d.ts",
+    "address.d.ts",
+    "normalizers.d.ts",
+    "blake2b.d.ts",
+    "instruction-builders.d.ts",
+    "torii.d.ts",
+    "torii-browser.d.ts",
+    "norito.d.ts",
+    "sccp.d.ts",
+    "sorafs.d.ts",
+    "crypto.d.ts",
     "index.d.ts",
     "repo-agreement.d.ts",
     "privacy-capabilities.d.ts",
     "bootle-lantern-issuance.d.ts",
+    "atomic-private-settlement.d.ts",
     "canonical-request.d.ts",
     "ivm-artifact.d.ts",
     "transaction-codec.d.ts",
@@ -250,9 +277,7 @@
     "native/iroha_js_host.checksums.json",
     "dist",
     "recipes/iso_bridge_builder.mjs",
-    "recipes/nexus_app_transfer.mjs",
-    "scripts",
-    "src"
+    "recipes/nexus_app_transfer.mjs"
   ],
   "browser": {
     "./dist/authenticatedBlockProofs.js": "./dist/authenticatedBlockProofs.browser.js",

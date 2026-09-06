@@ -1094,7 +1094,7 @@ fn lane_block_artifact_persists_under_lane_segment_and_reloads() {
     );
 }
 #[test]
-fn latest_lane_block_artifact_scan_counts_sparse_and_malformed_slots_exactly() {
+fn latest_lane_block_artifact_rejects_malformed_slots_at_any_scan_position() {
     let temp_dir = TempDir::new().expect("create temp dir");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let lane_config = two_lane_runtime_config();
@@ -1122,10 +1122,9 @@ fn latest_lane_block_artifact_scan_counts_sparse_and_malformed_slots_exactly() {
         FsyncMode::Batched,
         None,
     ));
-    assert_eq!(
-        kura.latest_lane_block_artifact(lane_id),
-        Some(active.clone()),
-        "one malformed slot, every absent gap, and the active slot fit exactly in the budget",
+    assert!(
+        kura.latest_lane_block_artifact(lane_id).is_err(),
+        "an occupied malformed slot is not a sparse hole"
     );
     assert!(Kura::append_indexed_sidecar(
         &data_path,
@@ -1137,7 +1136,7 @@ fn latest_lane_block_artifact_scan_counts_sparse_and_malformed_slots_exactly() {
         None,
     ));
     assert!(
-        kura.latest_lane_block_artifact(lane_id).is_none(),
+        kura.latest_lane_block_artifact(lane_id).is_err(),
         "the same valid match one slot beyond the budget must fail closed",
     );
     assert_eq!(
@@ -1230,7 +1229,7 @@ fn lane_block_artifact_recreation_repairs_canonical_slot_and_bounds_retired_hist
             .is_none(),
         "the recreated marker must hide retired ownership bytes"
     );
-    assert!(kura.latest_lane_block_artifact(lane_id).is_none());
+    assert!(kura.latest_lane_block_artifact(lane_id).is_err());
     assert!(kura.lane_block_artifacts_snapshot().is_empty());
     assert!(
         kura.canonical_lane_block_artifacts_at_proposal_height_matching(
@@ -1337,8 +1336,8 @@ fn lane_block_artifact_recreation_repairs_canonical_slot_and_bounds_retired_hist
         ));
     }
     assert!(
-        kura.latest_lane_block_artifact(lane_id).is_none(),
-        "sixty-four retired high entries must consume the complete bounded scan",
+        kura.latest_lane_block_artifact(lane_id).is_err(),
+        "retired ownership retained in the active namespace must be a storage error",
     );
     assert_eq!(
         kura.lane_block_artifacts_snapshot(),
@@ -1383,7 +1382,7 @@ fn lane_block_artifact_recreation_repairs_canonical_slot_and_bounds_retired_hist
         Some(second_artifact.clone())
     );
     assert!(
-        reopened.latest_lane_block_artifact(lane_id).is_none(),
+        reopened.latest_lane_block_artifact(lane_id).is_err(),
         "restart must preserve the same bounded fail-closed lookup",
     );
     assert_eq!(

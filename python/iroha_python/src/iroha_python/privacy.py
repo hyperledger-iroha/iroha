@@ -9,13 +9,19 @@ parses each observation into deterministic Python structures.
 from __future__ import annotations
 
 import json
+import math
 from contextlib import closing
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Iterator, List, Mapping, Optional, Union
+from urllib.parse import urlsplit, urlunsplit
 
 import requests
 from requests import Response, Session
+
+_DEFAULT_NDJSON_MAX_RESPONSE_BYTES = 16 * 1024 * 1024
+_DEFAULT_NDJSON_MAX_LINE_BYTES = 1024 * 1024
+_DEFAULT_NDJSON_MAX_EVENTS = 100_000
 
 __all__ = [
     "PrivacyMode",
@@ -99,34 +105,34 @@ class PrivacyEventKind(str, Enum):
     GAR_ABUSE_CATEGORY = "GarAbuseCategory"
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class PrivacyEventHandshakeSuccess:
     rtt_ms: Optional[int]
     active_circuits_after: Optional[int]
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class PrivacyEventHandshakeFailure:
     reason: PrivacyHandshakeFailureReason
     rtt_ms: Optional[int]
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class PrivacyEventThrottle:
     scope: PrivacyThrottleScope
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class PrivacyEventActiveSample:
     active_circuits: int
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class PrivacyEventVerifiedBytes:
     bytes: int
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class PrivacyEventGarAbuseCategory:
     """GAR category represented only by its fixed eight-byte digest."""
 
@@ -145,7 +151,7 @@ PrivacyEventPayload = Optional[
 ]
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class PrivacyEvent:
     """Typed representation of a single NDJSON line."""
 
@@ -157,13 +163,11 @@ class PrivacyEvent:
 
 def _require_int(obj: Mapping[str, Any], field: str) -> int:
     value = obj.get(field)
-    if value is None:
-        raise TypeError(f"{field} must be numeric")
-    try:
-        coerced = int(value)
-    except (TypeError, ValueError) as exc:
-        raise TypeError(f"{field} must be numeric") from exc
-    return coerced
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"{field} must be a non-negative integer")
+    if value < 0:
+        raise ValueError(f"{field} must be a non-negative integer")
+    return value
 
 
 def _require_optional_int(obj: Mapping[str, Any], field: str) -> Optional[int]:
@@ -271,26 +275,133 @@ def parse_privacy_event_line(line: str) -> PrivacyEvent:
     return parse_privacy_event(obj)
 
 
-def load_privacy_events_from_ndjson(text: str) -> List[PrivacyEvent]:
+def load_privacy_events_from_ndjson(
+    text: str,
+    *,
+    maximum_line_bytes: int = _DEFAULT_NDJSON_MAX_LINE_BYTES,
+    maximum_events: int = _DEFAULT_NDJSON_MAX_EVENTS,
+) -> List[PrivacyEvent]:
     """Parse newline-delimited JSON emitted by `/privacy/events`."""
 
+    if not isinstance(text, str):
+        raise TypeError("text must be a string")
+    _require_positive_int(maximum_line_bytes, "maximum_line_bytes")
+    _require_positive_int(maximum_events, "maximum_events")
     events: List[PrivacyEvent] = []
     for raw_line in text.splitlines():
         line = raw_line.strip()
         if not line:
             continue
+        if len(line.encode("utf-8")) > maximum_line_bytes:
+            raise ValueError(
+                f"privacy event line exceeds the {maximum_line_bytes}-byte limit"
+            )
+        if len(events) >= maximum_events:
+            raise ValueError(f"privacy event feed exceeds the {maximum_events}-event limit")
         events.append(parse_privacy_event_line(line))
     return events
 
 
 def _build_privacy_url(base_url: str, path: str) -> str:
-    if not base_url.lower().startswith(("http://", "https://")):
-        raise ValueError("base_url must include http:// or https://")
-    base = base_url.rstrip("/")
-    target = path.lstrip("/")
-    if base.endswith(target):
-        return base_url
-    return f"{base}/{target}"
+    if not isinstance(base_url, str) or not base_url or base_url != base_url.strip():
+        raise ValueError("base_url must be an exact non-empty HTTP(S) URL")
+    if "\\" in base_url or any(
+        ord(character) <= 0x20 or ord(character) == 0x7F for character in base_url
+    ):
+        raise ValueError("base_url must not contain backslashes, spaces, or control characters")
+    if not isinstance(path, str) or not path.startswith("/") or path.startswith("//"):
+        raise ValueError("path must be an origin-relative path beginning with one slash")
+    if "\\" in path or any(
+        ord(character) <= 0x20 or ord(character) == 0x7F for character in path
+    ):
+        raise ValueError("path must not contain backslashes, spaces, or control characters")
+    target = urlsplit(path)
+    if target.scheme or target.netloc or target.query or target.fragment:
+        raise ValueError("path must not contain an origin, query, or fragment")
+    parsed = urlsplit(base_url)
+    if parsed.scheme.lower() not in {"http", "https"} or parsed.hostname is None:
+        raise ValueError("base_url must include an HTTP(S) origin")
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError("base_url must not include credentials")
+    if parsed.query or parsed.fragment:
+        raise ValueError("base_url must not include a query or fragment")
+    try:
+        _ = parsed.port
+    except ValueError as exc:
+        raise ValueError("base_url contains an invalid port") from exc
+    base_path = parsed.path.rstrip("/")
+    target_path = target.path.rstrip("/") or "/"
+    if base_path not in {"", target_path}:
+        raise ValueError("base_url path must be empty or the exact privacy endpoint path")
+    return urlunsplit((parsed.scheme.lower(), parsed.netloc, target_path, "", ""))
+
+
+def _require_positive_int(value: Any, context: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"{context} must be a positive integer")
+    if value <= 0:
+        raise ValueError(f"{context} must be a positive integer")
+    return value
+
+
+def _require_positive_timeout(value: Any) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TypeError("timeout must be a finite positive number")
+    timeout = float(value)
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise ValueError("timeout must be a finite positive number")
+    return timeout
+
+
+def _read_bounded_response(response: Response, maximum_bytes: int) -> bytes:
+    content_length = response.headers.get("Content-Length")
+    if (
+        content_length is not None
+        and content_length.isascii()
+        and content_length.isdecimal()
+        and int(content_length, 10) > maximum_bytes
+    ):
+        raise ValueError(f"privacy response exceeds the {maximum_bytes}-byte limit")
+    body = bytearray()
+    for chunk in response.iter_content(chunk_size=64 * 1024):
+        if not isinstance(chunk, bytes):
+            raise TypeError("privacy response yielded a non-bytes body chunk")
+        if len(body) + len(chunk) > maximum_bytes:
+            raise ValueError(f"privacy response exceeds the {maximum_bytes}-byte limit")
+        body.extend(chunk)
+    return bytes(body)
+
+
+def _iter_bounded_ndjson_lines(
+    response: Response,
+    *,
+    chunk_size: int,
+    maximum_line_bytes: int,
+) -> Iterator[str]:
+    pending = bytearray()
+    for chunk in response.iter_content(chunk_size=chunk_size):
+        if not isinstance(chunk, bytes):
+            raise TypeError("privacy response yielded a non-bytes body chunk")
+        pending.extend(chunk)
+        while True:
+            newline = pending.find(b"\n")
+            if newline < 0:
+                break
+            raw_line = bytes(pending[:newline])
+            del pending[: newline + 1]
+            if raw_line.endswith(b"\r"):
+                raw_line = raw_line[:-1]
+            if len(raw_line) > maximum_line_bytes:
+                raise ValueError(
+                    f"privacy event line exceeds the {maximum_line_bytes}-byte limit"
+                )
+            yield raw_line.decode("utf-8", "strict")
+        if len(pending) > maximum_line_bytes:
+            raise ValueError(
+                f"privacy event line exceeds the {maximum_line_bytes}-byte limit"
+            )
+    if pending:
+        yield bytes(pending).decode("utf-8", "strict")
 
 
 def fetch_privacy_events(
@@ -299,6 +410,9 @@ def fetch_privacy_events(
     session: Optional[Session] = None,
     timeout: float = 10.0,
     path: str = "/privacy/events",
+    maximum_response_bytes: int = _DEFAULT_NDJSON_MAX_RESPONSE_BYTES,
+    maximum_line_bytes: int = _DEFAULT_NDJSON_MAX_LINE_BYTES,
+    maximum_events: int = _DEFAULT_NDJSON_MAX_EVENTS,
 ) -> List[PrivacyEvent]:
     """Fetch and parse the relay admin NDJSON feed.
 
@@ -320,19 +434,35 @@ def fetch_privacy_events(
 
     url = _build_privacy_url(base_url, path)
 
+    _require_positive_int(maximum_response_bytes, "maximum_response_bytes")
+    _require_positive_int(maximum_line_bytes, "maximum_line_bytes")
+    _require_positive_int(maximum_events, "maximum_events")
+    request_timeout = _require_positive_timeout(timeout)
+    owned_session = session is None
+    active_session = session if session is not None else requests.Session()
+    if owned_session:
+        active_session.trust_env = False
     response: Optional[Response] = None
-    body = ""
     try:
-        if session is None:
-            response = requests.get(url, timeout=timeout, headers={"Accept": "application/x-ndjson"})
-        else:
-            response = session.get(url, timeout=timeout, headers={"Accept": "application/x-ndjson"})
+        response = active_session.get(
+            url,
+            timeout=request_timeout,
+            headers={"Accept": "application/x-ndjson"},
+            allow_redirects=False,
+            stream=True,
+        )
         response.raise_for_status()
-        body = response.text
+        body = _read_bounded_response(response, maximum_response_bytes)
     finally:
         if response is not None:
             response.close()
-    return load_privacy_events_from_ndjson(body)
+        if owned_session:
+            active_session.close()
+    return load_privacy_events_from_ndjson(
+        body.decode("utf-8", "strict"),
+        maximum_line_bytes=maximum_line_bytes,
+        maximum_events=maximum_events,
+    )
 
 
 def stream_privacy_events(
@@ -342,43 +472,45 @@ def stream_privacy_events(
     timeout: float = 10.0,
     path: str = "/privacy/events",
     chunk_size: int = 65536,
+    maximum_line_bytes: int = _DEFAULT_NDJSON_MAX_LINE_BYTES,
 ) -> Iterator[PrivacyEvent]:
     """Stream privacy events without buffering the entire NDJSON payload."""
 
     url = _build_privacy_url(base_url, path)
 
-    if session is None:
-        response = requests.get(
-            url,
-            timeout=timeout,
-            headers={"Accept": "application/x-ndjson"},
-            stream=True,
-        )
-    else:
-        response = session.get(
-            url,
-            timeout=timeout,
-            headers={"Accept": "application/x-ndjson"},
-            stream=True,
-        )
-
-    try:
-        response.raise_for_status()
-    except Exception:
-        response.close()
-        raise
+    _require_positive_int(chunk_size, "chunk_size")
+    _require_positive_int(maximum_line_bytes, "maximum_line_bytes")
+    request_timeout = _require_positive_timeout(timeout)
 
     def _iterator() -> Iterator[PrivacyEvent]:
-        with closing(response):
-            for raw_line in response.iter_lines(
-                decode_unicode=True,
-                chunk_size=chunk_size,
-            ):
-                if raw_line is None:
-                    continue
-                line = raw_line.strip()
-                if not line:
-                    continue
-                yield parse_privacy_event_line(line)
+        owned_session = session is None
+        active_session = session if session is not None else requests.Session()
+        if owned_session:
+            active_session.trust_env = False
+        response: Optional[Response] = None
+        try:
+            response = active_session.get(
+                url,
+                timeout=request_timeout,
+                headers={"Accept": "application/x-ndjson"},
+                allow_redirects=False,
+                stream=True,
+            )
+            response.raise_for_status()
+            with closing(response):
+                for raw_line in _iter_bounded_ndjson_lines(
+                    response,
+                    chunk_size=min(chunk_size, 64 * 1024),
+                    maximum_line_bytes=maximum_line_bytes,
+                ):
+                    line = raw_line.strip()
+                    if not line:
+                        continue
+                    yield parse_privacy_event_line(line)
+        finally:
+            if response is not None:
+                response.close()
+            if owned_session:
+                active_session.close()
 
     return _iterator()

@@ -1,8 +1,18 @@
 //! Static-site binding helpers backed by SoraFS storage.
+use crate::secure_file_metadata::{
+    SecureMetadata, from_file, from_path, is_direct_directory, is_direct_file, number_of_links,
+    same_file, unchanged,
+};
 use http::uri::Authority;
+use iroha_core::state::WorldReadOnly;
+use iroha_crypto::Hash;
+use iroha_data_model::soracloud::{
+    SORA_SERVICE_CONFIG_ENTRY_VERSION_V1, SoraRouteVisibilityV1, SoraServiceConfigEntryV1,
+};
+use mv::storage::StorageReadOnly as _;
 use std::{
     collections::BTreeSet,
-    fs::{self, File, OpenOptions},
+    fs::File,
     io::Read,
     net::IpAddr,
     path::{Component, Path, PathBuf},
@@ -11,6 +21,154 @@ use std::{
 pub const SITE_BINDINGS_SCHEMA_VERSION_V1: u8 = 1;
 /// Maximum JSON container nesting accepted before parsing.
 const SITE_BINDINGS_MAX_JSON_DEPTH: usize = 16;
+/// Ledger service-config name carrying one authoritative public static-site binding.
+pub(crate) const APP_STATIC_SITE_CONFIG_NAME: &str = "soracloud/app_static_site";
+const APP_STATIC_SITE_BINDING_SCHEMA_VERSION_V1: u16 = 1;
+
+#[derive(Clone, Debug, norito::derive::JsonDeserialize)]
+struct AuthoritativeAppStaticSiteBindingV1 {
+    schema_version: u16,
+    hostname: String,
+    mount_path: String,
+    index_document: String,
+    spa_fallback: bool,
+    manifest_digest_hex: String,
+}
+
+/// Validated ledger-authoritative public static-site binding.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct AuthoritativeAppSiteBinding {
+    /// Canonical public hostname selected by the active service revision.
+    pub(crate) hostname: String,
+    /// Validated single-component document served for the site root.
+    pub(crate) index_document: String,
+    /// Whether an unresolved extensionless path falls back to the index document.
+    pub(crate) spa_fallback: bool,
+    /// Canonical lower-case digest of the locally stored site manifest.
+    pub(crate) manifest_digest_hex: String,
+}
+
+/// Return whether one active public SoraCloud revision selects `host`.
+///
+/// This intentionally does not require a valid static-site config. Selecting
+/// the host first lets the gateway return a stable service failure for a
+/// malformed authoritative binding instead of falling through to an unrelated
+/// Torii 404 or a weaker operator-file binding.
+pub(crate) fn has_authoritative_public_site_host(world: &impl WorldReadOnly, host: &str) -> bool {
+    world
+        .soracloud_service_deployments()
+        .iter()
+        .any(|(service_id, deployment)| {
+            world
+                .soracloud_service_revisions()
+                .get(&(
+                    service_id.to_string(),
+                    deployment.current_service_version.clone(),
+                ))
+                .and_then(|bundle| bundle.service.route.as_ref())
+                .is_some_and(|route| {
+                    route.visibility == SoraRouteVisibilityV1::Public
+                        && normalize_host_header(&route.host).as_deref() == Some(host)
+                })
+        })
+}
+
+/// Resolve and validate the newest ledger-authoritative binding for `host`.
+pub(crate) fn authoritative_app_site_binding(
+    world: &impl WorldReadOnly,
+    host: &str,
+) -> Result<Option<AuthoritativeAppSiteBinding>, String> {
+    let mut best_candidate: Option<(u64, String, SoraServiceConfigEntryV1)> = None;
+    for (service_id, deployment) in world.soracloud_service_deployments().iter() {
+        let service_name = service_id.to_string();
+        let Some(bundle) = world.soracloud_service_revisions().get(&(
+            service_name.clone(),
+            deployment.current_service_version.clone(),
+        )) else {
+            continue;
+        };
+        let Some(route) = bundle.service.route.as_ref() else {
+            continue;
+        };
+        if route.visibility != SoraRouteVisibilityV1::Public
+            || normalize_host_header(&route.host).as_deref() != Some(host)
+        {
+            continue;
+        }
+        let Some(config_entry) = deployment.service_configs.get(APP_STATIC_SITE_CONFIG_NAME) else {
+            continue;
+        };
+        let replace =
+            best_candidate
+                .as_ref()
+                .is_none_or(|(best_sequence, best_service_name, _)| {
+                    config_entry.last_update_sequence > *best_sequence
+                        || (config_entry.last_update_sequence == *best_sequence
+                            && service_name < *best_service_name)
+                });
+        if replace {
+            best_candidate = Some((
+                config_entry.last_update_sequence,
+                service_name,
+                config_entry.clone(),
+            ));
+        }
+    }
+    let Some((_sequence, service_name, config_entry)) = best_candidate else {
+        return Ok(None);
+    };
+    if config_entry.schema_version != SORA_SERVICE_CONFIG_ENTRY_VERSION_V1
+        || config_entry.config_name != APP_STATIC_SITE_CONFIG_NAME
+    {
+        return Err(format!(
+            "service `{service_name}` has invalid static-site config metadata"
+        ));
+    }
+    let encoded_value = norito::json::to_vec(&config_entry.value_json)
+        .map_err(|_| format!("service `{service_name}` static-site config is not encodable"))?;
+    if Hash::new(encoded_value) != config_entry.value_hash {
+        return Err(format!(
+            "service `{service_name}` static-site config hash does not match its value"
+        ));
+    }
+    let binding = config_entry
+        .value_json
+        .try_into_any_norito::<AuthoritativeAppStaticSiteBindingV1>()
+        .map_err(|_| format!("service `{service_name}` static-site config is not decodable"))?;
+    if binding.schema_version != APP_STATIC_SITE_BINDING_SCHEMA_VERSION_V1 {
+        return Err(format!(
+            "service `{service_name}` static-site config has an unsupported schema"
+        ));
+    }
+    if normalize_host_header(&binding.hostname).as_deref() != Some(host) {
+        return Err(format!(
+            "service `{service_name}` static-site config hostname does not match its route"
+        ));
+    }
+    if binding.mount_path != "/" {
+        return Err(format!(
+            "service `{service_name}` static-site config mount path is unsupported"
+        ));
+    }
+    validate_index_document_name(&binding.index_document)
+        .map_err(|_| format!("service `{service_name}` static-site index document is invalid"))?;
+    if binding.manifest_digest_hex.len() != 64
+        || binding
+            .manifest_digest_hex
+            .bytes()
+            .any(|byte| !byte.is_ascii_digit() && !(b'a'..=b'f').contains(&byte))
+    {
+        return Err(format!(
+            "service `{service_name}` static-site manifest digest is invalid"
+        ));
+    }
+    Ok(Some(AuthoritativeAppSiteBinding {
+        hostname: binding.hostname,
+        index_document: binding.index_document,
+        spa_fallback: binding.spa_fallback,
+        manifest_digest_hex: binding.manifest_digest_hex,
+    }))
+}
 /// Versioned JSON document loaded once from the configured startup path.
 #[derive(
     Debug, Clone, PartialEq, Eq, norito::derive::JsonDeserialize, norito::derive::JsonSerialize,
@@ -133,34 +291,34 @@ fn absolute_secure_path(path: &Path) -> Result<PathBuf, String> {
             .map_err(|err| format!("failed to resolve SoraFS site binding path: {err}"))
     }
 }
-fn reject_symlink_components(path: &Path) -> Result<(), String> {
+type PinnedBindingAncestor = (PathBuf, SecureMetadata);
+
+fn pin_binding_ancestors(path: &Path) -> Result<Vec<PinnedBindingAncestor>, String> {
     let mut current = PathBuf::new();
     let component_count = path.components().count();
+    let mut ancestors = Vec::new();
     for (index, component) in path.components().enumerate() {
         current.push(component.as_os_str());
         if matches!(component, Component::Prefix(_) | Component::RootDir) {
             continue;
         }
-        let metadata = fs::symlink_metadata(&current).map_err(|err| {
+        if index + 1 == component_count {
+            break;
+        }
+        let metadata = from_path(&current).map_err(|err| {
             format!(
                 "failed to inspect SoraFS site binding path component `{}`: {err}",
                 current.display()
             )
         })?;
-        if metadata.file_type().is_symlink() {
+        if !is_direct_directory(&metadata) {
             return Err(format!(
-                "SoraFS site binding path component `{}` must not be a symbolic link",
-                current.display()
-            ));
-        }
-        if index + 1 < component_count && !metadata.is_dir() {
-            return Err(format!(
-                "SoraFS site binding ancestor `{}` is not a directory",
+                "SoraFS site binding ancestor `{}` must be a direct directory",
                 current.display()
             ));
         }
         #[cfg(unix)]
-        if index + 1 < component_count {
+        {
             use std::os::unix::fs::MetadataExt as _;
             if metadata.mode() & 0o022 != 0 {
                 return Err(format!(
@@ -169,18 +327,57 @@ fn reject_symlink_components(path: &Path) -> Result<(), String> {
                 ));
             }
         }
+        ancestors.push((current.clone(), metadata));
+    }
+    Ok(ancestors)
+}
+
+fn revalidate_binding_ancestors(ancestors: &[PinnedBindingAncestor]) -> Result<(), String> {
+    for (path, before) in ancestors {
+        let after = from_path(path).map_err(|err| {
+            format!(
+                "failed to re-inspect SoraFS site binding ancestor `{}`: {err}",
+                path.display()
+            )
+        })?;
+        if !is_direct_directory(&after) || !same_file(before, &after) {
+            return Err(format!(
+                "SoraFS site binding ancestor `{}` changed while the file was being read",
+                path.display()
+            ));
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt as _;
+            if after.mode() & 0o022 != 0 {
+                return Err(format!(
+                    "SoraFS site binding ancestor `{}` must not be group- or world-writable",
+                    path.display()
+                ));
+            }
+        }
     }
     Ok(())
 }
+
 fn open_read_only_no_follow(path: &Path) -> Result<File, String> {
-    let mut options = OpenOptions::new();
-    options.read(true);
+    #[cfg(windows)]
+    let opened = crate::secure_file_metadata::open_direct_file(path);
     #[cfg(unix)]
-    {
+    let opened = {
         use std::os::unix::fs::OpenOptionsExt as _;
-        options.custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
-    }
-    options.open(path).map_err(|err| {
+        let mut options = std::fs::OpenOptions::new();
+        options
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK | libc::O_NOCTTY);
+        options.open(path)
+    };
+    #[cfg(not(any(unix, windows)))]
+    let opened = Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "secure direct-file opening is unsupported on this platform",
+    ));
+    opened.map_err(|err| {
         format!(
             "failed to open SoraFS site bindings `{}`: {err}",
             path.display()
@@ -188,22 +385,22 @@ fn open_read_only_no_follow(path: &Path) -> Result<File, String> {
     })
 }
 #[allow(unsafe_code)]
-fn validate_binding_file_metadata(path: &Path, metadata: &fs::Metadata) -> Result<(), String> {
-    if !metadata.is_file() {
+fn validate_binding_file_metadata(path: &Path, metadata: &SecureMetadata) -> Result<(), String> {
+    if !is_direct_file(metadata) {
         return Err(format!(
-            "SoraFS site binding path `{}` is not a regular file",
+            "SoraFS site binding path `{}` is not a direct regular file",
+            path.display()
+        ));
+    }
+    if number_of_links(metadata) != Some(1) {
+        return Err(format!(
+            "SoraFS site binding file `{}` must have exactly one hard link",
             path.display()
         ));
     }
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt as _;
-        if metadata.nlink() != 1 {
-            return Err(format!(
-                "SoraFS site binding file `{}` must have exactly one hard link",
-                path.display()
-            ));
-        }
         let effective_uid = rustix::process::geteuid().as_raw();
         if metadata.uid() != effective_uid && metadata.uid() != 0 {
             return Err(format!(
@@ -221,14 +418,15 @@ fn validate_binding_file_metadata(path: &Path, metadata: &fs::Metadata) -> Resul
     Ok(())
 }
 fn read_secure_bounded(path: &Path, max_bytes: usize) -> Result<Vec<u8>, String> {
-    reject_symlink_components(path)?;
-    let before = fs::symlink_metadata(path).map_err(|err| {
+    let ancestors = pin_binding_ancestors(path)?;
+    let before = from_path(path).map_err(|err| {
         format!(
             "failed to inspect SoraFS site bindings `{}`: {err}",
             path.display()
         )
     })?;
     validate_binding_file_metadata(path, &before)?;
+    revalidate_binding_ancestors(&ancestors)?;
     let max_bytes_u64 = u64::try_from(max_bytes).unwrap_or(u64::MAX);
     if before.len() > max_bytes_u64 {
         return Err(format!(
@@ -238,33 +436,42 @@ fn read_secure_bounded(path: &Path, max_bytes: usize) -> Result<Vec<u8>, String>
             max_bytes
         ));
     }
-    let file = open_read_only_no_follow(path)?;
-    let opened = file.metadata().map_err(|err| {
+    let mut file = open_read_only_no_follow(path)?;
+    let opened_before = from_file(&file).map_err(|err| {
         format!(
             "failed to inspect opened SoraFS site bindings `{}`: {err}",
             path.display()
         )
     })?;
-    validate_binding_file_metadata(path, &opened)?;
-    #[cfg(unix)]
+    let named_after_open = from_path(path).map_err(|err| {
+        format!(
+            "failed to re-inspect opened SoraFS site bindings `{}`: {err}",
+            path.display()
+        )
+    })?;
+    validate_binding_file_metadata(path, &opened_before)?;
+    validate_binding_file_metadata(path, &named_after_open)?;
+    if !same_file(&before, &opened_before)
+        || !unchanged(&before, &opened_before)
+        || !same_file(&opened_before, &named_after_open)
+        || !unchanged(&opened_before, &named_after_open)
     {
-        use std::os::unix::fs::MetadataExt as _;
-        if before.dev() != opened.dev() || before.ino() != opened.ino() {
-            return Err(format!(
-                "SoraFS site binding file `{}` changed while it was opened",
-                path.display()
-            ));
-        }
+        return Err(format!(
+            "SoraFS site binding file `{}` changed while it was opened",
+            path.display()
+        ));
     }
+    revalidate_binding_ancestors(&ancestors)?;
     let read_limit = u64::try_from(max_bytes)
         .unwrap_or(u64::MAX)
         .saturating_add(1);
     let mut bytes = Vec::with_capacity(
-        usize::try_from(before.len())
+        usize::try_from(opened_before.len())
             .unwrap_or(max_bytes)
             .min(max_bytes),
     );
-    file.take(read_limit)
+    (&mut file)
+        .take(read_limit)
         .read_to_end(&mut bytes)
         .map_err(|err| {
             format!(
@@ -279,7 +486,34 @@ fn read_secure_bounded(path: &Path, max_bytes: usize) -> Result<Vec<u8>, String>
             max_bytes
         ));
     }
-    if bytes.len() as u64 != before.len() {
+    let opened_after = from_file(&file).map_err(|err| {
+        format!(
+            "failed to re-inspect opened SoraFS site bindings `{}`: {err}",
+            path.display()
+        )
+    })?;
+    let named_after_read = from_path(path).map_err(|err| {
+        format!(
+            "failed to re-inspect SoraFS site bindings `{}` after reading: {err}",
+            path.display()
+        )
+    })?;
+    validate_binding_file_metadata(path, &opened_after)?;
+    validate_binding_file_metadata(path, &named_after_read)?;
+    if !same_file(&opened_before, &opened_after)
+        || !unchanged(&opened_before, &opened_after)
+        || !same_file(&opened_after, &named_after_read)
+        || !unchanged(&opened_after, &named_after_read)
+        || !same_file(&before, &named_after_read)
+        || !unchanged(&before, &named_after_read)
+    {
+        return Err(format!(
+            "SoraFS site binding file `{}` changed while it was being read",
+            path.display()
+        ));
+    }
+    revalidate_binding_ancestors(&ancestors)?;
+    if u64::try_from(bytes.len()).ok() != Some(opened_before.len()) {
         return Err(format!(
             "SoraFS site binding file `{}` changed size while being read",
             path.display()
@@ -624,6 +858,8 @@ pub fn content_type_for_path(path: &[String]) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+
     fn sample_document() -> SiteBindingsDocument {
         SiteBindingsDocument {
             version: SITE_BINDINGS_SCHEMA_VERSION_V1,
@@ -820,7 +1056,7 @@ mod tests {
     }
     #[cfg(unix)]
     #[test]
-    fn secure_loader_rejects_symlinks_hardlinks_and_unsafe_permissions() {
+    fn secure_loader_rejects_symlinks_and_unsafe_permissions() {
         use std::os::unix::fs::{PermissionsExt as _, symlink};
         let bytes = encoded_sample_document();
         let (dir, path) = write_secure_fixture(&bytes);
@@ -837,10 +1073,6 @@ mod tests {
         assert!(
             load_site_bindings_file(&parent_link.join("bindings.json"), bytes.len(), 1).is_err()
         );
-        let hard_link = canonical_dir.join("bindings-hardlink.json");
-        fs::hard_link(&path, &hard_link).expect("create hard link");
-        assert!(load_site_bindings_file(&path, bytes.len(), 1).is_err());
-        fs::remove_file(&hard_link).expect("remove hard link");
         fs::set_permissions(&path, fs::Permissions::from_mode(0o622))
             .expect("make fixture group writable");
         assert!(load_site_bindings_file(&path, bytes.len(), 1).is_err());
@@ -851,6 +1083,16 @@ mod tests {
         )
         .expect("make parent world writable");
         assert!(load_site_bindings_file(&unsafe_path, bytes.len(), 1).is_err());
+    }
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn secure_loader_rejects_multiply_linked_files() {
+        let bytes = encoded_sample_document();
+        let (directory, path) = write_secure_fixture(&bytes);
+        let hard_link = directory.path().join("bindings-hardlink.json");
+        fs::hard_link(&path, &hard_link).expect("create hard link");
+
+        assert!(load_site_bindings_file(&path, bytes.len(), 1).is_err());
     }
     #[test]
     fn secure_loader_rejects_traversal_and_non_files() {

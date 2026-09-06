@@ -14,13 +14,16 @@ use iroha_data_model::{
     isi::smart_contract_code::{
         ActivateContractInstance, RegisterSmartContractBytes, RegisterSmartContractCode,
     },
-    prelude::ValidationFail,
+    parameter::{CustomParameterId, Parameters},
+    prelude::{Name, ValidationFail},
     smart_contract::manifest::{ContractManifest, EntryPointKind},
-    smart_contract::{ContractAddress, ContractAlias},
+    smart_contract::{
+        ContractAddress, ContractAlias, ContractLifecycleControlV1, ContractLifecycleOwnerV1,
+    },
     state_path::StatePath,
 };
 use mv::storage::StorageReadOnly;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
 /// Consensus-persisted, irreversible subject identity for one contract address.
 ///
@@ -40,14 +43,41 @@ use thiserror::Error;
 pub struct ContractSubjectBinding {
     /// Exact account authority used while this contract executes.
     pub(crate) subject: AccountId,
+    /// Exact ownership and lifecycle-control state for this address.
+    pub(crate) lifecycle: ContractLifecycleControlV1,
 }
 impl ContractSubjectBinding {
-    /// Construct the canonical first-release binding for an address.
+    /// Construct the canonical direct-deployment binding for an address.
     #[must_use]
-    pub(crate) fn new(address: &ContractAddress) -> Self {
+    pub(crate) fn new_direct(address: &ContractAddress, deployer: AccountId) -> Self {
         Self {
             subject: address.subject_id(),
+            lifecycle: ContractLifecycleControlV1::direct(deployer),
         }
+    }
+    /// Construct the canonical Parliament-deployment binding for an address.
+    #[must_use]
+    pub(crate) fn new_parliament(
+        address: &ContractAddress,
+        proposer: AccountId,
+        proposal_content_id: [u8; 32],
+        governance_attempt_id: [u8; 32],
+    ) -> Self {
+        Self {
+            subject: address.subject_id(),
+            lifecycle: ContractLifecycleControlV1::parliament(
+                proposer,
+                proposal_content_id,
+                governance_attempt_id,
+            ),
+        }
+    }
+    /// Seed an already-active binding while constructing an internally consistent fixture.
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    #[must_use]
+    pub(crate) fn with_active_code_hash(mut self, code_hash: Hash) -> Self {
+        self.lifecycle.active_code_hash = Some(code_hash);
+        self
     }
     /// Validate that the persisted subject matches the canonical address derivation.
     pub(crate) fn validate_for(&self, address: &ContractAddress) -> Result<(), String> {
@@ -58,6 +88,9 @@ impl ContractSubjectBinding {
                 self.subject
             ));
         }
+        self.lifecycle
+            .validate()
+            .map_err(|error| format!("invalid lifecycle binding for `{address}`: {error}"))?;
         Ok(())
     }
 }
@@ -72,13 +105,11 @@ pub(crate) fn initialize_contract_subject_bindings(
         .map(|(address, _)| address.clone())
         .collect();
     for address in addresses {
-        if let Some(binding) = world.contract_subject_bindings.view().get(&address) {
-            binding.validate_for(&address)?;
-        } else {
-            world
-                .contract_subject_bindings
-                .insert(address.clone(), ContractSubjectBinding::new(&address));
-        }
+        let bindings = world.contract_subject_bindings.view();
+        let binding = bindings.get(&address).ok_or_else(|| {
+            format!("active contract instance `{address}` has no lifecycle binding; legacy snapshots are not accepted")
+        })?;
+        binding.validate_for(&address)?;
     }
     rebuild_contract_subject_addresses(world)?;
     validate_contract_subject_bindings(world)
@@ -110,6 +141,29 @@ pub(crate) fn validate_contract_subject_bindings(
     let bindings = world.contract_subject_bindings.view();
     for (address, binding) in bindings.iter() {
         binding.validate_for(address)?;
+        if world.accounts.view().get(&binding.subject).is_none() {
+            return Err(format!(
+                "contract subject account `{}` for `{address}` does not exist",
+                binding.subject
+            ));
+        }
+        let indexed_active_code_hash = world.contract_instances.view().get(address).copied();
+        if binding.lifecycle.active_code_hash != indexed_active_code_hash {
+            return Err(format!(
+                "contract lifecycle active code hash for `{address}` does not match the active-instance index"
+            ));
+        }
+        for owner in core::iter::once(&binding.lifecycle.owner)
+            .chain(binding.lifecycle.pending_owner.as_ref())
+        {
+            if let ContractLifecycleOwnerV1::Account(account) = owner
+                && world.accounts.view().get(account).is_none()
+            {
+                return Err(format!(
+                    "contract lifecycle owner `{account}` for `{address}` does not exist"
+                ));
+            }
+        }
     }
     for (address, _) in world.contract_instances.view().iter() {
         if bindings.get(address).is_none() {
@@ -136,12 +190,98 @@ pub(crate) fn validate_contract_subject_bindings(
     }
     Ok(())
 }
+/// Read the complete lifecycle record for a contract address, including inactive addresses.
+///
+/// The returned subject is the consensus-persisted non-signing execution authority. `None` means
+/// the address has never been deployed; malformed persisted bindings fail closed with an error.
+///
+/// # Errors
+/// Returns an invariant explanation when the binding or its active-code index is inconsistent.
+pub fn fetch_contract_lifecycle(
+    world: &impl WorldReadOnly,
+    address: &ContractAddress,
+) -> Result<Option<(AccountId, ContractLifecycleControlV1)>, String> {
+    let Some(binding) = world.contract_subject_bindings().get(address) else {
+        if world.contract_instances().get(address).is_some() {
+            return Err(format!(
+                "active contract instance `{address}` has no lifecycle binding"
+            ));
+        }
+        return Ok(None);
+    };
+    binding.validate_for(address)?;
+    if world.accounts().get(&binding.subject).is_none() {
+        return Err(format!(
+            "contract subject account `{}` for `{address}` does not exist",
+            binding.subject
+        ));
+    }
+    let indexed_active_code_hash = world.contract_instances().get(address).copied();
+    if binding.lifecycle.active_code_hash != indexed_active_code_hash {
+        return Err(format!(
+            "contract lifecycle active code hash for `{address}` does not match the active-instance index"
+        ));
+    }
+    Ok(Some((binding.subject.clone(), binding.lifecycle.clone())))
+}
+/// Return the retained contract whose irreversible subject is `subject`.
+pub(crate) fn historical_contract_for_subject(
+    world: &impl WorldReadOnly,
+    subject: &AccountId,
+) -> Option<ContractAddress> {
+    world.contract_subject_addresses().get(subject).cloned()
+}
 /// Return whether an account is an irreversible historical contract subject.
 pub(crate) fn is_historical_contract_subject(
     world: &impl WorldReadOnly,
     subject: &AccountId,
 ) -> bool {
-    world.contract_subject_addresses().get(subject).is_some()
+    historical_contract_for_subject(world, subject).is_some()
+}
+/// Return a contract that retains `account` as its current or pending lifecycle owner.
+pub(crate) fn contract_owned_or_pending_for_account(
+    world: &impl WorldReadOnly,
+    account: &AccountId,
+) -> Option<ContractAddress> {
+    world
+        .contract_subject_bindings()
+        .iter()
+        .find_map(|(address, binding)| {
+            let owns = matches!(
+                &binding.lifecycle.owner,
+                ContractLifecycleOwnerV1::Account(owner) if owner == account
+            );
+            let pending = matches!(
+                binding.lifecycle.pending_owner.as_ref(),
+                Some(ContractLifecycleOwnerV1::Account(owner)) if owner == account
+            );
+            (owns || pending).then(|| address.clone())
+        })
+}
+/// Reject execution while a certified Parliament emergency hold is active.
+pub(crate) fn ensure_contract_execution_allowed(
+    world: &impl WorldReadOnly,
+    address: &ContractAddress,
+    height: u64,
+) -> Result<(), String> {
+    let binding = world
+        .contract_subject_bindings()
+        .get(address)
+        .ok_or_else(|| format!("contract `{address}` has no lifecycle binding"))?;
+    binding.validate_for(address)?;
+    if binding.lifecycle.is_held_at(height) {
+        let hold = binding
+            .lifecycle
+            .emergency_hold
+            .as_ref()
+            .expect("active hold predicate requires a retained hold");
+        return Err(format!(
+            "contract `{address}` execution is held by Parliament through block {}: {}",
+            hold.expires_at_height.saturating_sub(1),
+            hold.reason
+        ));
+    }
+    Ok(())
 }
 /// Smart contract registry errors.
 #[derive(Debug, Error)]
@@ -158,6 +298,83 @@ pub enum RegistryError {
     /// Bytecode image is not a valid self-describing IVM contract artifact.
     #[error("invalid contract bytecode: {0}")]
     InvalidCode(String),
+}
+/// Canonical custom-parameter name for the first-release contract namespace policy.
+pub const PROTECTED_CONTRACT_NAMESPACES_PARAMETER: &str = "gov_protected_namespaces";
+/// Error returned when the persisted protected-contract namespace policy is malformed.
+#[derive(Clone, Debug, Error, PartialEq, Eq)]
+pub enum ProtectedContractNamespacesError {
+    /// The parameter payload is not the canonical array-of-strings shape.
+    #[error("`{PROTECTED_CONTRACT_NAMESPACES_PARAMETER}` must be an array of strings")]
+    InvalidPayload,
+    /// One namespace is not an exact non-empty ASCII token.
+    #[error(
+        "`{PROTECTED_CONTRACT_NAMESPACES_PARAMETER}` namespaces[{index}] must be a non-empty ASCII token without whitespace or control characters"
+    )]
+    InvalidNamespace {
+        /// Zero-based position of the malformed namespace.
+        index: usize,
+    },
+    /// Namespace entries must be unique so the policy has one canonical representation.
+    #[error(
+        "`{PROTECTED_CONTRACT_NAMESPACES_PARAMETER}` contains duplicate namespace `{namespace}`"
+    )]
+    DuplicateNamespace {
+        /// Repeated namespace token.
+        namespace: String,
+    },
+}
+/// Validate the canonical first-release protected-contract namespace list.
+///
+/// # Errors
+///
+/// Returns [`ProtectedContractNamespacesError`] for malformed or duplicate tokens.
+pub fn validate_protected_contract_namespaces(
+    namespaces: &[String],
+) -> Result<(), ProtectedContractNamespacesError> {
+    let mut seen = BTreeSet::new();
+    for (index, namespace) in namespaces.iter().enumerate() {
+        if namespace.is_empty()
+            || !namespace.is_ascii()
+            || namespace
+                .chars()
+                .any(|character| character.is_whitespace() || character.is_control())
+        {
+            return Err(ProtectedContractNamespacesError::InvalidNamespace { index });
+        }
+        if !seen.insert(namespace.as_str()) {
+            return Err(ProtectedContractNamespacesError::DuplicateNamespace {
+                namespace: namespace.clone(),
+            });
+        }
+    }
+    Ok(())
+}
+/// Decode the persisted protected-contract namespace policy.
+///
+/// `Ok(None)` means the parameter is absent. A present parameter is always decoded and validated;
+/// callers must propagate an error rather than interpreting malformed state as an empty policy.
+///
+/// # Errors
+///
+/// Returns [`ProtectedContractNamespacesError`] when a present payload is not canonical.
+pub fn protected_contract_namespaces(
+    parameters: &Parameters,
+) -> Result<Option<Vec<String>>, ProtectedContractNamespacesError> {
+    let id = CustomParameterId::new(
+        PROTECTED_CONTRACT_NAMESPACES_PARAMETER
+            .parse::<Name>()
+            .expect("protected-contract namespace parameter name must remain valid"),
+    );
+    let Some(custom) = parameters.custom().get(&id) else {
+        return Ok(None);
+    };
+    let namespaces = custom
+        .payload()
+        .try_into_any_norito::<Vec<String>>()
+        .map_err(|_| ProtectedContractNamespacesError::InvalidPayload)?;
+    validate_protected_contract_namespaces(&namespaces)?;
+    Ok(Some(namespaces))
 }
 /// Reserved physical durable-state namespace for consensus-managed contract lifecycle markers.
 ///
@@ -450,8 +667,9 @@ pub struct ContractCodeRecord {
 }
 /// Register a smart contract manifest on-chain via the canonical ISI.
 ///
-/// The authority must hold `CanRegisterSmartContractCode`. Networks can add
-/// `CanEnactGovernance` for specific namespaces via `gov_protected_namespaces`.
+/// The authority must hold `CanRegisterSmartContractCode`. This permission only
+/// registers an artifact; it cannot create a contract address. Namespaces listed
+/// in `gov_protected_namespaces` remain deployable only through Parliament.
 /// The manifest must include `code_hash` and `abi_hash`, and the corresponding
 /// bytecode must already be stored as a verified self-describing artifact.
 ///
@@ -494,12 +712,11 @@ pub fn register_code_bytes(
     RegisterSmartContractBytes { code_hash, code }.execute(authority, state_transaction)?;
     Ok(code_hash)
 }
-/// Bind `contract_address` to a `code_hash` to activate or perform `kaizen`/`改善` on an instance.
+/// Bind `contract_address` to a `code_hash` at an exact lifecycle revision.
 ///
-/// The authority must hold `CanRegisterSmartContractCode`, including for an
-/// idempotent request. Rebinding an active address to different verified code
-/// additionally requires `CanEnactGovernance`; it is a genuine in-place
-/// `kaizen`/`改善` and stages its declared `kaizen`/`改善` hook.
+/// The address must already have a retained lifecycle record owned by
+/// `authority`. A stale `expected_revision` fails closed. Rebinding an active
+/// address is a genuine in-place `kaizen`/`改善` and stages its declared hook.
 ///
 /// # Errors
 ///
@@ -507,11 +724,13 @@ pub fn register_code_bytes(
 pub fn activate_instance(
     authority: &AccountId,
     contract_address: ContractAddress,
+    expected_revision: u64,
     code_hash: Hash,
     state_transaction: &mut StateTransaction<'_, '_>,
 ) -> Result<(), RegistryError> {
     ActivateContractInstance {
         contract_address,
+        expected_revision,
         code_hash,
     }
     .execute(authority, state_transaction)?;
@@ -632,9 +851,13 @@ pub fn borrow_bound_contract_subject_from_world<'a>(
     world: &'a impl WorldReadOnly,
     contract_address: &ContractAddress,
 ) -> Option<&'a AccountId> {
-    world.contract_instances().get(contract_address)?;
+    let code_hash = world.contract_instances().get(contract_address)?;
     let binding = world.contract_subject_bindings().get(contract_address)?;
     binding.validate_for(contract_address).ok()?;
+    if binding.lifecycle.active_code_hash.as_ref() != Some(code_hash) {
+        return None;
+    }
+    world.accounts().get(&binding.subject)?;
     Some(&binding.subject)
 }
 /// Resolve a bound instance without cloning its manifest or bytecode.
@@ -687,11 +910,8 @@ pub fn fetch_bound_contract_record(
     contract_address: &ContractAddress,
 ) -> Option<BoundContractRecord> {
     let code_hash = fetch_instance_binding(state, contract_address)?;
-    let subject_binding = state
-        .world()
-        .contract_subject_bindings()
-        .get(contract_address)?;
-    subject_binding.validate_for(contract_address).ok()?;
+    let contract_subject =
+        borrow_bound_contract_subject_from_world(state.world(), contract_address)?;
     let manifest = fetch_manifest(state, &code_hash)?;
     let code_bytes = fetch_code_bytes(state, &code_hash)?;
     let contract_alias_binding = state
@@ -709,7 +929,7 @@ pub fn fetch_bound_contract_record(
     }
     Some(BoundContractRecord {
         contract_address: contract_address.clone(),
-        contract_subject: subject_binding.subject.clone(),
+        contract_subject: contract_subject.clone(),
         contract_alias,
         contract_alias_binding,
         code_hash,
@@ -770,9 +990,67 @@ mod tests {
     fn checked_keypair() -> KeyPair {
         KeyPair::try_random().expect("smart contract code fixture key generation should succeed")
     }
+    fn protected_namespaces_parameter(payload: iroha_primitives::json::Json) -> CustomParameter {
+        CustomParameter::new(
+            CustomParameterId::new(
+                PROTECTED_CONTRACT_NAMESPACES_PARAMETER
+                    .parse()
+                    .expect("protected namespace parameter id"),
+            ),
+            payload,
+        )
+    }
     #[test]
     fn checked_keypair_preserves_default_algorithm() {
         assert_eq!(checked_keypair().algorithm(), Algorithm::default());
+    }
+    #[test]
+    fn protected_namespace_policy_distinguishes_absent_valid_and_malformed_state() {
+        let mut parameters = Parameters::default();
+        assert_eq!(
+            protected_contract_namespaces(&parameters).expect("absent policy is valid"),
+            None
+        );
+
+        parameters.set_parameter(Parameter::Custom(protected_namespaces_parameter(
+            iroha_primitives::json::Json::new(vec!["apps".to_owned(), "dataspace:0".to_owned()]),
+        )));
+        assert_eq!(
+            protected_contract_namespaces(&parameters).expect("canonical policy"),
+            Some(vec!["apps".to_owned(), "dataspace:0".to_owned()])
+        );
+
+        parameters.set_parameter(Parameter::Custom(protected_namespaces_parameter(
+            iroha_primitives::json::Json::new("apps"),
+        )));
+        assert_eq!(
+            protected_contract_namespaces(&parameters),
+            Err(ProtectedContractNamespacesError::InvalidPayload)
+        );
+    }
+    #[test]
+    fn protected_namespace_policy_rejects_noncanonical_and_duplicate_tokens() {
+        for (namespaces, expected) in [
+            (
+                vec![" apps".to_owned()],
+                ProtectedContractNamespacesError::InvalidNamespace { index: 0 },
+            ),
+            (
+                vec!["système".to_owned()],
+                ProtectedContractNamespacesError::InvalidNamespace { index: 0 },
+            ),
+            (
+                vec!["apps".to_owned(), "apps".to_owned()],
+                ProtectedContractNamespacesError::DuplicateNamespace {
+                    namespace: "apps".to_owned(),
+                },
+            ),
+        ] {
+            assert_eq!(
+                validate_protected_contract_namespaces(&namespaces),
+                Err(expected)
+            );
+        }
     }
     fn minimal_contract_artifact(
         abi_version: u8,
@@ -901,7 +1179,11 @@ mod tests {
             DataSpaceId::UNIVERSAL,
         )
         .expect("contract address");
-        activate_instance(&authority, contract_address.clone(), code_hash, &mut stx)
+        stx.world.bind_inactive_contract_subject_for_testing(
+            contract_address.clone(),
+            authority.clone(),
+        );
+        activate_instance(&authority, contract_address.clone(), 1, code_hash, &mut stx)
             .expect("activate instance");
         assert_eq!(
             pending_contract_lifecycle(&stx.world, &contract_address)
@@ -964,16 +1246,12 @@ mod tests {
         assert_eq!(borrowed.0, stored_ptr, "borrow helper must not clone bytes");
     }
     #[test]
-    fn protected_contract_activation_succeeds_with_governance_permission() {
+    fn protected_contract_activation_uses_existing_owner_lifecycle() {
         let (state, authority, kp) = test_state();
         let mut block = state.block(default_header(1));
         let mut stx = block.transaction();
-        // Grant only the governance/parameter permissions needed to protect a namespace.
-        let enact: permission::Permission =
-            iroha_executor_data_model::permission::governance::CanEnactGovernance.into();
-        Grant::account_permission(enact, authority.clone())
-            .execute(&authority, &mut stx)
-            .expect("grant CanEnactGovernance");
+        // Namespace protection applies to address deployment. Once Parliament has
+        // established a lifecycle binding, its owner may perform revision-CAS activation.
         let set_params: permission::Permission = CanSetParameters.into();
         Grant::account_permission(set_params, authority.clone())
             .execute(&authority, &mut stx)
@@ -1002,7 +1280,11 @@ mod tests {
             DataSpaceId::UNIVERSAL,
         )
         .expect("contract address");
-        activate_instance(&authority, contract_address.clone(), code_hash, &mut stx)
+        stx.world.bind_inactive_contract_subject_for_testing(
+            contract_address.clone(),
+            authority.clone(),
+        );
+        activate_instance(&authority, contract_address.clone(), 1, code_hash, &mut stx)
             .expect("governed activation");
         stx.apply();
         block
@@ -1026,6 +1308,12 @@ mod tests {
             DataSpaceId::UNIVERSAL,
         )
         .expect("contract address");
+        transaction
+            .world
+            .bind_inactive_contract_subject_for_testing(
+                contract_address.clone(),
+                authority.clone(),
+            );
         let (v1_code, v1_manifest) = lifecycle_contract(
             r#"
 seiyaku LifecycleOne {
@@ -1042,6 +1330,7 @@ seiyaku LifecycleOne {
         activate_instance(
             &authority,
             contract_address.clone(),
+            1,
             v1_hash,
             &mut transaction,
         )
@@ -1106,6 +1395,7 @@ seiyaku LifecycleOne {
         activate_instance(
             &authority,
             contract_address.clone(),
+            2,
             v1_hash,
             &mut transaction,
         )
@@ -1129,43 +1419,14 @@ seiyaku LifecycleTwo {
             .expect("register v2 bytecode");
         register_manifest(&authority, v2_manifest.signed(&keypair), &mut transaction)
             .expect("register v2 manifest");
-        let unauthorized_kaizen = activate_instance(
-            &authority,
-            contract_address.clone(),
-            v2_hash,
-            &mut transaction,
-        )
-        .expect_err("in-place replacement requires governance authorization");
-        assert!(
-            unauthorized_kaizen
-                .to_string()
-                .contains("CanEnactGovernance")
-        );
-        assert_eq!(
-            transaction
-                .world
-                .contract_instances
-                .get(&contract_address)
-                .copied(),
-            Some(v1_hash),
-            "rejected kaizen must preserve the old binding"
-        );
-        Grant::account_permission(
-            iroha_data_model::permission::Permission::new(
-                "CanEnactGovernance".to_owned(),
-                Json::new(()),
-            ),
-            authority.clone(),
-        )
-        .execute(&authority, &mut transaction)
-        .expect("grant in-place kaizen governance permission");
         activate_instance(
             &authority,
             contract_address.clone(),
+            2,
             v2_hash,
             &mut transaction,
         )
-        .expect("replace the active binding");
+        .expect("the lifecycle owner may replace the active binding");
         let kaizen = pending_contract_lifecycle(&transaction.world, &contract_address)
             .expect("valid lifecycle state")
             .expect("replacement staged kaizen");
@@ -1281,6 +1542,12 @@ seiyaku LifecycleAba {
         let mut first_block = state.block(default_header(1));
         let mut first_transaction = first_block.transaction();
         first_transaction.tx_call_hash = Some(Hash::new(b"lifecycle-aba-first-activation"));
+        first_transaction
+            .world
+            .bind_inactive_contract_subject_for_testing(
+                contract_address.clone(),
+                authority.clone(),
+            );
         let code_hash = register_code_bytes(&authority, code, &mut first_transaction)
             .expect("register lifecycle bytecode");
         register_manifest(
@@ -1292,6 +1559,7 @@ seiyaku LifecycleAba {
         activate_instance(
             &authority,
             contract_address.clone(),
+            1,
             code_hash,
             &mut first_transaction,
         )
@@ -1316,6 +1584,7 @@ seiyaku LifecycleAba {
         deactivate.tx_call_hash = Some(Hash::new(b"lifecycle-aba-deactivation"));
         DeactivateContractInstance {
             contract_address: contract_address.clone(),
+            expected_revision: 2,
             reason: Some("ABA regression fixture".to_owned()),
         }
         .execute(&authority, &mut deactivate)
@@ -1330,6 +1599,7 @@ seiyaku LifecycleAba {
         activate_instance(
             &authority,
             contract_address.clone(),
+            3,
             code_hash,
             &mut second_transaction,
         )
@@ -1544,14 +1814,38 @@ seiyaku LifecycleAba {
         )
         .expect("contract address");
         let mut world = World::default();
+        world.accounts.insert(
+            authority.clone(),
+            iroha_data_model::account::AccountValue::new(
+                iroha_data_model::account::AccountDetails::default(),
+            ),
+        );
+        let subject = address.subject_id();
+        world.accounts.insert(
+            subject.clone(),
+            iroha_data_model::account::AccountValue::new(
+                iroha_data_model::account::AccountDetails::default(),
+            ),
+        );
+        let active_code_hash = Hash::new(b"active-contract");
         world
             .contract_instances
-            .insert(address.clone(), Hash::new(b"active-contract"));
+            .insert(address.clone(), active_code_hash);
+        world.contract_subject_bindings.insert(
+            address.clone(),
+            ContractSubjectBinding::new_direct(&address, authority.clone())
+                .with_active_code_hash(active_code_hash),
+        );
         initialize_contract_subject_bindings(&mut world).expect("initialize subject ledger");
         let bindings = world.contract_subject_bindings.view();
         let binding = bindings.get(&address).expect("binding");
         assert_eq!(binding.subject, address.subject_id());
         let world_view = world.view();
+        let (persisted_subject, lifecycle) = fetch_contract_lifecycle(&world_view, &address)
+            .expect("valid lifecycle lookup")
+            .expect("retained lifecycle");
+        assert_eq!(persisted_subject, subject);
+        assert_eq!(lifecycle.active_code_hash, Some(active_code_hash));
         assert_eq!(
             borrow_bound_contract_subject_from_world(&world_view, &address),
             Some(&binding.subject),
@@ -1564,6 +1858,167 @@ seiyaku LifecycleAba {
             Some(&address)
         );
         validate_contract_subject_bindings(&world).expect("validated subject ledger");
+    }
+    #[test]
+    fn subject_binding_initialization_rejects_missing_subject_account() {
+        let authority = AccountId::new(checked_keypair().public_key().clone());
+        let address = ContractAddress::derive(
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
+            &authority,
+            72,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
+        let missing_subject = address.subject_id();
+        let mut world = World::default();
+        world.accounts.insert(
+            authority.clone(),
+            iroha_data_model::account::AccountValue::new(
+                iroha_data_model::account::AccountDetails::default(),
+            ),
+        );
+        world.contract_subject_bindings.insert(
+            address.clone(),
+            ContractSubjectBinding::new_direct(&address, authority),
+        );
+
+        let error = initialize_contract_subject_bindings(&mut world)
+            .expect_err("a retained binding cannot reference an absent subject account");
+        assert!(
+            error.contains(&format!(
+                "contract subject account `{missing_subject}` for `{address}` does not exist"
+            )),
+            "unexpected missing-subject validation error: {error}"
+        );
+    }
+    #[test]
+    fn active_contract_lookups_reject_missing_subject_account() {
+        let (state, authority, keypair) = test_state();
+        let mut block = state.block(default_header(1));
+        let mut transaction = block.transaction();
+        let (code, manifest) = minimal_contract_artifact(1);
+        let code_hash = register_code_bytes(&authority, code, &mut transaction)
+            .expect("register contract bytecode");
+        register_manifest(&authority, manifest.signed(&keypair), &mut transaction)
+            .expect("register contract manifest");
+        let address = ContractAddress::derive(
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
+            &authority,
+            73,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
+        transaction
+            .world
+            .bind_inactive_contract_subject_for_testing(address.clone(), authority.clone());
+        activate_instance(&authority, address.clone(), 1, code_hash, &mut transaction)
+            .expect("activate contract");
+        assert!(fetch_bound_contract_record(&transaction, &address).is_some());
+
+        let subject = address.subject_id();
+        assert!(transaction.world.accounts.remove(subject.clone()).is_some());
+        let lifecycle_error = fetch_contract_lifecycle(&transaction.world, &address)
+            .expect_err("lifecycle lookup must reject a missing subject account");
+        assert!(lifecycle_error.contains(&subject.to_string()));
+        assert!(
+            fetch_bound_contract_subject(&transaction, &address).is_none(),
+            "active subject lookup must fail closed"
+        );
+        assert!(
+            fetch_bound_contract_identity(&transaction, &address).is_none(),
+            "active identity lookup must fail closed"
+        );
+        assert!(
+            fetch_bound_contract_record(&transaction, &address).is_none(),
+            "active record lookup must fail closed"
+        );
+    }
+    #[test]
+    fn emergency_hold_blocks_only_its_exact_interval_and_remains_auditable_after_expiry() {
+        let authority = AccountId::new(checked_keypair().public_key().clone());
+        let address = ContractAddress::derive(
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
+            &authority,
+            71,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
+        let mut binding = ContractSubjectBinding::new_direct(&address, authority);
+        binding.lifecycle.emergency_hold =
+            Some(iroha_data_model::smart_contract::ContractEmergencyHoldV1 {
+                incident_digest: [0xC1; 32],
+                proposal_content_id: [0xC2; 32],
+                governance_attempt_id: [0xC3; 32],
+                reason: "bounded incident containment".to_owned(),
+                imposed_at_height: 8,
+                expires_at_height: 10,
+            });
+        let mut world = World::default();
+        world
+            .contract_subject_bindings
+            .insert(address.clone(), binding);
+        let view = world.view();
+
+        assert!(ensure_contract_execution_allowed(&view, &address, 7).is_ok());
+        for height in [8, 9] {
+            let error = ensure_contract_execution_allowed(&view, &address, height)
+                .expect_err("hold interval must suspend execution");
+            assert!(error.contains("held by Parliament"));
+            assert!(error.contains("through block 9"));
+        }
+        assert!(ensure_contract_execution_allowed(&view, &address, 10).is_ok());
+        assert!(
+            view.contract_subject_bindings()
+                .get(&address)
+                .expect("retained lifecycle")
+                .lifecycle
+                .emergency_hold
+                .is_some(),
+            "expiry must not erase the hold before its certified retrospective"
+        );
+    }
+    #[test]
+    fn lifecycle_lookup_rejects_active_index_drift() {
+        let authority = AccountId::new(checked_keypair().public_key().clone());
+        let address = ContractAddress::derive(
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
+            &authority,
+            70,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
+        let mut world = World::default();
+        for account in [authority.clone(), address.subject_id()] {
+            world.accounts.insert(
+                account,
+                iroha_data_model::account::AccountValue::new(
+                    iroha_data_model::account::AccountDetails::default(),
+                ),
+            );
+        }
+        world.contract_subject_bindings.insert(
+            address.clone(),
+            ContractSubjectBinding::new_direct(&address, authority),
+        );
+        world
+            .contract_instances
+            .insert(address.clone(), Hash::new(b"drifted active index"));
+        let world_view = world.view();
+        let error = fetch_contract_lifecycle(&world_view, &address)
+            .expect_err("active-index drift must fail closed");
+        assert!(error.contains("does not match the active-instance index"));
+        assert!(
+            borrow_bound_contract_subject_from_world(&world_view, &address).is_none(),
+            "active execution identity must fail closed on lifecycle/index drift"
+        );
     }
     #[test]
     fn subject_binding_initialization_rejects_mismatched_existing_binding() {
@@ -1586,6 +2041,7 @@ seiyaku LifecycleAba {
             address.clone(),
             ContractSubjectBinding {
                 subject: authority.clone(),
+                lifecycle: ContractLifecycleControlV1::direct(authority.clone()),
             },
         );
         let error = initialize_contract_subject_bindings(&mut world)

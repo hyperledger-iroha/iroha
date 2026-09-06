@@ -215,9 +215,6 @@ fn prebuilt_quarantine_provider_config(
     }
 }
 #[test]
-#[should_panic(
-    expected = "injected SoraFS node quarantine-key provider binding does not match torii.sorafs.storage"
-)]
 fn prebuilt_sorafs_node_rejects_mismatched_quarantine_key_provider_binding() {
     let temp_dir = tempfile::tempdir().expect("create prebuilt SoraFS node temp dir");
     let root = temp_dir
@@ -246,7 +243,10 @@ fn prebuilt_sorafs_node_rejects_mismatched_quarantine_key_provider_binding() {
             sorafs_node::ModerationQuarantineKeyProviderQualificationV1::new(2, [0x52; 32]),
         )))
         .build();
-    assert_prebuilt_sorafs_quarantine_key_provider_binding(&node, &substituted_config);
+    assert_eq!(
+        validate_prebuilt_sorafs_quarantine_key_provider_binding(&node, &substituted_config),
+        Err("injected SoraFS node quarantine-key provider binding does not match configuration"),
+    );
 }
 const PREBUILT_PRIVACY_PRF_HANDLE: &str = "threshold-prf:transparency:primary";
 const PREBUILT_PRIVACY_ANCHOR_HANDLE: &str = "governance-dag:transparency:primary";
@@ -798,9 +798,10 @@ fn prebuilt_sorafs_node_accepts_exact_privacy_provider_bindings() {
         &ToriiRuntimeDeps::new(routing::MaybeTelemetry::disabled()).with_sorafs_node(node.clone()),
     )
     .expect("live-revalidate the prebuilt SoraFS fused privacy runtime");
-    assert_prebuilt_sorafs_privacy_provider_bindings(
+    validate_prebuilt_sorafs_privacy_provider_bindings(
         &node, &config, false, false, false, false, false,
-    );
+    )
+    .expect("exact privacy provider bindings are accepted");
 }
 #[test]
 fn fused_privacy_preflight_rejects_substituted_signed_governance_root() {
@@ -865,7 +866,7 @@ fn fused_privacy_preflight_requires_raw_governance_signer() {
     let error = preflight_sorafs_fenced_privacy_runtime(&config, &runtime_deps)
         .expect_err("standalone signed Governance publication must require its raw signer");
     assert!(
-        error.contains("requires a raw runtime HSM signer"),
+        error.contains("requires a raw runtime signer"),
         "unexpected error: {error}"
     );
 }
@@ -1076,9 +1077,6 @@ fn fused_privacy_preflight_rejects_substituted_raw_head_reader() {
     );
 }
 #[test]
-#[should_panic(
-    expected = "injected SoraFS node threshold-PRF provider binding does not match torii.sorafs.storage"
-)]
 fn prebuilt_sorafs_node_rejects_mismatched_privacy_provider_binding() {
     let temp_dir = tempfile::tempdir().expect("create prebuilt privacy temp dir");
     let root = temp_dir
@@ -1092,20 +1090,20 @@ fn prebuilt_sorafs_node_rejects_mismatched_privacy_provider_binding() {
     )
     .expect("start prebuilt SoraFS node with exact privacy bindings");
     let substituted_config = prebuilt_privacy_storage_config(root.join("storage"), 2, 1);
-    assert_prebuilt_sorafs_privacy_provider_bindings(
-        &node,
-        &substituted_config,
-        false,
-        false,
-        false,
-        false,
-        false,
+    assert_eq!(
+        validate_prebuilt_sorafs_privacy_provider_bindings(
+            &node,
+            &substituted_config,
+            false,
+            false,
+            false,
+            false,
+            false,
+        ),
+        Err("injected SoraFS node threshold-PRF provider binding does not match configuration"),
     );
 }
 #[test]
-#[should_panic(
-    expected = "injected SoraFS node fused privacy publisher binding does not match torii.sorafs.storage"
-)]
 fn prebuilt_sorafs_node_rejects_substituted_fenced_privacy_binding() {
     let temp_dir = tempfile::tempdir().expect("create prebuilt privacy temp dir");
     let root = temp_dir
@@ -1119,20 +1117,20 @@ fn prebuilt_sorafs_node_rejects_substituted_fenced_privacy_binding() {
     )
     .expect("start prebuilt SoraFS node with exact privacy bindings");
     let substituted_config = prebuilt_privacy_storage_config(root.join("storage"), 1, 2);
-    assert_prebuilt_sorafs_privacy_provider_bindings(
-        &node,
-        &substituted_config,
-        false,
-        false,
-        false,
-        false,
-        false,
+    assert_eq!(
+        validate_prebuilt_sorafs_privacy_provider_bindings(
+            &node,
+            &substituted_config,
+            false,
+            false,
+            false,
+            false,
+            false,
+        ),
+        Err("injected SoraFS node fused privacy publisher binding does not match configuration"),
     );
 }
 #[test]
-#[should_panic(
-    expected = "a prebuilt SoraFS node must not also receive a raw threshold-PRF provider through Torii"
-)]
 fn prebuilt_sorafs_node_rejects_ambiguous_raw_privacy_provider() {
     let temp_dir = tempfile::tempdir().expect("create prebuilt privacy temp dir");
     let root = temp_dir
@@ -1145,14 +1143,16 @@ fn prebuilt_sorafs_node_rejects_ambiguous_raw_privacy_provider() {
         prebuilt_privacy_runtime_deps(),
     )
     .expect("start prebuilt SoraFS node with exact privacy bindings");
-    assert_prebuilt_sorafs_privacy_provider_bindings(
-        &node, &config, true, false, false, false, false,
+    assert_eq!(
+        validate_prebuilt_sorafs_privacy_provider_bindings(
+            &node, &config, true, false, false, false, false,
+        ),
+        Err(
+            "a prebuilt SoraFS node must not also receive a raw threshold-PRF provider through Torii"
+        ),
     );
 }
 #[test]
-#[should_panic(
-    expected = "a prebuilt SoraFS node must not also receive a raw fused privacy publisher through Torii"
-)]
 fn prebuilt_sorafs_node_rejects_ambiguous_raw_fenced_privacy_publisher() {
     let temp_dir = tempfile::tempdir().expect("create prebuilt privacy temp dir");
     let root = temp_dir
@@ -1165,14 +1165,16 @@ fn prebuilt_sorafs_node_rejects_ambiguous_raw_fenced_privacy_publisher() {
         prebuilt_privacy_runtime_deps(),
     )
     .expect("start prebuilt SoraFS node with exact privacy bindings");
-    assert_prebuilt_sorafs_privacy_provider_bindings(
-        &node, &config, false, false, false, true, false,
+    assert_eq!(
+        validate_prebuilt_sorafs_privacy_provider_bindings(
+            &node, &config, false, false, false, true, false,
+        ),
+        Err(
+            "a prebuilt SoraFS node must not also receive a raw fused privacy publisher through Torii"
+        ),
     );
 }
 #[test]
-#[should_panic(
-    expected = "a prebuilt SoraFS node must not also receive a raw authenticated privacy-head reader through Torii"
-)]
 fn prebuilt_sorafs_node_rejects_ambiguous_raw_fenced_privacy_head_reader() {
     let temp_dir = tempfile::tempdir().expect("create prebuilt privacy temp dir");
     let root = temp_dir
@@ -1185,8 +1187,13 @@ fn prebuilt_sorafs_node_rejects_ambiguous_raw_fenced_privacy_head_reader() {
         prebuilt_privacy_runtime_deps(),
     )
     .expect("start prebuilt SoraFS node with exact privacy bindings");
-    assert_prebuilt_sorafs_privacy_provider_bindings(
-        &node, &config, false, false, false, false, true,
+    assert_eq!(
+        validate_prebuilt_sorafs_privacy_provider_bindings(
+            &node, &config, false, false, false, false, true,
+        ),
+        Err(
+            "a prebuilt SoraFS node must not also receive a raw authenticated privacy-head reader through Torii"
+        ),
     );
 }
 #[test]
@@ -1350,9 +1357,6 @@ fn torii_runtime_deps_retain_fenced_privacy_pair() {
     );
 }
 #[tokio::test]
-#[should_panic(
-    expected = "invalid SoraFS node runtime preflight: standalone fused privacy runtime requires the raw writer and authenticated-head reader as one complete pair"
-)]
 async fn new_with_handle_preflights_fused_privacy_before_startup() {
     tokio::task::yield_now().await;
     let cfg = crate::test_utils::mk_minimal_root_cfg();
@@ -1375,7 +1379,7 @@ async fn new_with_handle_preflights_fused_privacy_before_startup() {
     let (publisher, _) = prebuilt_fenced_transparency_runtime();
     let runtime_deps = ToriiRuntimeDeps::new(routing::MaybeTelemetry::disabled())
         .with_sorafs_fenced_transparency_publisher(publisher);
-    let _ = Torii::new_with_handle(
+    let error = Torii::new_with_handle(
         ChainId::from("fused-privacy-preflight-test"),
         signed_query_test_network_id(),
         kiso,
@@ -1389,6 +1393,21 @@ async fn new_with_handle_preflights_fused_privacy_before_startup() {
         OnlinePeersProvider::new(peers_rx),
         None,
         runtime_deps,
+    )
+    .err()
+    .expect("an incomplete fused-privacy pair must fail construction");
+    assert!(matches!(
+        error,
+        ToriiBuildError::InvalidRuntimeDependency {
+            component: "sorafs.storage",
+            ..
+        }
+    ));
+    assert!(
+        error
+            .to_string()
+            .contains("standalone fused privacy runtime requires the raw writer and authenticated-head reader as one complete pair"),
+        "unexpected construction error: {error}"
     );
 }
 fn proof_json_headers() -> HeaderMap {
@@ -1582,6 +1601,10 @@ fn bind_asset_alias_for_test(
 fn sample_iso_bridge_config(alias: &str, account_id: &AccountId) -> actual::IsoBridge {
     let signer_keypair =
         checked_torii_test_ed25519_keypair(0x80, "derive ISO bridge signer fixture key");
+    let originator_operator =
+        checked_torii_test_ed25519_keypair(0x81, "derive ISO originator operator fixture key");
+    let counterparty_operator =
+        checked_torii_test_ed25519_keypair(0x82, "derive ISO counterparty operator fixture key");
     actual::IsoBridge {
         enabled: true,
         max_body_bytes: iroha_config::parameters::defaults::torii::ISO_BRIDGE_MAX_BODY_BYTES,
@@ -1598,6 +1621,23 @@ fn sample_iso_bridge_config(alias: &str, account_id: &AccountId) -> actual::IsoB
             account_id: account_id.to_string(),
             private_key: signer_keypair.private_key().clone(),
         }),
+        participants: vec![
+            actual::IsoBridgeParticipant {
+                id: "originator-bank".to_owned(),
+                operator_keys: vec![originator_operator.public_key().clone()],
+                financial_identifiers: vec!["DEUTDEFF".to_owned()],
+                allowed_profiles: vec!["generic-iso20022".to_owned()],
+                roles: vec!["originator".to_owned(), "counterparty".to_owned()],
+            },
+            actual::IsoBridgeParticipant {
+                id: "counterparty-bank".to_owned(),
+                operator_keys: vec![counterparty_operator.public_key().clone()],
+                financial_identifiers: vec!["MARKDEFF".to_owned()],
+                allowed_profiles: vec!["generic-iso20022".to_owned()],
+                roles: vec!["originator".to_owned(), "counterparty".to_owned()],
+            },
+        ],
+        audit_admin_keys: Vec::new(),
         account_aliases: vec![actual::IsoAccountAlias {
             iban: alias.to_string(),
             account_id: account_id.to_string(),
@@ -1605,6 +1645,36 @@ fn sample_iso_bridge_config(alias: &str, account_id: &AccountId) -> actual::IsoB
         currency_assets: Vec::new(),
         reference_data: actual::IsoReferenceData::default(),
     }
+}
+#[test]
+fn iso_lifecycle_persistence_error_is_retryable_without_rejection() {
+    let app = mk_app_state_for_tests_with_iso_bridge(Some(sample_iso_bridge_config(
+        "DE89370400440532013000",
+        &ALICE_ID,
+    )));
+    let runtime = app.iso_bridge.as_ref().expect("ISO bridge enabled");
+    let message_id = "handler-persistence-unavailable";
+    assert!(runtime.check_and_record_message(message_id));
+
+    let error = map_iso_lifecycle_apply_error(
+        runtime,
+        message_id,
+        IsoLifecycleApplyError::PersistenceUnavailable,
+    );
+    assert!(matches!(
+        error,
+        Error::AppServiceUnavailable {
+            code: "iso_lifecycle_persistence_unavailable",
+            ..
+        }
+    ));
+    assert_eq!(
+        runtime
+            .message_status(message_id)
+            .expect("admitted lifecycle record remains retryable")
+            .status_label(),
+        "Pending"
+    );
 }
 fn local_connect_info() -> axum::extract::ConnectInfo<std::net::SocketAddr> {
     axum::extract::ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))
@@ -1616,9 +1686,20 @@ async fn iso_audit_messages_endpoint_exports_digest_bound_manifest() {
         &ALICE_ID,
     )));
     let runtime = app.iso_bridge.as_ref().expect("iso bridge enabled");
+    assert!(runtime.check_and_record_message("handler-audit"));
     runtime.mark_accepted("handler-audit", "handler-tx");
+    let operator = operator_signatures::AuthenticatedOperatorPublicKey(
+        checked_torii_test_ed25519_keypair(0x81, "derive ISO audit reader fixture key")
+            .public_key()
+            .clone(),
+    );
     let (status, JsonBody(body)) =
-        handler_iso_audit_messages(State(app), HeaderMap::new(), local_connect_info())
+        handler_iso_audit_messages(
+            State(app),
+            Extension(operator),
+            HeaderMap::new(),
+            local_connect_info(),
+        )
             .await
             .expect("audit endpoint");
     assert_eq!(status, StatusCode::OK);
@@ -1649,6 +1730,11 @@ async fn iso_audit_messages_endpoint_exports_digest_bound_manifest() {
 async fn iso_audit_messages_endpoint_rejects_disabled_bridge() {
     let err = handler_iso_audit_messages(
         State(mk_app_state_for_tests()),
+        Extension(operator_signatures::AuthenticatedOperatorPublicKey(
+            checked_torii_test_ed25519_keypair(0x81, "derive disabled ISO reader fixture key")
+                .public_key()
+                .clone(),
+        )),
         HeaderMap::new(),
         local_connect_info(),
     )
@@ -2034,6 +2120,8 @@ fn next_block_height(app: &SharedAppState) -> u64 {
     current_block_height(app).saturating_add(1).max(1)
 }
 #[cfg(feature = "app_api")]
+const TX_HISTORY_TEST_HMAC_SECRET: &str = "0123456789abcdef0123456789abcdef";
+#[cfg(feature = "app_api")]
 fn sample_tx_history_jwt_claims(subject: &str) -> Value {
     let mut claims = Map::new();
     claims.insert("sub".to_string(), Value::from(subject));
@@ -2050,13 +2138,7 @@ fn sample_tx_history_jwt_claims(subject: &str) -> Value {
     Value::Object(claims)
 }
 #[cfg(feature = "app_api")]
-fn sign_tx_history_jwt_claims(secret: &str, claims: Value) -> String {
-    let mut header = Map::new();
-    header.insert("typ".to_string(), Value::from("JWT"));
-    header.insert(
-        "alg".to_string(),
-        Value::from(tx_history_jwt_algorithm_name(JwtAlgorithm::HS256)),
-    );
+fn sign_tx_history_jwt_header_and_claims(secret: &str, header: Map, claims: Value) -> String {
     let encoded_header = JWT_BASE64.encode(
         norito::json::to_vec(&Value::Object(header)).expect("sample JWT header should encode"),
     );
@@ -2072,13 +2154,221 @@ fn sign_tx_history_jwt_claims(secret: &str, claims: Value) -> String {
     format!("{message}.{signature}")
 }
 #[cfg(feature = "app_api")]
+fn sign_tx_history_jwt_claims(secret: &str, claims: Value) -> String {
+    let mut header = Map::new();
+    header.insert("typ".to_string(), Value::from("JWT"));
+    header.insert(
+        "alg".to_string(),
+        Value::from(tx_history_jwt_algorithm_name(JwtAlgorithm::HS256)),
+    );
+    sign_tx_history_jwt_header_and_claims(secret, header, claims)
+}
+#[cfg(feature = "app_api")]
 fn sample_tx_history_jwt(secret: &str) -> String {
     sign_tx_history_jwt_claims(secret, sample_tx_history_jwt_claims("operator1@banka"))
 }
 #[cfg(feature = "app_api")]
 #[test]
+fn tx_history_jwt_algorithm_labels_are_exact() {
+    for algorithm in [
+        JwtAlgorithm::HS256,
+        JwtAlgorithm::HS384,
+        JwtAlgorithm::HS512,
+        JwtAlgorithm::RS256,
+        JwtAlgorithm::RS384,
+        JwtAlgorithm::RS512,
+        JwtAlgorithm::PS256,
+        JwtAlgorithm::PS384,
+        JwtAlgorithm::PS512,
+        JwtAlgorithm::ES256,
+        JwtAlgorithm::ES384,
+        JwtAlgorithm::EdDSA,
+    ] {
+        assert_eq!(
+            parse_tx_history_jwt_algorithm(tx_history_jwt_algorithm_name(algorithm)),
+            Some(algorithm)
+        );
+    }
+    for alias in ["hs256", " HS256", "HS256 ", "EDDSA", "eddsa"] {
+        assert_eq!(parse_tx_history_jwt_algorithm(alias), None);
+    }
+}
+#[cfg(feature = "app_api")]
+#[test]
+fn tx_history_policy_loader_rejects_malformed_asymmetric_keys_without_unwinding() {
+    let catalog = iroha_data_model::nexus::DataSpaceCatalog::new(vec![
+        iroha_data_model::nexus::DataSpaceMetadata::default(),
+    ])
+    .expect("dataspace catalog");
+    for algorithm in ["RS256", "ES256", "EdDSA"] {
+        let config = actual::ToriiTxHistory {
+            mandatory_aliases_path: None,
+            mandatory_aliases_max_file_bytes:
+                iroha_config::parameters::defaults::torii::tx_history::
+                    MANDATORY_ALIASES_MAX_FILE_BYTES_V1,
+            allowed_asset_definition_id: None,
+            jwt: Some(actual::ToriiTxHistoryJwt {
+                algorithm: algorithm.to_owned(),
+                secret: None,
+                public_key_pem: Some(
+                    "-----BEGIN PUBLIC KEY-----\nnot-base64\n-----END PUBLIC KEY-----".to_owned(),
+                ),
+                issuer: None,
+                audience: None,
+            }),
+        };
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            load_tx_history_access_policy(Some(&config), &catalog)
+        }))
+        .expect("malformed asymmetric key must return an error instead of unwinding");
+        let error = match outcome {
+            Err(error) => error,
+            Ok(_) => panic!("malformed {algorithm} key must fail policy construction"),
+        };
+        assert!(matches!(
+            &error,
+            TxHistoryStartupError::InvalidJwtPublicKey {
+                algorithm: rejected,
+                ..
+            } if rejected == algorithm
+        ));
+        let unavailable = TxHistoryAccessPolicy::with_startup_error(error);
+        assert!(matches!(
+            ensure_tx_history_access_policy_ready(&unavailable),
+            Err(Error::TxHistoryStartup { .. })
+        ));
+    }
+}
+#[cfg(feature = "app_api")]
+#[test]
+fn tx_history_policy_loader_rejects_out_of_range_hmac_secrets() {
+    let catalog = iroha_data_model::nexus::DataSpaceCatalog::new(vec![
+        iroha_data_model::nexus::DataSpaceMetadata::default(),
+    ])
+    .expect("dataspace catalog");
+    for (algorithm, minimum) in [("HS256", 32), ("HS384", 48), ("HS512", 64)] {
+        for accepted_length in [minimum, 4 * 1024] {
+            let config = actual::ToriiTxHistory {
+                mandatory_aliases_path: None,
+                mandatory_aliases_max_file_bytes:
+                    iroha_config::parameters::defaults::torii::tx_history::
+                        MANDATORY_ALIASES_MAX_FILE_BYTES_V1,
+                allowed_asset_definition_id: None,
+                jwt: Some(actual::ToriiTxHistoryJwt {
+                    algorithm: algorithm.to_owned(),
+                    secret: Some("s".repeat(accepted_length)),
+                    public_key_pem: None,
+                    issuer: None,
+                    audience: None,
+                }),
+            };
+            load_tx_history_access_policy(Some(&config), &catalog)
+                .expect("boundary-valid HMAC secret must load");
+        }
+        for rejected_length in [minimum - 1, 4 * 1024 + 1] {
+            let config = actual::ToriiTxHistory {
+                mandatory_aliases_path: None,
+                mandatory_aliases_max_file_bytes:
+                    iroha_config::parameters::defaults::torii::tx_history::
+                        MANDATORY_ALIASES_MAX_FILE_BYTES_V1,
+                allowed_asset_definition_id: None,
+                jwt: Some(actual::ToriiTxHistoryJwt {
+                    algorithm: algorithm.to_owned(),
+                    secret: Some("s".repeat(rejected_length)),
+                    public_key_pem: None,
+                    issuer: None,
+                    audience: None,
+                }),
+            };
+            assert!(matches!(
+                load_tx_history_access_policy(Some(&config), &catalog),
+                Err(TxHistoryStartupError::InvalidJwtSecretLength {
+                    minimum: rejected_minimum,
+                    maximum: 4096,
+                    actual,
+                    ..
+                }) if rejected_minimum == minimum && actual == rejected_length
+            ));
+        }
+        let config = actual::ToriiTxHistory {
+            mandatory_aliases_path: None,
+            mandatory_aliases_max_file_bytes:
+                iroha_config::parameters::defaults::torii::tx_history::
+                    MANDATORY_ALIASES_MAX_FILE_BYTES_V1,
+            allowed_asset_definition_id: None,
+            jwt: Some(actual::ToriiTxHistoryJwt {
+                algorithm: algorithm.to_owned(),
+                secret: Some(" ".repeat(minimum)),
+                public_key_pem: None,
+                issuer: None,
+                audience: None,
+            }),
+        };
+        assert!(matches!(
+            load_tx_history_access_policy(Some(&config), &catalog),
+            Err(TxHistoryStartupError::InvalidJwtSecretLength { .. })
+        ));
+    }
+}
+#[cfg(feature = "app_api")]
+#[test]
+fn tx_history_policy_loader_propagates_missing_alias_policy_as_startup_error() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let path = directory.path().join("missing-alias-policy.json");
+    let config = actual::ToriiTxHistory {
+        mandatory_aliases_path: Some(path.clone()),
+        mandatory_aliases_max_file_bytes: 1024,
+        allowed_asset_definition_id: None,
+        jwt: None,
+    };
+    let catalog = iroha_data_model::nexus::DataSpaceCatalog::new(vec![
+        iroha_data_model::nexus::DataSpaceMetadata::default(),
+    ])
+    .expect("dataspace catalog");
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        load_tx_history_access_policy(Some(&config), &catalog)
+    }))
+    .expect("missing alias policy must return an error instead of unwinding");
+    let error = match outcome {
+        Err(error) => error,
+        Ok(_) => panic!("missing alias policy must fail policy construction"),
+    };
+    assert!(matches!(
+        &error,
+        TxHistoryStartupError::MandatoryAliasPolicy { path: rejected, .. } if rejected == &path
+    ));
+    assert!(matches!(
+        ensure_tx_history_access_policy_ready(&TxHistoryAccessPolicy::with_startup_error(error)),
+        Err(Error::TxHistoryStartup { .. })
+    ));
+}
+#[cfg(feature = "app_api")]
+#[tokio::test]
+async fn invalid_tx_history_policy_fails_closed_when_test_router_bypasses_startup() {
+    let mut app = mk_app_state_for_tests();
+    Arc::get_mut(&mut app)
+        .expect("unique app state")
+        .tx_history_access_policy = Arc::new(TxHistoryAccessPolicy::with_startup_error(
+        TxHistoryStartupError::InvalidJwtPublicKey {
+            algorithm: "RS256".to_owned(),
+            reason: "invalid test key".to_owned(),
+        },
+    ));
+    let response = tx_history_viewer_from_headers(&app, &HeaderMap::new())
+        .expect_err("invalid startup policy must not degrade to unconfigured authentication");
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert!(matches!(
+        resolve_tx_history_allowed_asset_definition_id(app.as_ref()),
+        Err(Error::AppServiceUnavailable {
+            code: "tx_history_configuration_invalid",
+            ..
+        })
+    ));
+}
+#[cfg(feature = "app_api")]
+#[test]
 fn tx_history_jwt_claims_accept_valid_hmac_token() {
-    let secret = "shared-secret";
+    let secret = TX_HISTORY_TEST_HMAC_SECRET;
     let token = sample_tx_history_jwt(secret);
     let jwt = TxHistoryJwtConfig {
         algorithm: JwtAlgorithm::HS256,
@@ -2094,7 +2384,7 @@ fn tx_history_jwt_claims_accept_valid_hmac_token() {
 #[cfg(feature = "app_api")]
 #[test]
 fn tx_history_jwt_claims_accept_case_insensitive_bearer_scheme() {
-    let secret = "shared-secret";
+    let secret = TX_HISTORY_TEST_HMAC_SECRET;
     let token = sample_tx_history_jwt(secret);
     let jwt = TxHistoryJwtConfig {
         algorithm: JwtAlgorithm::HS256,
@@ -2102,17 +2392,113 @@ fn tx_history_jwt_claims_accept_case_insensitive_bearer_scheme() {
         issuer: Some("pk-cbdc-dev".to_string()),
         audience: Some("pk-cbdc".to_string()),
     };
-    let claims = decode_tx_history_jwt_claims(&format!("BEARER   {token}"), &jwt)
-        .expect("Bearer scheme is case-insensitive and allows HTTP whitespace");
+    let claims = decode_tx_history_jwt_claims(&format!("BEARER {token}"), &jwt)
+        .expect("Bearer scheme is case-insensitive");
     assert_eq!(claims.sub.as_deref(), Some("operator1@banka"));
 }
 #[cfg(feature = "app_api")]
 #[test]
-fn tx_history_jwt_claims_reject_invalid_hmac_signature() {
-    let token = sample_tx_history_jwt("correct-secret");
+fn tx_history_jwt_claims_reject_noncanonical_authorization_whitespace() {
+    let token = sample_tx_history_jwt(TX_HISTORY_TEST_HMAC_SECRET);
     let jwt = TxHistoryJwtConfig {
         algorithm: JwtAlgorithm::HS256,
-        key: TxHistoryJwtKey::Hmac(b"wrong-secret".to_vec()),
+        key: TxHistoryJwtKey::Hmac(TX_HISTORY_TEST_HMAC_SECRET.as_bytes().to_vec()),
+        issuer: Some("pk-cbdc-dev".to_string()),
+        audience: Some("pk-cbdc".to_string()),
+    };
+    for header in [
+        format!(" Bearer {token}"),
+        format!("Bearer  {token}"),
+        format!("Bearer\t{token}"),
+        format!("Bearer {token} "),
+    ] {
+        decode_tx_history_jwt_claims(&header, &jwt)
+            .expect_err("noncanonical Authorization whitespace must fail closed");
+    }
+}
+#[cfg(feature = "app_api")]
+#[test]
+fn tx_history_jwt_claim_constraints_are_compared_byte_exactly() {
+    let jwt = TxHistoryJwtConfig {
+        algorithm: JwtAlgorithm::HS256,
+        key: TxHistoryJwtKey::Hmac(TX_HISTORY_TEST_HMAC_SECRET.as_bytes().to_vec()),
+        issuer: Some("pk-cbdc-dev".to_string()),
+        audience: Some("pk-cbdc".to_string()),
+    };
+
+    let mut claims = sample_tx_history_jwt_claims("operator1@banka");
+    claims
+        .as_object_mut()
+        .expect("sample claims object")
+        .insert("iss".to_owned(), Value::from("pk-cbdc-dev "));
+    let token = sign_tx_history_jwt_claims(TX_HISTORY_TEST_HMAC_SECRET, claims);
+    assert_eq!(
+        decode_tx_history_jwt_claims(&format!("Bearer {token}"), &jwt)
+            .expect_err("issuer whitespace alias must be rejected"),
+        "invalid JWT issuer"
+    );
+
+    let mut claims = sample_tx_history_jwt_claims("operator1@banka");
+    claims
+        .as_object_mut()
+        .expect("sample claims object")
+        .insert(
+            "aud".to_owned(),
+            Value::Array(vec![Value::from(" pk-cbdc"), Value::from("pk-cbdc ")]),
+        );
+    let token = sign_tx_history_jwt_claims(TX_HISTORY_TEST_HMAC_SECRET, claims);
+    assert_eq!(
+        decode_tx_history_jwt_claims(&format!("Bearer {token}"), &jwt)
+            .expect_err("audience whitespace aliases must be rejected"),
+        "invalid JWT audience"
+    );
+}
+#[cfg(feature = "app_api")]
+#[test]
+fn tx_history_jwt_header_is_schema_closed_and_exact() {
+    let jwt = TxHistoryJwtConfig {
+        algorithm: JwtAlgorithm::HS256,
+        key: TxHistoryJwtKey::Hmac(TX_HISTORY_TEST_HMAC_SECRET.as_bytes().to_vec()),
+        issuer: Some("pk-cbdc-dev".to_string()),
+        audience: Some("pk-cbdc".to_string()),
+    };
+    let mut minimal_header = Map::new();
+    minimal_header.insert("alg".to_owned(), Value::from("HS256"));
+    let token = sign_tx_history_jwt_header_and_claims(
+        TX_HISTORY_TEST_HMAC_SECRET,
+        minimal_header,
+        sample_tx_history_jwt_claims("operator1@banka"),
+    );
+    decode_tx_history_jwt_claims(&format!("Bearer {token}"), &jwt)
+        .expect("optional typ header may be absent");
+
+    for (field, value) in [
+        ("typ", Value::from("jwt")),
+        (
+            "crit",
+            Value::Array(vec![Value::from("unsupported-extension")]),
+        ),
+        ("kid", Value::from("unconfigured-key-selector")),
+    ] {
+        let mut header = Map::new();
+        header.insert("alg".to_owned(), Value::from("HS256"));
+        header.insert(field.to_owned(), value);
+        let token = sign_tx_history_jwt_header_and_claims(
+            TX_HISTORY_TEST_HMAC_SECRET,
+            header,
+            sample_tx_history_jwt_claims("operator1@banka"),
+        );
+        decode_tx_history_jwt_claims(&format!("Bearer {token}"), &jwt)
+            .expect_err("unsupported or noncanonical JWT header must fail closed");
+    }
+}
+#[cfg(feature = "app_api")]
+#[test]
+fn tx_history_jwt_claims_reject_invalid_hmac_signature() {
+    let token = sample_tx_history_jwt(TX_HISTORY_TEST_HMAC_SECRET);
+    let jwt = TxHistoryJwtConfig {
+        algorithm: JwtAlgorithm::HS256,
+        key: TxHistoryJwtKey::Hmac(b"fedcba9876543210fedcba9876543210".to_vec()),
         issuer: Some("pk-cbdc-dev".to_string()),
         audience: Some("pk-cbdc".to_string()),
     };
@@ -2145,23 +2531,35 @@ fn tx_history_alias_resolution_reject_maps_invalid_alias_literals_to_bad_request
 }
 #[cfg(feature = "app_api")]
 #[test]
-fn normalize_tx_history_alias_preserves_on_chain_literals() {
-    assert_eq!(
-        normalize_tx_history_alias("operator1@banka"),
-        "operator1@banka"
-    );
-    assert_eq!(
-        normalize_tx_history_alias("operator2@bankb"),
-        "operator2@bankb"
-    );
-    assert_eq!(
-        normalize_tx_history_alias("banking@universal"),
-        "banking@universal"
-    );
-    assert_eq!(
-        normalize_tx_history_alias("operator1@banka.dataspace"),
-        "operator1@banka.dataspace"
-    );
+fn tx_history_dataspace_claim_requires_an_exact_catalog_alias() {
+    let catalog = iroha_data_model::nexus::DataSpaceCatalog::new(vec![
+        iroha_data_model::nexus::DataSpaceMetadata::default(),
+        iroha_data_model::nexus::DataSpaceMetadata {
+            id: DataSpaceId::new(10),
+            alias: "banka".to_owned(),
+            description: None,
+            fault_tolerance: 1,
+        },
+    ])
+    .expect("dataspace catalog");
+    assert!(is_exact_tx_history_dataspace_alias(&catalog, "banka"));
+    for noncanonical in ["", " banka", "banka ", "BANKA", "unknown"] {
+        assert!(!is_exact_tx_history_dataspace_alias(&catalog, noncanonical));
+    }
+    let noncanonical_catalog = iroha_data_model::nexus::DataSpaceCatalog::new(vec![
+        iroha_data_model::nexus::DataSpaceMetadata::default(),
+        iroha_data_model::nexus::DataSpaceMetadata {
+            id: DataSpaceId::new(11),
+            alias: "BANKA".to_owned(),
+            description: None,
+            fault_tolerance: 1,
+        },
+    ])
+    .expect("catalog constructor currently permits a noncanonical alias");
+    assert!(!is_exact_tx_history_dataspace_alias(
+        &noncanonical_catalog,
+        "BANKA"
+    ));
 }
 #[cfg(feature = "app_api")]
 #[test]
@@ -2212,10 +2610,28 @@ fn canonical_tx_history_subject_alias_rejects_bare_subjects() {
     );
 }
 #[cfg(feature = "app_api")]
+#[test]
+fn canonical_tx_history_subject_alias_rejects_noncanonical_spellings() {
+    let catalog = iroha_data_model::nexus::DataSpaceCatalog::new(vec![
+        iroha_data_model::nexus::DataSpaceMetadata::default(),
+        iroha_data_model::nexus::DataSpaceMetadata {
+            id: DataSpaceId::new(10),
+            alias: "banka".to_owned(),
+            description: None,
+            fault_tolerance: 1,
+        },
+    ])
+    .expect("dataspace catalog");
+    for noncanonical in [" operator1@banka", "operator1@banka ", "OPERATOR1@BANKA"] {
+        canonical_tx_history_subject_alias(&catalog, noncanonical)
+            .expect_err("noncanonical subject aliases must not be normalized");
+    }
+}
+#[cfg(feature = "app_api")]
 #[tokio::test]
 async fn tx_history_viewer_from_headers_rejects_bare_subject_aliases() {
     let mut app = mk_app_state_for_tests();
-    let secret = "shared-secret";
+    let secret = TX_HISTORY_TEST_HMAC_SECRET;
     let token = sign_tx_history_jwt_claims(secret, sample_tx_history_jwt_claims("operator1"));
     let app_state = Arc::get_mut(&mut app).expect("unique app state");
     app_state.tx_history_access_policy = Arc::new(TxHistoryAccessPolicy {
@@ -2242,7 +2658,7 @@ async fn tx_history_viewer_from_headers_rejects_bare_subject_aliases() {
 #[tokio::test]
 async fn tx_history_viewer_from_headers_rejects_duplicate_authorization_headers() {
     let mut app = mk_app_state_for_tests();
-    let secret = "shared-secret";
+    let secret = TX_HISTORY_TEST_HMAC_SECRET;
     let token = sample_tx_history_jwt(secret);
     Arc::get_mut(&mut app)
         .expect("unique app state")

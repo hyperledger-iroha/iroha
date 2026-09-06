@@ -82,7 +82,7 @@ pub struct DaCommitmentListCursor {
     norito::derive::NoritoSerialize,
 )]
 pub struct DaCommitmentListRequest {
-    /// Maximum raw index rows to inspect, capped by the server at 1,000.
+    /// Maximum raw index rows to inspect; values above 1,000 are rejected.
     #[norito(default)]
     pub limit: Option<NonZeroU64>,
     /// Server-issued continuation cursor from the preceding page.
@@ -161,8 +161,7 @@ pub async fn handler_list_commitments(
     let nexus = app.state.nexus_snapshot();
     let page = {
         let store = app.state.da_commitments();
-        list_active_from_store(&store, &request, &nexus, snapshot)
-            .map_err(commitment_cursor_error)?
+        list_active_from_store(&store, &request, &nexus, snapshot).map_err(commitment_list_error)?
     };
     let policies = active_proof_policy_bundle_for_state(&nexus, app.state.as_ref());
     if list_snapshot_for_state(app.state.as_ref()) != snapshot {
@@ -232,30 +231,34 @@ pub(super) fn list_snapshot_for_state(state: &iroha_core::state::State) -> DaLis
     }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DaCommitmentCursorError {
+enum DaCommitmentListError {
+    LimitOutOfRange { provided: u64 },
     NonCanonicalSnapshot,
     StaleSnapshot,
     UnknownKey,
 }
-fn commitment_cursor_error(error: DaCommitmentCursorError) -> Error {
+fn commitment_list_error(error: DaCommitmentListError) -> Error {
     let (code, message) = match error {
-        DaCommitmentCursorError::NonCanonicalSnapshot => (
-            "invalid_da_commitment_cursor",
-            "DA commitment cursor snapshot must contain no block hash at height 0 and exactly one block hash at non-zero height",
+        DaCommitmentListError::LimitOutOfRange { provided } => (
+            "invalid_da_commitment_limit",
+            format!(
+                "DA commitment list limit is {provided}; maximum is {MAX_COMMITMENT_PAGE_SIZE}"
+            ),
         ),
-        DaCommitmentCursorError::StaleSnapshot => (
+        DaCommitmentListError::NonCanonicalSnapshot => (
+            "invalid_da_commitment_cursor",
+            "DA commitment cursor snapshot must contain no block hash at height 0 and exactly one block hash at non-zero height".to_owned(),
+        ),
+        DaCommitmentListError::StaleSnapshot => (
             "stale_da_commitment_cursor",
-            "DA commitment cursor does not target the current committed ledger tip; restart from the first page",
+            "DA commitment cursor does not target the current committed ledger tip; restart from the first page".to_owned(),
         ),
-        DaCommitmentCursorError::UnknownKey => (
+        DaCommitmentListError::UnknownKey => (
             "invalid_da_commitment_cursor",
-            "DA commitment cursor key is absent from the current active query index",
+            "DA commitment cursor key is absent from the current active query index".to_owned(),
         ),
     };
-    Error::AppQueryValidation {
-        code,
-        message: message.to_owned(),
-    }
+    Error::AppQueryValidation { code, message }
 }
 #[derive(Debug)]
 struct DaCommitmentPage {
@@ -267,7 +270,7 @@ fn list_active_from_store(
     request: &DaCommitmentListRequest,
     nexus: &Nexus,
     snapshot: DaListSnapshot,
-) -> Result<DaCommitmentPage, DaCommitmentCursorError> {
+) -> Result<DaCommitmentPage, DaCommitmentListError> {
     let policy_context = ActiveLaneProofPolicyContext::new(nexus);
     list_page_from_store(store, request, snapshot, |record| {
         commitment_lane_is_active(&policy_context, record)
@@ -278,22 +281,25 @@ fn list_page_from_store(
     request: &DaCommitmentListRequest,
     snapshot: DaListSnapshot,
     mut is_visible: impl FnMut(&DaCommitmentWithLocation) -> bool,
-) -> Result<DaCommitmentPage, DaCommitmentCursorError> {
+) -> Result<DaCommitmentPage, DaCommitmentListError> {
     let limit = request
         .limit
-        .map(NonZeroU64::get)
-        .and_then(|n| usize::try_from(n).ok())
-        .unwrap_or(DEFAULT_COMMITMENT_PAGE_SIZE)
-        .min(MAX_COMMITMENT_PAGE_SIZE);
+        .map_or(Ok(DEFAULT_COMMITMENT_PAGE_SIZE), |limit| {
+            let provided = limit.get();
+            usize::try_from(provided)
+                .ok()
+                .filter(|&limit| limit <= MAX_COMMITMENT_PAGE_SIZE)
+                .ok_or(DaCommitmentListError::LimitOutOfRange { provided })
+        })?;
     let after = request.cursor.map(|cursor| {
         if !cursor.snapshot.is_canonical() {
-            return Err(DaCommitmentCursorError::NonCanonicalSnapshot);
+            return Err(DaCommitmentListError::NonCanonicalSnapshot);
         }
         if cursor.snapshot != snapshot {
-            return Err(DaCommitmentCursorError::StaleSnapshot);
+            return Err(DaCommitmentListError::StaleSnapshot);
         }
         if !store.contains_query_key(cursor.after) {
-            return Err(DaCommitmentCursorError::UnknownKey);
+            return Err(DaCommitmentListError::UnknownKey);
         }
         Ok(cursor.after)
     });
@@ -706,6 +712,35 @@ mod tests {
         assert!(second.next_cursor.is_none());
     }
     #[test]
+    fn list_overlarge_limit_is_rejected_before_scan() {
+        use std::cell::Cell;
+
+        let store = store_with_records();
+        let snapshot = DaListSnapshot {
+            block_height: 0,
+            block_hash: None,
+        };
+        let examined = Cell::new(0_usize);
+        let provided = u64::try_from(MAX_COMMITMENT_PAGE_SIZE).expect("page limit fits u64") + 1;
+        let error = list_page_from_store(&store, &list_request(Some(provided)), snapshot, |_| {
+            examined.set(examined.get() + 1);
+            true
+        })
+        .expect_err("limit above the exact maximum must be rejected");
+        assert_eq!(error, DaCommitmentListError::LimitOutOfRange { provided });
+        assert_eq!(
+            examined.get(),
+            0,
+            "invalid limits must fail before scanning"
+        );
+
+        assert_eq!(
+            list_page_from_store(&store, &list_request(Some(u64::MAX)), snapshot, |_| true)
+                .expect_err("unrepresentable or overlarge limits must be rejected"),
+            DaCommitmentListError::LimitOutOfRange { provided: u64::MAX }
+        );
+    }
+    #[test]
     fn list_cursor_rejects_unknown_key_and_stale_snapshot() {
         let store = store_with_records();
         let snapshot = DaListSnapshot {
@@ -727,7 +762,7 @@ mod tests {
         assert_eq!(
             list_page_from_store(&store, &unknown, snapshot, |_| true)
                 .expect_err("foreign key must fail closed"),
-            DaCommitmentCursorError::UnknownKey
+            DaCommitmentListError::UnknownKey
         );
         let valid_key = DaCommitmentKey::from_record(
             &store
@@ -749,7 +784,7 @@ mod tests {
         assert_eq!(
             list_page_from_store(&store, &stale, snapshot, |_| true)
                 .expect_err("stale tip must fail closed"),
-            DaCommitmentCursorError::StaleSnapshot
+            DaCommitmentListError::StaleSnapshot
         );
     }
     #[test]
@@ -779,7 +814,7 @@ mod tests {
         assert_eq!(
             list_page_from_store(&store, &request, snapshot, |_| true)
                 .expect_err("malformed snapshot must fail closed"),
-            DaCommitmentCursorError::NonCanonicalSnapshot
+            DaCommitmentListError::NonCanonicalSnapshot
         );
     }
     #[test]
@@ -907,6 +942,33 @@ mod tests {
                 .await
                 .expect("handler should succeed");
         assert_eq!(response.policies.version, DaProofPolicyBundle::VERSION_V1);
+    }
+    #[tokio::test]
+    async fn list_handler_enforces_exact_limit_maximum() {
+        let app = mk_app_state_for_tests();
+        let accepted = u64::try_from(MAX_COMMITMENT_PAGE_SIZE).expect("page limit fits u64");
+        let JsonBody(page) = super::handler_list_commitments(
+            State(app.clone()),
+            NoritoJson(list_request(Some(accepted))),
+        )
+        .await
+        .expect("the exact page-limit maximum must be accepted");
+        assert!(page.commitments.is_empty());
+
+        let rejected = accepted + 1;
+        let error =
+            super::handler_list_commitments(State(app), NoritoJson(list_request(Some(rejected))))
+                .await
+                .expect_err("a page limit above the maximum must be rejected");
+        assert!(matches!(
+            &error,
+            Error::AppQueryValidation {
+                code: "invalid_da_commitment_limit",
+                ..
+            }
+        ));
+        let response = axum::response::IntoResponse::into_response(error);
+        assert_eq!(response.status(), axum::http::StatusCode::BAD_REQUEST);
     }
     #[tokio::test]
     async fn list_handler_rejects_cursor_bound_to_another_tip() {

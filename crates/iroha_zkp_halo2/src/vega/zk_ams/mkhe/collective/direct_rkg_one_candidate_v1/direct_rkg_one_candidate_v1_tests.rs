@@ -296,7 +296,8 @@ fn semantic_handoff_is_ordered_move_only_and_has_no_bypass() {
         &[
             "statement_objects_v2()? != objects",
             "return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);",
-            "self.lifecycle_owner",
+            "let lifecycle_owner = self",
+            ".lifecycle_owner",
             ".verify_semantic_candidate_v2(context, objects, provider)?",
             "Ok(PostSemanticDirectRkgOneCandidateV1 {",
             "_lifecycle_owner: lifecycle_owner,",

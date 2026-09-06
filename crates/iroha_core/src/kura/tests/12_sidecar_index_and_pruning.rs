@@ -185,10 +185,43 @@ fn strict_init_prunes_oversized_block_length() {
     let BlockIndex { start, .. } = store.read_block_index(0).unwrap();
     let huge_len = STRICT_INIT_MAX_BLOCK_BYTES + 1;
     store.write_block_index(0, start, huge_len).unwrap();
-    let validation = Kura::init_canonical_chain(&mut store, 1, None).unwrap();
+    let validation = Kura::init_canonical_chain(&mut store, 1, None, &BTreeMap::new()).unwrap();
     assert!(validation.truncated);
     assert!(validation.hashes.is_empty());
     assert_eq!(store.read_index_count().unwrap(), 0);
+}
+#[test]
+fn strict_init_does_not_prune_corruption_before_a_pinned_terminal_carrier() {
+    let dir = TempDir::new().unwrap();
+    let mut store = BlockStore::new(dir.path());
+    store.create_files_if_they_do_not_exist().unwrap();
+    let mut blocks = DummyBlocks::new();
+    let first = blocks.next();
+    let carrier = blocks.next();
+    store.append_block_to_chain(&first).unwrap();
+    store.append_block_to_chain(&carrier).unwrap();
+    let BlockIndex { start, .. } = store.read_block_index(0).unwrap();
+    store
+        .write_block_index(0, start, STRICT_INIT_MAX_BLOCK_BYTES + 1)
+        .unwrap();
+    let index_path = dir.path().join(INDEX_FILE_NAME);
+    let original_index = fs::read(&index_path).expect("read corrupt index before strict init");
+    let pins = BTreeMap::from([(2_u64, carrier.hash())]);
+
+    let error = Kura::init_canonical_chain(&mut store, 2, None, &pins)
+        .expect_err("a pinned carrier must prevent destructive prefix repair");
+    assert!(
+        error
+            .to_string()
+            .contains("corruption precedes a pinned canonical replica terminal carrier"),
+        "unexpected pinned-carrier rejection: {error:?}",
+    );
+    assert_eq!(store.read_index_count().unwrap(), 2);
+    assert_eq!(
+        fs::read(&index_path).expect("read preserved corrupt index after strict init"),
+        original_index,
+        "strict init must leave the canonical journal byte-exact when repair would erase a pinned carrier",
+    );
 }
 #[test]
 fn strict_init_repairs_only_the_hash_suffix_above_v2_finality() {
@@ -209,7 +242,7 @@ fn strict_init_repairs_only_the_hash_suffix_above_v2_finality() {
     store
         .write_block_hash(2, forged)
         .expect("corrupt only the unfinalized hash suffix");
-    let validation = Kura::init_canonical_chain(&mut store, 3, Some(2))
+    let validation = Kura::init_canonical_chain(&mut store, 3, Some(2), &BTreeMap::new())
         .expect("repair above finality must succeed");
     assert!(validation.hash_mismatch);
     assert!(!validation.truncated);
@@ -241,7 +274,7 @@ fn strict_init_reconstructs_a_missing_hash_suffix_above_v2_finality() {
     store
         .truncate_hashes_to_count(2)
         .expect("remove only the unfinalized hash suffix");
-    let validation = Kura::init_canonical_chain(&mut store, 3, Some(2))
+    let validation = Kura::init_canonical_chain(&mut store, 3, Some(2), &BTreeMap::new())
         .expect("reconstruct a missing suffix without rewriting finality");
     assert!(!validation.hash_mismatch);
     assert!(!validation.truncated);
@@ -1251,22 +1284,6 @@ fn readers_blocked_behind_inflight_prune_fail_closed_after_durable_intent() {
         Some(blocks[3].as_ref()),
         "test requires an above-target cached block before prune"
     );
-    let operation_id = [0xD4; 32];
-    {
-        let mut index = kura.transaction_entrypoint_index.lock();
-        index.heights_by_offline_operation_id.insert(
-            (SAMPLE_GENESIS_ACCOUNT_ID.clone(), operation_id),
-            BTreeSet::from([nonzero!(4_usize)]),
-        );
-    }
-    assert_eq!(
-        kura.get_earliest_block_height_by_offline_operation_id(
-            &SAMPLE_GENESIS_ACCOUNT_ID,
-            operation_id,
-        ),
-        Some(Some(nonzero!(4_usize))),
-        "test requires an above-target offline operation before prune"
-    );
     kura.fail_prune_after_stage_for_tests(PRUNE_STAGE_INTENT);
     kura.pause_prune_before_intent
         .store(true, Ordering::Release);
@@ -1291,7 +1308,6 @@ fn readers_blocked_behind_inflight_prune_fail_closed_after_durable_intent() {
         }
         thread::yield_now();
     }
-    let operation_index_guard = kura.transaction_entrypoint_index.lock();
     kura.canonical_read_kinds_after_prune_check
         .store(0, Ordering::Release);
     kura.observe_canonical_reads_after_prune_check
@@ -1310,29 +1326,12 @@ fn readers_blocked_behind_inflight_prune_fail_closed_after_durable_intent() {
             .send(block_kura.get_block(nonzero!(4_usize)))
             .expect("report blocked block read");
     });
-    let (operation_tx, operation_rx) = std::sync::mpsc::sync_channel(1);
-    let operation_kura = Arc::clone(&kura);
-    let operation_issuer = SAMPLE_GENESIS_ACCOUNT_ID.clone();
-    let operation_reader = thread::spawn(move || {
-        operation_tx
-            .send(
-                operation_kura.get_earliest_block_height_by_offline_operation_id(
-                    &operation_issuer,
-                    operation_id,
-                ),
-            )
-            .expect("report blocked offline-operation read");
-    });
     let readers_deadline = Instant::now() + Duration::from_secs(5);
     while (kura
         .canonical_read_kinds_after_prune_check
         .load(Ordering::Acquire)
-        & (CANONICAL_HASH_READER_OBSERVED
-            | CANONICAL_BLOCK_READER_OBSERVED
-            | OFFLINE_OPERATION_READER_OBSERVED))
-        != (CANONICAL_HASH_READER_OBSERVED
-            | CANONICAL_BLOCK_READER_OBSERVED
-            | OFFLINE_OPERATION_READER_OBSERVED)
+        & (CANONICAL_HASH_READER_OBSERVED | CANONICAL_BLOCK_READER_OBSERVED))
+        != (CANONICAL_HASH_READER_OBSERVED | CANONICAL_BLOCK_READER_OBSERVED)
     {
         if Instant::now() >= readers_deadline {
             kura.observe_canonical_reads_after_prune_check
@@ -1342,10 +1341,6 @@ fn readers_blocked_behind_inflight_prune_fail_closed_after_durable_intent() {
             pruner.join().expect("pruner after reader timeout");
             hash_reader.join().expect("hash reader after timeout");
             block_reader.join().expect("block reader after timeout");
-            drop(operation_index_guard);
-            operation_reader
-                .join()
-                .expect("offline-operation reader after timeout");
             panic!("canonical readers never reached their post-check lock barriers");
         }
         thread::yield_now();
@@ -1360,7 +1355,6 @@ fn readers_blocked_behind_inflight_prune_fail_closed_after_durable_intent() {
             .expect("prune reaches injected crash"),
         "prune must fail-stop after publishing its durable intent"
     );
-    drop(operation_index_guard);
     assert_eq!(
         hash_rx
             .recv_timeout(Duration::from_secs(5))
@@ -1375,18 +1369,10 @@ fn readers_blocked_behind_inflight_prune_fail_closed_after_durable_intent() {
         None,
         "a reader that passed its precheck must not expose an above-target cached block after fail-stop"
     );
-    assert_eq!(
-        operation_rx
-            .recv_timeout(Duration::from_secs(5))
-            .expect("blocked offline-operation reader resumes"),
-        None,
-        "a reader that passed its precheck must not expose an above-target offline operation after fail-stop"
-    );
     pruner.join().expect("pruner");
     crate::sumeragi::status::clear_consensus_transition_poison_for_tests();
     hash_reader.join().expect("hash reader");
     block_reader.join().expect("block reader");
-    operation_reader.join().expect("offline-operation reader");
     assert!(kura.prune_recovery_is_required());
     assert_eq!(
         kura.block_data.lock().len(),

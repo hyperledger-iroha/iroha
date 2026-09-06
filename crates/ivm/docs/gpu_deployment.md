@@ -1,9 +1,10 @@
 # GPU Deployment Guide
 
 This guide explains how to enable and operate the optional CUDA acceleration
-feature of IVM. The offloading infrastructure is designed to be transparent –
-results stay identical to the CPU path – but all nodes in a consensus group must
-use homogeneous GPU hardware for deterministic performance.
+feature of IVM. The offloading infrastructure is transparent: accelerated
+results must match the CPU path byte for byte, so validator nodes do not need
+homogeneous GPU hardware for consensus. Homogeneous fleets can still simplify
+performance qualification and operations.
 
 Note
 - CUDA PTX installation is fail-closed: `build.rs` consumes checked-in PTX by
@@ -19,10 +20,11 @@ Note
 
 ## Metal on macOS
 
-When running on macOS the VM automatically checks for a compatible Metal device.
+Compile IVM with the `metal` Cargo feature on macOS. At runtime the VM checks
+for a compatible Metal device when `[accel].enable_metal = true`.
 If found, vector helpers and the SHA‑256 compression round are executed using
-Metal compute kernels. No additional build flags are required. Nodes without a
-Metal GPU simply fall back to the CPU path and produce identical results.
+Metal compute kernels. Nodes without a Metal GPU simply fall back to the CPU
+path and produce identical results.
 
 ## Enabling CUDA support
 
@@ -34,11 +36,11 @@ Metal GPU simply fall back to the CPU path and produce identical results.
    required only to run the explicit `IVM_CUDA_PTX_MODE=generate` or
    `IVM_CUDA_PTX_MODE=check` qualification path; matching NVIDIA drivers remain
    required at runtime.
-2. At runtime the VM automatically detects GPUs and will offload certain vector
-   and hashing operations. Set `IVM_DISABLE_CUDA=1` to force CPU execution even
-   on systems with GPUs.
-3. To restrict the number of GPUs used, set `IVM_MAX_GPUS` to an integer value.
-   The VM will initialise at most that many devices in deterministic order.
+2. Configure `[accel].enable_cuda = true` (the default) to permit runtime GPU
+   discovery and offload eligible vector and hashing operations. Set it to
+   `false` for CPU-only operation.
+3. Set `[accel].max_gpus` to a positive integer to cap device count, or `0` for
+   no cap. The VM initialises at most that many devices in deterministic order.
 
 ## Determinism considerations
 
@@ -48,18 +50,17 @@ against the scalar implementation and disables itself on a mismatch. The
 legacy `vector_add_f32` diagnostic helper is outside consensus and must be
 removed or explicitly classified before the PTX manifest is signed.
 
-For consensus safety every validating node **must** use the same GPU model and
-CUDA driver version. Mixing different hardware (for example A100 and H100) is
-not recommended as it may lead to subtle timing differences or driver behaviour
-changes.
+Different GPU models, driver versions, or a CPU-only node may have different
+performance, but they must produce the same observable VM result. A golden
+self-test mismatch disables the affected backend and falls back to CPU.
 
 ## Operator checklist
 
 - Install matching CUDA drivers on every node.
 - Verify the signed PTX manifest and exact checked-in artifact digests.
-- Ensure each machine contains the same GPU model and memory size.
-- Verify that `IVM_DISABLE_CUDA` is **not** set when GPUs should be utilised.
-- Optionally set `IVM_MAX_GPUS` if fewer than all detected devices should be used.
+- Qualify each deployed GPU/driver combination against the CPU golden vectors.
+- Verify `[accel].enable_cuda` is true when GPUs should be used.
+- Optionally set `[accel].max_gpus` if fewer than all detected devices should be used.
 - Monitor logs for `CUDA GPU available` during the IVM startup banner.
 
 ## Rollout plan: 8×A100 cluster

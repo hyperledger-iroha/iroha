@@ -25,7 +25,9 @@ pub const FASTPQ_TRANSITION_BATCH_SCHEMA_NAME: &str =
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
     IntoSchema,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_data_model::fastpq::TransferTranscript")]
 pub struct TransferTranscript {
     /// Hash of the transaction entrypoint (`hash_as_entrypoint`) that emitted this transcript.
     pub batch_hash: Hash,
@@ -51,7 +53,9 @@ pub struct TransferTranscript {
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
     IntoSchema,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_data_model::fastpq::TransferDeltaTranscript")]
 pub struct TransferDeltaTranscript {
     /// Source account.
     pub from_account: AccountId,
@@ -158,7 +162,9 @@ pub fn transfer_asset_scales(
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
     IntoSchema,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_data_model::fastpq::TransferSmtWitness")]
 pub struct TransferSmtWitness {
     /// Root before applying this participant update.
     pub root_before: [u8; 32],
@@ -217,6 +223,11 @@ pub fn normalized_numeric_to_u64(value: &Numeric, target_scale: u32) -> Option<u
     IntoSchema,
 )]
 #[norito(schema_name = "iroha_data_model::fastpq::FastpqStateTransitionBatchV1")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_data_model::fastpq::FastpqTransitionBatch",
+    frame = "iroha_data_model::fastpq::FastpqStateTransitionBatchV1"
+)]
 pub struct FastpqTransitionBatch {
     /// Parameter set name (`fastpq-state-transition-stark-v1`).
     pub parameter: String,
@@ -238,7 +249,9 @@ pub struct FastpqTransitionBatch {
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
     IntoSchema,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_data_model::fastpq::FastpqStateTransition")]
 pub struct FastpqStateTransition {
     /// Schema-qualified logical key (asset/account path).
     pub key: Vec<u8>,
@@ -252,6 +265,7 @@ pub struct FastpqStateTransition {
 /// FASTPQ operation selector recorded in batches.
 #[derive(
     Debug,
+    Copy,
     Clone,
     PartialEq,
     Eq,
@@ -262,6 +276,8 @@ pub struct FastpqStateTransition {
     IntoSchema,
 )]
 #[norito(tag = "kind", content = "payload")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::fastpq::FastpqOperationKind")]
 pub enum FastpqOperationKind {
     // The final V1 block starts at 32 so both the experimental 0..=5 wire and
     // the superseded two-operation 16/17 wire fail decoding.
@@ -287,6 +303,7 @@ pub enum FastpqOperationKind {
 /// Exact role/permission tuple committed by a FASTPQ permission transition.
 #[derive(
     Debug,
+    Copy,
     Clone,
     PartialEq,
     Eq,
@@ -295,7 +312,9 @@ pub enum FastpqOperationKind {
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
     IntoSchema,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_data_model::fastpq::FastpqRolePermissionDelta")]
 pub struct FastpqRolePermissionDelta {
     /// Canonical 32-byte role identifier.
     pub role_id: [u8; 32],
@@ -316,7 +335,9 @@ pub struct FastpqRolePermissionDelta {
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
     IntoSchema,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_data_model::fastpq::FastpqPublicInputs")]
 pub struct FastpqPublicInputs {
     /// Data-space identifier (little-endian UUID bytes).
     pub dsid: [u8; 16],
@@ -344,7 +365,9 @@ pub struct FastpqPublicInputs {
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
     IntoSchema,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_data_model::fastpq::TransferTranscriptBundle")]
 pub struct TransferTranscriptBundle {
     /// Entry identity associated with the transcripts on the enclosing evidence surface.
     ///
@@ -448,6 +471,14 @@ mod tests {
     #[test]
     fn transition_batch_schema_rejects_the_pre_release_header() {
         let expected = norito::core::schema_hash_for_name(FASTPQ_TRANSITION_BATCH_SCHEMA_NAME);
+        assert_eq!(
+            <FastpqTransitionBatch as norito::NoritoSchema>::frame_name(),
+            FASTPQ_TRANSITION_BATCH_SCHEMA_NAME
+        );
+        assert_eq!(
+            norito::schema::identity::frame_hash::<FastpqTransitionBatch>(),
+            expected
+        );
         assert_eq!(
             <FastpqTransitionBatch as norito::NoritoSerialize>::schema_hash(),
             expected
@@ -630,3 +661,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod captured_fastpq_schema_tests;

@@ -705,74 +705,31 @@ async fn zk_verify_batch_json_accepts_empty_batch() {
         Some(0)
     );
 }
-#[cfg(feature = "goldilocks_backend")]
 #[tokio::test]
-async fn zk_verify_batch_endpoint_accepts_goldilocks_payload() {
-    use h2::norito_helpers as nh;
-    use iroha_zkp_halo2 as h2;
-    use iroha_zkp_halo2::{
-        GoldilocksParams, GoldilocksPolynomial, GoldilocksScalar, Transcript,
-        backend::goldilocks::GoldilocksBackend,
-    };
-    let app = Router::new().route(
-        "/v1/zk/verify-batch",
-        post(
-            |headers: axum::http::HeaderMap, body: axum::body::Bytes| async move {
-                iroha_torii::handle_v1_zk_verify_batch_with_limits(
-                    headers,
-                    body,
-                    iroha_zkp_halo2::OpenVerifyLimits::default(),
-                    TEST_MAX_BODY_BYTES,
-                    16,
-                    1024 * 1024,
-                    false,
-                )
-                .await
-            },
-        ),
+async fn zk_verify_batch_endpoint_rejects_goldilocks_field_as_ipa_group() {
+    let mut envelope = sample_pallas_envelope("torii-field-is-not-group");
+    envelope.params.curve_id = iroha_zkp_halo2::ZkCurveId::Goldilocks.as_u16();
+    envelope.public.curve_id = iroha_zkp_halo2::ZkCurveId::Goldilocks.as_u16();
+    let bytes = norito::to_bytes(&vec![envelope]).expect("encode unsupported field identity");
+    let value = post_batch_with_limits(
+        bytes,
+        "application/x-norito",
+        iroha_zkp_halo2::OpenVerifyLimits::default(),
+        16,
+        1024 * 1024,
+        false,
+    )
+    .await;
+    assert_eq!(
+        value.get("ok").and_then(|entry| entry.as_bool()),
+        Some(false)
     );
-    let params = GoldilocksParams::new(8).unwrap();
-    let coeffs: Vec<GoldilocksScalar> = (0u64..8).map(|i| GoldilocksScalar::from(i + 1)).collect();
-    let poly = GoldilocksPolynomial::from_coeffs(coeffs);
-    let mut tr = Transcript::new("torii-gold");
-    let p_g = poly.commit(&params).unwrap();
-    let z = GoldilocksScalar::from(6u64);
-    let (proof, t) = poly.open(&params, &mut tr, z, p_g).unwrap();
-    let env_ok = h2::OpenVerifyEnvelope {
-        params: nh::params_to_wire(&params),
-        public: nh::poly_open_public::<GoldilocksBackend>(params.n(), z, t, p_g),
-        proof: nh::proof_to_wire(&proof),
-        transcript_label: "torii-gold".to_string(),
-        vk_commitment: None,
-        public_inputs_schema_hash: None,
-        domain_tag: None,
-    };
-    let mut bad_public = env_ok.public.clone();
-    bad_public.t[0] = bad_public.t[0].wrapping_add(1);
-    let env_bad = h2::OpenVerifyEnvelope {
-        public: bad_public,
-        ..env_ok.clone()
-    };
-    let norito_vec = norito::to_bytes(&vec![env_ok, env_bad]).expect("encode batch");
-    let req = http::Request::builder()
-        .method("POST")
-        .uri("/v1/zk/verify-batch")
-        .header(http::header::CONTENT_TYPE, "application/x-norito")
-        .body(axum::body::Body::from(norito_vec))
-        .unwrap();
-    let resp = app.oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), http::StatusCode::OK);
-    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
-    let v: norito::json::Value = norito::json::from_slice(&bytes).unwrap();
-    assert_eq!(v.get("ok").and_then(|x| x.as_bool()), Some(true));
-    let statuses = v
+    let statuses = value
         .get("statuses")
-        .and_then(|x| x.as_array())
-        .cloned()
-        .unwrap_or_default();
-    assert_eq!(statuses.len(), 2);
-    assert_batch_outcome(&statuses[0], "verified", None);
-    assert_batch_outcome(&statuses[1], "invalid", None);
+        .and_then(|entry| entry.as_array())
+        .unwrap();
+    assert_eq!(statuses.len(), 1);
+    assert_batch_outcome(&statuses[0], "error", Some("unsupported_backend"));
 }
 #[tokio::test]
 async fn zk_verify_batch_endpoint_rejects_bound_metadata_tampering() {

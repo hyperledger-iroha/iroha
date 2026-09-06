@@ -27,7 +27,7 @@ fn rr_and_or_xor_shifts() {
     push_word(&mut code, rr(instruction::wide::arithmetic::SRA, 10, 8, 11));
     halt(&mut code);
     let mut vm = IVM::new(10_000);
-    vm.memory.load_code(&code);
+    vm.memory.load_code(&code).unwrap();
     vm.registers.set(2, 0xFF00_FF00_FF00_FF00);
     vm.registers.set(3, 0x0F0F_0F0F_0F0F_0F0F);
     vm.registers.set(5, 0x00FF_00FF_00FF_00FF);
@@ -47,7 +47,7 @@ fn shift_operands_are_masked() {
     push_word(&mut code, rr(instruction::wide::arithmetic::SRA, 1, 2, 3));
     halt(&mut code);
     let mut vm = IVM::new(10_000);
-    vm.memory.load_code(&code);
+    vm.memory.load_code(&code).unwrap();
     vm.registers.set(2, 0xF000_0000_0000_0000u64);
     vm.registers.set(3, 70); // masked to 6
     vm.run().unwrap();
@@ -80,7 +80,7 @@ fn immediate_ops_cover_small_constants() {
     );
     halt(&mut code);
     let mut vm = IVM::new(10_000);
-    vm.memory.load_code(&code);
+    vm.memory.load_code(&code).unwrap();
     vm.registers.set(2, 100);
     vm.run().unwrap();
     assert_eq!(vm.registers.get(1), 95);
@@ -97,7 +97,7 @@ fn load_store_64_roundtrip() {
     push_word(&mut code, load64(1, 2, 8));
     halt(&mut code);
     let mut vm = IVM::new(10_000);
-    vm.memory.load_code(&code);
+    vm.memory.load_code(&code).unwrap();
     let base = ivm::Memory::HEAP_START;
     vm.registers.set(2, base);
     vm.registers.set(3, 0xDEAD_BEEF_F00D_BAAF);
@@ -118,7 +118,7 @@ fn branch_offset_counts_words() {
     push_word(&mut code, rr(instruction::wide::arithmetic::ADD, 6, 6, 6));
     halt(&mut code);
     let mut vm = IVM::new(10_000);
-    vm.memory.load_code(&code);
+    vm.memory.load_code(&code).unwrap();
     vm.registers.set(2, 1);
     vm.registers.set(5, 1);
     vm.registers.set(6, 1);
@@ -139,7 +139,7 @@ fn jalr_masks_low_bit_and_records_return_address() {
     );
     halt(&mut code);
     let mut vm = IVM::new(10_000);
-    vm.memory.load_code(&code);
+    vm.memory.load_code(&code).unwrap();
     // Target address with low bit set should be masked to the XOR word (address 4).
     vm.registers.set(2, 5);
     vm.registers.set(10, 0xABCD);

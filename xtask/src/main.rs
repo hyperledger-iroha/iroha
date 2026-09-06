@@ -9,7 +9,7 @@ use eyre::eyre;
 use iroha_config::{
     base::read::ConfigReader,
     parameters::{
-        actual::{self, IsoReferenceData, SorafsRolloutPhase},
+        actual::{self, IsoReferenceData},
         user,
     },
 };
@@ -30,6 +30,7 @@ use iroha_crypto::{KeyPair, PrivateKey, Signature};
 use iroha_data_model::{
     account::address::compliance_vectors::compliance_vectors_json, nexus::AssetPermissionManifest,
 };
+use iroha_service_model::soranet::RolloutPhase;
 use iroha_torii::{
     MaybeTelemetry, OnlinePeersProvider,
     test_utils::{TestDataDirGuard, mk_minimal_root_cfg},
@@ -2677,6 +2678,7 @@ where
             let mut profiles: Vec<String> = Vec::new();
             let mut kagami: Option<PathBuf> = None;
             let mut nexus_xor_asset_definition_id: Option<String> = None;
+            let mut kagemusha_mint_finality_parameters_dir: Option<PathBuf> = None;
             let mut pending = args.peekable();
             while let Some(arg) = pending.next() {
                 match arg.as_str() {
@@ -2707,6 +2709,16 @@ where
                         };
                         nexus_xor_asset_definition_id = Some(asset_definition_id);
                     }
+                    "--kagemusha-mint-finality-parameters-dir" => {
+                        let Some(path) = pending.next() else {
+                            return Err(
+                                "expected path after --kagemusha-mint-finality-parameters-dir"
+                                    .into(),
+                            );
+                        };
+                        kagemusha_mint_finality_parameters_dir =
+                            Some(normalize_path(Path::new(&path))?);
+                    }
                     flag => {
                         return Err(format!("unknown flag for kagami-profiles: {flag}").into());
                     }
@@ -2715,12 +2727,15 @@ where
             let output = output
                 .map(Ok)
                 .unwrap_or_else(|| normalize_path(Path::new("defaults/kagami")))?;
+            let kagemusha_mint_finality_parameters_dir = kagemusha_mint_finality_parameters_dir
+                .ok_or("kagami-profiles requires --kagemusha-mint-finality-parameters-dir <DIR>")?;
             Ok(CommandKind::KagamiProfiles {
                 options: kagami_profiles::KagamiProfileOptions {
                     output,
                     profiles,
                     kagami_override: kagami,
                     nexus_xor_asset_definition_id,
+                    kagemusha_mint_finality_parameters_dir,
                 },
             })
         }
@@ -4771,7 +4786,7 @@ where
             let mut output_dir: Option<PathBuf> = None;
             let mut sbom: Option<PathBuf> = None;
             let mut vuln_report: Option<PathBuf> = None;
-            let mut hsm_policy: Option<PathBuf> = None;
+            let mut signing_policy: Option<PathBuf> = None;
             let mut sandbox_profile: Option<PathBuf> = None;
             let mut data_retention_days: u32 = 30;
             let mut log_retention_days: u32 = 30;
@@ -4796,11 +4811,11 @@ where
                         };
                         vuln_report = Some(normalize_path(Path::new(&path))?);
                     }
-                    "--hsm-policy" => {
+                    "--signing-policy" => {
                         let Some(path) = pending.next() else {
-                            return Err("expected path after --hsm-policy".into());
+                            return Err("expected path after --signing-policy".into());
                         };
-                        hsm_policy = Some(normalize_path(Path::new(&path))?);
+                        signing_policy = Some(normalize_path(Path::new(&path))?);
                     }
                     "--sandbox-profile" => {
                         let Some(path) = pending.next() else {
@@ -4842,7 +4857,7 @@ where
                     output_dir,
                     sbom,
                     vuln_report,
-                    hsm_policy,
+                    signing_policy,
                     sandbox_profile,
                     data_retention_days,
                     log_retention_days,
@@ -6932,7 +6947,7 @@ where
             let mut markdown_out: Option<PathBuf> = None;
             let mut label: Option<String> = None;
             let mut environment: Option<String> = None;
-            let mut phase = SorafsRolloutPhase::Ramp;
+            let mut phase = RolloutPhase::Ramp;
             let mut pending = args.peekable();
             while let Some(arg) = pending.next() {
                 match arg.as_str() {
@@ -6972,7 +6987,7 @@ where
                         let Some(value) = pending.next() else {
                             return Err("expected phase label after --phase".into());
                         };
-                        phase = SorafsRolloutPhase::parse(&value).ok_or_else(|| {
+                        phase = RolloutPhase::parse(&value).ok_or_else(|| {
                             format!("invalid rollout phase `{value}`; expected canary|ramp|default")
                         })?;
                     }
@@ -7042,7 +7057,7 @@ where
             let mut base_dir: Option<PathBuf> = None;
             let mut label: Option<String> = None;
             let mut environment = String::from("production");
-            let mut phase = SorafsRolloutPhase::Ramp;
+            let mut phase = RolloutPhase::Ramp;
             let mut log_path: Option<PathBuf> = None;
             let mut artifacts: Vec<soranet_rollout::ArtifactInput> = Vec::new();
             let mut key_path: Option<PathBuf> = None;
@@ -7072,7 +7087,7 @@ where
                         let Some(value) = pending.next() else {
                             return Err("expected phase label after --phase".into());
                         };
-                        phase = SorafsRolloutPhase::parse(&value).ok_or_else(|| {
+                        phase = RolloutPhase::parse(&value).ok_or_else(|| {
                             format!("invalid rollout phase `{value}`; expected canary|ramp|default")
                         })?;
                     }
@@ -11946,6 +11961,15 @@ mod openapi_tests {
         );
     }
     #[test]
+    fn current_router_document_satisfies_release_validation() {
+        let bytes = require_release_router_openapi(try_generate_router_openapi())
+            .expect("the current Torii router must satisfy release OpenAPI validation");
+        let spec = norito::json::from_slice::<Value>(&bytes)
+            .expect("validated router OpenAPI remains canonical JSON");
+        openapi_validation::validate_release_openapi_spec(&spec)
+            .expect("the canonicalized router document remains release-valid");
+    }
+    #[test]
     fn router_generation_canonicalizes_json_without_losing_exact_integers() {
         let exact = br#"{
   "openapi": "3.1.0",
@@ -13584,7 +13608,7 @@ fn try_generate_router_openapi() -> Result<Option<Vec<u8>>, Box<dyn Error>> {
     runtime.block_on(generate_router_openapi_async())
 }
 async fn generate_router_openapi_async() -> Result<Option<Vec<u8>>, Box<dyn Error>> {
-    const OPENAPI_ENDPOINT_CANDIDATES: &[&str] = &["/openapi.json", "/openapi"];
+    const OPENAPI_ENDPOINT_CANDIDATES: &[&str] = &["/openapi.json"];
     let _data_dir = TestDataDirGuard::new();
     let mut cfg = mk_minimal_root_cfg();
     let mut tokens = vec!["Test-Token".to_owned()];
@@ -13603,7 +13627,7 @@ async fn generate_router_openapi_async() -> Result<Option<Vec<u8>>, Box<dyn Erro
         );
     }
     cfg.torii.require_api_token = true;
-    cfg.torii.api_tokens = tokens.clone();
+    cfg.torii.api_tokens = tokens.clone().into();
     let (kiso, _child) = KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();
     let query_store = LiveQueryStore::start_test();
@@ -13627,9 +13651,13 @@ async fn generate_router_openapi_async() -> Result<Option<Vec<u8>>, Box<dyn Erro
         OnlinePeersProvider::new(peers_rx),
         None,
         MaybeTelemetry::disabled(),
-    );
-    let router = torii.api_router_for_tests();
-    let spec = fetch_openapi_from_router(router, OPENAPI_ENDPOINT_CANDIDATES).await;
+    )?;
+    let router_runtime = torii
+        .api_router_for_tests()
+        .map_err(|error| eyre!("failed to initialize Torii router: {error}"))?;
+    let spec =
+        fetch_openapi_from_router(router_runtime.router(), OPENAPI_ENDPOINT_CANDIDATES).await;
+    router_runtime.shutdown().await;
     Ok(spec)
 }
 fn openapi_router_state(

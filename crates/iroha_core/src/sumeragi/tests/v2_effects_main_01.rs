@@ -63,8 +63,13 @@ fn certified_sources(fixture: &Fixture, _certificate: &wire::QuorumCertificate) 
         .collect()
 }
 fn signed_payload_chunk(fixture: &Fixture) -> wire::PayloadChunk {
+    let validated = wire::ValidatedPayloadManifest::new(
+        &fixture.context,
+        fixture.manifest.clone(),
+    )
+    .expect("validate chunk manifest once");
     let mut chunk = wire::PayloadChunk {
-        manifest_hash: HashOf::new(&fixture.manifest),
+        manifest_hash: validated.manifest_hash(),
         index: 0,
         bytes: fixture.encoded_chunks[0].clone(),
         sender: 0,
@@ -73,8 +78,9 @@ fn signed_payload_chunk(fixture: &Fixture) -> wire::PayloadChunk {
     chunk.signature = Signature::new(
         fixture.validator_keys[0].private_key(),
         &chunk
-            .signature_preimage(&fixture.context, &fixture.manifest)
-            .expect("chunk preimage"),
+            .signature_payload(&validated)
+            .expect("chunk signature payload")
+            .signature_preimage(),
     )
     .payload()
     .to_vec();

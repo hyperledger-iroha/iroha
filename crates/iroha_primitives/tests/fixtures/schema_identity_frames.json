@@ -1,0 +1,163 @@
+[
+  {
+    "deserialize_hash": "854d8d023b44f58f9768552cd2941c7d",
+    "frame_hex": "4e5254300000854d8d023b44f58f9768552cd2941c7d001200000000000000dd7ca879c27bb1b00202000000000000000407000000040b000000",
+    "frame_name": "iroha_primitives::const_vec::ConstVec<u32>",
+    "nominal": "iroha_primitives::const_vec::ConstVec<u32>",
+    "serialize_hash": "854d8d023b44f58f9768552cd2941c7d"
+  },
+  {
+    "deserialize_hash": "c9609a602025e7e25338e12376dba4e1",
+    "frame_hex": "4e5254300000c9609a602025e7e25338e12376dba4e1001200000000000000dd7ca879c27bb1b00202000000000000000407000000040b000000",
+    "frame_name": "iroha_primitives::unique_vec::UniqueVec<u32>",
+    "nominal": "iroha_primitives::unique_vec::UniqueVec<u32>",
+    "serialize_hash": "c9609a602025e7e25338e12376dba4e1"
+  },
+  {
+    "deserialize_hash": "5333e7064f0e992f6660a7e123240cbc",
+    "frame_hex": "4e52543000005333e7064f0e992f6660a7e123240cbc000700000000000000f0cc6a48150062b80206736368656d61",
+    "frame_name": "iroha_primitives::small::small_string::SmallStr",
+    "nominal": "iroha_primitives::small::small_string::SmallStr",
+    "serialize_hash": "5333e7064f0e992f6660a7e123240cbc"
+  },
+  {
+    "deserialize_hash": "49dddccfa0f1c6197446c216fe4c5400",
+    "frame_hex": "4e525430000049dddccfa0f1c6197446c216fe4c540000200000000000000089995077df7314ac00020000000000000004000000000000000700000004000000000000000b000000",
+    "frame_name": "iroha_primitives::small::small_vector::SmallVec<[u32; 2]>",
+    "nominal": "iroha_primitives::small::small_vector::SmallVec<[u32; 2]>",
+    "serialize_hash": "49dddccfa0f1c6197446c216fe4c5400"
+  },
+  {
+    "deserialize_hash": "92b2dcd232a728162539a4fd7a0ce26e",
+    "frame_hex": "4e525430000092b2dcd232a728162539a4fd7a0ce26e00200000000000000089995077df7314ac00020000000000000004000000000000000700000004000000000000000b000000",
+    "frame_name": "iroha_primitives::small::small_vector::SmallVec<[u32; 8]>",
+    "nominal": "iroha_primitives::small::small_vector::SmallVec<[u32; 8]>",
+    "serialize_hash": "92b2dcd232a728162539a4fd7a0ce26e"
+  },
+  {
+    "deserialize_hash": "b53f2d96f2165ced59862d64329f9200",
+    "frame_hex": "4e5254300000b53f2d96f2165ced59862d64329f9200000700000000000000f0cc6a48150062b80206736368656d61",
+    "frame_name": "iroha_primitives::conststr::ConstString",
+    "nominal": "iroha_primitives::conststr::ConstString",
+    "serialize_hash": "b53f2d96f2165ced59862d64329f9200"
+  },
+  {
+    "deserialize_hash": "db404a728cd8c93f7e44a888133f6719",
+    "frame_hex": "4e5254300000db404a728cd8c93f7e44a888133f6719001a000000000000002b85ce2451be4b140219187b2261223a372c2262223a5b747275652c66616c73655d7d",
+    "frame_name": "iroha_primitives::json::Json",
+    "nominal": "iroha_primitives::json::Json",
+    "serialize_hash": "db404a728cd8c93f7e44a888133f6719"
+  },
+  {
+    "deserialize_hash": "495e41feabffadac1cf5f646244e173b",
+    "frame_hex": "4e5254300000495e41feabffadac1cf5f646244e173b000600000000000000c0e2ced730bf29bf00020000007fff",
+    "frame_name": "iroha_primitives::bigint::BigInt",
+    "nominal": "iroha_primitives::bigint::BigInt",
+    "serialize_hash": "495e41feabffadac1cf5f646244e173b"
+  },
+  {
+    "deserialize_hash": "bc6beba5bbf1887c7d78e737869cc09c",
+    "frame_hex": "4e5254300000bc6beba5bbf1887c7d78e737869cc09c000c0000000000000087fa005f9faae8a00206020000007fff0402000000",
+    "frame_name": "iroha_primitives::numeric::Numeric",
+    "nominal": "iroha_primitives::numeric::Numeric",
+    "serialize_hash": "bc6beba5bbf1887c7d78e737869cc09c"
+  },
+  {
+    "deserialize_hash": "d5ee23d8c3190f8189bff8843135591d",
+    "frame_hex": "4e5254300000d5ee23d8c3190f8189bff8843135591d000c0000000000000005a21269d17146a802060200000081000402000000",
+    "frame_name": "iroha_primitives::numeric::Quantity",
+    "nominal": "iroha_primitives::numeric::Quantity",
+    "serialize_hash": "d5ee23d8c3190f8189bff8843135591d"
+  },
+  {
+    "deserialize_hash": "be3658fd9c8d56738bf2c736f54d12d5",
+    "frame_hex": "4e5254300000be3658fd9c8d56738bf2c736f54d12d5000c0000000000000005a21269d17146a802060200000081000402000000",
+    "frame_name": "iroha_primitives::numeric::XorQuantity",
+    "nominal": "iroha_primitives::numeric::XorQuantity",
+    "serialize_hash": "be3658fd9c8d56738bf2c736f54d12d5"
+  },
+  {
+    "deserialize_hash": "8502b6eb0a676671c472294dbed4e7a3",
+    "frame_hex": "4e52543000008502b6eb0a676671c472294dbed4e7a3000600000000000000bd6ca1e29b9a00e902010402000000",
+    "frame_name": "iroha_primitives::numeric::NumericSpec",
+    "nominal": "iroha_primitives::numeric::NumericSpec",
+    "serialize_hash": "8502b6eb0a676671c472294dbed4e7a3"
+  },
+  {
+    "deserialize_hash": "07c039457363b9e1d36bbd31d93dec4a",
+    "frame_hex": "4e525430000007c039457363b9e1d36bbd31d93dec4a000600000000000000c0e2ced730bf29bf00020000007fff",
+    "frame_name": "iroha.numeric.IntValueV1",
+    "nominal": "iroha_primitives::numeric_abi::IntValueV1",
+    "serialize_hash": "07c039457363b9e1d36bbd31d93dec4a"
+  },
+  {
+    "deserialize_hash": "ba2ffed52e4d8ee16f17efefe1828524",
+    "frame_hex": "4e5254300000ba2ffed52e4d8ee16f17efefe182852400070000000000000003d9b4c0c4c24c4600020000007fff02",
+    "frame_name": "iroha.numeric.DecimalValueV1",
+    "nominal": "iroha_primitives::numeric_abi::DecimalValueV1",
+    "serialize_hash": "ba2ffed52e4d8ee16f17efefe1828524"
+  },
+  {
+    "deserialize_hash": "e4769984c81ce0e8b678f2eb06274ee3",
+    "frame_hex": "4e5254300000e4769984c81ce0e8b678f2eb06274ee3000700000000000000d75060453b22ec8c0002000000810002",
+    "frame_name": "iroha.numeric.QuantityValueV1",
+    "nominal": "iroha_primitives::numeric_abi::QuantityValueV1",
+    "serialize_hash": "e4769984c81ce0e8b678f2eb06274ee3"
+  },
+  {
+    "deserialize_hash": "8bbd64c85eab90d9c274c2220a4cf128",
+    "frame_hex": "4e52543000008bbd64c85eab90d9c274c2220a4cf1280010000000000000006349e8326ef66be20201000000000000000706736368656d61",
+    "frame_name": "alloc::vec::Vec<iroha_primitives::small::small_string::SmallStr>",
+    "nominal": "alloc::vec::Vec<iroha_primitives::small::small_string::SmallStr>",
+    "serialize_hash": "8bbd64c85eab90d9c274c2220a4cf128"
+  },
+  {
+    "deserialize_hash": "a2b4bd2f92d4b2ca93bfd5823328ee01",
+    "frame_hex": "4e5254300000a2b4bd2f92d4b2ca93bfd5823328ee01000900000000000000997000f23ffd14c3020107020000007fff02",
+    "frame_name": "core::option::Option<iroha_primitives::numeric_abi::DecimalValueV1>",
+    "nominal": "core::option::Option<iroha_primitives::numeric_abi::DecimalValueV1>",
+    "serialize_hash": "a2b4bd2f92d4b2ca93bfd5823328ee01"
+  },
+  {
+    "deserialize_hash": "814dea3f7f28cd49762b5f6115867de7",
+    "frame_hex": "4e5254300000814dea3f7f28cd49762b5f6115867de7001b0000000000000011a91a099fb5c3fa0201000000000000001202000000000000000407000000040b000000",
+    "frame_name": "alloc::vec::Vec<iroha_primitives::const_vec::ConstVec<u32>>",
+    "nominal": "alloc::vec::Vec<iroha_primitives::const_vec::ConstVec<u32>>",
+    "serialize_hash": "814dea3f7f28cd49762b5f6115867de7"
+  },
+  {
+    "deserialize_hash": null,
+    "frame_hex": "4e5254300000de8aa5f4464c061ccfb73b1ef7d949cb000900000000000000413879dcd89a51220208077b2261223a377d",
+    "frame_name": "iroha_primitives::json::JsonWireRef<'_>",
+    "nominal": "iroha_primitives::json::JsonWireRef<'_>",
+    "serialize_hash": "de8aa5f4464c061ccfb73b1ef7d949cb"
+  },
+  {
+    "deserialize_hash": "20932cc18619878fc7e29af31c396c67",
+    "frame_hex": "4e525430000020932cc18619878fc7e29af31c396c67000900000000000000413879dcd89a51220208077b2261223a377d",
+    "frame_name": "iroha_primitives::json::JsonWireOwned",
+    "nominal": "iroha_primitives::json::JsonWireOwned",
+    "serialize_hash": "20932cc18619878fc7e29af31c396c67"
+  },
+  {
+    "deserialize_hash": null,
+    "frame_hex": "4e5254300000495e41feabffadac1cf5f646244e173b000600000000000000c0e2ced730bf29bf00020000007fff",
+    "frame_name": "iroha_primitives::bigint::BigInt",
+    "nominal": "iroha_primitives::numeric::scale_::BigIntView<'_>",
+    "serialize_hash": "495e41feabffadac1cf5f646244e173b"
+  },
+  {
+    "deserialize_hash": "cca5e134d03bdbe8fa3b40781a71a6d2",
+    "frame_hex": "4e5254300000cca5e134d03bdbe8fa3b40781a71a6d2000c0000000000000087fa005f9faae8a00206020000007fff0402000000",
+    "frame_name": "iroha_primitives::numeric::scale_::NumericScaleHelper",
+    "nominal": "iroha_primitives::numeric::scale_::NumericScaleHelper",
+    "serialize_hash": "cca5e134d03bdbe8fa3b40781a71a6d2"
+  },
+  {
+    "deserialize_hash": null,
+    "frame_hex": "4e52543000003a850f05e0ed1069f6f97c871d59dd39000c0000000000000087fa005f9faae8a00206020000007fff0402000000",
+    "frame_name": "iroha_primitives::numeric::scale_::NumericScaleHelperView<'_>",
+    "nominal": "iroha_primitives::numeric::scale_::NumericScaleHelperView<'_>",
+    "serialize_hash": "3a850f05e0ed1069f6f97c871d59dd39"
+  }
+]

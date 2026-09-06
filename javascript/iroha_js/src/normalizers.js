@@ -9,7 +9,6 @@ import { blake3 } from "@noble/hashes/blake3";
 import {
   AccountAddress,
   AccountAddressError,
-  AccountAddressErrorCode,
 } from "./address.js";
 import {
   createValidationError,
@@ -36,46 +35,6 @@ function assertString(value, name) {
     fail(ValidationErrorCode.INVALID_STRING, `${name} must be a non-empty string`, name);
   }
   return value;
-}
-
-export function normalizeUaidLiteral(value, name) {
-  const literal = assertString(value, name);
-  if (!/^uaid:[0-9a-f]{64}$/u.test(literal)) {
-    fail(
-      ValidationErrorCode.INVALID_ACCOUNT_ID,
-      `${name} must be an exact canonical uaid:<64 lowercase hex> literal`,
-      name,
-    );
-  }
-  if (!/[13579bdf]$/u.test(literal)) {
-    fail(
-      ValidationErrorCode.INVALID_ACCOUNT_ID,
-      `${name} must have least significant bit set to 1`,
-      name,
-    );
-  }
-  return literal;
-}
-
-export function normalizeOpaqueLiteral(value, name) {
-  const literal = assertString(value, name).trim();
-  if (!literal) {
-    fail(ValidationErrorCode.INVALID_ACCOUNT_ID, `${name} must be a non-empty string`, name);
-  }
-  let hexPortion;
-  if (literal.slice(0, 7).toLowerCase() === "opaque:") {
-    hexPortion = literal.slice(7).trim();
-  } else {
-    hexPortion = literal;
-  }
-  if (hexPortion.length !== 64 || !/^[0-9a-fA-F]+$/.test(hexPortion)) {
-    fail(
-      ValidationErrorCode.INVALID_ACCOUNT_ID,
-      `${name} must contain 64 hex characters`,
-      name,
-    );
-  }
-  return `opaque:${hexPortion.toLowerCase()}`;
 }
 
 export function canonicalizeMultihashHex(value, name) {
@@ -399,14 +358,6 @@ export function normalizeAccountAliasLiteral(value, name) {
     );
   }
   return alias;
-}
-
-export function normalizeAccountIdOrAliasLiteral(value, name) {
-  const raw = assertString(value, name).trim();
-  if (raw.includes("@")) {
-    return normalizeAccountAliasLiteral(raw, name);
-  }
-  return normalizeAccountId(raw, name);
 }
 
 export function normalizeAssetId(value, name) {

@@ -86,8 +86,8 @@ export function registerToriiClientGovernanceTests({
   ToriiClient,
   ValidationError,
   ValidationErrorCode,
+  assertRequestSignal,
   cloneFixture,
-  configureCurveSupport,
   createResponse,
   parseStrictLosslessIntegerJson,
   readFileSync,
@@ -97,10 +97,6 @@ export function registerToriiClientGovernanceTests({
   test("governance helpers validate options", async () => {
     const client = new ToriiClient(BASE_URL);
 
-    await assert.rejects(
-      () => client.getGovernanceCouncilCurrent("invalid"),
-      /getGovernanceCouncilCurrent options must be an object/,
-    );
     const optionTypeCases = [
       [
         "getGovernanceProposal",
@@ -423,7 +419,7 @@ export function registerToriiClientGovernanceTests({
     assert.deepEqual(missingTyped, { found: false, proposal: null });
   });
 
-  test("getGovernanceProposalTyped closes over all seven V1 proposal kinds", async () => {
+  test("getGovernanceProposalTyped closes over all ten V1 proposal kinds", async () => {
     const contractAddress =
       "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw";
     const payoutBinding = {
@@ -452,12 +448,18 @@ export function registerToriiClientGovernanceTests({
     const variants = [
       [
         "DeployContract",
-        cloneFixture(toriiFixtures.governance.proposalDeployContract).proposal.kind.payload,
+        {
+          ...cloneFixture(
+            toriiFixtures.governance.proposalDeployContract,
+          ).proposal.kind.payload,
+          proposal_operator: FIXTURE_ALICE_ID,
+        },
         "deploy_contract",
       ],
       [
         "RuntimeUpgrade",
         {
+          proposal_operator: FIXTURE_ALICE_ID,
           manifest: {
             name: "runtime-v1-refresh",
             description: "Canonical V1 runtime image",
@@ -543,6 +545,44 @@ export function registerToriiClientGovernanceTests({
           },
         },
         "sorafs_provider_governance",
+      ],
+      [
+        "ContractLifecycleGovernance",
+        {
+          proposal_operator: FIXTURE_ALICE_ID,
+          contract_address: contractAddress,
+          expected_revision: 3,
+          action: {
+            action: "CompleteEmergencyHoldRetrospective",
+            payload: {
+              hold_proposal_content_id: Array(32).fill(0x51),
+              hold_governance_attempt_id: Array(32).fill(0x52),
+              incident_digest: Array(32).fill(0x53),
+              retrospective_finding_root: Array(32).fill(0x54),
+            },
+          },
+        },
+        "contract_lifecycle_governance",
+      ],
+      [
+        "ContractEmergencyHold",
+        {
+          contract_address: contractAddress,
+          expected_revision: 2,
+          expected_code_hash: "33".repeat(32),
+          incident_digest: Array(32).fill(0x55),
+          reason: "contain active exploit",
+          duration_blocks: 3_600,
+        },
+        "contract_emergency_hold",
+      ],
+      [
+        "GlobalDataTriggerPermissionGovernance",
+        {
+          authority: FIXTURE_ALICE_ID,
+          action: { action: "grant", value: null },
+        },
+        "global_data_trigger_permission_governance",
       ],
     ];
     for (const [variant, payload, resultField] of variants) {
@@ -811,7 +851,11 @@ export function registerToriiClientGovernanceTests({
   });
 
   test("getGovernanceUnlockStats rejects empty payloads", async () => {
-    const fetchImpl = async () => createResponse({ status: 200 });
+    const fetchImpl = async () => createResponse({
+      status: 200,
+      jsonData: null,
+      headers: { "content-type": "application/json" },
+    });
     const client = new ToriiClient(BASE_URL, { fetchImpl });
     await assert.rejects(
       () => client.getGovernanceUnlockStats(governanceReadOptions()),
@@ -1281,6 +1325,7 @@ export function registerToriiClientGovernanceTests({
     });
     const result = await client.governanceProposeDeployContract(
       {
+        proposalOperator: FIXTURE_ALICE_ID,
         contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
         codeHash: `BlAkE2b32:0X${"1a".repeat(32)}`,
         abiHash: Buffer.alloc(32, 0xbb),
@@ -1296,6 +1341,7 @@ export function registerToriiClientGovernanceTests({
       capturedBody.contract_address,
       "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
     );
+    assert.equal(capturedBody.proposal_operator, FIXTURE_ALICE_ID);
     assert.equal(capturedBody.code_hash, "1a".repeat(32));
     assert.equal(capturedBody.abi_hash, "bb".repeat(32));
     assert.equal(capturedBody.abi_version, 1);
@@ -1330,6 +1376,7 @@ wire_id: "iroha.instruction.v1::governance::ProposeDeployContract",
       },
     });
     const base = {
+      proposalOperator: FIXTURE_ALICE_ID,
       contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
       codeHash: "aa".repeat(32),
       abiHash: "bb".repeat(32),
@@ -1345,36 +1392,56 @@ wire_id: "iroha.instruction.v1::governance::ProposeDeployContract",
       governanceBallotOptions(FIXTURE_ALICE_ID),
     );
 
-    configureCurveSupport({ allowMlDsa: true });
-    try {
-      for (const [label, signer, errorPattern] of [
-        ["one-byte", mlDsaManifestSigner(1), /expected 1952 bytes/u],
-        ["short", mlDsaManifestSigner(1_951), /expected 1952 bytes/u],
-        ["overlong", mlDsaManifestSigner(1_953), /expected 1952 bytes/u],
-        ["all-zero", mlDsaManifestSigner(1_952, 0), /all-zero/u],
-      ]) {
-        // eslint-disable-next-line no-await-in-loop
-        await assert.rejects(
-          () => proposeWithSigner(signer),
-          errorPattern,
-          `${label} ML-DSA signer must be rejected before fetch`,
-        );
-      }
-      assert.equal(fetchCalls, 0);
-
-      await proposeWithSigner(mlDsaManifestSigner(1_952));
-      assert.equal(fetchCalls, 1);
-      assert.equal(
-        capturedBody.manifest_provenance.signer,
-        `ee01a00f${"5A".repeat(1_952)}`,
+    for (const [label, signer, errorPattern] of [
+      ["one-byte", mlDsaManifestSigner(1), /expected 1952 bytes/u],
+      ["short", mlDsaManifestSigner(1_951), /expected 1952 bytes/u],
+      ["overlong", mlDsaManifestSigner(1_953), /expected 1952 bytes/u],
+      ["all-zero", mlDsaManifestSigner(1_952, 0), /all-zero/u],
+    ]) {
+      // eslint-disable-next-line no-await-in-loop
+      await assert.rejects(
+        () => proposeWithSigner(signer),
+        errorPattern,
+        `${label} ML-DSA signer must be rejected before fetch`,
       );
-    } finally {
-      configureCurveSupport();
     }
+    assert.equal(fetchCalls, 0);
+
+    await proposeWithSigner(mlDsaManifestSigner(1_952));
+    assert.equal(fetchCalls, 1);
+    assert.equal(
+      capturedBody.manifest_provenance.signer,
+      `ee01a00f${"5A".repeat(1_952)}`,
+    );
+  });
+
+  test("governanceProposeDeployContract rejects an operator distinct from canonical auth", async () => {
+    let fetchCalls = 0;
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () => {
+        fetchCalls += 1;
+        throw new Error("mismatched proposal reached transport");
+      },
+    });
+    await assert.rejects(
+      client.governanceProposeDeployContract(
+        {
+          proposalOperator: FIXTURE_BOB_ID,
+          contractAddress:
+            "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
+          codeHash: "aa".repeat(32),
+          abiHash: "bb".repeat(32),
+        },
+        governanceBallotOptions(FIXTURE_ALICE_ID),
+      ),
+      /canonicalAuth\.accountId must equal the exact proposalOperator/u,
+    );
+    assert.equal(fetchCalls, 0);
   });
 
   test("governanceProposeDeployContract rejects noncanonical draft responses", async () => {
     const request = {
+      proposalOperator: FIXTURE_ALICE_ID,
       contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
       codeHash: "11".repeat(32),
       abiHash: "22".repeat(32),
@@ -1453,6 +1520,7 @@ wire_id: "iroha.instruction.v1::governance::ProposeDeployContract",
         .sort();
 
     const deploy = interfaceBody("ToriiGovernanceDeployContractProposalRequest");
+    assert.match(deploy, /proposalOperator: string;/u);
     assert.doesNotMatch(deploy, /\blimits\??:/u);
     assert.match(deploy, /abiVersion\?: 1;/u);
     assert.doesNotMatch(deploy, /\b(?:window|mode)\??:/u);
@@ -1468,6 +1536,7 @@ wire_id: "iroha.instruction.v1::governance::ProposeDeployContract",
       "code_hash",
       "contract_address",
       "manifest_provenance",
+      "proposal_operator",
     ]);
     assert.match(storedDeploy, /abi_version: 1;/u);
     assert.match(
@@ -1491,6 +1560,9 @@ wire_id: "iroha.instruction.v1::governance::ProposeDeployContract",
       "ValidationFeePayoutLifecycle",
       "MusubiRegistryGovernance",
       "SorafsProviderGovernance",
+      "ContractLifecycleGovernance",
+      "ContractEmergencyHold",
+      "GlobalDataTriggerPermissionGovernance",
     ]) {
       assert.match(proposalKind[1], new RegExp(`variant: "${variant}"`, "u"));
     }
@@ -1578,6 +1650,7 @@ wire_id: "iroha.instruction.v1::governance::ProposeDeployContract",
 
     await client.governanceProposeDeployContract(
       {
+        proposalOperator: FIXTURE_ALICE_ID,
         contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
         codeHash: Array.from(Buffer.alloc(32, 0x1a)),
         abiHash: Array.from(Buffer.alloc(32, 0xbb)),
@@ -1599,6 +1672,7 @@ wire_id: "iroha.instruction.v1::governance::ProposeDeployContract",
       },
     });
     const base = {
+      proposalOperator: FIXTURE_ALICE_ID,
       contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
       codeHash: "1a".repeat(32),
       abiHash: "bb".repeat(32),
@@ -1627,6 +1701,7 @@ wire_id: "iroha.instruction.v1::governance::ProposeDeployContract",
     });
     const hash = "1a".repeat(32);
     const base = {
+      proposalOperator: FIXTURE_ALICE_ID,
       contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
       abiHash: "bb".repeat(32),
     };
@@ -1658,6 +1733,7 @@ wire_id: "iroha.instruction.v1::governance::ProposeDeployContract",
       },
     });
     const base = {
+      proposalOperator: FIXTURE_ALICE_ID,
       contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
       codeHash: `0x${"1a".repeat(32)}`,
       abiHash: Buffer.alloc(32, 0xbb),
@@ -1709,6 +1785,7 @@ wire_id: "iroha.instruction.v1::governance::ProposeDeployContract",
       () =>
         client.governanceProposeDeployContract(
           {
+            proposalOperator: FIXTURE_ALICE_ID,
             contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
             codeHash: [256],
             abiHash: Array.from(Buffer.alloc(32, 0xbb)),
@@ -1732,7 +1809,7 @@ wire_id: "iroha.instruction.v1::governance::ProposeDeployContract",
         capturedBody = JSON.parse(init.body);
         return createResponse({
           status: 200,
-          jsonData: cloneFixture(toriiFixtures.governance.plainBallotResponse),
+          jsonData: cloneFixture(toriiFixtures.governance.plainBallotDraftResponse),
           headers: { "content-type": "application/json" },
         });
       },
@@ -1756,7 +1833,53 @@ wire_id: "iroha.instruction.v1::governance::ProposeDeployContract",
     assert.equal(capturedBody.chain_id, undefined);
     assert.equal(capturedInit.redirect, "error");
     assert.equal(fetchCalls, 1);
-    assert.equal(ballot.accepted, true);
+    assert.equal(ballot.drafted, true);
+    assert.equal(ballot.accepted, undefined);
+  });
+
+  test("governance ballot drafts reject noncanonical response contracts", async () => {
+    const responses = [
+      {
+        ok: false,
+        accepted: false,
+        reason: "invalid ballot",
+        tx_instructions: [],
+      },
+      {
+        drafted: true,
+        tx_instructions: [{ wire_id: "Cast ZkBallot", payload_hex: "00" }],
+      },
+      {
+        drafted: true,
+        tx_instructions: [{ wire_id: "CastZkBallot", payload_hex: "AA" }],
+      },
+    ];
+    for (const jsonData of responses) {
+      const client = governanceBallotClient({
+        fetchImpl: async () => createResponse({
+          status: 200,
+          jsonData,
+          headers: { "content-type": "application/json" },
+        }),
+      });
+
+      // eslint-disable-next-line no-await-in-loop
+      await assert.rejects(
+        () => client.governanceSubmitPlainBallot(
+          {
+            authority: FIXTURE_ALICE_ID,
+            networkId: GOVERNANCE_NETWORK_ID,
+            referendumId: "ref-plain",
+            owner: FIXTURE_ALICE_ID,
+            amount: "1",
+            durationBlocks: 1,
+            direction: "Aye",
+          },
+          governanceBallotOptions(FIXTURE_ALICE_ID),
+        ),
+        /unsupported fields|drafted|whitespace|lowercase/u,
+      );
+    }
   });
 
   test("governance ballots reject retired identity keys and unbound authentication", async () => {
@@ -1906,6 +2029,7 @@ wire_id: "iroha.instruction.v1::governance::ProposeDeployContract",
       {
         name: "deploy-contract",
         payload: {
+          proposalOperator: FIXTURE_ALICE_ID,
           contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
           codeHash: "11".repeat(32),
           abiHash: "22".repeat(32),
@@ -2035,6 +2159,7 @@ wire_id: "iroha.instruction.v1::governance::ProposeDeployContract",
       () =>
         client.governanceProposeDeployContract(
           {
+            proposalOperator: FIXTURE_ALICE_ID,
             contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
             codeHash: "11".repeat(32),
             abiHash: "22".repeat(32),
@@ -2048,6 +2173,7 @@ wire_id: "iroha.instruction.v1::governance::ProposeDeployContract",
       () =>
         client.governanceProposeDeployContract(
           {
+            proposalOperator: FIXTURE_ALICE_ID,
             contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
             codeHash: "11".repeat(32),
             abiHash: "22".repeat(32),
@@ -2073,6 +2199,7 @@ wire_id: "iroha.instruction.v1::governance::ProposeDeployContract",
       },
     });
     const deploy = {
+      proposalOperator: FIXTURE_ALICE_ID,
       contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
       codeHash: "11".repeat(32),
       abiHash: "22".repeat(32),
@@ -2214,7 +2341,7 @@ wire_id: "iroha.instruction.v1::governance::ProposeDeployContract",
         capturedBody = JSON.parse(init.body);
         return createResponse({
           status: 200,
-          jsonData: cloneFixture(toriiFixtures.governance.plainBallotResponse),
+          jsonData: cloneFixture(toriiFixtures.governance.plainBallotDraftResponse),
           headers: { "content-type": "application/json" },
         });
       },
@@ -2244,7 +2371,7 @@ wire_id: "iroha.instruction.v1::governance::ProposeDeployContract",
         capturedBody = JSON.parse(init.body);
         return createResponse({
           status: 200,
-          jsonData: cloneFixture(toriiFixtures.governance.plainBallotResponse),
+          jsonData: cloneFixture(toriiFixtures.governance.plainBallotDraftResponse),
           headers: { "content-type": "application/json" },
         });
       },
@@ -2273,7 +2400,7 @@ wire_id: "iroha.instruction.v1::governance::ProposeDeployContract",
         capturedBody = JSON.parse(init.body);
         return createResponse({
           status: 200,
-          jsonData: cloneFixture(toriiFixtures.governance.plainBallotResponse),
+          jsonData: cloneFixture(toriiFixtures.governance.plainBallotDraftResponse),
           headers: { "content-type": "application/json" },
         });
       },
@@ -2326,7 +2453,7 @@ wire_id: "iroha.instruction.v1::governance::ProposeDeployContract",
         observedSignal = init?.signal;
         return createResponse({
           status: 200,
-          jsonData: cloneFixture(toriiFixtures.governance.plainBallotResponse),
+          jsonData: cloneFixture(toriiFixtures.governance.plainBallotDraftResponse),
           headers: { "content-type": "application/json" },
         });
       },
@@ -2344,7 +2471,7 @@ wire_id: "iroha.instruction.v1::governance::ProposeDeployContract",
       },
       governanceBallotOptions(FIXTURE_ALICE_ID, { signal: controller.signal }),
     );
-    assert.equal(observedSignal, controller.signal);
+    assertRequestSignal(observedSignal, controller.signal);
   });
 
   test("protected namespace helpers preserve exact tokens and support AbortSignal", async () => {
@@ -2369,7 +2496,7 @@ wire_id: "iroha.instruction.v1::governance::ProposeDeployContract",
     );
     assert.equal(captures[0].url, `${BASE_URL}/v1/gov/protected-namespaces`);
     assert.equal(captures[0].init.method, "POST");
-    assert.equal(captures[0].init.signal, controller.signal);
+    assertRequestSignal(captures[0].init.signal, controller.signal);
     assert.deepEqual(JSON.parse(String(captures[0].init.body)), {
       namespaces: ["apps", "system"],
     });
@@ -2381,7 +2508,7 @@ wire_id: "iroha.instruction.v1::governance::ProposeDeployContract",
     );
     assert.equal(captures[1].url, `${BASE_URL}/v1/gov/protected-namespaces`);
     assert.equal(captures[1].init.method, "GET");
-    assert.equal(captures[1].init.signal, controller.signal);
+    assertRequestSignal(captures[1].init.signal, controller.signal);
     assert.equal(getResponse.found, true);
     assert.deepEqual(getResponse.namespaces, ["apps", "system"]);
   });
@@ -2418,10 +2545,6 @@ wire_id: "iroha.instruction.v1::governance::ProposeDeployContract",
         throw new Error("fetch should not be invoked for option validation");
       },
     });
-    await assert.rejects(
-      () => client.getGovernanceCouncilCurrent({ signal: undefined, extra: true }),
-      /getGovernanceCouncilCurrent options contains unsupported fields: extra/,
-    );
     const ballotPayload = {
       authority: FIXTURE_ALICE_ID,
       networkId: GOVERNANCE_NETWORK_ID,
@@ -2447,6 +2570,7 @@ wire_id: "iroha.instruction.v1::governance::ProposeDeployContract",
       () =>
         client.governanceProposeDeployContract(
           {
+            proposalOperator: FIXTURE_ALICE_ID,
             contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
             codeHash: "11".repeat(32),
             abiHash: Buffer.alloc(32, 0xaa),
@@ -2466,7 +2590,7 @@ wire_id: "iroha.instruction.v1::governance::ProposeDeployContract",
         calls.push({ url, body: JSON.parse(init.body) });
         return createResponse({
           status: 200,
-          jsonData: cloneFixture(toriiFixtures.governance.zkBallotDeferred),
+          jsonData: cloneFixture(toriiFixtures.governance.zkBallotDraftResponse),
           headers: { "content-type": "application/json" },
         });
       },
@@ -2493,8 +2617,8 @@ wire_id: "iroha.instruction.v1::governance::ProposeDeployContract",
     assert.equal(calls[0].body.amount, "18446744073709551616.25");
     assert.equal(calls[0].body.duration_blocks, 0);
     assert.equal(calls[0].body.nullifier, "ff".repeat(32));
-    assert.equal(zkV1Result.accepted, false);
-    assert.equal(zkV1Result.reason, "build transaction skeleton");
+    assert.equal(zkV1Result.drafted, true);
+    assert.equal(zkV1Result.accepted, undefined);
 
     const zkProofResult = await client.governanceSubmitZkBallotProofV1(
       {
@@ -2508,7 +2632,7 @@ wire_id: "iroha.instruction.v1::governance::ProposeDeployContract",
           nullifier: `0x${"DD".repeat(32)}`,
           owner: SAMPLE_ACCOUNT_FORMS.i105,
           amount: "18446744073709551616.25",
-          durationBlocks: "0",
+          durationBlocks: 0,
           direction: "Nay",
         },
       },
@@ -2520,7 +2644,7 @@ wire_id: "iroha.instruction.v1::governance::ProposeDeployContract",
     assert.equal(calls[1].body.ballot.amount, "18446744073709551616.25");
     assert.equal(calls[1].body.ballot.duration_blocks, 0);
     assert.equal(calls[1].body.ballot.direction, "Nay");
-    assert.equal(zkProofResult.accepted, false);
+    assert.equal(zkProofResult.drafted, true);
   });
 
   test("governance ZK-v1 routes emit full-u64 duration tokens losslessly", async () => {
@@ -2530,7 +2654,7 @@ wire_id: "iroha.instruction.v1::governance::ProposeDeployContract",
         bodies.push(String(init.body));
         return createResponse({
           status: 200,
-          jsonData: cloneFixture(toriiFixtures.governance.zkBallotAccepted),
+          jsonData: cloneFixture(toriiFixtures.governance.zkBallotDraftResponse),
           headers: { "content-type": "application/json" },
         });
       },
@@ -2828,47 +2952,6 @@ wire_id: "iroha.instruction.v1::governance::ProposeDeployContract",
       );
     }
     assert.equal(fetchCalls, 0);
-  });
-
-  test("getGovernanceCouncilCurrent normalizes roster payload", async () => {
-    let callCount = 0;
-    const client = new ToriiClient(BASE_URL, {
-      fetchImpl: async () => {
-        callCount += 1;
-        const payload = cloneFixture(toriiFixtures.governance.councilCurrent);
-        if (Array.isArray(payload.members) && payload.members.length >= 2) {
-          payload.members[0].account_id = FIXTURE_ALICE_ID;
-          payload.members[1].account_id = FIXTURE_BOB_ID;
-        }
-        if (Array.isArray(payload.alternates) && payload.alternates.length > 0) {
-          payload.alternates[0].account_id = FIXTURE_CAROL_ID;
-        }
-        return createResponse({
-          status: 200,
-          jsonData: payload,
-          headers: { "content-type": "application/json" },
-        });
-      },
-    });
-    const roster = await client.getGovernanceCouncilCurrent(governanceReadOptions());
-    assert.equal(callCount, 1);
-    assert.equal(roster.epoch, 77);
-    assert.deepEqual(roster.members, [
-      { account_id: FIXTURE_ALICE_ID },
-      { account_id: FIXTURE_BOB_ID },
-    ]);
-  });
-
-  test("getGovernanceCouncilCurrent rejects non-object options", async () => {
-    const client = new ToriiClient(BASE_URL, {
-      fetchImpl: async () => {
-        throw new Error("fetch should not run");
-      },
-    });
-    await assert.rejects(
-      () => client.getGovernanceCouncilCurrent("bad-options"),
-      /getGovernanceCouncilCurrent options must be an object/,
-    );
   });
 
   test("setProtectedNamespaces posts exact namespace list", async () => {

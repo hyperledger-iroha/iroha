@@ -209,8 +209,23 @@ fn vpn_payment_identity_is_the_inner_signed_hash_for_direct_and_sealed_entrypoin
         canonical_signed_transaction_hash(reveal.signed_transaction()),
         canonical
     );
+    let carrier_hash = sealed.hash();
+    let signed_entrypoint_alias = reveal.signed_transaction().hash_as_entrypoint();
+    assert!(crate::transaction_entrypoint_matches_indexed_identity(
+        &sealed,
+        &carrier_hash,
+    ));
+    assert!(crate::transaction_entrypoint_matches_indexed_identity(
+        &sealed,
+        &signed_entrypoint_alias,
+    ));
+    assert!(crate::signed_transaction_carrier_matches_indexed_identity(
+        &carrier_hash,
+        reveal.signed_transaction(),
+        &signed_entrypoint_alias,
+    ));
     assert_ne!(
-        sealed.hash().as_ref(),
+        carrier_hash.as_ref(),
         &canonical,
         "the outer sealed-reveal lookup hash must never become receipt identity"
     );

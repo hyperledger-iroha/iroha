@@ -23,7 +23,6 @@ const fn account_get(id: &'static str, path: &'static str) -> RouteDescriptor {
     .with_feature_gate(FeatureGate::Feature("app_api"))
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
     .with_private_no_store()
-    .with_implicit_head(true)
     .with_cors_options(true)
 }
 
@@ -44,10 +43,10 @@ const fn account_post(id: &'static str, path: &'static str) -> RouteDescriptor {
     .with_cors_options(true)
 }
 
-const fn auditor_get(id: &'static str, path: &'static str) -> RouteDescriptor {
+const fn auditor_read_post(id: &'static str, path: &'static str) -> RouteDescriptor {
     RouteDescriptor::new(
         id,
-        HttpMethod::Get,
+        HttpMethod::Post,
         path,
         ApiSurface::Public,
         Listener::Torii,
@@ -58,7 +57,6 @@ const fn auditor_get(id: &'static str, path: &'static str) -> RouteDescriptor {
     .with_feature_gate(FeatureGate::Feature("app_api"))
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
     .with_private_no_store()
-    .with_implicit_head(true)
 }
 
 const fn validator_get(id: &'static str, path: &'static str) -> RouteDescriptor {
@@ -75,7 +73,6 @@ const fn validator_get(id: &'static str, path: &'static str) -> RouteDescriptor 
     .with_feature_gate(FeatureGate::Feature("app_api"))
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
     .with_private_no_store()
-    .with_implicit_head(true)
 }
 
 const fn auditor_post(id: &'static str, path: &'static str) -> RouteDescriptor {
@@ -106,8 +103,25 @@ const fn public_get(id: &'static str, path: &'static str) -> RouteDescriptor {
     )
     .with_feature_gate(FeatureGate::Feature("app_api"))
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
-    .with_implicit_head(true)
     .with_cors_options(true)
+}
+
+const fn test_network_diagnostic_get(id: &'static str, path: &'static str) -> RouteDescriptor {
+    RouteDescriptor::new(
+        id,
+        HttpMethod::Get,
+        path,
+        ApiSurface::Diagnostic,
+        Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::ValidatorRosterMember,
+    )
+    .with_authentication(AuthenticationPolicy::IdentityBoundSignature)
+    .with_feature_gate(FeatureGate::Feature(
+        "test-network-private-settlement-route-control",
+    ))
+    .with_projections(RouteProjections::NONE)
+    .with_private_no_store()
 }
 
 /// Upload one complete encrypted leg through restricted confidential DA.
@@ -135,6 +149,11 @@ pub const PHASE_CERTIFICATE: RouteDescriptor = account_post(
     "private_settlement.phase.certificate",
     "/v1/nexus/private-settlements/phases/certificates",
 );
+/// Recover exact locally durable Prepare and Commit certificates as the sponsor.
+pub const PHASE_CERTIFICATES_GET: RouteDescriptor = account_get(
+    "private_settlement.phase.certificates_get",
+    "/v1/nexus/private-settlements/legs/{payload_digest}/phase-certificates",
+);
 /// Read redacted lifecycle information for an uploaded leg.
 pub const LEG_STATUS: RouteDescriptor = account_get(
     "private_settlement.leg.status",
@@ -146,7 +165,7 @@ pub const COMMITTEE_PROOF: RouteDescriptor = validator_get(
     "/v1/nexus/private-settlements/legs/{payload_digest}/committee-proof",
 );
 /// Fetch one padded encrypted audit capsule as an authorized local auditor.
-pub const AUDITOR_CAPSULE: RouteDescriptor = auditor_get(
+pub const AUDITOR_CAPSULE: RouteDescriptor = auditor_read_post(
     "private_settlement.auditor.capsule",
     "/v1/nexus/private-settlements/legs/{payload_digest}/audit-capsule",
 );
@@ -155,7 +174,8 @@ pub const AUDITOR_APPROVAL: RouteDescriptor = auditor_post(
     "private_settlement.auditor.approval",
     "/v1/nexus/private-settlements/legs/{payload_digest}/audit-approvals",
 );
-/// Submit the complete certified bundle carrier as its public sponsor.
+/// Submit a complete Prepare-lock registration, finalization, or abort carrier
+/// as its public sponsor.
 pub const BUNDLE_SUBMIT: RouteDescriptor = account_post(
     "private_settlement.bundle.submit",
     "/v1/nexus/private-settlements/bundles",
@@ -170,6 +190,15 @@ pub const BUNDLE_RECEIPT: RouteDescriptor = public_get(
     "private_settlement.bundle.receipt",
     "/v1/nexus/private-settlements/bundles/{bundle_id}/receipt",
 );
+/// Read a domain-separated state commitment on an explicitly instrumented
+/// test-network validator.
+///
+/// This descriptor has no generated projection and cannot be mounted by a
+/// shipping/default feature graph.
+pub const TEST_NETWORK_STATE_COMMITMENT: RouteDescriptor = test_network_diagnostic_get(
+    "private_settlement.test_network.state_commitment",
+    "/v1/nexus/private-settlements/test-network/state-commitment",
+);
 
 /// Complete atomic-private-settlement Torii route family.
 pub const ROUTES: &[RouteDescriptor] = &[
@@ -177,6 +206,7 @@ pub const ROUTES: &[RouteDescriptor] = &[
     PREPARE_VOTE,
     COMMIT_VOTE,
     PHASE_CERTIFICATE,
+    PHASE_CERTIFICATES_GET,
     LEG_UPLOAD,
     LEG_STATUS,
     COMMITTEE_PROOF,
@@ -185,6 +215,7 @@ pub const ROUTES: &[RouteDescriptor] = &[
     BUNDLE_SUBMIT,
     BUNDLE_STATUS,
     BUNDLE_RECEIPT,
+    TEST_NETWORK_STATE_COMMITMENT,
 ];
 
 #[cfg(test)]
@@ -203,11 +234,28 @@ mod tests {
                     EnabledFeatures::new(&["app_api"]),
                 )
                 .len(),
-            ROUTES.len()
+            ROUTES.len() - 1
         );
         assert_eq!(
             catalog
                 .project(CatalogProjection::Sdk, EnabledFeatures::none())
+                .len(),
+            ROUTES.len() - 1
+        );
+        assert_eq!(
+            TEST_NETWORK_STATE_COMMITMENT.projections(),
+            RouteProjections::NONE
+        );
+        assert!(TEST_NETWORK_STATE_COMMITMENT.requires_private_no_store());
+        assert_eq!(
+            catalog
+                .project(
+                    CatalogProjection::Mounted,
+                    EnabledFeatures::new(&[
+                        "app_api",
+                        "test-network-private-settlement-route-control",
+                    ]),
+                )
                 .len(),
             ROUTES.len()
         );
@@ -220,6 +268,7 @@ mod tests {
             PREPARE_VOTE,
             COMMIT_VOTE,
             PHASE_CERTIFICATE,
+            PHASE_CERTIFICATES_GET,
             LEG_UPLOAD,
             LEG_STATUS,
             BUNDLE_SUBMIT,

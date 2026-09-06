@@ -102,7 +102,7 @@ fn seed_plain_referendum(
         iroha_core::state::GovernanceReferendumRecord {
             h_start: 1,
             h_end: 5,
-            status: iroha_core::state::GovernanceReferendumStatus::Proposed,
+            status: iroha_core::state::GovernanceReferendumStatus::Open,
             mode: iroha_core::state::GovernanceReferendumMode::Plain,
         },
     );
@@ -114,10 +114,10 @@ fn lock_slash_restitute(
 ) {
     let ballot = iroha_data_model::isi::governance::CastPlainBallot {
         referendum_id: referendum_id.to_string(),
+        direction: 0,
         owner: owner.clone(),
         amount: 10_u64.into(),
         duration_blocks: 200,
-        direction: 0,
     };
     ballot
         .clone()

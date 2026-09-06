@@ -1,0 +1,10 @@
+[package]
+name = "iroha_service_model"
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "State-independent Iroha service records and policies"
+
+[lints]
+workspace = true

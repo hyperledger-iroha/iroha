@@ -4,51 +4,64 @@
 //! Feature-gated behind `app_api`:
 //! - Stores webhooks in-memory, persisted to `./storage/torii/webhooks.json` by default.
 //!   Base directory is configured via `torii.data_dir`; tests may use `data_dir::OverrideGuard`.
+//!   The versioned registry durably retains its ID high-water mark and an opaque
+//!   generation for each registration so deleted IDs and queued deliveries are
+//!   never inherited by a later registration.
 //! - Exposes CRUD endpoints to create/list/delete webhooks.
 //! - Background worker scans a disk-backed queue and delivers payloads with
 //!   optional HMAC-SHA256 signature and exponential backoff retries. Queue
 //!   admission, spool records, decoded bodies, and each scan batch have hard
 //!   bounds so a large or adversarial queue cannot grow worker memory without
 //!   limit.
+//! - Durable webhook storage is supported on Apple and Linux hosts, where Torii
+//!   can pin directories and enforce owner-private files. Enabling webhooks on
+//!   other hosts fails startup instead of falling back to pathname-only storage.
 //! - HTTPS delivery is supported when the `app_api_https` feature is enabled,
-//!   using `reqwest` + `rustls` with native roots. Otherwise, only `http://` is allowed.
+//!   using `reqwest` + `rustls` with native roots. WebSocket delivery requires
+//!   `app_api_wss`; plain `http://` delivery is always available.
 //!
 //! Endpoints (wired in `lib.rs` when `app_api` is enabled):
 //! - POST `/v1/webhooks` – Create a webhook.
 //! - GET  `/v1/webhooks` – List webhooks.
 //! - DELETE `/v1/webhooks/{id}` – Delete a webhook by id.
 use crate::filter::filter_expr_to_value;
-use axum::{extract::Path as AxumPath, http::StatusCode, response::IntoResponse};
+use axum::{
+    extract::Path as AxumPath,
+    http::{HeaderName, HeaderValue, StatusCode},
+    response::IntoResponse,
+};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use core::{convert::TryFrom, str::FromStr};
 use iroha_config::parameters::defaults;
-use iroha_data_model::{
-    events::data::prelude as df,
-    nexus::{DataSpaceId, LaneId},
-    prelude::DataEvent,
-};
+use iroha_data_model::{events::data::prelude as df, prelude::DataEvent};
+use iroha_futures::supervisor::ShutdownSignal;
 use sha2::{Digest, Sha256};
-#[cfg(test)]
-use std::sync::{
-    Arc,
-    atomic::{AtomicU32, Ordering},
-};
+#[cfg(any(target_vendor = "apple", target_os = "linux"))]
+use std::ffi::{OsStr, OsString};
+#[cfg(all(test, any(target_vendor = "apple", target_os = "linux")))]
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::{
     collections::HashMap,
-    fs,
-    io::{Read as _, Write as _},
+    io,
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     num::{NonZeroU32, NonZeroUsize},
     path::{Path, PathBuf},
-    sync::{Mutex, OnceLock},
+    sync::{Arc, Mutex, OnceLock, Weak},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-use tokio::fs as tokio_fs;
+#[cfg(any(test, target_vendor = "apple", target_os = "linux"))]
+use std::{
+    fs,
+    io::{Read as _, Write as _},
+};
 use url::{Host, Url};
 const WEBHOOK_REGISTRY_MAX_ENTRIES: usize = 1_024;
 const WEBHOOK_REGISTRY_MAX_BYTES: usize = 8 * 1024 * 1024;
 const WEBHOOK_ENTRY_MAX_BYTES: usize = 64 * 1024;
-const WEBHOOK_HTTP_RESPONSE_MAX_BYTES: u64 = 64 * 1024;
+const WEBHOOK_REGISTRY_FORMAT_VERSION: u64 = 1;
+const WEBHOOK_GENERATION_BYTES: usize = 16;
+const WEBHOOK_HTTP_RESPONSE_HEADER_MAX_BYTES: u64 = 64 * 1024;
+const WEBHOOK_DNS_MAX_ADDRESSES: usize = 64;
 // The configured capacity may be lowered, but never raises this process-level
 // safety ceiling. This intentionally matches the shipped default.
 const WEBHOOK_QUEUE_HARD_CAPACITY: usize = 10_000;
@@ -58,9 +71,13 @@ const WEBHOOK_DELIVERY_MAX_BASE64_BYTES: usize = WEBHOOK_DELIVERY_MAX_BYTES.div_
 // A 1 MiB body expands to about 1.34 MiB in base64; leave bounded room for the
 // delivery metadata while rejecting unexpectedly large on-disk records.
 const WEBHOOK_QUEUE_FILE_MAX_BYTES: usize = 2 * 1024 * 1024;
+#[cfg(any(target_vendor = "apple", target_os = "linux"))]
 const WEBHOOK_QUEUE_SCAN_BATCH_SIZE: usize = 128;
+#[cfg(any(target_vendor = "apple", target_os = "linux"))]
 const WEBHOOK_QUEUE_SCAN_WORK_ITEMS: usize = 1024;
 const WEBHOOK_QUEUE_ADMISSION_SCAN_WORK_ITEMS: usize = WEBHOOK_QUEUE_HARD_CAPACITY * 2;
+#[cfg(any(target_vendor = "apple", target_os = "linux"))]
+const WEBHOOK_TEMP_FILE_RETRIES: usize = 32;
 #[derive(
     Debug,
     Clone,
@@ -92,10 +109,15 @@ pub struct WebhookEntry {
     pub secret: Option<String>,
     pub filter: Option<crate::filter::FilterExpr>,
 }
-#[derive(Default)]
+#[derive(Clone)]
+struct RegisteredWebhook {
+    entry: WebhookEntry,
+    generation: [u8; WEBHOOK_GENERATION_BYTES],
+}
+#[derive(Clone, Default)]
 struct RegistryInner {
     next_id: u64,
-    items: HashMap<u64, WebhookEntry>,
+    items: HashMap<u64, RegisteredWebhook>,
 }
 fn registry() -> &'static Mutex<RegistryInner> {
     static REG: OnceLock<Mutex<RegistryInner>> = OnceLock::new();
@@ -109,25 +131,942 @@ fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 fn lock_registry() -> std::sync::MutexGuard<'static, RegistryInner> {
     lock_unpoisoned(registry())
 }
+fn webhook_delivery_attempt_lock(webhook_id: u64) -> Arc<tokio::sync::Mutex<()>> {
+    static LOCKS: OnceLock<Mutex<HashMap<u64, Weak<tokio::sync::Mutex<()>>>>> = OnceLock::new();
+    let mut locks = lock_unpoisoned(LOCKS.get_or_init(|| Mutex::new(HashMap::new())));
+    locks.retain(|_, lock| lock.strong_count() != 0);
+    if let Some(lock) = locks.get(&webhook_id).and_then(Weak::upgrade) {
+        return lock;
+    }
+    let lock = Arc::new(tokio::sync::Mutex::new(()));
+    locks.insert(webhook_id, Arc::downgrade(&lock));
+    lock
+}
 fn data_dir() -> PathBuf {
     crate::data_dir::base_dir()
 }
+#[cfg(all(test, any(target_vendor = "apple", target_os = "linux")))]
 fn registry_path() -> PathBuf {
     data_dir().join("webhooks.json")
 }
 fn queue_dir() -> PathBuf {
     data_dir().join("queue")
 }
+
+struct WebhookDirectory {
+    path: PathBuf,
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
+    file: fs::File,
+}
+
+#[cfg(any(target_vendor = "apple", target_os = "linux"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct WebhookFileIdentity {
+    device: u64,
+    inode: u64,
+}
+
+#[cfg(not(any(target_vendor = "apple", target_os = "linux")))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct WebhookFileIdentity;
+
+struct BoundedWebhookFile {
+    bytes: Vec<u8>,
+    identity: WebhookFileIdentity,
+}
+
+#[derive(Clone, Copy)]
+enum WebhookPublication {
+    CreateNew,
+    Replace,
+    ReplaceIdentity(WebhookFileIdentity),
+}
+
+#[cfg(target_vendor = "apple")]
+#[allow(unsafe_code)]
+mod webhook_acl {
+    use std::{
+        ffi::{c_int, c_void},
+        fs, io,
+        os::fd::AsRawFd as _,
+        path::Path,
+        ptr,
+    };
+
+    const ACL_TYPE_EXTENDED: c_int = 0x0000_0100;
+    const ACL_FIRST_ENTRY: c_int = 0;
+    const ACL_NEXT_ENTRY: c_int = -1;
+    const ACL_EXTENDED_DENY: c_int = 2;
+    type Acl = *mut c_void;
+    type AclEntry = *mut c_void;
+
+    unsafe extern "C" {
+        fn acl_free(object: *mut c_void) -> c_int;
+        fn acl_get_entry(acl: Acl, entry_id: c_int, entry: *mut AclEntry) -> c_int;
+        fn acl_get_tag_type(entry: AclEntry, tag_type: *mut c_int) -> c_int;
+        fn acl_get_fd_np(fd: c_int, acl_type: c_int) -> Acl;
+        fn acl_init(count: c_int) -> Acl;
+        fn acl_set_fd_np(fd: c_int, acl: Acl, acl_type: c_int) -> c_int;
+        fn acl_valid(acl: Acl) -> c_int;
+    }
+
+    struct AclGuard(Acl);
+
+    impl Drop for AclGuard {
+        fn drop(&mut self) {
+            if !self.0.is_null() {
+                // SAFETY: This guard exclusively owns the ACL object.
+                unsafe {
+                    acl_free(self.0);
+                }
+            }
+        }
+    }
+
+    fn file_acl(file: &fs::File, path: &Path) -> io::Result<Option<AclGuard>> {
+        // SAFETY: The descriptor remains live for the ACL query.
+        let acl = unsafe { acl_get_fd_np(file.as_raw_fd(), ACL_TYPE_EXTENDED) };
+        if acl.is_null() {
+            let error = io::Error::last_os_error();
+            return if error.kind() == io::ErrorKind::NotFound {
+                Ok(None)
+            } else {
+                Err(io::Error::new(
+                    error.kind(),
+                    format!(
+                        "failed to inspect the macOS ACL for {}: {error}",
+                        path.display()
+                    ),
+                ))
+            };
+        }
+        let acl = AclGuard(acl);
+        // SAFETY: The guard owns a live ACL object.
+        if unsafe { acl_valid(acl.0) } != 0 {
+            return Err(io::Error::other(format!(
+                "invalid macOS ACL on {}: {}",
+                path.display(),
+                io::Error::last_os_error()
+            )));
+        }
+        Ok(Some(acl))
+    }
+
+    fn entry_exhausted(error: &io::Error) -> bool {
+        error.kind() == io::ErrorKind::InvalidInput
+    }
+
+    pub(super) fn validate_ancestor(file: &fs::File, path: &Path) -> io::Result<()> {
+        let Some(acl) = file_acl(file, path)? else {
+            return Ok(());
+        };
+        let mut entry_id = ACL_FIRST_ENTRY;
+        loop {
+            let mut entry = ptr::null_mut();
+            // SAFETY: The ACL is live and `entry` is a valid out pointer.
+            if unsafe { acl_get_entry(acl.0, entry_id, &raw mut entry) } == 0 {
+                let mut tag_type = 0;
+                // SAFETY: A successful lookup returned a live entry.
+                if unsafe { acl_get_tag_type(entry, &raw mut tag_type) } != 0 {
+                    return Err(io::Error::other(format!(
+                        "failed to inspect the macOS ACL on {}: {}",
+                        path.display(),
+                        io::Error::last_os_error()
+                    )));
+                }
+                if tag_type != ACL_EXTENDED_DENY {
+                    return Err(invalid_acl(path));
+                }
+                entry_id = ACL_NEXT_ENTRY;
+                continue;
+            }
+            let error = io::Error::last_os_error();
+            return if entry_exhausted(&error) {
+                Ok(())
+            } else {
+                Err(error)
+            };
+        }
+    }
+
+    pub(super) fn validate_private(file: &fs::File, path: &Path) -> io::Result<()> {
+        let Some(acl) = file_acl(file, path)? else {
+            return Ok(());
+        };
+        let mut entry = ptr::null_mut();
+        // SAFETY: The ACL is live and `entry` is a valid out pointer.
+        if unsafe { acl_get_entry(acl.0, ACL_FIRST_ENTRY, &raw mut entry) } == 0 {
+            return Err(invalid_acl(path));
+        }
+        let error = io::Error::last_os_error();
+        if entry_exhausted(&error) {
+            Ok(())
+        } else {
+            Err(error)
+        }
+    }
+
+    pub(super) fn clear_private(file: &fs::File, path: &Path) -> io::Result<()> {
+        // SAFETY: Zero requests a valid ACL with no entries.
+        let acl = unsafe { acl_init(0) };
+        if acl.is_null() {
+            return Err(io::Error::last_os_error());
+        }
+        let acl = AclGuard(acl);
+        // SAFETY: The descriptor and initialized ACL remain live for the call.
+        if unsafe { acl_set_fd_np(file.as_raw_fd(), acl.0, ACL_TYPE_EXTENDED) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        validate_private(file, path)
+    }
+
+    fn invalid_acl(path: &Path) -> io::Error {
+        io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!(
+                "webhook persistence object must not have an extended allow ACL: {}",
+                path.display()
+            ),
+        )
+    }
+}
+
+#[cfg(all(not(target_vendor = "apple"), target_os = "linux"))]
+mod webhook_acl {
+    use std::{fs, io, path::Path};
+
+    pub(super) fn validate_ancestor(_file: &fs::File, _path: &Path) -> io::Result<()> {
+        Ok(())
+    }
+    pub(super) fn validate_private(_file: &fs::File, _path: &Path) -> io::Result<()> {
+        Ok(())
+    }
+    pub(super) fn clear_private(_file: &fs::File, _path: &Path) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+fn invalid_webhook_storage(message: impl Into<String>) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, message.into())
+}
+
+#[cfg(not(any(target_vendor = "apple", target_os = "linux")))]
+fn unsupported_webhook_persistence() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::Unsupported,
+        "durable webhook persistence is unavailable on this platform because Torii cannot enforce descriptor-bound owner-private storage",
+    )
+}
+
+#[cfg(any(target_vendor = "apple", target_os = "linux"))]
+fn open_webhook_directory_chain(
+    path: &Path,
+    create: bool,
+    private_final: bool,
+) -> io::Result<Option<WebhookDirectory>> {
+    use std::{os::unix::fs::MetadataExt as _, path::Component};
+
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()?.join(path)
+    };
+    let mut components = Vec::new();
+    for component in absolute.components() {
+        match component {
+            Component::RootDir | Component::CurDir => {}
+            Component::Normal(component) => components.push(component.to_os_string()),
+            Component::ParentDir | Component::Prefix(_) => {
+                return Err(invalid_webhook_storage(format!(
+                    "webhook storage path must not contain parent-directory components: {}",
+                    absolute.display()
+                )));
+            }
+        }
+    }
+    if components.is_empty() {
+        return Err(invalid_webhook_storage(
+            "the filesystem root cannot be used as webhook storage",
+        ));
+    }
+    let mut directory = fs::File::from(
+        rustix::fs::open(
+            Path::new("/"),
+            rustix::fs::OFlags::RDONLY
+                | rustix::fs::OFlags::DIRECTORY
+                | rustix::fs::OFlags::NOFOLLOW
+                | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::empty(),
+        )
+        .map_err(io::Error::from)?,
+    );
+    webhook_acl::validate_ancestor(&directory, Path::new("/"))?;
+    let effective_uid = rustix::process::geteuid().as_raw();
+    let root_metadata = directory.metadata()?;
+    if !root_metadata.is_dir()
+        || (root_metadata.uid() != 0 && root_metadata.uid() != effective_uid)
+        || root_metadata.mode() & 0o022 != 0
+    {
+        return Err(invalid_webhook_storage(
+            "webhook filesystem root is not a trusted directory",
+        ));
+    }
+    let component_count = components.len();
+    let mut cursor = PathBuf::from("/");
+    for (index, component) in components.into_iter().enumerate() {
+        cursor.push(&component);
+        let created = match rustix::fs::statat(
+            &directory,
+            &component,
+            rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+        ) {
+            Ok(_) => false,
+            Err(rustix::io::Errno::NOENT) if !create => return Ok(None),
+            Err(rustix::io::Errno::NOENT) => {
+                match rustix::fs::mkdirat(&directory, &component, rustix::fs::Mode::RWXU) {
+                    Ok(()) => true,
+                    Err(rustix::io::Errno::EXIST) => false,
+                    Err(error) => return Err(io::Error::from(error)),
+                }
+            }
+            Err(error) => return Err(io::Error::from(error)),
+        };
+        let before = rustix::fs::statat(
+            &directory,
+            &component,
+            rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+        )
+        .map_err(io::Error::from)?;
+        let current = directory.metadata()?;
+        let file_type = rustix::fs::FileType::from_raw_mode(before.st_mode);
+        // macOS exposes /var and /tmp as root-owned symlinks. Permit only such immutable
+        // system aliases; user-owned or writable-parent symlinks remain fatal.
+        let trusted_system_symlink = file_type == rustix::fs::FileType::Symlink
+            && before.st_uid == 0
+            && current.uid() == 0
+            && current.mode() & 0o022 == 0;
+        if file_type != rustix::fs::FileType::Directory && !trusted_system_symlink {
+            return Err(invalid_webhook_storage(format!(
+                "webhook storage ancestor is a non-directory or untrusted symlink: {}",
+                cursor.display()
+            )));
+        }
+        let mut flags = rustix::fs::OFlags::RDONLY
+            | rustix::fs::OFlags::DIRECTORY
+            | rustix::fs::OFlags::CLOEXEC;
+        if !trusted_system_symlink {
+            flags |= rustix::fs::OFlags::NOFOLLOW;
+        }
+        let next = fs::File::from(
+            rustix::fs::openat(&directory, &component, flags, rustix::fs::Mode::empty())
+                .map_err(io::Error::from)?,
+        );
+        if created {
+            rustix::fs::fchmod(&next, rustix::fs::Mode::RWXU).map_err(io::Error::from)?;
+            webhook_acl::clear_private(&next, &cursor)?;
+            next.sync_all()?;
+            directory.sync_all()?;
+        }
+        let opened = next.metadata()?;
+        let after = rustix::fs::statat(
+            &directory,
+            &component,
+            rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+        )
+        .map_err(io::Error::from)?;
+        let trusted_owner = opened.uid() == 0 || opened.uid() == effective_uid;
+        let trusted_sticky_root = opened.uid() == 0 && opened.mode() & 0o1000 != 0;
+        let stable_name = before.st_dev == after.st_dev
+            && before.st_ino == after.st_ino
+            && rustix::fs::FileType::from_raw_mode(after.st_mode) == file_type;
+        let opened_matches_name = trusted_system_symlink
+            || (u64::try_from(before.st_dev).ok() == Some(opened.dev())
+                && u64::try_from(before.st_ino).ok() == Some(opened.ino()));
+        if !opened.is_dir()
+            || !trusted_owner
+            || (opened.mode() & 0o022 != 0 && !trusted_sticky_root)
+            || !stable_name
+            || !opened_matches_name
+        {
+            return Err(invalid_webhook_storage(format!(
+                "webhook storage ancestor is unsafe or changed while opening: {}",
+                cursor.display()
+            )));
+        }
+        if index + 1 == component_count {
+            if opened.uid() != effective_uid {
+                return Err(invalid_webhook_storage(format!(
+                    "webhook storage directory must be owned by the current user: {}",
+                    cursor.display()
+                )));
+            }
+            if private_final && opened.mode() & 0o7777 != 0o700 {
+                rustix::fs::fchmod(&next, rustix::fs::Mode::RWXU).map_err(io::Error::from)?;
+                webhook_acl::clear_private(&next, &cursor)?;
+                next.sync_all()?;
+                let tightened = next.metadata()?;
+                if tightened.uid() != effective_uid || tightened.mode() & 0o7777 != 0o700 {
+                    return Err(invalid_webhook_storage(format!(
+                        "webhook queue directory could not be made private: {}",
+                        cursor.display()
+                    )));
+                }
+            }
+            if private_final {
+                webhook_acl::validate_private(&next, &cursor)?;
+            } else {
+                webhook_acl::validate_ancestor(&next, &cursor)?;
+            }
+        } else {
+            webhook_acl::validate_ancestor(&next, &cursor)?;
+        }
+        directory = next;
+    }
+    Ok(Some(WebhookDirectory {
+        path: absolute,
+        file: directory,
+    }))
+}
+
+#[cfg(not(any(target_vendor = "apple", target_os = "linux")))]
+fn open_webhook_directory_chain(
+    _path: &Path,
+    _create: bool,
+    _private_final: bool,
+) -> io::Result<Option<WebhookDirectory>> {
+    Err(unsupported_webhook_persistence())
+}
+
+fn open_webhook_data_directory(create: bool) -> io::Result<Option<WebhookDirectory>> {
+    open_webhook_directory_chain(&data_dir(), create, false)
+}
+
+fn open_webhook_queue_directory(create: bool) -> io::Result<Option<WebhookDirectory>> {
+    open_webhook_directory_chain(&queue_dir(), create, true)
+}
+
+#[cfg(any(target_vendor = "apple", target_os = "linux"))]
+fn filename_in_webhook_directory<'a>(
+    directory: &WebhookDirectory,
+    path: &'a Path,
+) -> io::Result<&'a OsStr> {
+    if path.parent() != Some(directory.path.as_path()) {
+        return Err(invalid_webhook_storage(format!(
+            "webhook persistence path escaped its pinned directory: {}",
+            path.display()
+        )));
+    }
+    path.file_name().ok_or_else(|| {
+        invalid_webhook_storage(format!(
+            "webhook persistence path has no file name: {}",
+            path.display()
+        ))
+    })
+}
+
+#[cfg(any(target_vendor = "apple", target_os = "linux"))]
+fn webhook_identity_from_stat(
+    stat: &rustix::fs::Stat,
+    path: &Path,
+) -> io::Result<WebhookFileIdentity> {
+    Ok(WebhookFileIdentity {
+        device: u64::try_from(stat.st_dev).map_err(|_| {
+            invalid_webhook_storage(format!("invalid device identity for {}", path.display()))
+        })?,
+        inode: u64::try_from(stat.st_ino).map_err(|_| {
+            invalid_webhook_storage(format!("invalid inode identity for {}", path.display()))
+        })?,
+    })
+}
+
+#[cfg(any(target_vendor = "apple", target_os = "linux"))]
+fn webhook_identity_from_metadata(metadata: &fs::Metadata) -> WebhookFileIdentity {
+    use std::os::unix::fs::MetadataExt as _;
+    WebhookFileIdentity {
+        device: metadata.dev(),
+        inode: metadata.ino(),
+    }
+}
+
+#[cfg(any(target_vendor = "apple", target_os = "linux"))]
+fn inspect_private_webhook_file(
+    directory: &WebhookDirectory,
+    name: &OsStr,
+    maximum_bytes: Option<usize>,
+) -> io::Result<Option<(rustix::fs::Stat, WebhookFileIdentity)>> {
+    let path = directory.path.join(name);
+    let stat =
+        match rustix::fs::statat(&directory.file, name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW) {
+            Ok(stat) => stat,
+            Err(rustix::io::Errno::NOENT) => return Ok(None),
+            Err(error) => return Err(io::Error::from(error)),
+        };
+    let size = usize::try_from(stat.st_size).ok();
+    if rustix::fs::FileType::from_raw_mode(stat.st_mode) != rustix::fs::FileType::RegularFile
+        || stat.st_uid != rustix::process::geteuid().as_raw()
+        || stat.st_mode & 0o7777 != 0o600
+        || stat.st_nlink != 1
+        || maximum_bytes.is_some_and(|maximum| size.is_none_or(|size| size > maximum))
+    {
+        return Err(invalid_webhook_storage(format!(
+            "webhook persistence entry must be a private, owned, single-link bounded regular file: {}",
+            path.display()
+        )));
+    }
+    let identity = webhook_identity_from_stat(&stat, &path)?;
+    let file = fs::File::from(
+        rustix::fs::openat(
+            &directory.file,
+            name,
+            rustix::fs::OFlags::RDONLY
+                | rustix::fs::OFlags::NOFOLLOW
+                | rustix::fs::OFlags::NONBLOCK
+                | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::empty(),
+        )
+        .map_err(io::Error::from)?,
+    );
+    if webhook_identity_from_metadata(&file.metadata()?) != identity {
+        return Err(invalid_webhook_storage(format!(
+            "webhook persistence entry changed while validating permissions: {}",
+            path.display()
+        )));
+    }
+    webhook_acl::validate_private(&file, &path)?;
+    Ok(Some((stat, identity)))
+}
+
+#[cfg(any(target_vendor = "apple", target_os = "linux"))]
+fn read_private_webhook_file_bounded(
+    directory: &WebhookDirectory,
+    path: &Path,
+    maximum_bytes: usize,
+) -> io::Result<Option<BoundedWebhookFile>> {
+    use std::os::unix::fs::MetadataExt as _;
+
+    let name = filename_in_webhook_directory(directory, path)?;
+    let Some((before, identity)) =
+        inspect_private_webhook_file(directory, name, Some(maximum_bytes))?
+    else {
+        return Ok(None);
+    };
+    let mut file = fs::File::from(
+        rustix::fs::openat(
+            &directory.file,
+            name,
+            rustix::fs::OFlags::RDONLY
+                | rustix::fs::OFlags::NOFOLLOW
+                | rustix::fs::OFlags::NONBLOCK
+                | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::empty(),
+        )
+        .map_err(io::Error::from)?,
+    );
+    let opened_before = file.metadata()?;
+    if !opened_before.is_file()
+        || opened_before.uid() != rustix::process::geteuid().as_raw()
+        || opened_before.mode() & 0o7777 != 0o600
+        || opened_before.nlink() != 1
+        || webhook_identity_from_metadata(&opened_before) != identity
+        || usize::try_from(opened_before.len()).map_or(true, |size| size > maximum_bytes)
+    {
+        return Err(invalid_webhook_storage(format!(
+            "webhook persistence entry changed while opening: {}",
+            path.display()
+        )));
+    }
+    let capacity = usize::try_from(opened_before.len())
+        .unwrap_or(maximum_bytes)
+        .min(maximum_bytes);
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(capacity)
+        .map_err(io::Error::other)?;
+    (&mut file)
+        .take(
+            u64::try_from(maximum_bytes)
+                .unwrap_or(u64::MAX)
+                .saturating_add(1),
+        )
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > maximum_bytes {
+        return Err(invalid_webhook_storage(format!(
+            "webhook persistence entry exceeds its byte bound: {}",
+            path.display()
+        )));
+    }
+    let opened_after = file.metadata()?;
+    let Some((named_after, named_identity)) =
+        inspect_private_webhook_file(directory, name, Some(maximum_bytes))?
+    else {
+        return Err(invalid_webhook_storage(format!(
+            "webhook persistence entry disappeared while reading: {}",
+            path.display()
+        )));
+    };
+    if webhook_identity_from_metadata(&opened_after) != identity
+        || named_identity != identity
+        || opened_after.len() != u64::try_from(bytes.len()).unwrap_or(u64::MAX)
+        || before.st_size != named_after.st_size
+        || before.st_mtime != named_after.st_mtime
+        || before.st_mtime_nsec != named_after.st_mtime_nsec
+        || before.st_ctime != named_after.st_ctime
+        || before.st_ctime_nsec != named_after.st_ctime_nsec
+    {
+        return Err(invalid_webhook_storage(format!(
+            "webhook persistence entry changed while reading: {}",
+            path.display()
+        )));
+    }
+    Ok(Some(BoundedWebhookFile { bytes, identity }))
+}
+
+#[cfg(not(any(target_vendor = "apple", target_os = "linux")))]
+fn read_private_webhook_file_bounded(
+    _directory: &WebhookDirectory,
+    _path: &Path,
+    _maximum_bytes: usize,
+) -> io::Result<Option<BoundedWebhookFile>> {
+    Err(unsupported_webhook_persistence())
+}
+
+#[cfg(any(target_vendor = "apple", target_os = "linux"))]
+fn create_private_webhook_temp_file(
+    directory: &WebhookDirectory,
+) -> io::Result<(fs::File, OsString)> {
+    use rand::TryRngCore as _;
+
+    let mut rng = rand::rngs::OsRng;
+    for _ in 0..WEBHOOK_TEMP_FILE_RETRIES {
+        let mut nonce = [0_u8; 16];
+        rng.try_fill_bytes(&mut nonce).map_err(|error| {
+            io::Error::other(format!(
+                "failed to generate a webhook temporary-file name: {error}"
+            ))
+        })?;
+        let name = OsString::from(format!(".webhook-{}.tmp", hex::encode(nonce)));
+        match rustix::fs::openat(
+            &directory.file,
+            &name,
+            rustix::fs::OFlags::WRONLY
+                | rustix::fs::OFlags::CREATE
+                | rustix::fs::OFlags::EXCL
+                | rustix::fs::OFlags::NOFOLLOW
+                | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
+        ) {
+            Ok(file) => {
+                let file = fs::File::from(file);
+                rustix::fs::fchmod(&file, rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR)
+                    .map_err(io::Error::from)?;
+                webhook_acl::clear_private(&file, &directory.path.join(&name))?;
+                return Ok((file, name));
+            }
+            Err(rustix::io::Errno::EXIST) => continue,
+            Err(error) => return Err(io::Error::from(error)),
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "failed to allocate a collision-free webhook temporary file",
+    ))
+}
+
+#[cfg(any(target_vendor = "apple", target_os = "linux"))]
+fn publication_matches(
+    publication: WebhookPublication,
+    actual: Option<WebhookFileIdentity>,
+) -> bool {
+    match publication {
+        WebhookPublication::CreateNew => actual.is_none(),
+        WebhookPublication::Replace => true,
+        WebhookPublication::ReplaceIdentity(expected) => actual == Some(expected),
+    }
+}
+
+#[cfg(any(target_vendor = "apple", target_os = "linux"))]
+fn write_private_webhook_file_atomic(
+    directory: &WebhookDirectory,
+    path: &Path,
+    bytes: &[u8],
+    maximum_bytes: usize,
+    publication: WebhookPublication,
+) -> io::Result<()> {
+    use std::os::unix::fs::MetadataExt as _;
+
+    if bytes.len() > maximum_bytes {
+        return Err(invalid_webhook_storage(
+            "webhook persistence payload exceeds its byte bound",
+        ));
+    }
+    let name = filename_in_webhook_directory(directory, path)?;
+    let initial =
+        inspect_private_webhook_file(directory, name, None)?.map(|(_, identity)| identity);
+    if !publication_matches(publication, initial) {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "webhook persistence destination changed before publication",
+        ));
+    }
+    let (mut temporary, temporary_name) = create_private_webhook_temp_file(directory)?;
+    let temporary_path = directory.path.join(&temporary_name);
+    let prepared = (|| {
+        temporary.write_all(bytes)?;
+        temporary.sync_all()?;
+        let temporary_metadata = temporary.metadata()?;
+        let Some((_, temporary_identity)) =
+            inspect_private_webhook_file(directory, &temporary_name, Some(maximum_bytes))?
+        else {
+            return Err(invalid_webhook_storage(
+                "webhook temporary file disappeared before publication",
+            ));
+        };
+        if !temporary_metadata.is_file()
+            || temporary_metadata.uid() != rustix::process::geteuid().as_raw()
+            || temporary_metadata.mode() & 0o7777 != 0o600
+            || temporary_metadata.nlink() != 1
+            || temporary_metadata.len() != u64::try_from(bytes.len()).unwrap_or(u64::MAX)
+            || webhook_identity_from_metadata(&temporary_metadata) != temporary_identity
+        {
+            return Err(invalid_webhook_storage(
+                "webhook temporary file failed its private-file invariant",
+            ));
+        }
+        let current =
+            inspect_private_webhook_file(directory, name, None)?.map(|(_, identity)| identity);
+        let stable_destination = match publication {
+            WebhookPublication::CreateNew => current.is_none(),
+            WebhookPublication::Replace => current == initial,
+            WebhookPublication::ReplaceIdentity(expected) => current == Some(expected),
+        };
+        if !stable_destination {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "webhook persistence destination changed during publication",
+            ));
+        }
+        if current.is_none() {
+            rustix::fs::renameat_with(
+                &directory.file,
+                &temporary_name,
+                &directory.file,
+                name,
+                rustix::fs::RenameFlags::NOREPLACE,
+            )
+            .map_err(io::Error::from)?;
+        } else {
+            rustix::fs::renameat(&directory.file, &temporary_name, &directory.file, name)
+                .map_err(io::Error::from)?;
+        }
+        let Some((_, published_identity)) =
+            inspect_private_webhook_file(directory, name, Some(maximum_bytes))?
+        else {
+            return Err(invalid_webhook_storage(
+                "webhook publication disappeared after atomic replacement",
+            ));
+        };
+        if published_identity != temporary_identity {
+            return Err(invalid_webhook_storage(
+                "webhook publication changed after atomic replacement",
+            ));
+        }
+        directory.file.sync_all()
+    })();
+    if prepared.is_err() {
+        if let Ok(Some((_, identity))) =
+            inspect_private_webhook_file(directory, &temporary_name, None)
+        {
+            let _ = unlink_private_webhook_entry(directory, &temporary_path, Some(identity), false);
+        }
+    }
+    prepared
+}
+
+#[cfg(not(any(target_vendor = "apple", target_os = "linux")))]
+fn write_private_webhook_file_atomic(
+    _directory: &WebhookDirectory,
+    _path: &Path,
+    _bytes: &[u8],
+    _maximum_bytes: usize,
+    _publication: WebhookPublication,
+) -> io::Result<()> {
+    Err(unsupported_webhook_persistence())
+}
+
+#[cfg(any(target_vendor = "apple", target_os = "linux"))]
+fn unlink_private_webhook_entry(
+    directory: &WebhookDirectory,
+    path: &Path,
+    expected: Option<WebhookFileIdentity>,
+    sync: bool,
+) -> io::Result<()> {
+    let name = filename_in_webhook_directory(directory, path)?;
+    if let Some(expected) = expected {
+        let Some((_, current)) = inspect_private_webhook_file(directory, name, None)? else {
+            return Ok(());
+        };
+        if current != expected {
+            return Err(invalid_webhook_storage(
+                "refusing to remove a replaced webhook persistence entry",
+            ));
+        }
+    }
+    rustix::fs::unlinkat(&directory.file, name, rustix::fs::AtFlags::empty())
+        .map_err(io::Error::from)?;
+    if sync {
+        directory.file.sync_all()?;
+    }
+    Ok(())
+}
+
+#[cfg(not(any(target_vendor = "apple", target_os = "linux")))]
+fn unlink_private_webhook_entry(
+    _directory: &WebhookDirectory,
+    _path: &Path,
+    _expected: Option<WebhookFileIdentity>,
+    _sync: bool,
+) -> io::Result<()> {
+    Err(unsupported_webhook_persistence())
+}
+
+#[cfg(any(target_vendor = "apple", target_os = "linux"))]
+fn is_webhook_temporary_name(name: &OsStr) -> bool {
+    let Some(name) = name.to_str() else {
+        return false;
+    };
+    let Some(nonce) = name
+        .strip_prefix(".webhook-")
+        .and_then(|name| name.strip_suffix(".tmp"))
+    else {
+        return false;
+    };
+    nonce.len() == 32
+        && nonce
+            .as_bytes()
+            .iter()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte))
+}
+
+#[cfg(any(target_vendor = "apple", target_os = "linux"))]
+fn cleanup_webhook_temporary_files(
+    directory: &WebhookDirectory,
+    work_limit: usize,
+) -> io::Result<usize> {
+    use std::os::unix::ffi::OsStrExt as _;
+
+    let mut entries = rustix::fs::Dir::read_from(&directory.file).map_err(io::Error::from)?;
+    let mut work = 0_usize;
+    let mut removed = 0_usize;
+    for entry in &mut entries {
+        let entry = entry.map_err(io::Error::from)?;
+        let bytes = entry.file_name().to_bytes();
+        if matches!(bytes, b"." | b"..") {
+            continue;
+        }
+        if work >= work_limit {
+            return Err(io::Error::other(
+                "webhook temporary-file recovery work limit reached",
+            ));
+        }
+        work = work.saturating_add(1);
+        let name = OsStr::from_bytes(bytes);
+        if !is_webhook_temporary_name(name) {
+            continue;
+        }
+        let path = directory.path.join(name);
+        let Some((_, identity)) = inspect_private_webhook_file(directory, name, None)? else {
+            continue;
+        };
+        unlink_private_webhook_entry(directory, &path, Some(identity), false)?;
+        removed = removed.saturating_add(1);
+    }
+    if removed != 0 {
+        directory.file.sync_all()?;
+    }
+    Ok(removed)
+}
+
+#[cfg(not(any(target_vendor = "apple", target_os = "linux")))]
+fn cleanup_webhook_temporary_files(
+    _directory: &WebhookDirectory,
+    _work_limit: usize,
+) -> io::Result<usize> {
+    Err(unsupported_webhook_persistence())
+}
+
+fn recover_webhook_temporary_files() -> io::Result<()> {
+    let data = open_webhook_data_directory(true)?.ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            "webhook data directory is unavailable",
+        )
+    })?;
+    let queue = open_webhook_queue_directory(true)?.ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            "webhook queue directory is unavailable",
+        )
+    })?;
+    cleanup_webhook_temporary_files(&data, WEBHOOK_QUEUE_ADMISSION_SCAN_WORK_ITEMS)?;
+    cleanup_webhook_temporary_files(&queue, WEBHOOK_QUEUE_ADMISSION_SCAN_WORK_ITEMS)?;
+    Ok(())
+}
+
 fn effective_queue_capacity(policy: WebhookPolicy) -> usize {
     policy.queue_capacity.get().min(WEBHOOK_QUEUE_HARD_CAPACITY)
 }
+#[cfg(test)]
 fn queue_depth_bounded(maximum: usize) -> std::io::Result<usize> {
-    queue_depth_bounded_at(
-        &queue_dir(),
-        maximum,
-        WEBHOOK_QUEUE_ADMISSION_SCAN_WORK_ITEMS,
-    )
+    let directory = open_webhook_queue_directory(true)?.ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            "webhook queue directory is unavailable",
+        )
+    })?;
+    queue_depth_bounded_in(&directory, maximum, WEBHOOK_QUEUE_ADMISSION_SCAN_WORK_ITEMS)
 }
+#[cfg(any(target_vendor = "apple", target_os = "linux"))]
+fn queue_depth_bounded_in(
+    directory: &WebhookDirectory,
+    maximum: usize,
+    work_limit: usize,
+) -> io::Result<usize> {
+    use std::os::unix::ffi::OsStrExt as _;
+
+    let mut count = 0_usize;
+    let mut work = 0_usize;
+    let mut entries = rustix::fs::Dir::read_from(&directory.file).map_err(io::Error::from)?;
+    for entry in &mut entries {
+        let entry = entry.map_err(io::Error::from)?;
+        let bytes = entry.file_name().to_bytes();
+        if matches!(bytes, b"." | b"..") {
+            continue;
+        }
+        if work >= work_limit {
+            return Err(io::Error::other(
+                "webhook queue admission scan work limit reached",
+            ));
+        }
+        work = work.saturating_add(1);
+        if !bytes.ends_with(b".json") {
+            continue;
+        }
+        count = count.saturating_add(1);
+        if count >= maximum {
+            return Ok(maximum);
+        }
+    }
+    Ok(count)
+}
+#[cfg(not(any(target_vendor = "apple", target_os = "linux")))]
+fn queue_depth_bounded_in(
+    _directory: &WebhookDirectory,
+    _maximum: usize,
+    _work_limit: usize,
+) -> io::Result<usize> {
+    Err(unsupported_webhook_persistence())
+}
+#[cfg(test)]
 fn queue_depth_bounded_at(
     root: &Path,
     maximum: usize,
@@ -151,7 +1090,7 @@ fn queue_depth_bounded_at(
     }
     Ok(count)
 }
-#[cfg(test)]
+#[cfg(all(test, any(target_vendor = "apple", target_os = "linux")))]
 fn queue_depth() -> usize {
     match queue_depth_bounded(usize::MAX) {
         Ok(depth) => depth,
@@ -167,16 +1106,28 @@ fn queue_write_lock() -> &'static Mutex<()> {
 }
 struct QueueAdmission {
     _guard: std::sync::MutexGuard<'static, ()>,
+    directory: WebhookDirectory,
     remaining: usize,
 }
 impl QueueAdmission {
     fn begin(policy: WebhookPolicy) -> std::io::Result<Self> {
-        ensure_dirs();
+        ensure_dirs()?;
         let guard = lock_unpoisoned(queue_write_lock());
+        let directory = open_webhook_queue_directory(true)?.ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                "webhook queue directory is unavailable",
+            )
+        })?;
         let capacity = effective_queue_capacity(policy);
-        let used = queue_depth_bounded(capacity)?;
+        let used = queue_depth_bounded_in(
+            &directory,
+            capacity,
+            WEBHOOK_QUEUE_ADMISSION_SCAN_WORK_ITEMS,
+        )?;
         Ok(Self {
             _guard: guard,
+            directory,
             remaining: capacity.saturating_sub(used),
         })
     }
@@ -188,11 +1139,14 @@ impl QueueAdmission {
             return Err(std::io::Error::other("webhook queue hard capacity reached"));
         }
         let encoded = encode_pending_delivery(pd)?;
-        let path = queue_dir().join(format!("{}.json", pd.id));
-        let mut tmp = tempfile::NamedTempFile::new_in(queue_dir())?;
-        tmp.write_all(encoded.as_bytes())?;
-        tmp.flush()?;
-        tmp.persist_noclobber(path)?;
+        let path = self.directory.path.join(format!("{}.json", pd.id));
+        write_private_webhook_file_atomic(
+            &self.directory,
+            &path,
+            encoded.as_bytes(),
+            WEBHOOK_QUEUE_FILE_MAX_BYTES,
+            WebhookPublication::CreateNew,
+        )?;
         self.remaining = self.remaining.saturating_sub(1);
         Ok(())
     }
@@ -210,16 +1164,42 @@ fn encode_pending_delivery(pd: &PendingDelivery) -> std::io::Result<String> {
             "webhook delivery metadata exceeds hard byte limit",
         ));
     }
+    if !delivery_content_type_is_valid(&pd.content_type) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "webhook delivery content type is not a valid HTTP header value",
+        ));
+    }
+    if pd
+        .signature
+        .as_deref()
+        .is_some_and(|signature| !delivery_signature_is_valid(signature))
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "webhook delivery signature is invalid",
+        ));
+    }
     let mut payload = norito::json::Map::new();
     payload.insert("id".into(), norito::json::Value::from(pd.id.clone()));
     payload.insert(
         "webhook_id".into(),
         norito::json::Value::from(pd.webhook_id),
     );
+    payload.insert(
+        "webhook_generation".into(),
+        norito::json::Value::from(hex::encode(pd.webhook_generation)),
+    );
     payload.insert("url".into(), norito::json::Value::from(pd.url.clone()));
     payload.insert(
         "content_type".into(),
         norito::json::Value::from(pd.content_type.clone()),
+    );
+    payload.insert(
+        "signature".into(),
+        pd.signature
+            .clone()
+            .map_or(norito::json::Value::Null, norito::json::Value::from),
     );
     payload.insert(
         "body".into(),
@@ -253,39 +1233,24 @@ fn delivery_metadata_is_bounded(id: &str, url: &str, content_type: &str) -> bool
         .and_then(|length| length.checked_add(content_type.len()))
         .is_some_and(|length| length <= WEBHOOK_DELIVERY_METADATA_MAX_BYTES)
 }
+fn delivery_content_type_is_valid(content_type: &str) -> bool {
+    !content_type.is_empty() && HeaderValue::from_str(content_type).is_ok()
+}
+fn delivery_signature_is_valid(signature: &str) -> bool {
+    HeaderValue::from_str(signature).is_ok()
+        && signature.strip_prefix("sha256=").is_some_and(|digest| {
+            digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+        })
+}
 fn proof_id_from_json(value: &norito::json::Value) -> Option<iroha_data_model::proof::ProofId> {
     use iroha_data_model::proof::ProofId;
-    match value {
-        norito::json::Value::String(s) => ProofId::from_str(s).ok(),
-        norito::json::Value::Object(map) => {
-            let backend = map.get("backend")?.as_str()?;
-            let hash_value = map.get("proof_hash")?;
-            if let Some(hex) = hash_value.as_str() {
-                let combined = format!("{backend}:{hex}");
-                ProofId::from_str(&combined).ok()
-            } else if let Some(arr) = hash_value.as_array() {
-                if arr.len() != 32 {
-                    return None;
-                }
-                let mut bytes = [0u8; 32];
-                for (idx, item) in arr.iter().enumerate() {
-                    let raw = item.as_u64()?;
-                    let byte = u8::try_from(raw).ok()?;
-                    bytes[idx] = byte;
-                }
-                Some(ProofId {
-                    backend: backend.into(),
-                    proof_hash: bytes,
-                })
-            } else {
-                None
-            }
-        }
-        _ => None,
-    }
+    let literal = value.as_str()?;
+    let id = ProofId::from_str(literal).ok()?;
+    (id.to_string() == literal).then_some(id)
 }
 fn parse_account_id_literal(input: &str) -> Option<iroha_data_model::account::AccountId> {
-    iroha_data_model::account::AccountId::parse_encoded(input).ok()
+    let id = iroha_data_model::account::AccountId::parse_encoded(input).ok()?;
+    (id.to_string() == input).then_some(id)
 }
 #[derive(Clone, Copy, Debug)]
 pub struct HttpTimeoutConfig {
@@ -442,137 +1407,228 @@ where
     *guard = Some(Arc::new(handler));
     HttpPostOverrideGuard
 }
-fn ensure_dirs() {
-    if cfg!(test) {
-        let _ = fs::create_dir_all(queue_dir());
-        return;
-    }
-    static INIT: OnceLock<()> = OnceLock::new();
-    INIT.get_or_init(|| {
-        let _ = fs::create_dir_all(queue_dir());
-    });
+fn ensure_dirs() -> io::Result<()> {
+    open_webhook_data_directory(true)?.ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            "webhook data directory is unavailable",
+        )
+    })?;
+    open_webhook_queue_directory(true)?.ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            "webhook queue directory is unavailable",
+        )
+    })?;
+    Ok(())
 }
-fn persist_registry() {
-    let path = registry_path();
-    ensure_dirs();
-    if let Ok(mut tmp) =
-        tempfile::NamedTempFile::new_in(path.parent().unwrap_or_else(|| Path::new(".")))
-    {
-        {
-            let guard = lock_registry();
-            let mut arr = Vec::with_capacity(guard.items.len());
-            for (_, e) in guard.items.iter() {
-                arr.push(webhook_entry_to_storage_json(e));
+fn webhook_generation_from_hex(value: &str) -> Option<[u8; WEBHOOK_GENERATION_BYTES]> {
+    let bytes = hex::decode(value).ok()?;
+    let generation: [u8; WEBHOOK_GENERATION_BYTES] = bytes.try_into().ok()?;
+    (hex::encode(generation) == value).then_some(generation)
+}
+fn new_webhook_generation() -> io::Result<[u8; WEBHOOK_GENERATION_BYTES]> {
+    use rand::TryRngCore as _;
+
+    let mut generation = [0_u8; WEBHOOK_GENERATION_BYTES];
+    let mut rng = rand::rngs::OsRng;
+    rng.try_fill_bytes(&mut generation).map_err(|error| {
+        io::Error::other(format!(
+            "failed to generate webhook registration generation: {error}"
+        ))
+    })?;
+    Ok(generation)
+}
+fn persist_registry(registry: &RegistryInner) -> io::Result<()> {
+    ensure_dirs()?;
+    let mut entries: Vec<_> = registry.items.values().collect();
+    entries.sort_by_key(|registered| registered.entry.id);
+    let arr = entries
+        .into_iter()
+        .map(registered_webhook_to_storage_json)
+        .collect();
+    let mut document = norito::json::Map::new();
+    document.insert(
+        "version".into(),
+        norito::json::Value::from(WEBHOOK_REGISTRY_FORMAT_VERSION),
+    );
+    document.insert(
+        "next_id".into(),
+        norito::json::Value::from(registry.next_id),
+    );
+    document.insert("entries".into(), norito::json::Value::Array(arr));
+    let body =
+        norito::json::to_json_pretty(&norito::json::Value::Object(document)).map_err(|error| {
+            invalid_webhook_storage(format!("failed to encode webhook registry: {error}"))
+        })?;
+    if body.len() > WEBHOOK_REGISTRY_MAX_BYTES {
+        return Err(invalid_webhook_storage(format!(
+            "webhook registry is {} bytes; maximum is {WEBHOOK_REGISTRY_MAX_BYTES}",
+            body.len()
+        )));
+    }
+    let directory = open_webhook_data_directory(false)?.ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            "webhook data directory disappeared before registry persistence",
+        )
+    })?;
+    let path = directory.path.join("webhooks.json");
+    write_private_webhook_file_atomic(
+        &directory,
+        &path,
+        body.as_bytes(),
+        WEBHOOK_REGISTRY_MAX_BYTES,
+        WebhookPublication::Replace,
+    )
+}
+fn load_registry() -> io::Result<()> {
+    let Some(directory) = open_webhook_data_directory(false)? else {
+        *lock_registry() = RegistryInner::default();
+        return Ok(());
+    };
+    let path = directory.path.join("webhooks.json");
+    let Some(file) =
+        read_private_webhook_file_bounded(&directory, &path, WEBHOOK_REGISTRY_MAX_BYTES)?
+    else {
+        *lock_registry() = RegistryInner::default();
+        return Ok(());
+    };
+    let value = norito::json::from_slice::<norito::json::Value>(&file.bytes).map_err(|error| {
+        invalid_webhook_storage(format!(
+            "failed to decode webhook registry {}: {error}",
+            path.display()
+        ))
+    })?;
+    let norito::json::Value::Object(mut document) = value else {
+        return Err(invalid_webhook_storage(format!(
+            "webhook registry is not a JSON object: {}",
+            path.display()
+        )));
+    };
+    let version = document
+        .remove("version")
+        .and_then(|value| value.as_u64())
+        .ok_or_else(|| {
+            invalid_webhook_storage(format!(
+                "webhook registry has no valid format version: {}",
+                path.display()
+            ))
+        })?;
+    if version != WEBHOOK_REGISTRY_FORMAT_VERSION {
+        return Err(invalid_webhook_storage(format!(
+            "unsupported webhook registry format version {version}: {}",
+            path.display()
+        )));
+    }
+    let next_id = document
+        .remove("next_id")
+        .and_then(|value| value.as_u64())
+        .ok_or_else(|| {
+            invalid_webhook_storage(format!(
+                "webhook registry has no valid next identifier: {}",
+                path.display()
+            ))
+        })?;
+    let Some(norito::json::Value::Array(arr)) = document.remove("entries") else {
+        return Err(invalid_webhook_storage(format!(
+            "webhook registry has no valid entries array: {}",
+            path.display()
+        )));
+    };
+    if arr.len() > WEBHOOK_REGISTRY_MAX_ENTRIES {
+        return Err(invalid_webhook_storage(format!(
+            "webhook registry contains {} entries; maximum is {WEBHOOK_REGISTRY_MAX_ENTRIES}",
+            arr.len()
+        )));
+    }
+    let policy = webhook_security_policy();
+    let mut loaded = RegistryInner::default();
+    for v in arr {
+        if let norito::json::Value::Object(m) = v {
+            let Some(idv) = m.get("id").and_then(norito::json::Value::as_u64) else {
+                continue;
+            };
+            if idv > next_id {
+                return Err(invalid_webhook_storage(format!(
+                    "webhook identifier {idv} exceeds durable next identifier {next_id}"
+                )));
             }
-            let body = norito::json::to_json_pretty(&norito::json::Value::Array(arr))
-                .unwrap_or_else(|_| "[]".into());
-            if body.len() > WEBHOOK_REGISTRY_MAX_BYTES {
-                iroha_logger::error!(
-                    actual = body.len(),
-                    maximum = WEBHOOK_REGISTRY_MAX_BYTES,
-                    "refusing to persist oversized webhook registry"
+            let Some(generation) = m
+                .get("generation")
+                .and_then(norito::json::Value::as_str)
+                .and_then(webhook_generation_from_hex)
+            else {
+                iroha_logger::warn!(
+                    webhook_id = idv,
+                    "skipping persisted webhook with an invalid generation"
                 );
-                return;
-            }
-            let _ = tmp.write_all(body.as_bytes());
-            let _ = tmp.flush();
-            if let Err(e) = tmp.persist(&path) {
-                iroha_logger::warn!(%e, "failed to persist webhook registry");
-            }
-        }
-    }
-}
-fn load_registry() {
-    let path = registry_path();
-    if let Ok(f) = fs::File::open(&path) {
-        let Ok(metadata) = f.metadata() else {
-            return;
-        };
-        if !metadata.is_file()
-            || usize::try_from(metadata.len()).map_or(true, |len| len > WEBHOOK_REGISTRY_MAX_BYTES)
-        {
-            iroha_logger::warn!(
-                path = %path.display(),
-                maximum = WEBHOOK_REGISTRY_MAX_BYTES,
-                "refusing to load oversized or non-regular webhook registry"
-            );
-            return;
-        }
-        let mut buf = Vec::new();
-        let mut limited = f.take(
-            u64::try_from(WEBHOOK_REGISTRY_MAX_BYTES)
-                .unwrap_or(u64::MAX)
-                .saturating_add(1),
-        );
-        if limited.read_to_end(&mut buf).is_ok() && buf.len() <= WEBHOOK_REGISTRY_MAX_BYTES {
-            if let Ok(norito::json::Value::Array(arr)) =
-                norito::json::from_slice::<norito::json::Value>(&buf)
-            {
-                let mut guard = lock_registry();
-                guard.items.clear();
-                let mut max_id = 0u64;
-                for (index, v) in arr.into_iter().enumerate() {
-                    if let norito::json::Value::Object(m) = v {
-                        let Some(idv) = m.get("id").and_then(norito::json::Value::as_u64) else {
+                continue;
+            };
+            if let (Some(urlv), Some(activev)) = (
+                m.get("url")
+                    .and_then(norito::json::Value::as_str)
+                    .map(ToString::to_string),
+                m.get("active").and_then(|v| match v {
+                    norito::json::Value::Bool(b) => Some(*b),
+                    _ => None,
+                }),
+            ) {
+                let urlv = match validate_webhook_url_for_create(&urlv, &policy) {
+                    Ok(url) => url.to_string(),
+                    Err((_, error)) => {
+                        iroha_logger::warn!(
+                            webhook_id = idv,
+                            %error,
+                            "skipping persisted webhook with an invalid destination"
+                        );
+                        continue;
+                    }
+                };
+                let secret = m
+                    .get("secret")
+                    .and_then(norito::json::Value::as_str)
+                    .map(ToString::to_string);
+                let filter = match m.get("filter") {
+                    None | Some(norito::json::Value::Null) => None,
+                    Some(value) => {
+                        let Some(filter) = value_to_filter_expr(value) else {
+                            iroha_logger::warn!(
+                                webhook_id = idv,
+                                "skipping persisted webhook with malformed filter"
+                            );
                             continue;
                         };
-                        // IDs are durable identities, including for entries
-                        // quarantined below or ignored past the storage cap.
-                        // Never recycle one merely because the rest of its
-                        // persisted record is corrupt.
-                        max_id = max_id.max(idv);
-                        if index >= WEBHOOK_REGISTRY_MAX_ENTRIES {
+                        if let Err(error) = validate_webhook_filter(&filter) {
+                            iroha_logger::warn!(
+                                webhook_id = idv,
+                                %error,
+                                "skipping persisted webhook with invalid filter"
+                            );
                             continue;
                         }
-                        if let (Some(urlv), Some(activev)) = (
-                            m.get("url")
-                                .and_then(norito::json::Value::as_str)
-                                .map(ToString::to_string),
-                            m.get("active").and_then(|v| match v {
-                                norito::json::Value::Bool(b) => Some(*b),
-                                _ => None,
-                            }),
-                        ) {
-                            let secret = m
-                                .get("secret")
-                                .and_then(norito::json::Value::as_str)
-                                .map(ToString::to_string);
-                            let filter = match m.get("filter") {
-                                None | Some(norito::json::Value::Null) => None,
-                                Some(value) => {
-                                    let Some(filter) = value_to_filter_expr(value) else {
-                                        iroha_logger::warn!(
-                                            webhook_id = idv,
-                                            "skipping persisted webhook with malformed filter"
-                                        );
-                                        continue;
-                                    };
-                                    if let Err(error) = crate::filter::validate_filter(&filter) {
-                                        iroha_logger::warn!(
-                                            webhook_id = idv,
-                                            %error,
-                                            "skipping persisted webhook with invalid filter"
-                                        );
-                                        continue;
-                                    }
-                                    Some(filter)
-                                }
-                            };
-                            let entry = WebhookEntry {
-                                id: idv,
-                                url: urlv,
-                                active: activev,
-                                secret,
-                                filter,
-                            };
-                            guard.items.insert(idv, entry);
-                        }
+                        Some(filter)
                     }
+                };
+                let entry = WebhookEntry {
+                    id: idv,
+                    url: urlv,
+                    active: activev,
+                    secret,
+                    filter,
+                };
+                let registered = RegisteredWebhook { entry, generation };
+                if loaded.items.insert(idv, registered).is_some() {
+                    return Err(invalid_webhook_storage(format!(
+                        "webhook registry contains duplicate identifier {idv}"
+                    )));
                 }
-                guard.next_id = max_id;
             }
         }
     }
+    loaded.next_id = next_id;
+    *lock_registry() = loaded;
+    Ok(())
 }
 fn webhook_entry_to_storage_json(entry: &WebhookEntry) -> norito::json::Value {
     let mut map = norito::json::Map::new();
@@ -595,21 +1651,34 @@ fn webhook_entry_to_storage_json(entry: &WebhookEntry) -> norito::json::Value {
     );
     norito::json::Value::Object(map)
 }
-fn webhook_entry_encoded_len(entry: &WebhookEntry) -> Result<usize, norito::json::Error> {
-    norito::json::to_vec(&webhook_entry_to_storage_json(entry)).map(|bytes| bytes.len())
+fn registered_webhook_to_storage_json(registered: &RegisteredWebhook) -> norito::json::Value {
+    let norito::json::Value::Object(mut map) = webhook_entry_to_storage_json(&registered.entry)
+    else {
+        unreachable!("webhook storage encoder always returns an object");
+    };
+    map.insert(
+        "generation".into(),
+        norito::json::Value::from(hex::encode(registered.generation)),
+    );
+    norito::json::Value::Object(map)
 }
-fn registry_can_retain(guard: &RegistryInner, candidate: &WebhookEntry) -> bool {
+fn registered_webhook_encoded_len(
+    registered: &RegisteredWebhook,
+) -> Result<usize, norito::json::Error> {
+    norito::json::to_vec(&registered_webhook_to_storage_json(registered)).map(|bytes| bytes.len())
+}
+fn registry_can_retain(guard: &RegistryInner, candidate: &RegisteredWebhook) -> bool {
     if guard.items.len() >= WEBHOOK_REGISTRY_MAX_ENTRIES {
         return false;
     }
-    let Ok(candidate_len) = webhook_entry_encoded_len(candidate) else {
+    let Ok(candidate_len) = registered_webhook_encoded_len(candidate) else {
         return false;
     };
     if candidate_len > WEBHOOK_ENTRY_MAX_BYTES {
         return false;
     }
     let retained = guard.items.values().try_fold(0_usize, |total, entry| {
-        webhook_entry_encoded_len(entry)
+        registered_webhook_encoded_len(entry)
             .ok()
             .and_then(|len| total.checked_add(len.saturating_add(1)))
     });
@@ -620,9 +1689,10 @@ fn registry_can_retain(guard: &RegistryInner, candidate: &WebhookEntry) -> bool 
     })
 }
 /// Initialize persistence: create data dir and load registry from disk.
-pub fn init_persistence() {
-    ensure_dirs();
-    load_registry();
+pub fn init_persistence() -> io::Result<()> {
+    ensure_dirs()?;
+    recover_webhook_temporary_files()?;
+    load_registry()
 }
 fn webhook_entry_to_public_json(entry: &WebhookEntry) -> norito::json::Value {
     let mut m = norito::json::Map::new();
@@ -709,17 +1779,50 @@ fn is_localhost_domain(domain: &str) -> bool {
 fn validate_webhook_url_for_create(
     raw: &str,
     policy: &WebhookSecurityPolicy,
-) -> Result<(), (StatusCode, String)> {
+) -> Result<Url, (StatusCode, String)> {
     let url = Url::parse(raw)
         .map_err(|e| (StatusCode::BAD_REQUEST, format!("invalid webhook url: {e}")))?;
+    validate_parsed_webhook_url(&url, policy)?;
+    Ok(url)
+}
+fn validate_parsed_webhook_url(
+    url: &Url,
+    policy: &WebhookSecurityPolicy,
+) -> Result<(), (StatusCode, String)> {
     match url.scheme() {
-        "http" | "https" | "ws" | "wss" => {}
+        "http" => {}
+        "https" if cfg!(feature = "app_api_https") => {}
+        "ws" | "wss" if cfg!(feature = "app_api_wss") => {}
+        unavailable @ ("https" | "ws" | "wss") => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!("webhook scheme `{unavailable}` is unavailable in this build"),
+            ));
+        }
         other => {
             return Err((
                 StatusCode::BAD_REQUEST,
                 format!("unsupported webhook scheme `{other}`"),
             ));
         }
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "webhook url must not contain user information".to_string(),
+        ));
+    }
+    if url.fragment().is_some() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "webhook url must not contain a fragment".to_string(),
+        ));
+    }
+    if url.port() == Some(0) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "webhook url port must not be zero".to_string(),
+        ));
     }
     let Some(host) = url.host() else {
         return Err((
@@ -763,14 +1866,15 @@ pub async fn handle_create_webhook(
     crate::utils::extractors::JsonOnly(req): crate::utils::extractors::JsonOnly<WebhookCreate>,
 ) -> axum::response::Response {
     if let Some(ref expr) = req.filter {
-        if let Err(e) = crate::filter::validate_filter(expr) {
+        if let Err(e) = validate_webhook_filter(expr) {
             return (StatusCode::BAD_REQUEST, format!("invalid filter: {e}")).into_response();
         }
     }
     let policy = webhook_security_policy();
-    if let Err((status, message)) = validate_webhook_url_for_create(&req.url, &policy) {
-        return (status, message).into_response();
-    }
+    let url = match validate_webhook_url_for_create(&req.url, &policy) {
+        Ok(url) => url.to_string(),
+        Err((status, message)) => return (status, message).into_response(),
+    };
     let mut guard = lock_registry();
     let Some(id) = guard.next_id.checked_add(1) else {
         return (
@@ -781,22 +1885,46 @@ pub async fn handle_create_webhook(
     };
     let entry = WebhookEntry {
         id,
-        url: req.url,
+        url,
         active: req.active,
         secret: req.secret,
         filter: req.filter,
     };
-    if !registry_can_retain(&guard, &entry) {
+    let generation = match new_webhook_generation() {
+        Ok(generation) => generation,
+        Err(error) => {
+            iroha_logger::error!(%error, "failed to create webhook registration generation");
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "webhook registry persistence is unavailable",
+            )
+                .into_response();
+        }
+    };
+    let registered = RegisteredWebhook {
+        entry: entry.clone(),
+        generation,
+    };
+    if !registry_can_retain(&guard, &registered) {
         return (
             StatusCode::INSUFFICIENT_STORAGE,
             "webhook registry capacity exceeded",
         )
             .into_response();
     }
-    guard.next_id = id;
-    guard.items.insert(id, entry.clone());
+    let mut candidate = guard.clone();
+    candidate.next_id = id;
+    candidate.items.insert(id, registered);
+    if let Err(error) = persist_registry(&candidate) {
+        iroha_logger::error!(%error, "failed to commit webhook registry update");
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "webhook registry persistence is unavailable",
+        )
+            .into_response();
+    }
+    *guard = candidate;
     drop(guard);
-    persist_registry();
     // Build Norito JSON response
     let body = norito::json::to_json_pretty(&webhook_entry_to_public_json(&entry))
         .unwrap_or_else(|_| "{}".into());
@@ -805,7 +1933,11 @@ pub async fn handle_create_webhook(
 /// GET /v1/webhooks – list current webhook entries.
 pub async fn handle_list_webhooks() -> impl IntoResponse {
     let guard = lock_registry();
-    let mut entries: Vec<_> = guard.items.values().cloned().collect();
+    let mut entries: Vec<_> = guard
+        .items
+        .values()
+        .map(|registered| registered.entry.clone())
+        .collect();
     entries.sort_by_key(|w| w.id);
     let mut arr = Vec::with_capacity(entries.len());
     for e in entries {
@@ -819,16 +1951,26 @@ pub async fn handle_list_webhooks() -> impl IntoResponse {
         .unwrap()
 }
 /// DELETE /v1/webhooks/{id} – delete a webhook.
-pub async fn handle_delete_webhook(AxumPath(id): AxumPath<u64>) -> impl IntoResponse {
+pub async fn handle_delete_webhook(AxumPath(id): AxumPath<u64>) -> axum::response::Response {
+    // Serialize deletion with the final registration check and network attempt.
+    // Once DELETE returns, no delivery using the deleted generation can start.
+    let delivery_lock = webhook_delivery_attempt_lock(id);
+    let _delivery_guard = delivery_lock.lock().await;
     let mut guard = lock_registry();
-    let removed = guard.items.remove(&id).is_some();
-    drop(guard);
-    if removed {
-        persist_registry();
-        StatusCode::NO_CONTENT
-    } else {
-        StatusCode::NOT_FOUND
+    let mut candidate = guard.clone();
+    if candidate.items.remove(&id).is_none() {
+        return StatusCode::NOT_FOUND.into_response();
     }
+    if let Err(error) = persist_registry(&candidate) {
+        iroha_logger::error!(%error, webhook_id = id, "failed to commit webhook deletion");
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "webhook registry persistence is unavailable",
+        )
+            .into_response();
+    }
+    *guard = candidate;
+    StatusCode::NO_CONTENT.into_response()
 }
 /// Compute HMAC-SHA256 of `body` with `secret` and return lowercase hex string.
 fn hmac_sha256_hex(secret: &[u8], body: &[u8]) -> String {
@@ -867,17 +2009,39 @@ fn hmac_sha256_hex(secret: &[u8], body: &[u8]) -> String {
 struct PendingDelivery {
     id: String,
     webhook_id: u64,
+    webhook_generation: [u8; WEBHOOK_GENERATION_BYTES],
     url: String,
     content_type: String,
+    signature: Option<String>,
     body: Vec<u8>,
     attempts: u32,
     next_attempt_ms: u64,
+}
+fn new_delivery_id(webhook_id: u64, timestamp_ms: u64) -> io::Result<String> {
+    use rand::TryRngCore as _;
+
+    let mut nonce = [0_u8; 16];
+    let mut rng = rand::rngs::OsRng;
+    rng.try_fill_bytes(&mut nonce).map_err(|error| {
+        io::Error::other(format!("failed to generate webhook delivery id: {error}"))
+    })?;
+    Ok(format!(
+        "{webhook_id}-{timestamp_ms}-{}",
+        hex::encode(nonce)
+    ))
 }
 pub fn enqueue_event_for_matching_webhooks(
     event: &iroha_data_model::events::EventBox,
     content_type: &str,
 ) {
-    ensure_dirs();
+    if !delivery_content_type_is_valid(content_type) {
+        iroha_logger::warn!("dropping webhook event with an invalid content type");
+        return;
+    }
+    if let Err(error) = ensure_dirs() {
+        iroha_logger::warn!(%error, "failed to prepare webhook queue storage");
+        return;
+    }
     if content_type.len() > WEBHOOK_DELIVERY_METADATA_MAX_BYTES {
         iroha_logger::warn!(
             actual = content_type.len(),
@@ -891,7 +2055,7 @@ pub fn enqueue_event_for_matching_webhooks(
         .unwrap_or_default()
         .as_millis() as u64;
     // Snapshot registry to minimize lock duration
-    let entries: Vec<(u64, WebhookEntry)> = lock_registry()
+    let entries: Vec<(u64, RegisteredWebhook)> = lock_registry()
         .items
         .iter()
         .map(|(k, v)| (*k, v.clone()))
@@ -912,6 +2076,7 @@ pub fn enqueue_event_for_matching_webhooks(
         );
         return;
     }
+    let event_rows = webhook_event_rows(event);
     let policy = webhook_policy();
     let mut admission = match QueueAdmission::begin(policy) {
         Ok(admission) => admission,
@@ -920,7 +2085,8 @@ pub fn enqueue_event_for_matching_webhooks(
             return;
         }
     };
-    for (id, w) in entries {
+    for (id, registered) in entries {
+        let w = registered.entry;
         if !w.active {
             continue;
         }
@@ -932,29 +2098,17 @@ pub fn enqueue_event_for_matching_webhooks(
             break;
         }
         if let Some(ref expr) = w.filter {
-            let (proof_backend, proof_call_hash, proof_envelope_hash) = parse_proof_filters(expr);
-            let has_proof_filters = crate::proof_filters::has_any_proof_filters(
-                proof_backend.as_ref(),
-                proof_call_hash.as_ref(),
-                proof_envelope_hash.as_ref(),
-            );
-            let only_proof_filters = has_proof_filters && expr_contains_only_proof_filters(expr);
-            if !event_matches_filter(event, expr) && !only_proof_filters {
-                continue;
-            }
-            if has_proof_filters
-                && !crate::proof_filters::event_matches_proof_filters(
-                    event,
-                    proof_backend.as_ref(),
-                    proof_call_hash.as_ref(),
-                    proof_envelope_hash.as_ref(),
-                    only_proof_filters,
-                )
-            {
+            if !event_rows_match_filter(&event_rows, expr) {
                 continue;
             }
         }
-        let delivery_id = format!("{}-{}", id, now);
+        let delivery_id = match new_delivery_id(id, now) {
+            Ok(delivery_id) => delivery_id,
+            Err(error) => {
+                iroha_logger::warn!(%error, webhook_id = id, "failed to create webhook delivery id");
+                continue;
+            }
+        };
         if !delivery_metadata_is_bounded(&delivery_id, &w.url, content_type) {
             iroha_logger::warn!(
                 webhook_id = id,
@@ -966,8 +2120,13 @@ pub fn enqueue_event_for_matching_webhooks(
         let pd = PendingDelivery {
             id: delivery_id,
             webhook_id: id,
+            webhook_generation: registered.generation,
             url: w.url.clone(),
             content_type: content_type.to_string(),
+            signature: w
+                .secret
+                .as_deref()
+                .map(|secret| format!("sha256={}", hmac_sha256_hex(secret.as_bytes(), &body))),
             body: body.clone(),
             attempts: 0,
             next_attempt_ms: now,
@@ -978,902 +2137,892 @@ pub fn enqueue_event_for_matching_webhooks(
         }
     }
 }
-fn parse_proof_filters(
-    expr: &crate::filter::FilterExpr,
-) -> (
-    Option<Vec<String>>,   // proof_backend
-    Option<Vec<[u8; 32]>>, // proof_call_hash
-    Option<Vec<[u8; 32]>>, // proof_envelope_hash
-) {
-    use crate::filter::FilterExpr as F;
-    let mut proof_backend: Option<Vec<String>> = None;
-    let mut proof_call_hash: Option<Vec<[u8; 32]>> = None;
-    let mut proof_envelope_hash: Option<Vec<[u8; 32]>> = None;
-    fn walk(
-        e: &crate::filter::FilterExpr,
-        proof_backend: &mut Option<Vec<String>>,
-        proof_call_hash: &mut Option<Vec<[u8; 32]>>,
-        proof_envelope_hash: &mut Option<Vec<[u8; 32]>>,
-    ) {
-        match e {
-            F::And(list) | F::Or(list) => {
-                for sub in list {
-                    walk(sub, proof_backend, proof_call_hash, proof_envelope_hash);
-                }
-            }
-            F::Not(inner) => walk(inner, proof_backend, proof_call_hash, proof_envelope_hash),
-            F::Eq(field, val) => {
-                if field.0 == "proof_backend" {
-                    if let Some(s) = val.as_str() {
-                        let v = proof_backend.get_or_insert_with(Vec::new);
-                        v.push(s.to_string());
-                    }
-                } else if field.0 == "proof_call_hash" || field.0 == "proof_envelope_hash" {
-                    if let Some(s) = val.as_str() {
-                        if s.len() == 64 {
-                            if let Ok(bytes) = hex::decode(s) {
-                                if bytes.len() == 32 {
-                                    let mut arr = [0u8; 32];
-                                    arr.copy_from_slice(&bytes);
-                                    if field.0 == "proof_call_hash" {
-                                        let v = proof_call_hash.get_or_insert_with(Vec::new);
-                                        v.push(arr);
-                                    } else {
-                                        let v = proof_envelope_hash.get_or_insert_with(Vec::new);
-                                        v.push(arr);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            F::In(field, vals) => {
-                if field.0 == "proof_backend" {
-                    for val in vals {
-                        if let Some(s) = val.as_str() {
-                            let v = proof_backend.get_or_insert_with(Vec::new);
-                            v.push(s.to_string());
-                        }
-                    }
-                } else if field.0 == "proof_call_hash" || field.0 == "proof_envelope_hash" {
-                    for val in vals {
-                        if let Some(s) = val.as_str() {
-                            if s.len() == 64 {
-                                if let Ok(bytes) = hex::decode(s) {
-                                    if bytes.len() == 32 {
-                                        let mut arr = [0u8; 32];
-                                        arr.copy_from_slice(&bytes);
-                                        if field.0 == "proof_call_hash" {
-                                            let v = proof_call_hash.get_or_insert_with(Vec::new);
-                                            v.push(arr);
-                                        } else {
-                                            let v =
-                                                proof_envelope_hash.get_or_insert_with(Vec::new);
-                                            v.push(arr);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-    walk(
-        expr,
-        &mut proof_backend,
-        &mut proof_call_hash,
-        &mut proof_envelope_hash,
-    );
-    (proof_backend, proof_call_hash, proof_envelope_hash)
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+enum WebhookFilterValidationError {
+    #[error(transparent)]
+    Structure(#[from] crate::filter::ValidateError),
+    #[error("unsupported webhook filter field: {0}")]
+    UnsupportedField(String),
+    #[error("operator {operator} is not supported for webhook filter field {field}")]
+    UnsupportedOperator {
+        field: String,
+        operator: &'static str,
+    },
+    #[error("invalid webhook filter value for {field}: expected {expected}")]
+    InvalidValue {
+        field: String,
+        expected: &'static str,
+    },
 }
-fn is_proof_field(name: &str) -> bool {
+
+fn invalid_webhook_filter_value(
+    field: &str,
+    expected: &'static str,
+) -> WebhookFilterValidationError {
+    WebhookFilterValidationError::InvalidValue {
+        field: field.to_owned(),
+        expected,
+    }
+}
+
+fn webhook_filter_field_is_supported(field: &str) -> bool {
     matches!(
-        name,
-        "proof_backend" | "proof_call_hash" | "proof_envelope_hash"
+        field,
+        "tx_status"
+            | "tx_hash"
+            | "tx_block_height"
+            | "block_status"
+            | "block_height"
+            | "event_kind"
+            | "peer_id"
+            | "domain_id"
+            | "account_id"
+            | "asset_id"
+            | "asset_definition_id"
+            | "nft_id"
+            | "rwa_id"
+            | "data_trigger_id"
+            | "role_id"
+            | "proof_id"
+            | "peer_event"
+            | "domain_event"
+            | "account_event"
+            | "asset_event"
+            | "asset_definition_event"
+            | "nft_event"
+            | "rwa_event"
+            | "role_event"
+            | "configuration_event"
+            | "executor_event"
+            | "time_precommit"
+            | "execute_trigger_id"
+            | "execute_trigger_authority"
+            | "trigger_completed_id"
+            | "trigger_completed_outcome"
+            | "proof_backend"
+            | "proof_call_hash"
+            | "proof_envelope_hash"
     )
 }
-fn expr_contains_only_proof_filters(expr: &crate::filter::FilterExpr) -> bool {
-    use crate::filter::FilterExpr as F;
-    match expr {
-        F::And(list) | F::Or(list) => list.iter().all(expr_contains_only_proof_filters),
-        F::Not(inner) => expr_contains_only_proof_filters(inner),
-        F::Eq(field, _)
-        | F::Ne(field, _)
-        | F::Lt(field, _)
-        | F::Lte(field, _)
-        | F::Gt(field, _)
-        | F::Gte(field, _)
-        | F::Exists(field)
-        | F::IsNull(field)
-        | F::In(field, _)
-        | F::Nin(field, _) => is_proof_field(&field.0),
-    }
-}
-fn event_filter_boxes_from_expr(
-    expr: &crate::filter::FilterExpr,
-) -> Vec<iroha_data_model::events::EventFilterBox> {
-    use crate::filter::FilterExpr as F;
-    use iroha_data_model::events::{
-        EventFilterBox,
-        execute_trigger::prelude::ExecuteTriggerEventFilter,
-        pipeline::{BlockEventFilter, BlockStatus, TransactionEventFilter, TransactionStatus},
-        time::{ExecutionTime, TimeEventFilter},
-        trigger_completed::prelude::{TriggerCompletedEventFilter, TriggerCompletedOutcomeType},
+
+fn validate_canonical_webhook_id<T>(
+    field: &str,
+    value: &norito::json::Value,
+    expected: &'static str,
+) -> Result<(), WebhookFilterValidationError>
+where
+    T: FromStr + ToString,
+{
+    let Some(literal) = value.as_str() else {
+        return Err(invalid_webhook_filter_value(field, expected));
     };
-    use std::num::NonZeroU64;
-    #[derive(Clone)]
-    enum PF {
-        Tx(TransactionEventFilter),
-        Block(BlockEventFilter),
+    let Ok(parsed) = literal.parse::<T>() else {
+        return Err(invalid_webhook_filter_value(field, expected));
+    };
+    if parsed.to_string() != literal {
+        return Err(invalid_webhook_filter_value(field, expected));
     }
-    fn merge(a: PF, b: PF) -> Option<PF> {
-        match (a, b) {
-            (PF::Tx(mut x), PF::Tx(y)) => {
-                if let Some(st) = y.status() {
-                    x = x.for_status(st.clone());
-                }
-                if let Some(h) = y.block_height {
-                    x = x.for_block_height(h);
-                }
-                if let Some(hash) = y.hash() {
-                    x = x.for_hash(hash.clone());
-                }
-                Some(PF::Tx(x))
-            }
-            (PF::Block(mut x), PF::Block(y)) => {
-                if let Some(st) = y.status() {
-                    x = x.for_status(st.clone());
-                }
-                if let Some(h) = y.height() {
-                    x = x.for_height(h);
-                }
-                Some(PF::Block(x))
-            }
-            _ => None,
-        }
-    }
-    fn to_event_boxes(pfs: Vec<PF>) -> Vec<EventFilterBox> {
-        pfs.into_iter()
-            .map(|pf| match pf {
-                PF::Tx(f) => EventFilterBox::Pipeline(f.into()),
-                PF::Block(f) => EventFilterBox::Pipeline(f.into()),
-            })
-            .collect()
-    }
-    fn parse_tx_status(s: &str) -> Option<TransactionStatus> {
-        match s {
-            "Queued" => Some(TransactionStatus::Queued),
-            "Expired" => Some(TransactionStatus::Expired),
-            "Approved" => Some(TransactionStatus::Approved),
-            "Rejected" => Some(TransactionStatus::Rejected(Box::new(
-                iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
-                    iroha_data_model::ValidationFail::InternalError("filtered".into()),
-                ),
-            ))),
-            _ => None,
-        }
-    }
-    fn parse_block_status(s: &str) -> Option<BlockStatus> {
-        match s {
-            "Created" => Some(BlockStatus::Created),
-            "Approved" => Some(BlockStatus::Approved),
-            "Rejected" => Some(BlockStatus::Rejected(
-                iroha_data_model::block::error::BlockRejectionReason::ConsensusBlockRejection,
-            )),
-            "Committed" => Some(BlockStatus::Committed),
-            "Applied" => Some(BlockStatus::Applied),
-            _ => None,
-        }
-    }
-    fn build(expr: &crate::filter::FilterExpr) -> Vec<PF> {
-        match expr {
-            F::Eq(field, value) => match field.0.as_str() {
-                // Transaction fields
-                "tx_status" => value
-                    .as_str()
-                    .and_then(parse_tx_status)
-                    .map(|st| vec![PF::Tx(TransactionEventFilter::new().for_status(st))])
-                    .unwrap_or_default(),
-                "tx_hash" => value
-                    .as_str()
-                    .and_then(|s| {
-                        s.parse::<iroha_crypto::HashOf<
-                            iroha_data_model::transaction::signed::SignedTransaction,
-                        >>()
-                        .ok()
-                    })
-                    .map(|h| vec![PF::Tx(TransactionEventFilter::new().for_hash(h))])
-                    .unwrap_or_default(),
-                "tx_block_height" => value
-                    .as_u64()
-                    .and_then(NonZeroU64::new)
-                    .map(|h| {
-                        vec![PF::Tx(
-                            TransactionEventFilter::new().for_block_height(Some(h)),
-                        )]
-                    })
-                    .unwrap_or_default(),
-                // Block fields
-                "block_status" => value
-                    .as_str()
-                    .and_then(parse_block_status)
-                    .map(|st| vec![PF::Block(BlockEventFilter::new().for_status(st))])
-                    .unwrap_or_default(),
-                "block_height" => value
-                    .as_u64()
-                    .and_then(NonZeroU64::new)
-                    .map(|h| vec![PF::Block(BlockEventFilter::new().for_height(h))])
-                    .unwrap_or_default(),
-                _ => Vec::new(),
-            },
-            F::IsNull(field) if field.0.as_str() == "tx_block_height" => {
-                vec![PF::Tx(TransactionEventFilter::new().for_block_height(None))]
-            }
-            F::In(field, list) if field.0.as_str() == "tx_status" => {
-                let mut acc = Vec::new();
-                for v in list {
-                    if let Some(st) = v.as_str().and_then(parse_tx_status) {
-                        acc.push(PF::Tx(TransactionEventFilter::new().for_status(st)));
-                    }
-                }
-                acc
-            }
-            F::And(children) => {
-                let mut acc: Vec<PF> = vec![];
-                for c in children {
-                    let next = build(c);
-                    if acc.is_empty() {
-                        acc = next;
-                    } else {
-                        let mut merged = Vec::new();
-                        for a in &acc {
-                            for b in &next {
-                                if let Some(m) = merge(a.clone(), b.clone()) {
-                                    merged.push(m);
-                                }
-                            }
-                        }
-                        acc = merged;
-                    }
-                }
-                acc
-            }
-            F::Or(children) => {
-                let mut acc = Vec::new();
-                for c in children {
-                    acc.extend(build(c));
-                }
-                acc
-            }
-            F::Not(inner) => match &**inner {
-                F::Eq(f, v) if f.0.as_str() == "tx_status" => {
-                    let mut acc = Vec::new();
-                    if let Some(target) = v.as_str().and_then(parse_tx_status) {
-                        use iroha_data_model::events::pipeline::TransactionStatus as TS;
-                        let rejected = TS::Rejected(Box::new(
-                            iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
-                                iroha_data_model::ValidationFail::InternalError("filtered".into()),
-                            ),
-                        ));
-                        let all = [TS::Queued, TS::Expired, TS::Approved, rejected];
-                        for st in all.into_iter() {
-                            if core::mem::discriminant(&st) != core::mem::discriminant(&target) {
-                                acc.push(PF::Tx(TransactionEventFilter::new().for_status(st)));
-                            }
-                        }
-                    }
-                    acc
-                }
-                F::Eq(f, v) if f.0.as_str() == "block_status" => {
-                    let mut acc = Vec::new();
-                    if let Some(target) = v.as_str().and_then(parse_block_status) {
-                        use iroha_data_model::events::pipeline::BlockStatus as BS;
-                        let all = [
-                            BS::Created,
-                            BS::Approved,
-                            BS::Rejected(
-                                iroha_data_model::block::error::BlockRejectionReason::ConsensusBlockRejection,
-                            ),
-                            BS::Committed,
-                            BS::Applied,
-                        ];
-                        for st in all.into_iter() {
-                            if core::mem::discriminant(&st) != core::mem::discriminant(&target) {
-                                acc.push(PF::Block(BlockEventFilter::new().for_status(st)));
-                            }
-                        }
-                    }
-                    acc
-                }
-                _ => Vec::new(),
-            },
-            _ => Vec::new(),
-        }
-    }
-    // Map non-pipeline fields to event filters. For AND, merge compatible
-    // constraints (id + event set + coarse kind) into a single typed filter.
-    // For OR, return a union of child mappings.
-    fn map_non_pipeline(expr: &crate::filter::FilterExpr) -> Vec<EventFilterBox> {
-        match expr {
-            F::Eq(field, value) => match field.0.as_str() {
-                // Coarse event kind
-                "event_kind" => match value.as_str() {
-                    Some("Data" | "AnyData") => {
-                        vec![EventFilterBox::Data(df::DataEventFilter::Any)]
-                    }
-                    Some("ExecuteTrigger") => vec![EventFilterBox::ExecuteTrigger(
-                        ExecuteTriggerEventFilter::new(),
-                    )],
-                    Some("TriggerCompleted") => vec![EventFilterBox::TriggerCompleted(
-                        TriggerCompletedEventFilter::new(),
-                    )],
-                    Some("Time") => vec![EventFilterBox::Time(TimeEventFilter(
-                        ExecutionTime::PreCommit,
-                    ))],
-                    _ => Vec::new(),
-                },
-                // Data origins
-                "peer_id" => value
-                    .as_str()
-                    .and_then(|s| s.parse().ok())
-                    .map(|id| {
-                        EventFilterBox::Data(df::DataEventFilter::Peer(
-                            df::PeerEventFilter::new().for_peer(id),
-                        ))
-                    })
-                    .into_iter()
-                    .collect(),
-                "domain_id" => value
-                    .as_str()
-                    .and_then(|s| iroha_data_model::domain::DomainId::parse_fully_qualified(s).ok())
-                    .map(|id| {
-                        EventFilterBox::Data(df::DataEventFilter::Domain(
-                            df::DomainEventFilter::new().for_domain(id),
-                        ))
-                    })
-                    .into_iter()
-                    .collect(),
-                "account_id" => value
-                    .as_str()
-                    .and_then(parse_account_id_literal)
-                    .map(|id| {
-                        EventFilterBox::Data(df::DataEventFilter::Account(
-                            df::AccountEventFilter::new().for_account(id),
-                        ))
-                    })
-                    .into_iter()
-                    .collect(),
-                "asset_id" => value
-                    .as_str()
-                    .and_then(|s| s.parse().ok())
-                    .map(|id| {
-                        EventFilterBox::Data(df::DataEventFilter::Asset(
-                            df::AssetEventFilter::new().for_asset(id),
-                        ))
-                    })
-                    .into_iter()
-                    .collect(),
-                "asset_definition_id" => value
-                    .as_str()
-                    .and_then(|s| s.parse().ok())
-                    .map(|id| {
-                        EventFilterBox::Data(df::DataEventFilter::AssetDefinition(
-                            df::AssetDefinitionEventFilter::new().for_asset_definition(id),
-                        ))
-                    })
-                    .into_iter()
-                    .collect(),
-                "nft_id" => value
-                    .as_str()
-                    .and_then(|s| s.parse().ok())
-                    .map(|id| {
-                        EventFilterBox::Data(df::DataEventFilter::Nft(
-                            df::NftEventFilter::new().for_nft(id),
-                        ))
-                    })
-                    .into_iter()
-                    .collect(),
-                "rwa_id" => value
-                    .as_str()
-                    .and_then(|s| s.parse().ok())
-                    .map(|id| {
-                        EventFilterBox::Data(df::DataEventFilter::Rwa(
-                            df::RwaEventFilter::new().for_rwa(id),
-                        ))
-                    })
-                    .into_iter()
-                    .collect(),
-                "data_trigger_id" => value
-                    .as_str()
-                    .and_then(|s| s.parse().ok())
-                    .map(|id| {
-                        EventFilterBox::Data(df::DataEventFilter::Trigger(
-                            df::TriggerEventFilter::new().for_trigger(id),
-                        ))
-                    })
-                    .into_iter()
-                    .collect(),
-                "role_id" => value
-                    .as_str()
-                    .and_then(|s| s.parse().ok())
-                    .map(|id| {
-                        EventFilterBox::Data(df::DataEventFilter::Role(
-                            df::RoleEventFilter::new().for_role(id),
-                        ))
-                    })
-                    .into_iter()
-                    .collect(),
-                "proof_id" => proof_id_from_json(value)
-                    .map(|id| {
-                        EventFilterBox::Data(df::DataEventFilter::Proof(
-                            df::ProofEventFilter::new().for_proof(id),
-                        ))
-                    })
-                    .into_iter()
-                    .collect(),
-                // Time events
-                "time_precommit" if value.as_bool() == Some(true) => vec![EventFilterBox::Time(
-                    TimeEventFilter(ExecutionTime::PreCommit),
-                )],
-                // Trigger execution
-                "execute_trigger_id" => value
-                    .as_str()
-                    .and_then(|s| s.parse().ok())
-                    .map(|id| {
-                        EventFilterBox::ExecuteTrigger(
-                            ExecuteTriggerEventFilter::new().for_trigger(id),
-                        )
-                    })
-                    .into_iter()
-                    .collect(),
-                "execute_trigger_authority" => value
-                    .as_str()
-                    .and_then(parse_account_id_literal)
-                    .map(|acc: iroha_data_model::account::AccountId| {
-                        EventFilterBox::ExecuteTrigger(
-                            ExecuteTriggerEventFilter::new().under_authority(acc),
-                        )
-                    })
-                    .into_iter()
-                    .collect(),
-                // Trigger completed
-                "trigger_completed_id" | "trigger_id" => value
-                    .as_str()
-                    .and_then(|s| s.parse().ok())
-                    .map(|id| {
-                        EventFilterBox::TriggerCompleted(
-                            TriggerCompletedEventFilter::new().for_trigger(id),
-                        )
-                    })
-                    .into_iter()
-                    .collect(),
-                "trigger_completed_outcome" => value
-                    .as_str()
-                    .and_then(|s| match s {
-                        "Success" => Some(TriggerCompletedOutcomeType::Success),
-                        "Failure" => Some(TriggerCompletedOutcomeType::Failure),
-                        _ => None,
-                    })
-                    .map(|ty| {
-                        EventFilterBox::TriggerCompleted(
-                            TriggerCompletedEventFilter::new().for_outcome(ty),
-                        )
-                    })
-                    .into_iter()
-                    .collect(),
-                _ => Vec::new(),
-            },
-            F::And(children) => {
-                // Collect constraints per category and synthesize merged filters
-                #[derive(Default)]
-                struct C {
-                    // Data categories
-                    peer_id: Option<iroha_data_model::peer::PeerId>,
-                    peer_set: Option<df::PeerEventSet>,
-                    domain_id: Option<iroha_data_model::domain::DomainId>,
-                    domain_set: Option<df::DomainEventSet>,
-                    account_id: Option<iroha_data_model::account::AccountId>,
-                    account_set: Option<df::AccountEventSet>,
-                    asset_id: Option<iroha_data_model::asset::AssetId>,
-                    asset_set: Option<df::AssetEventSet>,
-                    asset_def_id: Option<iroha_data_model::asset::AssetDefinitionId>,
-                    asset_def_set: Option<df::AssetDefinitionEventSet>,
-                    nft_id: Option<iroha_data_model::nft::NftId>,
-                    nft_set: Option<df::NftEventSet>,
-                    rwa_id: Option<iroha_data_model::rwa::RwaId>,
-                    rwa_set: Option<df::RwaEventSet>,
-                    role_id: Option<iroha_data_model::role::RoleId>,
-                    role_set: Option<df::RoleEventSet>,
-                    proof_id: Option<iroha_data_model::proof::ProofId>,
-                    proof_set: Option<iroha_data_model::events::data::proof::ProofEventSet>,
-                    cfg_set: Option<df::ConfigurationEventSet>,
-                    exec_set: Option<df::ExecutorEventSet>,
-                    // Time
-                    time_precommit: bool,
-                    // ExecuteTrigger / TriggerCompleted
-                    exec_trig_id: Option<iroha_data_model::trigger::TriggerId>,
-                    exec_trig_auth: Option<iroha_data_model::account::AccountId>,
-                    trigc_id: Option<iroha_data_model::trigger::TriggerId>,
-                    trigc_outcome: Option<TriggerCompletedOutcomeType>,
-                    // coarse kinds
-                    want_data_any: bool,
-                }
-                fn parse_event_list<T>(
-                    vals: &norito::json::Value,
-                    from_str: &dyn Fn(&str) -> Option<T>,
-                ) -> Option<T>
-                where
-                    T: core::ops::BitOr<Output = T> + Copy,
-                {
-                    if let Some(s) = vals.as_str() {
-                        return from_str(s);
-                    }
-                    if let Some(arr) = vals.as_array() {
-                        let mut acc: Option<T> = None;
-                        for v in arr {
-                            if let Some(s) = v.as_str() {
-                                if let Some(one) = from_str(s) {
-                                    acc = Some(acc.map_or(one, |a| a | one));
-                                }
-                            }
-                        }
-                        return acc;
-                    }
-                    None
-                }
-                fn apply_constraint(c: &mut C, f: &str, v: &norito::json::Value) {
-                    match f {
-                        // coarse kinds
-                        "event_kind" => {
-                            if v.as_str().is_some_and(|s| matches!(s, "Data" | "AnyData")) {
-                                c.want_data_any = true;
-                            } else if v.as_str() == Some("Time") {
-                                c.time_precommit = true;
-                            }
-                        }
-                        // data ids
-                        "peer_id" => c.peer_id = v.as_str().and_then(|s| s.parse().ok()),
-                        "domain_id" => {
-                            c.domain_id = v.as_str().and_then(|s| {
-                                iroha_data_model::domain::DomainId::parse_fully_qualified(s).ok()
-                            })
-                        }
-                        "account_id" => {
-                            c.account_id = v.as_str().and_then(parse_account_id_literal)
-                        }
-                        "asset_id" => c.asset_id = v.as_str().and_then(|s| s.parse().ok()),
-                        "asset_definition_id" => {
-                            c.asset_def_id = v.as_str().and_then(|s| s.parse().ok())
-                        }
-                        "nft_id" => c.nft_id = v.as_str().and_then(|s| s.parse().ok()),
-                        "rwa_id" => c.rwa_id = v.as_str().and_then(|s| s.parse().ok()),
-                        "role_id" => c.role_id = v.as_str().and_then(|s| s.parse().ok()),
-                        "proof_id" => {
-                            c.proof_id = proof_id_from_json(v);
-                        }
-                        // data event sets
-                        "peer_event" => {
-                            c.peer_set = parse_event_list(v, &|s| match s {
-                                "Added" => Some(df::PeerEventSet::Added),
-                                "Removed" => Some(df::PeerEventSet::Removed),
-                                _ => None,
-                            });
-                        }
-                        "domain_event" => {
-                            c.domain_set = parse_event_list(v, &|s| match s {
-                                "Created" => Some(df::DomainEventSet::Created),
-                                "Deleted" => Some(df::DomainEventSet::Deleted),
-                                "AssetDefinition" => Some(df::DomainEventSet::AssetDefinition),
-                                "Asset" => Some(df::DomainEventSet::Asset),
-                                "Nft" => Some(df::DomainEventSet::AnyNft),
-                                "Account" => Some(df::DomainEventSet::Account),
-                                "MetadataInserted" => Some(df::DomainEventSet::MetadataInserted),
-                                "MetadataRemoved" => Some(df::DomainEventSet::MetadataRemoved),
-                                "OwnerChanged" => Some(df::DomainEventSet::OwnerChanged),
-                                _ => None,
-                            });
-                        }
-                        "account_event" => {
-                            c.account_set = parse_event_list(v, &|s| match s {
-                                "Created" => Some(df::AccountEventSet::Created),
-                                "Deleted" => Some(df::AccountEventSet::Deleted),
-                                "PermissionAdded" => Some(df::AccountEventSet::PermissionAdded),
-                                "PermissionRemoved" => Some(df::AccountEventSet::PermissionRemoved),
-                                "RoleGranted" => Some(df::AccountEventSet::RoleGranted),
-                                "RoleRevoked" => Some(df::AccountEventSet::RoleRevoked),
-                                "MetadataInserted" => Some(df::AccountEventSet::MetadataInserted),
-                                "MetadataRemoved" => Some(df::AccountEventSet::MetadataRemoved),
-                                _ => None,
-                            });
-                        }
-                        "asset_event" => {
-                            c.asset_set = parse_event_list(v, &|s| match s {
-                                "Created" => Some(df::AssetEventSet::Created),
-                                "Deleted" => Some(df::AssetEventSet::Deleted),
-                                "Added" => Some(df::AssetEventSet::Added),
-                                "Removed" => Some(df::AssetEventSet::Removed),
-                                "MetadataInserted" => Some(df::AssetEventSet::MetadataInserted),
-                                "MetadataRemoved" => Some(df::AssetEventSet::MetadataRemoved),
-                                _ => None,
-                            });
-                        }
-                        "asset_definition_event" => {
-                            c.asset_def_set = parse_event_list(v, &|s| match s {
-                                "Created" => Some(df::AssetDefinitionEventSet::Created),
-                                "Deleted" => Some(df::AssetDefinitionEventSet::Deleted),
-                                "MetadataInserted" => {
-                                    Some(df::AssetDefinitionEventSet::MetadataInserted)
-                                }
-                                "MetadataRemoved" => {
-                                    Some(df::AssetDefinitionEventSet::MetadataRemoved)
-                                }
-                                "MintabilityChanged" => {
-                                    Some(df::AssetDefinitionEventSet::MintabilityChanged)
-                                }
-                                "MintabilityChangedDetailed" => {
-                                    Some(df::AssetDefinitionEventSet::MintabilityChangedDetailed)
-                                }
-                                "TotalQuantityChanged" => {
-                                    Some(df::AssetDefinitionEventSet::TotalQuantityChanged)
-                                }
-                                "OwnerChanged" => Some(df::AssetDefinitionEventSet::OwnerChanged),
-                                _ => None,
-                            });
-                        }
-                        "nft_event" => {
-                            c.nft_set = parse_event_list(v, &|s| match s {
-                                "Created" => Some(df::NftEventSet::Created),
-                                "Deleted" => Some(df::NftEventSet::Deleted),
-                                "OwnerChanged" => Some(df::NftEventSet::OwnerChanged),
-                                _ => None,
-                            });
-                        }
-                        "rwa_event" => {
-                            c.rwa_set = parse_event_list(v, &|s| match s {
-                                "Created" => Some(df::RwaEventSet::Created),
-                                "MetadataInserted" => Some(df::RwaEventSet::MetadataInserted),
-                                "MetadataRemoved" => Some(df::RwaEventSet::MetadataRemoved),
-                                "OwnerChanged" => Some(df::RwaEventSet::OwnerChanged),
-                                "Split" => Some(df::RwaEventSet::Split),
-                                "Merged" => Some(df::RwaEventSet::Merged),
-                                "Redeemed" => Some(df::RwaEventSet::Redeemed),
-                                "Frozen" => Some(df::RwaEventSet::Frozen),
-                                "Unfrozen" => Some(df::RwaEventSet::Unfrozen),
-                                "Held" => Some(df::RwaEventSet::Held),
-                                "Released" => Some(df::RwaEventSet::Released),
-                                "ForceTransferred" => Some(df::RwaEventSet::ForceTransferred),
-                                "ControlsChanged" => Some(df::RwaEventSet::ControlsChanged),
-                                _ => None,
-                            });
-                        }
-                        "role_event" => {
-                            c.role_set = parse_event_list(v, &|s| match s {
-                                "Created" => Some(df::RoleEventSet::Created),
-                                "Deleted" => Some(df::RoleEventSet::Deleted),
-                                "PermissionAdded" => Some(df::RoleEventSet::PermissionAdded),
-                                "PermissionRemoved" => Some(df::RoleEventSet::PermissionRemoved),
-                                _ => None,
-                            });
-                        }
-                        "configuration_event" => {
-                            c.cfg_set = parse_event_list(v, &|s| match s {
-                                "Changed" => Some(df::ConfigurationEventSet::Changed),
-                                _ => None,
-                            });
-                        }
-                        "executor_event" => {
-                            c.exec_set = parse_event_list(v, &|s| match s {
-                                "Upgraded" => Some(df::ExecutorEventSet::Upgraded),
-                                _ => None,
-                            });
-                        }
-                        // time
-                        "time_precommit" => c.time_precommit |= v.as_bool().unwrap_or(false),
-                        // execute trigger / trigger completed
-                        "execute_trigger_id" => {
-                            c.exec_trig_id = v.as_str().and_then(|s| s.parse().ok());
-                        }
-                        "execute_trigger_authority" => {
-                            c.exec_trig_auth = v.as_str().and_then(parse_account_id_literal);
-                        }
-                        "trigger_completed_id" | "trigger_id" => {
-                            c.trigc_id = v.as_str().and_then(|s| s.parse().ok());
-                        }
-                        "trigger_completed_outcome" => {
-                            c.trigc_outcome = v.as_str().and_then(|s| match s {
-                                "Success" => Some(TriggerCompletedOutcomeType::Success),
-                                "Failure" => Some(TriggerCompletedOutcomeType::Failure),
-                                _ => None,
-                            });
-                        }
-                        _ => {}
-                    }
-                }
-                let mut c = C::default();
-                for child in children {
-                    match child {
-                        F::Eq(f, v) => apply_constraint(&mut c, &f.0, v),
-                        F::And(grand) | F::Or(grand) => {
-                            // Flatten: apply constraints from nested groups as union for sets
-                            for g in grand {
-                                if let F::Eq(f, v) = g {
-                                    apply_constraint(&mut c, &f.0, v);
-                                }
-                            }
-                        }
-                        F::Not(inner) => {
-                            if let F::Eq(f, v) = inner.as_ref() {
-                                apply_constraint(&mut c, &f.0, v);
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-                let mut out: Vec<EventFilterBox> = Vec::new();
-                // Synthesize merged typed filters per category
-                if c.want_data_any {
-                    out.push(EventFilterBox::Data(df::DataEventFilter::Any));
-                }
-                if c.peer_id.is_some() || c.peer_set.is_some() {
-                    let mut f = df::PeerEventFilter::new();
-                    if let Some(id) = c.peer_id {
-                        f = f.for_peer(id);
-                    }
-                    if let Some(set) = c.peer_set {
-                        f = f.for_events(set);
-                    }
-                    out.push(EventFilterBox::Data(df::DataEventFilter::Peer(f)));
-                }
-                if c.domain_id.is_some() || c.domain_set.is_some() {
-                    let mut f = df::DomainEventFilter::new();
-                    if let Some(id) = c.domain_id {
-                        f = f.for_domain(id);
-                    }
-                    if let Some(set) = c.domain_set {
-                        f = f.for_events(set);
-                    }
-                    out.push(EventFilterBox::Data(df::DataEventFilter::Domain(f)));
-                }
-                if c.account_id.is_some() || c.account_set.is_some() {
-                    let mut f = df::AccountEventFilter::new();
-                    if let Some(id) = c.account_id {
-                        f = f.for_account(id);
-                    }
-                    if let Some(set) = c.account_set {
-                        f = f.for_events(set);
-                    }
-                    out.push(EventFilterBox::Data(df::DataEventFilter::Account(f)));
-                }
-                if c.asset_id.is_some() || c.asset_set.is_some() {
-                    let mut f = df::AssetEventFilter::new();
-                    if let Some(id) = c.asset_id {
-                        f = f.for_asset(id);
-                    }
-                    if let Some(set) = c.asset_set {
-                        f = f.for_events(set);
-                    }
-                    out.push(EventFilterBox::Data(df::DataEventFilter::Asset(f)));
-                }
-                if c.asset_def_id.is_some() || c.asset_def_set.is_some() {
-                    let mut f = df::AssetDefinitionEventFilter::new();
-                    if let Some(id) = c.asset_def_id {
-                        f = f.for_asset_definition(id);
-                    }
-                    if let Some(set) = c.asset_def_set {
-                        f = f.for_events(set);
-                    }
-                    out.push(EventFilterBox::Data(df::DataEventFilter::AssetDefinition(
-                        f,
-                    )));
-                }
-                if c.nft_id.is_some() || c.nft_set.is_some() {
-                    let mut f = df::NftEventFilter::new();
-                    if let Some(id) = c.nft_id {
-                        f = f.for_nft(id);
-                    }
-                    if let Some(set) = c.nft_set {
-                        f = f.for_events(set);
-                    }
-                    out.push(EventFilterBox::Data(df::DataEventFilter::Nft(f)));
-                }
-                if c.rwa_id.is_some() || c.rwa_set.is_some() {
-                    let mut f = df::RwaEventFilter::new();
-                    if let Some(id) = c.rwa_id {
-                        f = f.for_rwa(id);
-                    }
-                    if let Some(set) = c.rwa_set {
-                        f = f.for_events(set);
-                    }
-                    out.push(EventFilterBox::Data(df::DataEventFilter::Rwa(f)));
-                }
-                if c.role_id.is_some() || c.role_set.is_some() {
-                    let mut f = df::RoleEventFilter::new();
-                    if let Some(id) = c.role_id {
-                        f = f.for_role(id);
-                    }
-                    if let Some(set) = c.role_set {
-                        f = f.for_events(set);
-                    }
-                    out.push(EventFilterBox::Data(df::DataEventFilter::Role(f)));
-                }
-                if c.proof_id.is_some() || c.proof_set.is_some() {
-                    let mut f = df::ProofEventFilter::new();
-                    if let Some(id) = c.proof_id {
-                        f = f.for_proof(id);
-                    }
-                    if let Some(set) = c.proof_set {
-                        f = f.for_events(set);
-                    }
-                    out.push(EventFilterBox::Data(df::DataEventFilter::Proof(f)));
-                }
-                if let Some(set) = c.cfg_set {
-                    out.push(EventFilterBox::Data(df::DataEventFilter::Configuration(
-                        df::ConfigurationEventFilter::new().for_events(set),
-                    )));
-                }
-                if let Some(set) = c.exec_set {
-                    out.push(EventFilterBox::Data(df::DataEventFilter::Executor(
-                        df::ExecutorEventFilter::new().for_events(set),
-                    )));
-                }
-                if c.time_precommit {
-                    out.push(EventFilterBox::Time(TimeEventFilter(
-                        ExecutionTime::PreCommit,
-                    )));
-                }
-                if c.exec_trig_id.is_some() || c.exec_trig_auth.is_some() {
-                    let mut f = ExecuteTriggerEventFilter::new();
-                    if let Some(id) = c.exec_trig_id {
-                        f = f.for_trigger(id);
-                    }
-                    if let Some(a) = c.exec_trig_auth {
-                        f = f.under_authority(a);
-                    }
-                    out.push(EventFilterBox::ExecuteTrigger(f));
-                }
-                if c.trigc_id.is_some() || c.trigc_outcome.is_some() {
-                    let mut f = TriggerCompletedEventFilter::new();
-                    if let Some(id) = c.trigc_id {
-                        f = f.for_trigger(id);
-                    }
-                    if let Some(o) = c.trigc_outcome {
-                        f = f.for_outcome(o);
-                    }
-                    out.push(EventFilterBox::TriggerCompleted(f));
-                }
-                out
-            }
-            F::Or(children) => {
-                let mut out = Vec::new();
-                for c in children {
-                    out.extend(map_non_pipeline(c));
-                }
-                out
-            }
-            F::Not(inner) => map_non_pipeline(inner),
-            _ => Vec::new(),
-        }
-    }
-    let mut out = to_event_boxes(build(expr));
-    out.extend(map_non_pipeline(expr));
-    out
+    Ok(())
 }
+
+fn validate_webhook_filter_value(
+    field: &str,
+    value: &norito::json::Value,
+) -> Result<(), WebhookFilterValidationError> {
+    let string_matches = |allowed: &[&str], expected| {
+        value
+            .as_str()
+            .filter(|literal| allowed.contains(literal))
+            .map(|_| ())
+            .ok_or_else(|| invalid_webhook_filter_value(field, expected))
+    };
+    match field {
+        "tx_status" => string_matches(
+            &["Queued", "Expired", "Approved", "Rejected"],
+            "a transaction status",
+        ),
+        "block_status" => string_matches(
+            &["Created", "Approved", "Rejected", "Committed", "Applied"],
+            "a block status",
+        ),
+        "event_kind" => string_matches(
+            &[
+                "Pipeline",
+                "Data",
+                "Time",
+                "ExecuteTrigger",
+                "TriggerCompleted",
+            ],
+            "an event kind",
+        ),
+        "peer_event" => string_matches(&["Added", "Removed"], "a peer event"),
+        "domain_event" => string_matches(
+            &[
+                "Created",
+                "Deleted",
+                "AssetDefinition",
+                "Asset",
+                "Nft",
+                "Rwa",
+                "Account",
+                "AccountLinked",
+                "AccountUnlinked",
+                "MetadataInserted",
+                "MetadataRemoved",
+                "OwnerChanged",
+                "KaigiRosterSummary",
+                "KaigiRelayRegistered",
+                "KaigiRelayManifestUpdated",
+                "KaigiUsageSummary",
+                "KaigiRelayHealthUpdated",
+                "StreamingTicketReady",
+                "StreamingTicketRevoked",
+                "KaigiRelayUnregistered",
+                "KaigiStatusChanged",
+            ],
+            "a domain event",
+        ),
+        "account_event" => string_matches(
+            &[
+                "Created",
+                "Deleted",
+                "ControllerReplaced",
+                "PermissionAdded",
+                "PermissionRemoved",
+                "RoleGranted",
+                "RoleRevoked",
+                "MetadataInserted",
+                "MetadataRemoved",
+                "Recovery",
+                "Repo",
+            ],
+            "an account event",
+        ),
+        "asset_event" => string_matches(
+            &[
+                "Created",
+                "Deleted",
+                "Added",
+                "Removed",
+                "Transferred",
+                "MetadataInserted",
+                "MetadataRemoved",
+                "BatchTransferOutcome",
+            ],
+            "an asset event",
+        ),
+        "asset_definition_event" => string_matches(
+            &[
+                "Created",
+                "Deleted",
+                "MetadataInserted",
+                "MetadataRemoved",
+                "MintabilityChanged",
+                "MintabilityChangedDetailed",
+                "TotalQuantityChanged",
+                "OwnerChanged",
+            ],
+            "an asset-definition event",
+        ),
+        "nft_event" => string_matches(
+            &[
+                "Created",
+                "Deleted",
+                "MetadataInserted",
+                "MetadataRemoved",
+                "OwnerChanged",
+            ],
+            "an NFT event",
+        ),
+        "rwa_event" => string_matches(
+            &[
+                "Created",
+                "MetadataInserted",
+                "MetadataRemoved",
+                "OwnerChanged",
+                "Split",
+                "Merged",
+                "Redeemed",
+                "Frozen",
+                "Unfrozen",
+                "Held",
+                "Released",
+                "ForceTransferred",
+                "ControlsChanged",
+            ],
+            "an RWA event",
+        ),
+        "role_event" => string_matches(
+            &["Created", "Deleted", "PermissionAdded", "PermissionRemoved"],
+            "a role event",
+        ),
+        "configuration_event" => {
+            string_matches(&["Changed", "SccpRegistryChanged"], "a configuration event")
+        }
+        "executor_event" => string_matches(&["Upgraded"], "an executor event"),
+        "trigger_completed_outcome" => string_matches(&["Success", "Failure"], "a trigger outcome"),
+        "time_precommit" => value
+            .as_bool()
+            .map(|_| ())
+            .ok_or_else(|| invalid_webhook_filter_value(field, "a boolean")),
+        "tx_block_height" => {
+            if value.is_null() || value.as_u64().is_some() {
+                Ok(())
+            } else {
+                Err(invalid_webhook_filter_value(
+                    field,
+                    "an unsigned integer or null",
+                ))
+            }
+        }
+        "block_height" => value
+            .as_u64()
+            .map(|_| ())
+            .ok_or_else(|| invalid_webhook_filter_value(field, "an unsigned integer")),
+        "proof_call_hash" | "proof_envelope_hash" => {
+            if value.is_null() {
+                return Ok(());
+            }
+            let Some(literal) = value.as_str() else {
+                return Err(invalid_webhook_filter_value(
+                    field,
+                    "64 lowercase hexadecimal digits or null",
+                ));
+            };
+            let Some(bytes) = hex::decode(literal).ok().filter(|bytes| bytes.len() == 32) else {
+                return Err(invalid_webhook_filter_value(
+                    field,
+                    "64 lowercase hexadecimal digits or null",
+                ));
+            };
+            if hex::encode(bytes) != literal {
+                return Err(invalid_webhook_filter_value(
+                    field,
+                    "64 lowercase hexadecimal digits or null",
+                ));
+            }
+            Ok(())
+        }
+        "proof_backend" => {
+            let Some(literal) = value.as_str() else {
+                return Err(invalid_webhook_filter_value(
+                    field,
+                    "a non-empty backend identifier",
+                ));
+            };
+            if literal.is_empty() || literal.trim() != literal {
+                return Err(invalid_webhook_filter_value(
+                    field,
+                    "a non-empty backend identifier",
+                ));
+            }
+            Ok(())
+        }
+        "tx_hash" => validate_canonical_webhook_id::<
+            iroha_crypto::HashOf<iroha_data_model::transaction::signed::SignedTransaction>,
+        >(field, value, "a canonical transaction hash"),
+        "peer_id" => validate_canonical_webhook_id::<iroha_data_model::peer::PeerId>(
+            field,
+            value,
+            "a canonical peer ID",
+        ),
+        "domain_id" => {
+            let Some(literal) = value.as_str() else {
+                return Err(invalid_webhook_filter_value(field, "a canonical domain ID"));
+            };
+            let Some(id) = iroha_data_model::domain::DomainId::parse_fully_qualified(literal).ok()
+            else {
+                return Err(invalid_webhook_filter_value(field, "a canonical domain ID"));
+            };
+            if id.to_string() != literal {
+                return Err(invalid_webhook_filter_value(field, "a canonical domain ID"));
+            }
+            Ok(())
+        }
+        "account_id" | "execute_trigger_authority" => {
+            let Some(literal) = value.as_str() else {
+                return Err(invalid_webhook_filter_value(
+                    field,
+                    "a canonical account ID",
+                ));
+            };
+            parse_account_id_literal(literal)
+                .map(|_| ())
+                .ok_or_else(|| invalid_webhook_filter_value(field, "a canonical account ID"))
+        }
+        "asset_id" => validate_canonical_webhook_id::<iroha_data_model::asset::AssetId>(
+            field,
+            value,
+            "a canonical asset ID",
+        ),
+        "asset_definition_id" => validate_canonical_webhook_id::<
+            iroha_data_model::asset::AssetDefinitionId,
+        >(field, value, "a canonical asset-definition ID"),
+        "nft_id" => validate_canonical_webhook_id::<iroha_data_model::nft::NftId>(
+            field,
+            value,
+            "a canonical NFT ID",
+        ),
+        "rwa_id" => validate_canonical_webhook_id::<iroha_data_model::rwa::RwaId>(
+            field,
+            value,
+            "a canonical RWA ID",
+        ),
+        "data_trigger_id" | "execute_trigger_id" | "trigger_completed_id" => {
+            validate_canonical_webhook_id::<iroha_data_model::trigger::TriggerId>(
+                field,
+                value,
+                "a canonical trigger ID",
+            )
+        }
+        "role_id" => validate_canonical_webhook_id::<iroha_data_model::role::RoleId>(
+            field,
+            value,
+            "a canonical role ID",
+        ),
+        "proof_id" => proof_id_from_json(value)
+            .map(|_| ())
+            .ok_or_else(|| invalid_webhook_filter_value(field, "a canonical proof ID")),
+        _ => Err(WebhookFilterValidationError::UnsupportedField(
+            field.to_owned(),
+        )),
+    }
+}
+
+fn validate_webhook_filter(
+    expr: &crate::filter::FilterExpr,
+) -> Result<(), WebhookFilterValidationError> {
+    use crate::filter::FilterExpr as F;
+
+    crate::filter::validate_filter(expr)?;
+
+    fn validate_ordering(
+        field: &str,
+        value: &norito::json::Value,
+        operator: &'static str,
+    ) -> Result<(), WebhookFilterValidationError> {
+        if !matches!(field, "tx_block_height" | "block_height") {
+            return Err(WebhookFilterValidationError::UnsupportedOperator {
+                field: field.to_owned(),
+                operator,
+            });
+        }
+        value
+            .as_u64()
+            .map(|_| ())
+            .ok_or_else(|| invalid_webhook_filter_value(field, "an unsigned integer"))
+    }
+
+    fn visit(expr: &F) -> Result<(), WebhookFilterValidationError> {
+        match expr {
+            F::And(children) | F::Or(children) => {
+                for child in children {
+                    visit(child)?;
+                }
+                Ok(())
+            }
+            F::Not(inner) => visit(inner),
+            F::Eq(field, value) | F::Ne(field, value) => {
+                validate_webhook_filter_value(&field.0, value)
+            }
+            F::Lt(field, value) => validate_ordering(&field.0, value, "lt"),
+            F::Lte(field, value) => validate_ordering(&field.0, value, "lte"),
+            F::Gt(field, value) => validate_ordering(&field.0, value, "gt"),
+            F::Gte(field, value) => validate_ordering(&field.0, value, "gte"),
+            F::In(field, values) | F::Nin(field, values) => {
+                for value in values {
+                    validate_webhook_filter_value(&field.0, value)?;
+                }
+                Ok(())
+            }
+            F::Exists(field) | F::IsNull(field) => {
+                if webhook_filter_field_is_supported(&field.0) {
+                    Ok(())
+                } else {
+                    Err(WebhookFilterValidationError::UnsupportedField(
+                        field.0.clone(),
+                    ))
+                }
+            }
+        }
+    }
+
+    visit(expr)
+}
+
+fn insert_webhook_event_field(
+    fields: &mut norito::json::Map,
+    name: &str,
+    value: norito::json::Value,
+) {
+    fields.insert(name.to_owned(), value);
+}
+
+fn transaction_status_name(
+    status: &iroha_data_model::events::pipeline::TransactionStatus,
+) -> &'static str {
+    use iroha_data_model::events::pipeline::TransactionStatus;
+    match status {
+        TransactionStatus::Queued => "Queued",
+        TransactionStatus::Expired => "Expired",
+        TransactionStatus::Approved => "Approved",
+        TransactionStatus::Rejected(_) => "Rejected",
+    }
+}
+
+fn block_status_name(status: &iroha_data_model::events::pipeline::BlockStatus) -> &'static str {
+    use iroha_data_model::events::pipeline::BlockStatus;
+    match status {
+        BlockStatus::Created => "Created",
+        BlockStatus::Approved => "Approved",
+        BlockStatus::Rejected(_) => "Rejected",
+        BlockStatus::Committed => "Committed",
+        BlockStatus::Applied => "Applied",
+    }
+}
+
+fn pipeline_webhook_event_fields(
+    event: &iroha_data_model::events::pipeline::PipelineEventBox,
+) -> norito::json::Map {
+    use iroha_data_model::events::pipeline::PipelineEventBox;
+
+    let mut fields = norito::json::Map::new();
+    insert_webhook_event_field(
+        &mut fields,
+        "event_kind",
+        norito::json::Value::from("Pipeline"),
+    );
+    match event {
+        PipelineEventBox::Transaction(event) => {
+            insert_webhook_event_field(
+                &mut fields,
+                "tx_status",
+                norito::json::Value::from(transaction_status_name(&event.status)),
+            );
+            insert_webhook_event_field(
+                &mut fields,
+                "tx_hash",
+                norito::json::Value::from(event.hash.to_string()),
+            );
+            insert_webhook_event_field(
+                &mut fields,
+                "tx_block_height",
+                event
+                    .block_height
+                    .map_or(norito::json::Value::Null, |height| {
+                        norito::json::Value::from(height.get())
+                    }),
+            );
+        }
+        PipelineEventBox::Block(event) => {
+            insert_webhook_event_field(
+                &mut fields,
+                "block_status",
+                norito::json::Value::from(block_status_name(&event.status)),
+            );
+            insert_webhook_event_field(
+                &mut fields,
+                "block_height",
+                norito::json::Value::from(event.header.height().get()),
+            );
+        }
+        PipelineEventBox::Warning(_)
+        | PipelineEventBox::Merge(_)
+        | PipelineEventBox::Witness(_) => {}
+    }
+    fields
+}
+
+fn insert_data_event_kind(fields: &mut norito::json::Map, field: &str, kind: &'static str) {
+    insert_webhook_event_field(fields, field, norito::json::Value::from(kind));
+}
+
+fn data_webhook_event_fields(event: &DataEvent) -> norito::json::Map {
+    use df::HasOrigin as _;
+    use iroha_data_model::events::data::proof::ProofEvent;
+
+    let mut fields = norito::json::Map::new();
+    insert_webhook_event_field(&mut fields, "event_kind", norito::json::Value::from("Data"));
+    match event {
+        DataEvent::Peer(event) => {
+            insert_webhook_event_field(
+                &mut fields,
+                "peer_id",
+                norito::json::Value::from(event.origin().to_string()),
+            );
+            let kind = match event {
+                df::PeerEvent::Added(_) => "Added",
+                df::PeerEvent::Removed(_) => "Removed",
+            };
+            insert_data_event_kind(&mut fields, "peer_event", kind);
+        }
+        DataEvent::Domain(event) => {
+            insert_webhook_event_field(
+                &mut fields,
+                "domain_id",
+                norito::json::Value::from(event.origin().to_string()),
+            );
+            let kind = match event {
+                df::DomainEvent::Created(_) => "Created",
+                df::DomainEvent::Deleted(_) => "Deleted",
+                df::DomainEvent::AssetDefinition(_) => "AssetDefinition",
+                df::DomainEvent::Asset(_) => "Asset",
+                df::DomainEvent::Nft(_) => "Nft",
+                df::DomainEvent::Rwa(_) => "Rwa",
+                df::DomainEvent::Account(_) => "Account",
+                df::DomainEvent::AccountLinked(_) => "AccountLinked",
+                df::DomainEvent::AccountUnlinked(_) => "AccountUnlinked",
+                df::DomainEvent::MetadataInserted(_) => "MetadataInserted",
+                df::DomainEvent::MetadataRemoved(_) => "MetadataRemoved",
+                df::DomainEvent::OwnerChanged(_) => "OwnerChanged",
+                df::DomainEvent::KaigiRosterSummary(_) => "KaigiRosterSummary",
+                df::DomainEvent::KaigiRelayRegistered(_) => "KaigiRelayRegistered",
+                df::DomainEvent::KaigiRelayManifestUpdated(_) => "KaigiRelayManifestUpdated",
+                df::DomainEvent::KaigiUsageSummary(_) => "KaigiUsageSummary",
+                df::DomainEvent::KaigiRelayHealthUpdated(_) => "KaigiRelayHealthUpdated",
+                df::DomainEvent::StreamingTicketReady(_) => "StreamingTicketReady",
+                df::DomainEvent::StreamingTicketRevoked(_) => "StreamingTicketRevoked",
+                df::DomainEvent::KaigiRelayUnregistered(_) => "KaigiRelayUnregistered",
+                df::DomainEvent::KaigiStatusChanged(_) => "KaigiStatusChanged",
+            };
+            insert_data_event_kind(&mut fields, "domain_event", kind);
+            match event {
+                df::DomainEvent::Nft(event) => {
+                    insert_webhook_event_field(
+                        &mut fields,
+                        "nft_id",
+                        norito::json::Value::from(event.origin().to_string()),
+                    );
+                    let kind = match event {
+                        df::NftEvent::Created(_) => "Created",
+                        df::NftEvent::Deleted(_) => "Deleted",
+                        df::NftEvent::MetadataInserted(_) => "MetadataInserted",
+                        df::NftEvent::MetadataRemoved(_) => "MetadataRemoved",
+                        df::NftEvent::OwnerChanged(_) => "OwnerChanged",
+                    };
+                    insert_data_event_kind(&mut fields, "nft_event", kind);
+                }
+                df::DomainEvent::Rwa(event) => {
+                    insert_webhook_event_field(
+                        &mut fields,
+                        "rwa_id",
+                        norito::json::Value::from(event.origin().to_string()),
+                    );
+                    let kind = match event {
+                        df::RwaEvent::Created(_) => "Created",
+                        df::RwaEvent::MetadataInserted(_) => "MetadataInserted",
+                        df::RwaEvent::MetadataRemoved(_) => "MetadataRemoved",
+                        df::RwaEvent::OwnerChanged(_) => "OwnerChanged",
+                        df::RwaEvent::Split(_) => "Split",
+                        df::RwaEvent::Merged(_) => "Merged",
+                        df::RwaEvent::Redeemed(_) => "Redeemed",
+                        df::RwaEvent::Frozen(_) => "Frozen",
+                        df::RwaEvent::Unfrozen(_) => "Unfrozen",
+                        df::RwaEvent::Held(_) => "Held",
+                        df::RwaEvent::Released(_) => "Released",
+                        df::RwaEvent::ForceTransferred(_) => "ForceTransferred",
+                        df::RwaEvent::ControlsChanged(_) => "ControlsChanged",
+                    };
+                    insert_data_event_kind(&mut fields, "rwa_event", kind);
+                }
+                _ => {}
+            }
+        }
+        DataEvent::Account(event) => {
+            insert_webhook_event_field(
+                &mut fields,
+                "account_id",
+                norito::json::Value::from(event.origin().to_string()),
+            );
+            let kind = match event {
+                df::AccountEvent::Created(_) => "Created",
+                df::AccountEvent::Deleted(_) => "Deleted",
+                df::AccountEvent::ControllerReplaced(_) => "ControllerReplaced",
+                df::AccountEvent::PermissionAdded(_) => "PermissionAdded",
+                df::AccountEvent::PermissionRemoved(_) => "PermissionRemoved",
+                df::AccountEvent::RoleGranted(_) => "RoleGranted",
+                df::AccountEvent::RoleRevoked(_) => "RoleRevoked",
+                df::AccountEvent::MetadataInserted(_) => "MetadataInserted",
+                df::AccountEvent::MetadataRemoved(_) => "MetadataRemoved",
+                df::AccountEvent::Recovery(_) => "Recovery",
+                df::AccountEvent::Repo(_) => "Repo",
+            };
+            insert_data_event_kind(&mut fields, "account_event", kind);
+        }
+        DataEvent::Asset(event) => {
+            insert_webhook_event_field(
+                &mut fields,
+                "asset_id",
+                norito::json::Value::from(event.origin().to_string()),
+            );
+            let kind = match event {
+                df::AssetEvent::Created(_) => "Created",
+                df::AssetEvent::Deleted(_) => "Deleted",
+                df::AssetEvent::Added(_) => "Added",
+                df::AssetEvent::Removed(_) => "Removed",
+                df::AssetEvent::Transferred(_) => "Transferred",
+                df::AssetEvent::MetadataInserted(_) => "MetadataInserted",
+                df::AssetEvent::MetadataRemoved(_) => "MetadataRemoved",
+                df::AssetEvent::BatchTransferOutcome(_) => "BatchTransferOutcome",
+            };
+            insert_data_event_kind(&mut fields, "asset_event", kind);
+        }
+        DataEvent::AssetDefinition(event) => {
+            insert_webhook_event_field(
+                &mut fields,
+                "asset_definition_id",
+                norito::json::Value::from(event.origin().to_string()),
+            );
+            let kind = match event {
+                df::AssetDefinitionEvent::Created(_) => "Created",
+                df::AssetDefinitionEvent::Deleted(_) => "Deleted",
+                df::AssetDefinitionEvent::MetadataInserted(_) => "MetadataInserted",
+                df::AssetDefinitionEvent::MetadataRemoved(_) => "MetadataRemoved",
+                df::AssetDefinitionEvent::MintabilityChanged(_) => "MintabilityChanged",
+                df::AssetDefinitionEvent::MintabilityChangedDetailed(_) => {
+                    "MintabilityChangedDetailed"
+                }
+                df::AssetDefinitionEvent::TotalQuantityChanged(_) => "TotalQuantityChanged",
+                df::AssetDefinitionEvent::OwnerChanged(_) => "OwnerChanged",
+            };
+            insert_data_event_kind(&mut fields, "asset_definition_event", kind);
+        }
+        DataEvent::Trigger(event) => {
+            insert_webhook_event_field(
+                &mut fields,
+                "data_trigger_id",
+                norito::json::Value::from(event.origin().to_string()),
+            );
+        }
+        DataEvent::Role(event) => {
+            insert_webhook_event_field(
+                &mut fields,
+                "role_id",
+                norito::json::Value::from(event.origin().to_string()),
+            );
+            let kind = match event {
+                df::RoleEvent::Created(_) => "Created",
+                df::RoleEvent::Deleted(_) => "Deleted",
+                df::RoleEvent::PermissionAdded(_) => "PermissionAdded",
+                df::RoleEvent::PermissionRemoved(_) => "PermissionRemoved",
+            };
+            insert_data_event_kind(&mut fields, "role_event", kind);
+        }
+        DataEvent::Configuration(event) => {
+            let kind = match event {
+                df::ConfigurationEvent::Changed(_) => "Changed",
+                df::ConfigurationEvent::SccpRegistryChanged(_) => "SccpRegistryChanged",
+            };
+            insert_data_event_kind(&mut fields, "configuration_event", kind);
+        }
+        DataEvent::Executor(event) => {
+            let kind = match event {
+                df::ExecutorEvent::Upgraded(_) => "Upgraded",
+            };
+            insert_data_event_kind(&mut fields, "executor_event", kind);
+        }
+        DataEvent::Proof(event) => match event {
+            ProofEvent::Verified(event) => {
+                insert_webhook_event_field(
+                    &mut fields,
+                    "proof_id",
+                    norito::json::Value::from(event.id.to_string()),
+                );
+                insert_webhook_event_field(
+                    &mut fields,
+                    "proof_backend",
+                    norito::json::Value::from(event.id.backend.to_string()),
+                );
+                insert_webhook_event_field(
+                    &mut fields,
+                    "proof_call_hash",
+                    event.call_hash.map_or(norito::json::Value::Null, |hash| {
+                        norito::json::Value::from(hex::encode(hash))
+                    }),
+                );
+                insert_webhook_event_field(
+                    &mut fields,
+                    "proof_envelope_hash",
+                    event
+                        .envelope_hash
+                        .map_or(norito::json::Value::Null, |hash| {
+                            norito::json::Value::from(hex::encode(hash))
+                        }),
+                );
+            }
+            ProofEvent::Rejected(event) => {
+                insert_webhook_event_field(
+                    &mut fields,
+                    "proof_id",
+                    norito::json::Value::from(event.id.to_string()),
+                );
+                insert_webhook_event_field(
+                    &mut fields,
+                    "proof_backend",
+                    norito::json::Value::from(event.id.backend.to_string()),
+                );
+                insert_webhook_event_field(
+                    &mut fields,
+                    "proof_call_hash",
+                    event.call_hash.map_or(norito::json::Value::Null, |hash| {
+                        norito::json::Value::from(hex::encode(hash))
+                    }),
+                );
+                insert_webhook_event_field(
+                    &mut fields,
+                    "proof_envelope_hash",
+                    event
+                        .envelope_hash
+                        .map_or(norito::json::Value::Null, |hash| {
+                            norito::json::Value::from(hex::encode(hash))
+                        }),
+                );
+            }
+            ProofEvent::Pruned(event) => {
+                insert_webhook_event_field(
+                    &mut fields,
+                    "proof_backend",
+                    norito::json::Value::from(event.backend.clone()),
+                );
+            }
+        },
+        _ => {}
+    }
+    fields
+}
+
+fn webhook_event_rows(event: &iroha_data_model::events::EventBox) -> Vec<norito::json::Map> {
+    use iroha_data_model::events::EventBox;
+
+    match event {
+        EventBox::Pipeline(event) => vec![pipeline_webhook_event_fields(event)],
+        EventBox::PipelineBatch(events) => {
+            events.iter().map(pipeline_webhook_event_fields).collect()
+        }
+        EventBox::Data(event) => vec![data_webhook_event_fields(event.as_ref())],
+        EventBox::Time(_) => {
+            let mut fields = norito::json::Map::new();
+            insert_webhook_event_field(
+                &mut fields,
+                "event_kind",
+                norito::json::Value::from("Time"),
+            );
+            insert_webhook_event_field(
+                &mut fields,
+                "time_precommit",
+                norito::json::Value::from(true),
+            );
+            vec![fields]
+        }
+        EventBox::ExecuteTrigger(event) => {
+            let mut fields = norito::json::Map::new();
+            insert_webhook_event_field(
+                &mut fields,
+                "event_kind",
+                norito::json::Value::from("ExecuteTrigger"),
+            );
+            insert_webhook_event_field(
+                &mut fields,
+                "execute_trigger_id",
+                norito::json::Value::from(event.trigger_id().to_string()),
+            );
+            insert_webhook_event_field(
+                &mut fields,
+                "execute_trigger_authority",
+                norito::json::Value::from(event.authority().to_string()),
+            );
+            vec![fields]
+        }
+        EventBox::TriggerCompleted(event) => {
+            use iroha_data_model::events::trigger_completed::TriggerCompletedOutcome;
+
+            let mut fields = norito::json::Map::new();
+            insert_webhook_event_field(
+                &mut fields,
+                "event_kind",
+                norito::json::Value::from("TriggerCompleted"),
+            );
+            insert_webhook_event_field(
+                &mut fields,
+                "trigger_completed_id",
+                norito::json::Value::from(event.trigger_id().to_string()),
+            );
+            let outcome = match event.outcome() {
+                TriggerCompletedOutcome::Success => "Success",
+                TriggerCompletedOutcome::Failure(_) => "Failure",
+            };
+            insert_webhook_event_field(
+                &mut fields,
+                "trigger_completed_outcome",
+                norito::json::Value::from(outcome),
+            );
+            vec![fields]
+        }
+    }
+}
+
+fn evaluate_webhook_filter(expr: &crate::filter::FilterExpr, fields: &norito::json::Map) -> bool {
+    use crate::filter::FilterExpr as F;
+
+    let numeric_order = |field: &crate::filter::FieldPath, expected: &norito::json::Value| {
+        let actual = fields.get(&field.0)?.as_u64()?;
+        let expected = expected.as_u64()?;
+        Some(actual.cmp(&expected))
+    };
+
+    match expr {
+        F::And(children) => children
+            .iter()
+            .all(|child| evaluate_webhook_filter(child, fields)),
+        F::Or(children) => children
+            .iter()
+            .any(|child| evaluate_webhook_filter(child, fields)),
+        F::Not(inner) => !evaluate_webhook_filter(inner, fields),
+        F::Eq(field, expected) => fields
+            .get(&field.0)
+            .is_some_and(|actual| actual == expected),
+        F::Ne(field, expected) => fields.get(&field.0).is_none_or(|actual| actual != expected),
+        F::Lt(field, expected) => {
+            numeric_order(field, expected).is_some_and(|order| order == core::cmp::Ordering::Less)
+        }
+        F::Lte(field, expected) => numeric_order(field, expected).is_some_and(|order| {
+            matches!(
+                order,
+                core::cmp::Ordering::Less | core::cmp::Ordering::Equal
+            )
+        }),
+        F::Gt(field, expected) => numeric_order(field, expected)
+            .is_some_and(|order| order == core::cmp::Ordering::Greater),
+        F::Gte(field, expected) => numeric_order(field, expected).is_some_and(|order| {
+            matches!(
+                order,
+                core::cmp::Ordering::Greater | core::cmp::Ordering::Equal
+            )
+        }),
+        F::In(field, expected) => fields
+            .get(&field.0)
+            .is_some_and(|actual| expected.iter().any(|candidate| candidate == actual)),
+        F::Nin(field, expected) => fields
+            .get(&field.0)
+            .is_none_or(|actual| expected.iter().all(|candidate| candidate != actual)),
+        F::Exists(field) => fields.contains_key(&field.0),
+        F::IsNull(field) => fields
+            .get(&field.0)
+            .is_none_or(norito::json::Value::is_null),
+    }
+}
+
+fn event_rows_match_filter(rows: &[norito::json::Map], expr: &crate::filter::FilterExpr) -> bool {
+    rows.iter()
+        .any(|fields| evaluate_webhook_filter(expr, fields))
+}
+
+#[cfg(test)]
 fn event_matches_filter(
     event: &iroha_data_model::events::EventBox,
     expr: &crate::filter::FilterExpr,
 ) -> bool {
-    #[cfg(feature = "transparent_api")]
-    {
-        use iroha_data_model::events::EventFilter as _;
-        let filters = event_filter_boxes_from_expr(expr);
-        return filters.iter().any(|f| f.matches(event));
-    }
-    #[allow(unreachable_code)]
-    false
+    event_rows_match_filter(&webhook_event_rows(event), expr)
 }
 fn value_to_filter_expr(v: &norito::json::Value) -> Option<crate::filter::FilterExpr> {
     let s = norito::json::to_json(v).ok()?;
@@ -1930,7 +3079,18 @@ async fn resolve_destination_addrs(
             Ok(vec![SocketAddr::new(ip, port)])
         }
         Host::Domain(domain) => {
-            let addrs: Vec<SocketAddr> = tokio::net::lookup_host((domain, port)).await?.collect();
+            let timeout = http_timeout_config().connect;
+            let resolved = tokio::time::timeout(timeout, tokio::net::lookup_host((domain, port)))
+                .await
+                .map_err(|_| io_timeout_error("dns resolution", timeout))??;
+            let addrs: Vec<SocketAddr> = resolved
+                .take(WEBHOOK_DNS_MAX_ADDRESSES.saturating_add(1))
+                .collect();
+            if addrs.len() > WEBHOOK_DNS_MAX_ADDRESSES {
+                return Err(io_invalid_input(format!(
+                    "webhook destination resolved to more than {WEBHOOK_DNS_MAX_ADDRESSES} addresses"
+                )));
+            }
             if addrs.is_empty() {
                 return Err(io_invalid_input(
                     "webhook destination resolved to no addresses",
@@ -2021,10 +3181,7 @@ async fn http_post_plain(
             path.push('?');
             path.push_str(query);
         }
-        use tokio::{
-            io::{AsyncReadExt, AsyncWriteExt},
-            net::TcpStream,
-        };
+        use tokio::{io::AsyncWriteExt, net::TcpStream};
         let timeouts = http_timeout_config();
         let mut stream =
             match tokio::time::timeout(timeouts.connect, TcpStream::connect(connect_addr)).await {
@@ -2050,32 +3207,164 @@ async fn http_post_plain(
         .await
         .map_err(|_| io_timeout_error("tcp write", timeouts.write))?;
         write_result?;
-        let mut buf = Vec::new();
-        let mut limited = stream.take(WEBHOOK_HTTP_RESPONSE_MAX_BYTES.saturating_add(1));
-        let read_result = tokio::time::timeout(timeouts.read, limited.read_to_end(&mut buf))
-            .await
-            .map_err(|_| io_timeout_error("tcp read", timeouts.read))?;
-        read_result?;
-        ensure_webhook_http_response_is_bounded(&buf)?;
-        // Parse status code
-        if let Some(line) = buf.split(|&b| b == b'\n').next() {
-            let line = String::from_utf8_lossy(line);
-            if let Some(code_str) = line.split_whitespace().nth(1) {
-                if let Ok(code) = code_str.parse::<u16>() {
-                    return Ok(code);
-                }
-            }
-        }
-        Ok(0)
+        let read_result =
+            tokio::time::timeout(timeouts.read, read_webhook_http_status(&mut stream))
+                .await
+                .map_err(|_| io_timeout_error("tcp read", timeouts.read))?;
+        read_result
     }
 }
-fn ensure_webhook_http_response_is_bounded(bytes: &[u8]) -> std::io::Result<()> {
-    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > WEBHOOK_HTTP_RESPONSE_MAX_BYTES {
-        return Err(std::io::Error::other(format!(
-            "webhook response exceeded the {WEBHOOK_HTTP_RESPONSE_MAX_BYTES}-byte protocol limit"
-        )));
+async fn read_webhook_http_status<R>(reader: R) -> io::Result<u16>
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    use tokio::io::{AsyncBufRead, AsyncBufReadExt as _, AsyncReadExt as _, BufReader};
+
+    async fn read_line<R>(reader: &mut R, consumed: &mut usize) -> io::Result<Vec<u8>>
+    where
+        R: AsyncBufRead + Unpin,
+    {
+        let mut line = Vec::new();
+        let read = reader.read_until(b'\n', &mut line).await?;
+        if read == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "webhook response ended before its headers were complete",
+            ));
+        }
+        *consumed = consumed.checked_add(read).ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidData, "webhook response size overflow")
+        })?;
+        ensure_webhook_http_response_is_bounded(*consumed)?;
+        if !line.ends_with(b"\r\n") {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "webhook response header line is not CRLF terminated",
+            ));
+        }
+        Ok(line)
+    }
+
+    let mut reader =
+        BufReader::new(reader.take(WEBHOOK_HTTP_RESPONSE_HEADER_MAX_BYTES.saturating_add(1)));
+    let mut consumed = 0_usize;
+    loop {
+        let status_line = read_line(&mut reader, &mut consumed).await?;
+        let status = parse_webhook_http_status_line(&status_line)?;
+        loop {
+            let line = read_line(&mut reader, &mut consumed).await?;
+            if line == b"\r\n" {
+                break;
+            }
+            validate_webhook_http_header_line(&line)?;
+        }
+        // RFC 9110 permits one or more informational responses before the
+        // final response. A protocol switch is itself final for this client.
+        if !(100..200).contains(&status) || status == 101 {
+            return Ok(status);
+        }
+    }
+}
+fn parse_webhook_http_status_line(line: &[u8]) -> io::Result<u16> {
+    let line = line.strip_suffix(b"\r\n").ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "webhook response status line is not CRLF terminated",
+        )
+    })?;
+    let line = core::str::from_utf8(line).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "webhook response status line is not valid ASCII",
+        )
+    })?;
+    if !line.is_ascii() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "webhook response status line is not valid ASCII",
+        ));
+    }
+    let mut fields = line.splitn(3, ' ');
+    let version = fields.next().unwrap_or_default();
+    if !matches!(version, "HTTP/1.0" | "HTTP/1.1") {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "webhook response uses an unsupported HTTP version",
+        ));
+    }
+    let code = fields.next().unwrap_or_default();
+    if code.len() != 3 || !code.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "webhook response contains an invalid status code",
+        ));
+    }
+    let code = code.parse::<u16>().map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "webhook response contains an invalid status code",
+        )
+    })?;
+    if !(100..600).contains(&code) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "webhook response status code is outside the HTTP range",
+        ));
+    }
+    Ok(code)
+}
+fn validate_webhook_http_header_line(line: &[u8]) -> io::Result<()> {
+    let line = line.strip_suffix(b"\r\n").ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "webhook response header line is not CRLF terminated",
+        )
+    })?;
+    let separator = line.iter().position(|byte| *byte == b':').ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "webhook response contains a malformed header",
+        )
+    })?;
+    HeaderName::from_bytes(&line[..separator]).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "webhook response contains an invalid header name",
+        )
+    })?;
+    HeaderValue::from_bytes(&line[separator + 1..]).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "webhook response contains an invalid header value",
+        )
+    })?;
+    Ok(())
+}
+fn ensure_webhook_http_response_is_bounded(length: usize) -> std::io::Result<()> {
+    if u64::try_from(length).unwrap_or(u64::MAX) > WEBHOOK_HTTP_RESPONSE_HEADER_MAX_BYTES {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                "webhook response headers exceeded the {WEBHOOK_HTTP_RESPONSE_HEADER_MAX_BYTES}-byte protocol limit"
+            ),
+        ));
     }
     Ok(())
+}
+#[cfg(feature = "app_api_https")]
+fn webhook_https_client_builder() -> reqwest::ClientBuilder {
+    let timeouts = http_timeout_config();
+    reqwest::Client::builder()
+        .timeout(timeouts.connect + timeouts.write + timeouts.read)
+        .connect_timeout(timeouts.connect)
+        .read_timeout(timeouts.read)
+        .http1_only()
+        // Proxy environment variables would let the proxy resolve and contact
+        // a destination independently of the address set vetted below.
+        .no_proxy()
+        // The destination policy and DNS pin apply to exactly one URL. Following
+        // a redirect would let the remote endpoint choose an unvetted host.
+        .redirect(reqwest::redirect::Policy::none())
 }
 #[cfg(feature = "app_api_https")]
 async fn http_post_https(
@@ -2085,13 +3374,7 @@ async fn http_post_https(
     body: &[u8],
 ) -> std::io::Result<u16> {
     use reqwest::header::{HeaderName, HeaderValue};
-    let mut client_builder = reqwest::Client::builder()
-        .timeout(
-            http_timeout_config().connect
-                + http_timeout_config().write
-                + http_timeout_config().read,
-        )
-        .http1_only();
+    let mut client_builder = webhook_https_client_builder();
     if let Some((domain, pinned_addrs)) = https_delivery_dns_override(url, connect_addrs) {
         client_builder = client_builder.resolve_to_addrs(&domain, &pinned_addrs);
     }
@@ -2103,11 +3386,11 @@ async fn http_post_https(
         .header("User-Agent", "iroha-torii-webhook/1")
         .header("Connection", "close");
     for (k, v) in headers {
-        if let Ok(name) = HeaderName::from_str(k) {
-            if let Ok(value) = HeaderValue::from_str(v) {
-                req = req.header(name, value);
-            }
-        }
+        let name = HeaderName::from_str(k)
+            .map_err(|error| io_invalid_input(format!("invalid webhook header name: {error}")))?;
+        let value = HeaderValue::from_str(v)
+            .map_err(|error| io_invalid_input(format!("invalid webhook header value: {error}")))?;
+        req = req.header(name, value);
     }
     let resp = req
         .body(body.to_vec())
@@ -2117,13 +3400,21 @@ async fn http_post_https(
     Ok(resp.status().as_u16())
 }
 async fn http_post(url: &str, headers: &[(&str, String)], body: &[u8]) -> std::io::Result<u16> {
+    validate_webhook_outbound_headers(headers)?;
+    let parsed = Url::parse(url).map_err(|e| io_invalid_input(format!("bad url: {e}")))?;
+    let policy = webhook_security_policy();
+    validate_parsed_webhook_url(&parsed, &policy).map_err(|(status, message)| {
+        if status == StatusCode::FORBIDDEN {
+            io_permission_denied(message)
+        } else {
+            io_invalid_input(message)
+        }
+    })?;
     #[cfg(test)]
     if let Some(handler) = http_post_override_handler() {
         return handler(url, headers, body);
     }
-    let parsed = Url::parse(url).map_err(|e| io_invalid_input(format!("bad url: {e}")))?;
     let scheme = parsed.scheme();
-    let policy = webhook_security_policy();
     if scheme == "https" {
         #[cfg(feature = "app_api_https")]
         {
@@ -2173,6 +3464,19 @@ async fn http_post(url: &str, headers: &[(&str, String)], body: &[u8]) -> std::i
     let host_header = host_header_value(&parsed)?;
     http_post_plain(&parsed, connect_addr, &host_header, headers, body).await
 }
+fn validate_webhook_outbound_headers(headers: &[(&str, String)]) -> io::Result<()> {
+    for (name, value) in headers {
+        HeaderName::from_bytes(name.as_bytes()).map_err(|error| {
+            io_invalid_input(format!("invalid webhook header name `{name}`: {error}"))
+        })?;
+        HeaderValue::from_str(value).map_err(|error| {
+            io_invalid_input(format!(
+                "invalid webhook header value for `{name}`: {error}"
+            ))
+        })?;
+    }
+    Ok(())
+}
 #[cfg(feature = "app_api_wss")]
 async fn ws_send(
     url: &Url,
@@ -2183,38 +3487,53 @@ async fn ws_send(
     use futures::SinkExt as _;
     use std::str::FromStr;
     use tokio_tungstenite::{client_async_tls_with_config, connect_async};
-    use tungstenite::{Message, client::IntoClientRequest, http::HeaderName};
+    use tungstenite::{
+        Message,
+        client::IntoClientRequest,
+        http::{HeaderName, HeaderValue},
+    };
     let mut req = url.as_str().into_client_request().map_err(|e| {
         std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("bad url: {e}"))
     })?;
     for (k, v) in headers {
-        if let Ok(name) = HeaderName::from_str(k) {
-            if let Ok(val) = v.parse() {
-                req.headers_mut().insert(name, val);
-            }
-        }
+        let name = HeaderName::from_str(k)
+            .map_err(|error| io_invalid_input(format!("invalid webhook header name: {error}")))?;
+        let value = HeaderValue::from_str(v)
+            .map_err(|error| io_invalid_input(format!("invalid webhook header value: {error}")))?;
+        req.headers_mut().insert(name, value);
     }
+    let timeouts = http_timeout_config();
     let (mut ws, _resp) = match connect_addr {
         Some(addr) => {
             use tokio::net::TcpStream;
-            let timeouts = http_timeout_config();
             let stream = tokio::time::timeout(timeouts.connect, TcpStream::connect(addr))
                 .await
                 .map_err(|_| io_timeout_error("tcp connect", timeouts.connect))??;
-            client_async_tls_with_config(req, stream, None, None)
-                .await
-                .map_err(|e| {
-                    std::io::Error::new(std::io::ErrorKind::Other, format!("ws connect: {e}"))
-                })?
+            tokio::time::timeout(
+                timeouts.connect,
+                client_async_tls_with_config(req, stream, None, None),
+            )
+            .await
+            .map_err(|_| io_timeout_error("websocket handshake", timeouts.connect))?
+            .map_err(|e| {
+                std::io::Error::new(std::io::ErrorKind::Other, format!("ws connect: {e}"))
+            })?
         }
-        None => connect_async(req).await.map_err(|e| {
-            std::io::Error::new(std::io::ErrorKind::Other, format!("ws connect: {e}"))
-        })?,
+        None => tokio::time::timeout(timeouts.connect, connect_async(req))
+            .await
+            .map_err(|_| io_timeout_error("websocket connect", timeouts.connect))?
+            .map_err(|e| {
+                std::io::Error::new(std::io::ErrorKind::Other, format!("ws connect: {e}"))
+            })?,
     };
-    ws.send(Message::Binary(body.to_vec().into()))
-        .await
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("ws send: {e}")))?;
-    let _ = ws.close(None).await;
+    tokio::time::timeout(
+        timeouts.write,
+        ws.send(Message::Binary(body.to_vec().into())),
+    )
+    .await
+    .map_err(|_| io_timeout_error("websocket write", timeouts.write))?
+    .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("ws send: {e}")))?;
+    let _ = tokio::time::timeout(timeouts.write, ws.close(None)).await;
     Ok(200)
 }
 fn backoff_delay(policy: &WebhookPolicy, attempts: u32) -> Duration {
@@ -2224,11 +3543,10 @@ fn backoff_delay(policy: &WebhookPolicy, attempts: u32) -> Duration {
     let delay_ms = base_ms.saturating_mul(1u128 << pow).min(max_ms);
     Duration::from_millis(delay_ms as u64)
 }
-async fn try_deliver(pd: &mut PendingDelivery, secret: Option<&str>) -> bool {
+async fn try_deliver(pd: &PendingDelivery) -> bool {
     let mut headers = vec![("Content-Type", pd.content_type.clone())];
-    if let Some(sec) = secret {
-        let sig = hmac_sha256_hex(sec.as_bytes(), &pd.body);
-        headers.push(("X-Iroha-Webhook-Signature", format!("sha256={sig}")));
+    if let Some(signature) = &pd.signature {
+        headers.push(("X-Iroha-Webhook-Signature", signature.clone()));
     }
     match http_post(&pd.url, &headers, &pd.body).await {
         Ok(code) if (200..300).contains(&code) => true,
@@ -2257,41 +3575,48 @@ async fn try_deliver(pd: &mut PendingDelivery, secret: Option<&str>) -> bool {
         }
     }
 }
-/// Spawn the background delivery worker. Idempotent.
-pub fn start_delivery_worker() {
-    static STARTED: OnceLock<()> = OnceLock::new();
-    if STARTED.set(()).is_err() {
-        return;
-    }
-    ensure_dirs();
+/// Spawn the background delivery worker after persistence initialization.
+pub(crate) fn start_delivery_worker(
+    shutdown: ShutdownSignal,
+) -> tokio::task::JoinHandle<crate::ToriiCriticalWorkerExit> {
     tokio::spawn(async move {
         loop {
-            let delay = process_queue_once().await;
+            let delay = tokio::select! {
+                () = shutdown.receive() => {
+                    return crate::ToriiCriticalWorkerExit::StoppedByShutdown;
+                }
+                delay = process_queue_once() => delay,
+            };
             if !delay.is_zero() {
-                tokio::time::sleep(delay).await;
+                tokio::select! {
+                    () = shutdown.receive() => {
+                        return crate::ToriiCriticalWorkerExit::StoppedByShutdown;
+                    }
+                    () = tokio::time::sleep(delay) => {}
+                }
             }
         }
-    });
+    })
 }
+#[cfg(test)]
 struct QueueScanState {
     root: PathBuf,
     capacity: usize,
     entries: fs::ReadDir,
     retained: usize,
 }
+#[cfg(test)]
 #[derive(Default)]
 struct QueueScanCursor {
     state: Option<QueueScanState>,
 }
 struct QueueScanBatch {
+    directory: Option<Arc<WebhookDirectory>>,
     paths: Vec<PathBuf>,
     overflow_paths: Vec<PathBuf>,
     sweep_complete: bool,
 }
-fn queue_scan_cursor() -> &'static Mutex<QueueScanCursor> {
-    static CURSOR: OnceLock<Mutex<QueueScanCursor>> = OnceLock::new();
-    CURSOR.get_or_init(|| Mutex::new(QueueScanCursor::default()))
-}
+#[cfg(test)]
 fn discover_queue_batch_at(
     cursor: &mut QueueScanCursor,
     root: &Path,
@@ -2354,22 +3679,138 @@ fn discover_queue_batch_at(
     paths.sort_by(|left, right| left.file_name().cmp(&right.file_name()));
     overflow_paths.sort_by(|left, right| left.file_name().cmp(&right.file_name()));
     Ok(QueueScanBatch {
+        directory: None,
         paths,
         overflow_paths,
         sweep_complete,
     })
 }
-fn discover_queue_batch(policy: WebhookPolicy) -> std::io::Result<QueueScanBatch> {
-    let mut cursor = lock_unpoisoned(queue_scan_cursor());
-    discover_queue_batch_at(
-        &mut cursor,
-        &queue_dir(),
-        effective_queue_capacity(policy),
-        WEBHOOK_QUEUE_SCAN_BATCH_SIZE,
-        WEBHOOK_QUEUE_SCAN_WORK_ITEMS,
-    )
+#[cfg(any(target_vendor = "apple", target_os = "linux"))]
+struct SecureQueueScanState {
+    root: PathBuf,
+    capacity: usize,
+    directory: Arc<WebhookDirectory>,
+    entries: rustix::fs::Dir,
+    retained: usize,
 }
+#[cfg(any(target_vendor = "apple", target_os = "linux"))]
+#[derive(Default)]
+struct SecureQueueScanCursor {
+    state: Option<SecureQueueScanState>,
+}
+#[cfg(any(target_vendor = "apple", target_os = "linux"))]
+fn secure_queue_scan_cursor() -> &'static Mutex<SecureQueueScanCursor> {
+    static CURSOR: OnceLock<Mutex<SecureQueueScanCursor>> = OnceLock::new();
+    CURSOR.get_or_init(|| Mutex::new(SecureQueueScanCursor::default()))
+}
+#[cfg(any(target_vendor = "apple", target_os = "linux"))]
+fn discover_queue_batch(policy: WebhookPolicy) -> std::io::Result<QueueScanBatch> {
+    use std::os::unix::ffi::OsStrExt as _;
+
+    let root = queue_dir();
+    let capacity = effective_queue_capacity(policy);
+    let mut cursor = lock_unpoisoned(secure_queue_scan_cursor());
+    if cursor
+        .state
+        .as_ref()
+        .is_none_or(|state| state.root != root || state.capacity != capacity)
+    {
+        let directory = Arc::new(open_webhook_queue_directory(true)?.ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                "webhook queue directory is unavailable",
+            )
+        })?);
+        let entries = rustix::fs::Dir::read_from(&directory.file).map_err(io::Error::from)?;
+        cursor.state = Some(SecureQueueScanState {
+            root: root.clone(),
+            capacity,
+            directory,
+            entries,
+            retained: 0,
+        });
+    }
+    let directory = Arc::clone(
+        &cursor
+            .state
+            .as_ref()
+            .expect("secure queue scan state initialized")
+            .directory,
+    );
+    let mut paths = Vec::with_capacity(WEBHOOK_QUEUE_SCAN_BATCH_SIZE);
+    let mut overflow_paths = Vec::new();
+    let mut work = 0_usize;
+    let mut sweep_complete = false;
+    while paths.len().saturating_add(overflow_paths.len()) < WEBHOOK_QUEUE_SCAN_BATCH_SIZE
+        && work < WEBHOOK_QUEUE_SCAN_WORK_ITEMS
+    {
+        let next = cursor
+            .state
+            .as_mut()
+            .expect("secure queue scan state initialized")
+            .entries
+            .next();
+        let Some(entry) = next else {
+            cursor.state = None;
+            sweep_complete = true;
+            break;
+        };
+        work = work.saturating_add(1);
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                cursor.state = None;
+                return Err(io::Error::from(error));
+            }
+        };
+        let bytes = entry.file_name().to_bytes();
+        if matches!(bytes, b"." | b"..") {
+            continue;
+        }
+        let name = OsStr::from_bytes(bytes);
+        if Path::new(name).extension().and_then(OsStr::to_str) != Some("json") {
+            continue;
+        }
+        let path = directory.path.join(name);
+        let state = cursor
+            .state
+            .as_mut()
+            .expect("secure queue scan state remains initialized");
+        if state.retained < capacity {
+            state.retained = state.retained.saturating_add(1);
+            paths.push(path);
+        } else {
+            overflow_paths.push(path);
+        }
+    }
+    paths.sort_by(|left, right| left.file_name().cmp(&right.file_name()));
+    overflow_paths.sort_by(|left, right| left.file_name().cmp(&right.file_name()));
+    Ok(QueueScanBatch {
+        directory: Some(directory),
+        paths,
+        overflow_paths,
+        sweep_complete,
+    })
+}
+#[cfg(not(any(target_vendor = "apple", target_os = "linux")))]
+fn discover_queue_batch(_policy: WebhookPolicy) -> std::io::Result<QueueScanBatch> {
+    Err(unsupported_webhook_persistence())
+}
+#[cfg(all(test, any(target_vendor = "apple", target_os = "linux")))]
 fn prune_verified_queue_overflow(
+    paths: Vec<PathBuf>,
+    policy: WebhookPolicy,
+) -> std::io::Result<usize> {
+    let directory = open_webhook_queue_directory(true)?.ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            "webhook queue directory is unavailable",
+        )
+    })?;
+    prune_verified_queue_overflow_in(&directory, paths, policy)
+}
+fn prune_verified_queue_overflow_in(
+    directory: &WebhookDirectory,
     paths: Vec<PathBuf>,
     policy: WebhookPolicy,
 ) -> std::io::Result<usize> {
@@ -2381,8 +3822,8 @@ fn prune_verified_queue_overflow(
     // currently verified excess is removed.
     let _guard = lock_unpoisoned(queue_write_lock());
     let capacity = effective_queue_capacity(policy);
-    let observed = queue_depth_bounded_at(
-        &queue_dir(),
+    let observed = queue_depth_bounded_in(
+        directory,
         capacity.saturating_add(paths.len()),
         WEBHOOK_QUEUE_ADMISSION_SCAN_WORK_ITEMS,
     )?;
@@ -2392,7 +3833,7 @@ fn prune_verified_queue_overflow(
         if remaining_excess == 0 {
             break;
         }
-        match fs::remove_file(&path) {
+        match unlink_private_webhook_entry(directory, &path, None, false) {
             Ok(()) => {
                 remaining_excess = remaining_excess.saturating_sub(1);
                 removed = removed.saturating_add(1);
@@ -2407,32 +3848,60 @@ fn prune_verified_queue_overflow(
             }
         }
     }
+    if removed != 0 {
+        #[cfg(any(target_vendor = "apple", target_os = "linux"))]
+        directory.file.sync_all()?;
+    }
     Ok(removed)
 }
-async fn read_queue_file_bounded(path: &Path) -> std::io::Result<Vec<u8>> {
-    use tokio::io::AsyncReadExt as _;
-    let metadata = tokio_fs::symlink_metadata(path).await?;
-    let maximum = u64::try_from(WEBHOOK_QUEUE_FILE_MAX_BYTES).unwrap_or(u64::MAX);
-    if !metadata.file_type().is_file() || metadata.len() > maximum {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "webhook spool record is oversized or non-regular",
-        ));
-    }
-    let file = tokio_fs::File::open(path).await?;
-    let capacity = usize::try_from(metadata.len())
-        .unwrap_or(WEBHOOK_QUEUE_FILE_MAX_BYTES)
-        .min(WEBHOOK_QUEUE_FILE_MAX_BYTES);
-    let mut bytes = Vec::with_capacity(capacity);
-    let mut limited = file.take(maximum.saturating_add(1));
-    limited.read_to_end(&mut bytes).await?;
-    if bytes.len() > WEBHOOK_QUEUE_FILE_MAX_BYTES {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "webhook spool record exceeds hard byte limit",
-        ));
-    }
-    Ok(bytes)
+async fn read_queue_file_bounded(
+    directory: Arc<WebhookDirectory>,
+    path: PathBuf,
+) -> std::io::Result<BoundedWebhookFile> {
+    run_queue_filesystem_operation(move || {
+        read_private_webhook_file_bounded(&directory, &path, WEBHOOK_QUEUE_FILE_MAX_BYTES)?
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "webhook spool disappeared"))
+    })
+    .await
+}
+async fn remove_queue_file(
+    directory: Arc<WebhookDirectory>,
+    path: PathBuf,
+    expected: Option<WebhookFileIdentity>,
+) -> io::Result<()> {
+    run_queue_filesystem_operation(move || {
+        unlink_private_webhook_entry(&directory, &path, expected, true)
+    })
+    .await
+}
+async fn replace_queue_file(
+    directory: Arc<WebhookDirectory>,
+    path: PathBuf,
+    expected: WebhookFileIdentity,
+    bytes: Vec<u8>,
+) -> io::Result<()> {
+    run_queue_filesystem_operation(move || {
+        write_private_webhook_file_atomic(
+            &directory,
+            &path,
+            &bytes,
+            WEBHOOK_QUEUE_FILE_MAX_BYTES,
+            WebhookPublication::ReplaceIdentity(expected),
+        )
+    })
+    .await
+}
+async fn run_queue_filesystem_operation<T>(
+    operation: impl FnOnce() -> io::Result<T> + Send + 'static,
+) -> io::Result<T>
+where
+    T: Send + 'static,
+{
+    crate::panic_recovery::join_recoverable(crate::panic_recovery::spawn_blocking_recoverable(
+        operation,
+    ))
+    .await
+    .map_err(io::Error::other)?
 }
 fn decode_pending_delivery(bytes: &[u8]) -> Option<PendingDelivery> {
     if bytes.len() > WEBHOOK_QUEUE_FILE_MAX_BYTES {
@@ -2445,11 +3914,24 @@ fn decode_pending_delivery(bytes: &[u8]) -> Option<PendingDelivery> {
     };
     let id = map.get("id")?.as_str()?;
     let webhook_id = map.get("webhook_id")?.as_u64()?;
+    let webhook_generation = map
+        .get("webhook_generation")?
+        .as_str()
+        .and_then(webhook_generation_from_hex)?;
     let url = map.get("url")?.as_str()?;
     let content_type = map.get("content_type")?.as_str()?;
-    if !delivery_metadata_is_bounded(id, url, content_type) {
+    if !delivery_metadata_is_bounded(id, url, content_type)
+        || !delivery_content_type_is_valid(content_type)
+    {
         return None;
     }
+    let signature = match map.get("signature")? {
+        norito::json::Value::Null => None,
+        norito::json::Value::String(signature) if delivery_signature_is_valid(signature) => {
+            Some(signature.clone())
+        }
+        _ => return None,
+    };
     let encoded_body = map.get("body")?.as_str()?;
     if encoded_body.len() > WEBHOOK_DELIVERY_MAX_BASE64_BYTES {
         return None;
@@ -2469,12 +3951,22 @@ fn decode_pending_delivery(bytes: &[u8]) -> Option<PendingDelivery> {
     Some(PendingDelivery {
         id: id.to_string(),
         webhook_id,
+        webhook_generation,
         url: url.to_string(),
         content_type: content_type.to_string(),
+        signature,
         body,
         attempts,
         next_attempt_ms,
     })
+}
+fn pending_delivery_registration_is_current(pd: &PendingDelivery) -> bool {
+    lock_registry()
+        .items
+        .get(&pd.webhook_id)
+        .is_some_and(|registered| {
+            registered.entry.active && registered.generation == pd.webhook_generation
+        })
 }
 async fn process_queue_once() -> Duration {
     let policy = webhook_policy();
@@ -2485,18 +3977,31 @@ async fn process_queue_once() -> Duration {
             return Duration::from_secs(5);
         }
     };
+    let directory = match batch.directory {
+        Some(directory) => directory,
+        None => match open_webhook_queue_directory(true) {
+            Ok(Some(directory)) => Arc::new(directory),
+            Ok(None) => return Duration::from_secs(5),
+            Err(error) => {
+                iroha_logger::warn!(%error, "failed to pin webhook queue directory");
+                return Duration::from_secs(5);
+            }
+        },
+    };
     let batch_had_entries = !batch.paths.is_empty() || !batch.overflow_paths.is_empty();
-    if let Err(err) = prune_verified_queue_overflow(batch.overflow_paths, policy) {
+    if let Err(err) = prune_verified_queue_overflow_in(&directory, batch.overflow_paths, policy) {
         iroha_logger::warn!(%err, "failed to verify webhook queue overflow");
     }
     let mut next_due = None;
     for path in batch.paths {
-        let bytes = match read_queue_file_bounded(&path).await {
-            Ok(bytes) => bytes,
+        let file = match read_queue_file_bounded(Arc::clone(&directory), path.clone()).await {
+            Ok(file) => file,
             Err(e) => {
                 iroha_logger::warn!(%e, ?path, "failed to read pending webhook delivery");
                 if e.kind() == std::io::ErrorKind::InvalidData {
-                    if let Err(remove_err) = tokio_fs::remove_file(&path).await {
+                    if let Err(remove_err) =
+                        remove_queue_file(Arc::clone(&directory), path.clone(), None).await
+                    {
                         iroha_logger::warn!(
                             %remove_err,
                             ?path,
@@ -2507,15 +4012,34 @@ async fn process_queue_once() -> Duration {
                 continue;
             }
         };
-        let mut pd = match decode_pending_delivery(&bytes) {
+        let mut pd = match decode_pending_delivery(&file.bytes) {
             Some(p) => p,
             None => {
-                if let Err(e) = tokio_fs::remove_file(&path).await {
+                if let Err(e) =
+                    remove_queue_file(Arc::clone(&directory), path.clone(), Some(file.identity))
+                        .await
+                {
                     iroha_logger::warn!(%e, ?path, "failed to remove invalid webhook payload");
                 }
                 continue;
             }
         };
+        if !pending_delivery_registration_is_current(&pd) {
+            iroha_logger::info!(
+                webhook_id = pd.webhook_id,
+                "dropping webhook payload for a deleted or replaced registration"
+            );
+            if let Err(error) =
+                remove_queue_file(Arc::clone(&directory), path.clone(), Some(file.identity)).await
+            {
+                iroha_logger::warn!(
+                    %error,
+                    ?path,
+                    "failed to remove invalidated webhook payload"
+                );
+            }
+            continue;
+        }
         // Wait until next_attempt
         let now_ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -2532,19 +4056,37 @@ async fn process_queue_once() -> Duration {
                 webhook_id = pd.webhook_id,
                 "dropping webhook payload that exceeded max attempts"
             );
-            if let Err(e) = tokio_fs::remove_file(&path).await {
+            if let Err(e) =
+                remove_queue_file(Arc::clone(&directory), path.clone(), Some(file.identity)).await
+            {
                 iroha_logger::warn!(%e, ?path, "failed to remove over-attempted webhook payload");
             }
             continue;
         }
-        // Lookup secret (if present)
-        let secret = lock_registry()
-            .items
-            .get(&pd.webhook_id)
-            .cloned()
-            .and_then(|w| w.secret);
-        if try_deliver(&mut pd, secret.as_deref()).await {
-            if let Err(e) = tokio_fs::remove_file(&path).await {
+        let delivery_lock = webhook_delivery_attempt_lock(pd.webhook_id);
+        let delivery_guard = delivery_lock.lock().await;
+        if !pending_delivery_registration_is_current(&pd) {
+            drop(delivery_guard);
+            iroha_logger::info!(
+                webhook_id = pd.webhook_id,
+                "dropping webhook payload for a deleted or replaced registration"
+            );
+            if let Err(error) =
+                remove_queue_file(Arc::clone(&directory), path.clone(), Some(file.identity)).await
+            {
+                iroha_logger::warn!(
+                    %error,
+                    ?path,
+                    "failed to remove invalidated webhook payload"
+                );
+            }
+            continue;
+        }
+        let delivered = try_deliver(&pd).await;
+        if delivered {
+            if let Err(e) =
+                remove_queue_file(Arc::clone(&directory), path.clone(), Some(file.identity)).await
+            {
                 iroha_logger::warn!(%e, ?path, "failed to remove delivered webhook payload");
             }
         } else {
@@ -2555,7 +4097,10 @@ async fn process_queue_once() -> Duration {
                     webhook_id = pd.webhook_id,
                     "dropping webhook payload after max attempts"
                 );
-                if let Err(e) = tokio_fs::remove_file(&path).await {
+                if let Err(e) =
+                    remove_queue_file(Arc::clone(&directory), path.clone(), Some(file.identity))
+                        .await
+                {
                     iroha_logger::warn!(%e, ?path, "failed to remove failed webhook payload");
                 }
                 continue;
@@ -2570,7 +4115,14 @@ async fn process_queue_once() -> Duration {
             pd.next_attempt_ms = next;
             match encode_pending_delivery(&pd) {
                 Ok(encoded) => {
-                    if let Err(e) = tokio_fs::write(&path, encoded.as_bytes()).await {
+                    if let Err(e) = replace_queue_file(
+                        Arc::clone(&directory),
+                        path.clone(),
+                        file.identity,
+                        encoded.into_bytes(),
+                    )
+                    .await
+                    {
                         iroha_logger::warn!(
                             %e,
                             ?path,
@@ -2584,7 +4136,10 @@ async fn process_queue_once() -> Duration {
                         ?path,
                         "dropping webhook delivery that exceeded spool bounds"
                     );
-                    if let Err(remove_err) = tokio_fs::remove_file(&path).await {
+                    if let Err(remove_err) =
+                        remove_queue_file(Arc::clone(&directory), path.clone(), Some(file.identity))
+                            .await
+                    {
                         iroha_logger::warn!(
                             %remove_err,
                             ?path,
@@ -2594,6 +4149,7 @@ async fn process_queue_once() -> Duration {
                 }
             }
         }
+        drop(delivery_guard);
     }
     if batch.sweep_complete {
         next_due
@@ -2609,24 +4165,46 @@ async fn process_queue_once() -> Duration {
 }
 #[cfg(test)]
 mod tests {
+    use iroha_data_model::nexus::{DataSpaceId, LaneId};
     use super::*;
     use crate::test_utils::TestDataDirGuard;
     use http_body_util::BodyExt as _;
     use iroha_crypto::Hash;
-    use iroha_data_model::events::EventFilter; // bring .matches()
     use iroha_data_model::events::{
         EventBox,
         pipeline::{TransactionEvent, TransactionStatus},
     };
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
+    use std::sync::{Barrier, MutexGuard};
     use std::{
+        collections::HashSet,
         convert::TryFrom,
         fs,
-        sync::{Arc, Barrier, Mutex, MutexGuard},
+        sync::{Arc, Mutex},
     };
     use tokio::{
         runtime::Runtime,
         time::{Duration, sleep},
     };
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
+    fn write_private_test_file(path: &Path, bytes: &[u8]) {
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            options.mode(0o600);
+        }
+        let mut file = options.open(path).expect("create private test file");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            file.set_permissions(fs::Permissions::from_mode(0o600))
+                .expect("set private test-file permissions");
+        }
+        file.write_all(bytes).expect("write private test file");
+        file.sync_all().expect("sync private test file");
+    }
     fn registry_entry(id: u64, url: String) -> WebhookEntry {
         WebhookEntry {
             id,
@@ -2636,12 +4214,64 @@ mod tests {
             filter: None,
         }
     }
+    fn test_webhook_generation(id: u64) -> [u8; WEBHOOK_GENERATION_BYTES] {
+        let mut generation = [0_u8; WEBHOOK_GENERATION_BYTES];
+        generation[WEBHOOK_GENERATION_BYTES - core::mem::size_of::<u64>()..]
+            .copy_from_slice(&id.to_be_bytes());
+        generation
+    }
+    fn registered_registry_entry(id: u64, url: String) -> RegisteredWebhook {
+        RegisteredWebhook {
+            entry: registry_entry(id, url),
+            generation: test_webhook_generation(id),
+        }
+    }
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
+    fn persisted_registry_document(
+        next_id: u64,
+        entries: Vec<norito::json::Value>,
+    ) -> norito::json::Value {
+        let mut document = norito::json::Map::new();
+        document.insert(
+            "version".into(),
+            norito::json::Value::from(WEBHOOK_REGISTRY_FORMAT_VERSION),
+        );
+        document.insert("next_id".into(), norito::json::Value::from(next_id));
+        document.insert("entries".into(), norito::json::Value::Array(entries));
+        norito::json::Value::Object(document)
+    }
+    fn proof_verified_event(backend: &str, call_hash: Option<[u8; 32]>) -> EventBox {
+        use iroha_data_model::events::data::proof::{ProofEvent, ProofVerified};
+
+        EventBox::Data(iroha_data_model::events::SharedDataEvent::from(
+            DataEvent::Proof(ProofEvent::Verified(ProofVerified {
+                id: iroha_data_model::proof::ProofId {
+                    backend: backend.to_owned(),
+                    proof_hash: [0xA1; 32],
+                },
+                vk_ref: None,
+                vk_commitment: None,
+                call_hash,
+                envelope_hash: None,
+            })),
+        ))
+    }
+    #[cfg(not(any(target_vendor = "apple", target_os = "linux")))]
+    #[test]
+    fn webhook_persistence_fails_closed_without_private_storage_support() {
+        let _env = TestDataDirGuard::new();
+        let error = init_persistence()
+            .expect_err("webhook persistence must not fall back to pathname-only storage");
+
+        assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+        assert!(error.to_string().contains("owner-private"));
+    }
     #[test]
     fn webhook_registry_rejects_entry_and_count_overflow() {
         let mut registry = RegistryInner::default();
-        let oversized = registry_entry(1, "x".repeat(WEBHOOK_ENTRY_MAX_BYTES));
+        let oversized = registered_registry_entry(1, "x".repeat(WEBHOOK_ENTRY_MAX_BYTES));
         assert!(!registry_can_retain(&registry, &oversized));
-        let compact = registry_entry(1, "https://example.com/hook".to_string());
+        let compact = registered_registry_entry(1, "http://example.com/hook".to_string());
         for id in 0..WEBHOOK_REGISTRY_MAX_ENTRIES {
             registry
                 .items
@@ -2649,6 +4279,7 @@ mod tests {
         }
         assert!(!registry_can_retain(&registry, &compact));
     }
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
     #[test]
     fn persisted_webhook_with_malformed_filter_is_skipped_instead_of_widened() {
         let _env = TestDataDirGuard::new();
@@ -2657,9 +4288,9 @@ mod tests {
             registry.next_id = 0;
             registry.items.clear();
         }
-        let mut malformed = webhook_entry_to_storage_json(&registry_entry(
+        let mut malformed = registered_webhook_to_storage_json(&registered_registry_entry(
             7,
-            "https://filtered.example/hook".to_owned(),
+            "http://filtered.example/hook".to_owned(),
         ));
         let norito::json::Value::Object(ref mut fields) = malformed else {
             panic!("stored webhook entry must be an object");
@@ -2668,22 +4299,25 @@ mod tests {
             "filter".into(),
             norito::json::Value::from("not-a-filter-expression"),
         );
-        let valid = webhook_entry_to_storage_json(&WebhookEntry {
-            id: 2,
-            url: "https://valid-filter.example/hook".to_owned(),
-            active: true,
-            secret: None,
-            filter: Some(crate::filter::FilterExpr::Eq(
-                crate::filter::FieldPath("status".to_owned()),
-                norito::json::Value::from("Approved"),
-            )),
+        let valid = registered_webhook_to_storage_json(&RegisteredWebhook {
+            entry: WebhookEntry {
+                id: 2,
+                url: "http://valid-filter.example/hook".to_owned(),
+                active: true,
+                secret: None,
+                filter: Some(crate::filter::FilterExpr::Eq(
+                    crate::filter::FieldPath("tx_status".to_owned()),
+                    norito::json::Value::from("Approved"),
+                )),
+            },
+            generation: test_webhook_generation(2),
         });
         fs::create_dir_all(data_dir()).expect("create webhook data directory");
         let body =
-            norito::json::to_json_pretty(&norito::json::Value::Array(vec![malformed, valid]))
+            norito::json::to_json_pretty(&persisted_registry_document(7, vec![malformed, valid]))
                 .expect("encode persisted webhook registry");
-        fs::write(registry_path(), body).expect("write persisted webhook registry");
-        load_registry();
+        write_private_test_file(&registry_path(), body.as_bytes());
+        load_registry().expect("load bounded webhook registry");
         let mut registry = lock_registry();
         assert!(
             !registry.items.contains_key(&7),
@@ -2697,7 +4331,7 @@ mod tests {
             registry
                 .items
                 .get(&2)
-                .is_some_and(|entry| entry.filter.is_some()),
+                .is_some_and(|registered| registered.entry.filter.is_some()),
             "the valid neighboring webhook must retain its filter"
         );
         assert_eq!(
@@ -2707,21 +4341,117 @@ mod tests {
         registry.next_id = 0;
         registry.items.clear();
     }
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
+    #[test]
+    fn persisted_boolean_filter_round_trips_without_semantic_widening() {
+        use crate::filter::{FieldPath, FilterExpr};
+
+        let _env = TestDataDirGuard::new();
+        let expression = FilterExpr::Or(vec![
+            FilterExpr::Not(Box::new(FilterExpr::Eq(
+                FieldPath("proof_backend".to_owned()),
+                norito::json::Value::from("halo2/ipa"),
+            ))),
+            FilterExpr::Eq(
+                FieldPath("proof_call_hash".to_owned()),
+                norito::json::Value::from(hex::encode([0xCC; 32])),
+            ),
+        ]);
+        let stored = registered_webhook_to_storage_json(&RegisteredWebhook {
+            entry: WebhookEntry {
+                id: 3,
+                url: "http://boolean-filter.example/hook".to_owned(),
+                active: true,
+                secret: None,
+                filter: Some(expression.clone()),
+            },
+            generation: test_webhook_generation(3),
+        });
+        fs::create_dir_all(data_dir()).expect("create webhook data directory");
+        let body = norito::json::to_json_pretty(&persisted_registry_document(3, vec![stored]))
+            .expect("encode persisted webhook registry");
+        write_private_test_file(&registry_path(), body.as_bytes());
+
+        load_registry().expect("load Boolean webhook filter");
+        let loaded = lock_registry()
+            .items
+            .get(&3)
+            .and_then(|registered| registered.entry.filter.clone())
+            .expect("valid Boolean filter must reload");
+        assert_eq!(loaded, expression);
+        assert!(event_matches_filter(
+            &proof_verified_event("halo2/ipa", Some([0xCC; 32])),
+            &loaded,
+        ));
+        assert!(!event_matches_filter(
+            &proof_verified_event("halo2/ipa", None),
+            &loaded,
+        ));
+        assert!(event_matches_filter(
+            &proof_verified_event("plonk", None),
+            &loaded,
+        ));
+
+        let mut registry = lock_registry();
+        registry.next_id = 0;
+        registry.items.clear();
+    }
     #[test]
     fn webhook_http_response_bound_rejects_limit_plus_one() {
-        let maximum = usize::try_from(WEBHOOK_HTTP_RESPONSE_MAX_BYTES).expect("limit fits");
-        assert!(ensure_webhook_http_response_is_bounded(&vec![0_u8; maximum]).is_ok());
-        let error = ensure_webhook_http_response_is_bounded(&vec![0_u8; maximum + 1])
+        let maximum = usize::try_from(WEBHOOK_HTTP_RESPONSE_HEADER_MAX_BYTES).expect("limit fits");
+        assert!(ensure_webhook_http_response_is_bounded(maximum).is_ok());
+        let error = ensure_webhook_http_response_is_bounded(maximum + 1)
             .expect_err("limit plus one must fail");
-        assert_eq!(error.kind(), std::io::ErrorKind::Other);
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    }
+    #[test]
+    fn plain_http_delivery_completes_after_headers_without_waiting_for_eof() {
+        let runtime = Runtime::new().expect("tokio runtime");
+        runtime.block_on(async {
+            use tokio::{
+                io::{AsyncReadExt as _, AsyncWriteExt as _},
+                sync::oneshot,
+            };
+
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("bind webhook peer");
+            let address = listener.local_addr().expect("webhook peer address");
+            let (release, held_open) = oneshot::channel();
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.expect("accept webhook request");
+                let mut request = [0_u8; 2_048];
+                let _ = socket.read(&mut request).await.expect("read webhook request");
+                socket
+                    .write_all(
+                        b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: keep-alive\r\n\r\n",
+                    )
+                    .await
+                    .expect("write webhook response headers");
+                let _ = held_open.await;
+            });
+            let url = Url::parse(&format!("http://{address}/hook")).expect("valid webhook url");
+            let status = tokio::time::timeout(
+                Duration::from_secs(1),
+                http_post_plain(&url, address, &address.to_string(), &[], b"event"),
+            )
+            .await
+            .expect("complete headers must complete delivery")
+            .expect("valid webhook response");
+            assert_eq!(status, 204);
+            let _ = release.send(());
+            server.await.expect("webhook peer task");
+        });
     }
     #[test]
     fn webhook_delivery_body_bound_accepts_limit_and_rejects_limit_plus_one() {
         let mut pending = PendingDelivery {
             id: "body-boundary".to_string(),
             webhook_id: 1,
+            webhook_generation: test_webhook_generation(1),
             url: "http://example.test/webhook".to_string(),
             content_type: "application/octet-stream".to_string(),
+            signature: None,
             body: vec![0xA5; WEBHOOK_DELIVERY_MAX_BYTES],
             attempts: 0,
             next_attempt_ms: 0,
@@ -2730,6 +4460,11 @@ mod tests {
         let decoded =
             decode_pending_delivery(encoded.as_bytes()).expect("boundary body must decode");
         assert_eq!(decoded.body.len(), WEBHOOK_DELIVERY_MAX_BYTES);
+        assert_eq!(
+            decoded.webhook_generation,
+            test_webhook_generation(1),
+            "the durable registration generation must round-trip"
+        );
         pending.body.push(0);
         let error = encode_pending_delivery(&pending).expect_err("limit plus one must fail");
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
@@ -2737,6 +4472,68 @@ mod tests {
         pending.content_type = "x".repeat(WEBHOOK_DELIVERY_METADATA_MAX_BYTES + 1);
         let error = encode_pending_delivery(&pending).expect_err("metadata overflow must fail");
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    }
+    #[test]
+    fn webhook_delivery_rejects_header_injection_in_content_type() {
+        let pending = PendingDelivery {
+            id: "hostile-content-type".to_string(),
+            webhook_id: 1,
+            webhook_generation: test_webhook_generation(1),
+            url: "http://example.test/webhook".to_string(),
+            content_type: "text/plain\r\nX-Evil: yes".to_string(),
+            signature: None,
+            body: b"event".to_vec(),
+            attempts: 0,
+            next_attempt_ms: 0,
+        };
+        let error = encode_pending_delivery(&pending)
+            .expect_err("header injection must not enter the durable spool");
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+
+        let runtime = Runtime::new().expect("tokio runtime");
+        let error = runtime
+            .block_on(http_post(
+                &pending.url,
+                &[("Content-Type", pending.content_type)],
+                b"event",
+            ))
+            .expect_err("transport must reject header injection defensively");
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+
+        let mut record = norito::json::Map::new();
+        record.insert(
+            "id".into(),
+            norito::json::Value::from("hostile-content-type"),
+        );
+        record.insert("webhook_id".into(), norito::json::Value::from(1_u64));
+        record.insert(
+            "url".into(),
+            norito::json::Value::from("http://example.test/webhook"),
+        );
+        record.insert(
+            "content_type".into(),
+            norito::json::Value::from("text/plain\r\nX-Evil: yes"),
+        );
+        record.insert("signature".into(), norito::json::Value::Null);
+        record.insert(
+            "body".into(),
+            norito::json::Value::from(STANDARD.encode(b"event")),
+        );
+        record.insert("attempts".into(), norito::json::Value::from(0_u64));
+        record.insert("next_attempt_ms".into(), norito::json::Value::from(0_u64));
+        let record = norito::json::to_vec(&record).expect("encode hostile spool record");
+        assert!(
+            decode_pending_delivery(&record).is_none(),
+            "corrupted spool metadata must not reach the transport"
+        );
+    }
+    #[test]
+    fn generated_webhook_delivery_ids_are_unique() {
+        let mut ids = HashSet::new();
+        for _ in 0..1_024 {
+            let id = new_delivery_id(7, 42).expect("OS randomness must be available");
+            assert!(ids.insert(id), "delivery identifiers must not collide");
+        }
     }
     #[test]
     fn webhook_spool_decode_rejects_encoded_body_overflow() {
@@ -2751,6 +4548,7 @@ mod tests {
             "content_type".into(),
             norito::json::Value::from("application/octet-stream"),
         );
+        payload.insert("signature".into(), norito::json::Value::Null);
         payload.insert(
             "body".into(),
             norito::json::Value::from("A".repeat(WEBHOOK_DELIVERY_MAX_BASE64_BYTES + 4)),
@@ -2846,6 +4644,7 @@ mod tests {
         );
         assert!(second.sweep_complete);
     }
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
     #[test]
     fn queue_overflow_pruning_rechecks_current_capacity() {
         let _env = TestDataDirGuard::new();
@@ -2876,6 +4675,7 @@ mod tests {
         assert!(!overflow.exists(), "verified overflow must be removed");
         assert_eq!(queue_depth_bounded_at(&root, 3, 3).unwrap(), 2);
     }
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
     #[test]
     fn delivery_worker_removes_oversized_spool_file_before_decode() {
         let _env = TestDataDirGuard::new();
@@ -2883,7 +4683,11 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).expect("create queue directory");
         let oversized = root.join("oversized.json");
-        let file = fs::File::create(&oversized).expect("create oversized queue file");
+        write_private_test_file(&oversized, b"");
+        let file = fs::OpenOptions::new()
+            .write(true)
+            .open(&oversized)
+            .expect("open oversized queue file");
         file.set_len(
             u64::try_from(WEBHOOK_QUEUE_FILE_MAX_BYTES)
                 .expect("file bound fits u64")
@@ -2895,7 +4699,171 @@ mod tests {
             .block_on(process_queue_once());
         assert!(!oversized.exists(), "oversized spool file must be removed");
     }
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
+    #[test]
+    fn delivery_worker_stops_cleanly_and_can_restart() {
+        let _env = TestDataDirGuard::new();
+        super::init_persistence().expect("initialize webhook persistence");
+        let runtime = Runtime::new().expect("tokio runtime");
+        runtime.block_on(async {
+            for _ in 0..2 {
+                let shutdown = ShutdownSignal::new();
+                let worker = super::start_delivery_worker(shutdown.clone());
+                shutdown.send();
+                let exit = tokio::time::timeout(Duration::from_secs(1), worker)
+                    .await
+                    .expect("delivery worker must observe shutdown")
+                    .expect("delivery worker must not panic");
+                assert_eq!(exit, crate::ToriiCriticalWorkerExit::StoppedByShutdown);
+            }
+        });
+    }
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
+    #[test]
+    fn webhook_storage_is_private_and_atomic() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let _env = TestDataDirGuard::new();
+        ensure_dirs().expect("prepare webhook storage");
+        let directory = open_webhook_queue_directory(false)
+            .expect("open queue directory")
+            .expect("queue directory exists");
+        assert_eq!(
+            directory
+                .file
+                .metadata()
+                .expect("inspect queue directory")
+                .permissions()
+                .mode()
+                & 0o7777,
+            0o700
+        );
+        let path = directory.path.join("atomic.json");
+        write_private_webhook_file_atomic(
+            &directory,
+            &path,
+            b"first",
+            32,
+            WebhookPublication::CreateNew,
+        )
+        .expect("publish queue record");
+        assert_eq!(
+            fs::symlink_metadata(&path)
+                .expect("inspect queue record")
+                .permissions()
+                .mode()
+                & 0o7777,
+            0o600
+        );
+        write_private_webhook_file_atomic(
+            &directory,
+            &path,
+            b"second",
+            32,
+            WebhookPublication::Replace,
+        )
+        .expect("replace queue record");
+        assert_eq!(
+            fs::read(&path).expect("read replaced queue record"),
+            b"second"
+        );
+    }
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
+    #[test]
+    fn webhook_startup_removes_only_owned_temporary_files() {
+        let _env = TestDataDirGuard::new();
+        ensure_dirs().expect("prepare webhook storage");
+        let data_temp = data_dir().join(".webhook-00000000000000000000000000000000.tmp");
+        let queue_temp = queue_dir().join(".webhook-11111111111111111111111111111111.tmp");
+        let unrelated = queue_dir().join("keep.tmp");
+        write_private_test_file(&data_temp, b"partial registry");
+        write_private_test_file(&queue_temp, b"partial delivery");
+        write_private_test_file(&unrelated, b"unrelated");
+        recover_webhook_temporary_files().expect("recover webhook temporary files");
+        assert!(!data_temp.exists());
+        assert!(!queue_temp.exists());
+        assert!(unrelated.exists());
+    }
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
+    #[test]
+    fn webhook_persistence_refuses_symlink_targets() {
+        use std::os::unix::fs::symlink;
+
+        let _env = TestDataDirGuard::new();
+        ensure_dirs().expect("prepare webhook storage");
+        let target = data_dir().join("outside.json");
+        write_private_test_file(&target, b"outside");
+        let directory = open_webhook_queue_directory(false)
+            .expect("open queue directory")
+            .expect("queue directory exists");
+        let queue_path = directory.path.join("linked.json");
+        symlink(&target, &queue_path).expect("create queue symlink");
+        assert!(
+            write_private_webhook_file_atomic(
+                &directory,
+                &queue_path,
+                b"replacement",
+                32,
+                WebhookPublication::Replace,
+            )
+            .is_err(),
+            "a retry must not publish through a symlink"
+        );
+        assert_eq!(
+            fs::read(&target).expect("read symlink target"),
+            b"outside",
+            "the symlink target must remain untouched"
+        );
+        let registry_target = data_dir().join("registry-target.json");
+        write_private_test_file(&registry_target, b"[]");
+        symlink(&registry_target, registry_path()).expect("create registry symlink");
+        let mut registry = lock_registry();
+        registry.items.clear();
+        registry.next_id = 0;
+        drop(registry);
+        assert!(
+            load_registry().is_err(),
+            "registry loading must reject a symlink target"
+        );
+        assert!(lock_registry().items.is_empty());
+    }
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
+    #[test]
+    fn queue_delete_rejects_a_replaced_inode() {
+        let _env = TestDataDirGuard::new();
+        ensure_dirs().expect("prepare webhook storage");
+        let directory = open_webhook_queue_directory(false)
+            .expect("open queue directory")
+            .expect("queue directory exists");
+        let path = directory.path.join("identity.json");
+        write_private_webhook_file_atomic(
+            &directory,
+            &path,
+            b"old",
+            32,
+            WebhookPublication::CreateNew,
+        )
+        .expect("publish original queue record");
+        let original = read_private_webhook_file_bounded(&directory, &path, 32)
+            .expect("read original queue record")
+            .expect("original queue record exists");
+        write_private_webhook_file_atomic(
+            &directory,
+            &path,
+            b"new",
+            32,
+            WebhookPublication::Replace,
+        )
+        .expect("replace queue record");
+        assert!(
+            unlink_private_webhook_entry(&directory, &path, Some(original.identity), true).is_err(),
+            "completion of an old attempt must not remove a replacement record"
+        );
+        assert_eq!(fs::read(&path).expect("read replacement record"), b"new");
+    }
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
     struct TimeoutOverride(super::HttpTimeoutConfig);
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
     impl TimeoutOverride {
         fn new(config: super::HttpTimeoutConfig) -> Self {
             let previous = super::http_timeout_config();
@@ -2903,15 +4871,18 @@ mod tests {
             Self(previous)
         }
     }
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
     impl Drop for TimeoutOverride {
         fn drop(&mut self) {
             super::set_http_timeout_config(self.0);
         }
     }
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
     struct WebhookPolicyGuard {
         previous: super::WebhookPolicy,
         _writer_guard: MutexGuard<'static, ()>,
     }
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
     impl WebhookPolicyGuard {
         fn new(policy: super::WebhookPolicy) -> Self {
             let writer_guard = super::webhook_policy_writer_lock()
@@ -2925,11 +4896,13 @@ mod tests {
             }
         }
     }
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
     impl Drop for WebhookPolicyGuard {
         fn drop(&mut self) {
             super::apply_webhook_policy(self.previous);
         }
     }
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
     fn expect_json_object(value: norito::json::Value, context: &str) -> norito::json::Map {
         match value {
             norito::json::Value::Object(map) => map,
@@ -2948,6 +4921,30 @@ mod tests {
         let mut recovered = super::lock_unpoisoned(&mutex);
         assert_eq!(*recovered, 7);
         *recovered = 8;
+    }
+    #[test]
+    fn queue_filesystem_panic_is_recovered() {
+        let runtime = Runtime::new().expect("tokio runtime");
+        runtime.block_on(async {
+            let reached = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let reached_in_worker = Arc::clone(&reached);
+            let error = super::run_queue_filesystem_operation(move || -> io::Result<()> {
+                assert!(
+                    iroha_core::panic_hook::is_suppressed(),
+                    "the recoverable boundary must be installed on the physical blocking worker"
+                );
+                reached_in_worker.store(true, std::sync::atomic::Ordering::SeqCst);
+                panic!("injected webhook queue filesystem panic");
+            })
+            .await
+            .expect_err("a queue filesystem panic must become a controlled I/O error");
+            assert_eq!(error.kind(), io::ErrorKind::Other);
+            assert!(reached.load(std::sync::atomic::Ordering::SeqCst));
+            assert!(
+                !iroha_core::panic_hook::is_suppressed(),
+                "suppression must stay scoped to the physical blocking worker"
+            );
+        });
     }
     #[test]
     fn proof_id_parsing_supports_string_and_object_forms() {
@@ -2984,6 +4981,7 @@ mod tests {
         let array_value = norito::json::Value::Object(map_array);
         assert_eq!(super::proof_id_from_json(&array_value), Some(proof));
     }
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
     #[test]
     fn delivery_worker_processes_queue() {
         let _env = TestDataDirGuard::new();
@@ -2992,7 +4990,7 @@ mod tests {
             g.next_id = 0;
             g.items.clear();
         }
-        super::init_persistence();
+        super::init_persistence().expect("initialize webhook persistence");
         let rt = Runtime::new().expect("tokio runtime");
         rt.block_on(async {
             let deliveries = Arc::new(Mutex::new(Vec::new()));
@@ -3008,16 +5006,8 @@ mod tests {
             let webhook_id = {
                 let mut g = registry().lock().unwrap();
                 g.next_id = 1;
-                g.items.insert(
-                    1,
-                    WebhookEntry {
-                        id: 1,
-                        url: target_url.to_string(),
-                        active: true,
-                        secret: None,
-                        filter: None,
-                    },
-                );
+                g.items
+                    .insert(1, registered_registry_entry(1, target_url.to_string()));
                 1
             };
             let queue_file = super::queue_dir().join("pending-delivery.json");
@@ -3029,11 +5019,16 @@ mod tests {
                     u64::try_from(webhook_id).expect("webhook id should be non-negative"),
                 ),
             );
+            payload.insert(
+                "webhook_generation".into(),
+                norito::json::Value::from(hex::encode(test_webhook_generation(1))),
+            );
             payload.insert("url".into(), norito::json::Value::from(target_url));
             payload.insert(
                 "content_type".into(),
                 norito::json::Value::from("application/json"),
             );
+            payload.insert("signature".into(), norito::json::Value::Null);
             payload.insert(
                 "body".into(),
                 norito::json::Value::from(STANDARD.encode(b"{\"ok\":true}")),
@@ -3041,7 +5036,7 @@ mod tests {
             payload.insert("attempts".into(), norito::json::Value::from(0u64));
             payload.insert("next_attempt_ms".into(), norito::json::Value::from(0u64));
             let payload = norito::json::to_json_pretty(&payload).expect("serialize payload");
-            std::fs::write(&queue_file, payload).expect("write queue file");
+            write_private_test_file(&queue_file, payload.as_bytes());
             let mut delivered = false;
             for _ in 0..50 {
                 let _ = super::process_queue_once().await;
@@ -3065,12 +5060,13 @@ mod tests {
             g.items.clear();
         });
     }
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
     #[test]
     fn queue_capacity_check_and_persistence_are_atomic() {
         const WRITERS: usize = 8;
         let _env = TestDataDirGuard::new();
         let _ = fs::remove_dir_all(super::queue_dir());
-        super::ensure_dirs();
+        super::ensure_dirs().expect("prepare queue directory");
         let policy = super::WebhookPolicy {
             queue_capacity: NonZeroUsize::new(1).unwrap(),
             max_attempts: NonZeroU32::new(3).unwrap(),
@@ -3090,8 +5086,12 @@ mod tests {
                     admission.persist(&PendingDelivery {
                         id: format!("writer-{writer}"),
                         webhook_id: u64::try_from(writer).expect("writer id fits u64"),
+                        webhook_generation: test_webhook_generation(
+                            u64::try_from(writer).expect("writer id fits u64"),
+                        ),
                         url: "http://example.test/webhook".to_string(),
                         content_type: "text/plain".to_string(),
+                        signature: None,
                         body: format!("payload-{writer}").into_bytes(),
                         attempts: 0,
                         next_attempt_ms: 0,
@@ -3112,11 +5112,12 @@ mod tests {
             "concurrent writers must not overshoot queue capacity"
         );
     }
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
     #[test]
     fn payload_dropped_after_max_attempts() {
         let _env = TestDataDirGuard::new();
         let _ = fs::remove_dir_all(super::queue_dir());
-        super::ensure_dirs();
+        super::ensure_dirs().expect("prepare queue directory");
         let _policy_guard = WebhookPolicyGuard::new(super::WebhookPolicy {
             queue_capacity: NonZeroUsize::new(10).unwrap(),
             max_attempts: NonZeroU32::new(2).unwrap(),
@@ -3131,19 +5132,17 @@ mod tests {
             g.items.clear();
             g.items.insert(
                 1,
-                WebhookEntry {
-                    id: 1,
-                    url: "http://local.test/webhook".to_string(),
-                    active: true,
-                    secret: None,
-                    filter: None,
-                },
+                registered_registry_entry(1, "http://local.test/webhook".to_string()),
             );
         }
         let pending_path = super::queue_dir().join("pending-drop.json");
         let mut payload = norito::json::Map::new();
         payload.insert("id".into(), norito::json::Value::from("pending-drop"));
         payload.insert("webhook_id".into(), norito::json::Value::from(1u64));
+        payload.insert(
+            "webhook_generation".into(),
+            norito::json::Value::from(hex::encode(test_webhook_generation(1))),
+        );
         payload.insert(
             "url".into(),
             norito::json::Value::from("http://local.test/webhook"),
@@ -3152,6 +5151,7 @@ mod tests {
             "content_type".into(),
             norito::json::Value::from("application/json"),
         );
+        payload.insert("signature".into(), norito::json::Value::Null);
         payload.insert(
             "body".into(),
             norito::json::Value::from(STANDARD.encode(b"payload")),
@@ -3159,7 +5159,7 @@ mod tests {
         payload.insert("attempts".into(), norito::json::Value::from(1u64));
         payload.insert("next_attempt_ms".into(), norito::json::Value::from(0u64));
         let json = norito::json::to_json_pretty(&payload).expect("serialize pending payload");
-        fs::write(&pending_path, json.as_bytes()).expect("write pending payload");
+        write_private_test_file(&pending_path, json.as_bytes());
         let _http_guard = super::install_http_post_override(|_, _, _| {
             Err(std::io::Error::new(
                 std::io::ErrorKind::Other,
@@ -3172,11 +5172,12 @@ mod tests {
         });
         assert_eq!(super::queue_depth(), 0);
     }
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
     #[test]
     fn overflowing_persisted_attempts_are_removed_without_delivery() {
         let _env = TestDataDirGuard::new();
         let _ = fs::remove_dir_all(super::queue_dir());
-        super::ensure_dirs();
+        super::ensure_dirs().expect("prepare queue directory");
         let pending_path = super::queue_dir().join("overflowing-attempts.json");
         let mut payload = norito::json::Map::new();
         payload.insert(
@@ -3185,6 +5186,10 @@ mod tests {
         );
         payload.insert("webhook_id".into(), norito::json::Value::from(1u64));
         payload.insert(
+            "webhook_generation".into(),
+            norito::json::Value::from(hex::encode(test_webhook_generation(1))),
+        );
+        payload.insert(
             "url".into(),
             norito::json::Value::from("http://local.test/webhook"),
         );
@@ -3192,6 +5197,7 @@ mod tests {
             "content_type".into(),
             norito::json::Value::from("application/json"),
         );
+        payload.insert("signature".into(), norito::json::Value::Null);
         payload.insert(
             "body".into(),
             norito::json::Value::from(STANDARD.encode(b"payload")),
@@ -3202,7 +5208,7 @@ mod tests {
         );
         payload.insert("next_attempt_ms".into(), norito::json::Value::from(0u64));
         let json = norito::json::to_json_pretty(&payload).expect("serialize pending payload");
-        fs::write(&pending_path, json.as_bytes()).expect("write pending payload");
+        write_private_test_file(&pending_path, json.as_bytes());
         let delivery_attempts = Arc::new(AtomicU32::new(0));
         let recorded_attempts = Arc::clone(&delivery_attempts);
         let _http_guard = super::install_http_post_override(move |_, _, _| {
@@ -3223,6 +5229,7 @@ mod tests {
             "overflow must not reset the retry budget and trigger delivery"
         );
     }
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
     #[test]
     fn delivery_worker_times_out_and_continues() {
         let _env = TestDataDirGuard::new();
@@ -3231,7 +5238,7 @@ mod tests {
             g.next_id = 0;
             g.items.clear();
         }
-        super::init_persistence();
+        super::init_persistence().expect("initialize webhook persistence");
         let rt = Runtime::new().expect("tokio runtime");
         let _timeout_guard = TimeoutOverride::new(super::HttpTimeoutConfig {
             connect: Duration::from_millis(200),
@@ -3264,26 +5271,10 @@ mod tests {
             {
                 let mut g = registry().lock().unwrap();
                 g.next_id = 2;
-                g.items.insert(
-                    1,
-                    WebhookEntry {
-                        id: 1,
-                        url: hung_url.clone(),
-                        active: true,
-                        secret: None,
-                        filter: None,
-                    },
-                );
-                g.items.insert(
-                    2,
-                    WebhookEntry {
-                        id: 2,
-                        url: success_url.clone(),
-                        active: true,
-                        secret: None,
-                        filter: None,
-                    },
-                );
+                g.items
+                    .insert(1, registered_registry_entry(1, hung_url.clone()));
+                g.items
+                    .insert(2, registered_registry_entry(2, success_url.clone()));
             }
             let queue_dir = super::queue_dir();
             let hung_file = queue_dir.join("0001-timeout.json");
@@ -3291,11 +5282,16 @@ mod tests {
             let mut hung_payload = norito::json::Map::new();
             hung_payload.insert("id".into(), norito::json::Value::from("timeout-job"));
             hung_payload.insert("webhook_id".into(), norito::json::Value::from(1u64));
+            hung_payload.insert(
+                "webhook_generation".into(),
+                norito::json::Value::from(hex::encode(test_webhook_generation(1))),
+            );
             hung_payload.insert("url".into(), norito::json::Value::from(hung_url.clone()));
             hung_payload.insert(
                 "content_type".into(),
                 norito::json::Value::from("application/json"),
             );
+            hung_payload.insert("signature".into(), norito::json::Value::Null);
             hung_payload.insert(
                 "body".into(),
                 norito::json::Value::from(STANDARD.encode(b"{\"timeout\":true}")),
@@ -3304,15 +5300,20 @@ mod tests {
             hung_payload.insert("next_attempt_ms".into(), norito::json::Value::from(0u64));
             let hung_payload =
                 norito::json::to_json_pretty(&hung_payload).expect("serialize timeout payload");
-            std::fs::write(&hung_file, hung_payload).expect("write timeout payload");
+            write_private_test_file(&hung_file, hung_payload.as_bytes());
             let mut success_payload = norito::json::Map::new();
             success_payload.insert("id".into(), norito::json::Value::from("success-job"));
             success_payload.insert("webhook_id".into(), norito::json::Value::from(2u64));
+            success_payload.insert(
+                "webhook_generation".into(),
+                norito::json::Value::from(hex::encode(test_webhook_generation(2))),
+            );
             success_payload.insert("url".into(), norito::json::Value::from(success_url.clone()));
             success_payload.insert(
                 "content_type".into(),
                 norito::json::Value::from("application/json"),
             );
+            success_payload.insert("signature".into(), norito::json::Value::Null);
             success_payload.insert(
                 "body".into(),
                 norito::json::Value::from(STANDARD.encode(b"{\"ok\":true}")),
@@ -3321,7 +5322,7 @@ mod tests {
             success_payload.insert("next_attempt_ms".into(), norito::json::Value::from(0u64));
             let success_payload =
                 norito::json::to_json_pretty(&success_payload).expect("serialize success payload");
-            std::fs::write(&success_file, success_payload).expect("write success payload");
+            write_private_test_file(&success_file, success_payload.as_bytes());
             let mut success_delivered = false;
             for _ in 0..50 {
                 let _ = super::process_queue_once().await;
@@ -3377,12 +5378,83 @@ mod tests {
             g.items.clear();
         });
     }
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
     fn expect_json_array(value: norito::json::Value, context: &str) -> Vec<norito::json::Value> {
         match value {
             norito::json::Value::Array(arr) => arr,
             _ => panic!("expected array for {context}", context = context),
         }
     }
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
+    #[test]
+    fn registry_next_id_survives_last_deletion_and_restart() {
+        let _env = TestDataDirGuard::new();
+        super::init_persistence().expect("initialize webhook persistence");
+        {
+            let mut registry = lock_registry();
+            registry.next_id = 1;
+            registry.items.clear();
+            registry.items.insert(
+                1,
+                registered_registry_entry(1, "http://first.example/hook".to_string()),
+            );
+            persist_registry(&registry).expect("persist original webhook registration");
+        }
+        let runtime = Runtime::new().expect("tokio runtime");
+        runtime.block_on(async {
+            let response = handle_delete_webhook(AxumPath(1)).await;
+            assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        });
+        {
+            let mut registry = lock_registry();
+            registry.next_id = 0;
+            registry.items.clear();
+        }
+
+        load_registry().expect("reload registry after simulated restart");
+        {
+            let registry = lock_registry();
+            assert_eq!(registry.next_id, 1);
+            assert!(registry.items.is_empty());
+        }
+        runtime.block_on(async {
+            let response =
+                handle_create_webhook(crate::utils::extractors::JsonOnly(WebhookCreate {
+                    url: "http://second.example/hook".to_string(),
+                    secret: None,
+                    active: true,
+                    filter: None,
+                }))
+                .await;
+            assert_eq!(response.status(), StatusCode::CREATED);
+        });
+        let mut registry = lock_registry();
+        assert_eq!(registry.next_id, 2);
+        assert!(registry.items.contains_key(&2));
+        assert!(!registry.items.contains_key(&1));
+        registry.next_id = 0;
+        registry.items.clear();
+    }
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
+    #[test]
+    fn loading_an_empty_store_clears_stale_registry_state() {
+        let _env = TestDataDirGuard::new();
+        {
+            let mut registry = lock_registry();
+            registry.next_id = 7;
+            registry.items.clear();
+            registry.items.insert(
+                7,
+                registered_registry_entry(7, "http://stale.example/hook".to_string()),
+            );
+        }
+
+        load_registry().expect("load empty webhook store");
+        let registry = lock_registry();
+        assert_eq!(registry.next_id, 0);
+        assert!(registry.items.is_empty());
+    }
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
     #[test]
     fn create_list_delete_roundtrip() {
         let _env = TestDataDirGuard::new();
@@ -3391,13 +5463,13 @@ mod tests {
             g.next_id = 0;
             g.items.clear();
         }
-        super::init_persistence();
+        super::init_persistence().expect("initialize webhook persistence");
         let data_dir = super::data_dir();
         let rt = Runtime::new().expect("tokio runtime");
         let (entry_id, entry_url) = rt.block_on(async {
             let created_resp =
                 super::handle_create_webhook(crate::utils::extractors::JsonOnly(WebhookCreate {
-                    url: "https://example.com/hook".into(),
+                    url: "http://example.com/hook".into(),
                     secret: Some("s".into()),
                     active: true,
                     filter: None,
@@ -3461,6 +5533,7 @@ mod tests {
             g.items.clear();
         }
     }
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
     #[test]
     fn responses_report_secret_presence_without_exposing_value() {
         let _env = TestDataDirGuard::new();
@@ -3469,12 +5542,12 @@ mod tests {
             g.next_id = 0;
             g.items.clear();
         }
-        super::init_persistence();
+        super::init_persistence().expect("initialize webhook persistence");
         let rt = Runtime::new().expect("tokio runtime");
         rt.block_on(async {
             let no_secret_resp =
                 super::handle_create_webhook(crate::utils::extractors::JsonOnly(WebhookCreate {
-                    url: "https://no-secret.example".into(),
+                    url: "http://no-secret.example".into(),
                     secret: None,
                     active: true,
                     filter: None,
@@ -3500,7 +5573,7 @@ mod tests {
             );
             let with_secret_resp =
                 super::handle_create_webhook(crate::utils::extractors::JsonOnly(WebhookCreate {
-                    url: "https://with-secret.example".into(),
+                    url: "http://with-secret.example".into(),
                     secret: Some("super-secret".into()),
                     active: true,
                     filter: None,
@@ -3549,11 +5622,11 @@ mod tests {
             }
             assert!(
                 seen.iter()
-                    .any(|(url, has)| url == "https://no-secret.example" && !has)
+                    .any(|(url, has)| url == "http://no-secret.example/" && !has)
             );
             assert!(
                 seen.iter()
-                    .any(|(url, has)| url == "https://with-secret.example" && *has)
+                    .any(|(url, has)| url == "http://with-secret.example/" && *has)
             );
         });
         {
@@ -3573,10 +5646,140 @@ mod tests {
             "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7"
         );
     }
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
+    #[test]
+    fn queued_delivery_is_invalidated_by_durable_registration_deletion() {
+        let _env = TestDataDirGuard::new();
+        super::init_persistence().expect("initialize webhook persistence");
+        {
+            let mut registry = lock_registry();
+            registry.next_id = 1;
+            registry.items.clear();
+            registry.items.insert(
+                1,
+                RegisteredWebhook {
+                    entry: WebhookEntry {
+                        id: 1,
+                        url: "http://local.test/hook".to_string(),
+                        active: true,
+                        secret: Some("delivery-secret".to_string()),
+                        filter: None,
+                    },
+                    generation: test_webhook_generation(1),
+                },
+            );
+            persist_registry(&registry).expect("persist original webhook registration");
+        }
+        enqueue_event_for_matching_webhooks(
+            &proof_verified_event("halo2/ipa", Some([0xA5; 32])),
+            "application/json",
+        );
+        let queue_path = fs::read_dir(queue_dir())
+            .expect("read webhook queue")
+            .next()
+            .expect("one queued delivery")
+            .expect("queued delivery entry")
+            .path();
+        let mut pending = decode_pending_delivery(&fs::read(&queue_path).expect("read delivery"))
+            .expect("decode queued delivery");
+        pending.next_attempt_ms = u64::MAX;
+        let encoded = encode_pending_delivery(&pending).expect("encode future-due delivery");
+        write_private_test_file(&queue_path, encoded.as_bytes());
+        let delivery_attempts = Arc::new(AtomicU32::new(0));
+        let recorded_attempts = Arc::clone(&delivery_attempts);
+        let _http_guard = super::install_http_post_override(move |_, _, _| {
+            recorded_attempts.fetch_add(1, Ordering::SeqCst);
+            Ok(204)
+        });
+        let runtime = Runtime::new().expect("tokio runtime");
+        runtime.block_on(async {
+            let response = handle_delete_webhook(AxumPath(1)).await;
+            assert_eq!(response.status(), StatusCode::NO_CONTENT);
+            *lock_registry() = RegistryInner::default();
+            load_registry().expect("reload durable deletion before delivery");
+            process_queue_once().await;
+        });
+        assert_eq!(
+            delivery_attempts.load(Ordering::SeqCst),
+            0,
+            "a deleted registration must never receive a queued delivery"
+        );
+        assert!(
+            !queue_path.exists(),
+            "the invalidated spool record must be removed"
+        );
+        let mut registry = lock_registry();
+        registry.next_id = 0;
+        registry.items.clear();
+    }
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
+    #[test]
+    fn queued_delivery_is_invalidated_by_durable_registration_replacement() {
+        let _env = TestDataDirGuard::new();
+        super::init_persistence().expect("initialize webhook persistence");
+        {
+            let mut registry = lock_registry();
+            registry.next_id = 1;
+            registry.items.clear();
+            registry.items.insert(
+                1,
+                RegisteredWebhook {
+                    entry: registry_entry(1, "http://local.test/hook".to_string()),
+                    generation: test_webhook_generation(1),
+                },
+            );
+            persist_registry(&registry).expect("persist original webhook registration");
+        }
+        enqueue_event_for_matching_webhooks(
+            &proof_verified_event("halo2/ipa", Some([0xA5; 32])),
+            "application/json",
+        );
+        let queue_path = fs::read_dir(queue_dir())
+            .expect("read webhook queue")
+            .next()
+            .expect("one queued delivery")
+            .expect("queued delivery entry")
+            .path();
+        {
+            let mut registry = lock_registry();
+            let replacement = RegisteredWebhook {
+                entry: registry_entry(1, "http://local.test/hook".to_string()),
+                generation: test_webhook_generation(2),
+            };
+            let mut candidate = registry.clone();
+            candidate.items.insert(1, replacement);
+            persist_registry(&candidate).expect("persist replacement webhook registration");
+            *registry = candidate;
+        }
+        *lock_registry() = RegistryInner::default();
+        load_registry().expect("reload durable replacement before delivery");
+        let delivery_attempts = Arc::new(AtomicU32::new(0));
+        let recorded_attempts = Arc::clone(&delivery_attempts);
+        let _http_guard = super::install_http_post_override(move |_, _, _| {
+            recorded_attempts.fetch_add(1, Ordering::SeqCst);
+            Ok(204)
+        });
+        Runtime::new()
+            .expect("tokio runtime")
+            .block_on(process_queue_once());
+        assert_eq!(
+            delivery_attempts.load(Ordering::SeqCst),
+            0,
+            "a replacement registration must not inherit queued deliveries"
+        );
+        assert!(
+            !queue_path.exists(),
+            "the invalidated spool record must be removed"
+        );
+        let mut registry = lock_registry();
+        registry.next_id = 0;
+        registry.items.clear();
+    }
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
     #[test]
     fn enqueue_respects_filter() {
         let _env = TestDataDirGuard::new();
-        super::init_persistence();
+        super::init_persistence().expect("initialize webhook persistence");
         // Insert 2 webhooks: one for Queued, one for Approved
         {
             let mut g = registry().lock().unwrap();
@@ -3586,30 +5789,36 @@ mod tests {
             let id1 = g.next_id;
             g.items.insert(
                 id1,
-                WebhookEntry {
-                    id: id1,
-                    url: "http://127.0.0.1:9/blackhole".into(),
-                    active: true,
-                    secret: None,
-                    filter: Some(crate::filter::FilterExpr::Eq(
-                        crate::filter::FieldPath("tx_status".into()),
-                        norito::json::Value::String("Queued".into()),
-                    )),
+                RegisteredWebhook {
+                    entry: WebhookEntry {
+                        id: id1,
+                        url: "http://127.0.0.1:9/blackhole".into(),
+                        active: true,
+                        secret: None,
+                        filter: Some(crate::filter::FilterExpr::Eq(
+                            crate::filter::FieldPath("tx_status".into()),
+                            norito::json::Value::String("Queued".into()),
+                        )),
+                    },
+                    generation: test_webhook_generation(id1),
                 },
             );
             g.next_id += 1;
             let id2 = g.next_id;
             g.items.insert(
                 id2,
-                WebhookEntry {
-                    id: id2,
-                    url: "http://127.0.0.1:9/blackhole".into(),
-                    active: true,
-                    secret: None,
-                    filter: Some(crate::filter::FilterExpr::Eq(
-                        crate::filter::FieldPath("tx_status".into()),
-                        norito::json::Value::String("Approved".into()),
-                    )),
+                RegisteredWebhook {
+                    entry: WebhookEntry {
+                        id: id2,
+                        url: "http://127.0.0.1:9/blackhole".into(),
+                        active: true,
+                        secret: None,
+                        filter: Some(crate::filter::FilterExpr::Eq(
+                            crate::filter::FieldPath("tx_status".into()),
+                            norito::json::Value::String("Approved".into()),
+                        )),
+                    },
+                    generation: test_webhook_generation(id2),
                 },
             );
         }
@@ -3637,6 +5846,7 @@ mod tests {
             .count();
         assert_eq!(count, 1);
     }
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
     #[test]
     fn enqueue_respects_proof_envelope_hash_filter() {
         use crate::filter::{FieldPath, FilterExpr};
@@ -3645,7 +5855,7 @@ mod tests {
             proof::{ProofEvent, ProofVerified},
         };
         let _env = TestDataDirGuard::new();
-        super::init_persistence();
+        super::init_persistence().expect("initialize webhook persistence");
         // Two webhooks: one matches specific envelope hash, one with different hash
         let match_id: u64;
         {
@@ -3658,15 +5868,18 @@ mod tests {
             match_id = id1;
             g.items.insert(
                 id1,
-                WebhookEntry {
-                    id: id1,
-                    url: "http://127.0.0.1:9/blackhole".into(),
-                    active: true,
-                    secret: None,
-                    filter: Some(FilterExpr::Eq(
-                        FieldPath("proof_envelope_hash".into()),
-                        norito::json::Value::String(hex::encode([0xCCu8; 32])),
-                    )),
+                RegisteredWebhook {
+                    entry: WebhookEntry {
+                        id: id1,
+                        url: "http://127.0.0.1:9/blackhole".into(),
+                        active: true,
+                        secret: None,
+                        filter: Some(FilterExpr::Eq(
+                            FieldPath("proof_envelope_hash".into()),
+                            norito::json::Value::String(hex::encode([0xCCu8; 32])),
+                        )),
+                    },
+                    generation: test_webhook_generation(id1),
                 },
             );
             // non-matching: proof_envelope_hash == 0xDD..DD
@@ -3674,15 +5887,18 @@ mod tests {
             let id2 = g.next_id;
             g.items.insert(
                 id2,
-                WebhookEntry {
-                    id: id2,
-                    url: "http://127.0.0.1:9/blackhole".into(),
-                    active: true,
-                    secret: None,
-                    filter: Some(FilterExpr::Eq(
-                        FieldPath("proof_envelope_hash".into()),
-                        norito::json::Value::String(hex::encode([0xDDu8; 32])),
-                    )),
+                RegisteredWebhook {
+                    entry: WebhookEntry {
+                        id: id2,
+                        url: "http://127.0.0.1:9/blackhole".into(),
+                        active: true,
+                        secret: None,
+                        filter: Some(FilterExpr::Eq(
+                            FieldPath("proof_envelope_hash".into()),
+                            norito::json::Value::String(hex::encode([0xDDu8; 32])),
+                        )),
+                    },
+                    generation: test_webhook_generation(id2),
                 },
             );
         }
@@ -3719,9 +5935,8 @@ mod tests {
         assert_eq!(got_id, match_id);
     }
     #[test]
-    fn proof_id_eq_builds_matching_filter() {
+    fn proof_id_eq_matches_only_the_exact_proof() {
         use crate::filter::{FieldPath, FilterExpr};
-        // Build a ProofId and event record wrapper
         let id = iroha_data_model::proof::ProofId {
             backend: "halo2/ipa".into(),
             proof_hash: [0xAA; 32],
@@ -3746,9 +5961,48 @@ mod tests {
             FieldPath("proof_id".into()),
             norito::json::Value::String(id_str),
         );
-        let filters = event_filter_boxes_from_expr(&expr);
-        assert!(!filters.is_empty());
-        assert!(filters.iter().any(|f| f.matches(&ev)));
+        assert!(event_matches_filter(&ev, &expr));
+        assert!(!event_matches_filter(
+            &proof_verified_event("halo2/ipa", None),
+            &expr,
+        ));
+    }
+    #[test]
+    fn proof_filters_preserve_not_and_or_semantics() {
+        use crate::filter::{FieldPath, FilterExpr};
+
+        let event = proof_verified_event("halo2/ipa", Some([0xCC; 32]));
+        let backend_is_halo2 = FilterExpr::Eq(
+            FieldPath("proof_backend".to_owned()),
+            norito::json::Value::from("halo2/ipa"),
+        );
+        assert!(!event_matches_filter(
+            &event,
+            &FilterExpr::Not(Box::new(backend_is_halo2.clone())),
+        ));
+        assert!(event_matches_filter(
+            &event,
+            &FilterExpr::Or(vec![
+                FilterExpr::Eq(
+                    FieldPath("proof_backend".to_owned()),
+                    norito::json::Value::from("plonk"),
+                ),
+                FilterExpr::Eq(
+                    FieldPath("proof_call_hash".to_owned()),
+                    norito::json::Value::from(hex::encode([0xCC; 32])),
+                ),
+            ]),
+        ));
+        assert!(!event_matches_filter(
+            &event,
+            &FilterExpr::Or(vec![
+                FilterExpr::Not(Box::new(backend_is_halo2)),
+                FilterExpr::Eq(
+                    FieldPath("proof_call_hash".to_owned()),
+                    norito::json::Value::from(hex::encode([0xDD; 32])),
+                ),
+            ]),
+        ));
     }
     #[test]
     fn webhook_url_validation_rejects_localhost_when_enabled() {
@@ -3790,6 +6044,57 @@ mod tests {
             .expect("allow-listed loopback allowed");
     }
     #[test]
+    fn webhook_url_validation_rejects_userinfo_fragments_and_zero_ports() {
+        let policy = WebhookSecurityPolicy {
+            enabled: false,
+            allow_nets: Vec::new(),
+        };
+        for invalid in [
+            "http://user:secret@example.test/hook",
+            "http://example.test/hook#fragment",
+            "http://example.test:0/hook",
+        ] {
+            let error = super::validate_webhook_url_for_create(invalid, &policy)
+                .expect_err("ambiguous or unsafe webhook URL must be rejected");
+            assert_eq!(error.0, StatusCode::BAD_REQUEST, "URL: {invalid}");
+        }
+    }
+    #[test]
+    fn webhook_url_validation_returns_a_canonical_destination() {
+        let policy = WebhookSecurityPolicy {
+            enabled: false,
+            allow_nets: Vec::new(),
+        };
+        let url = super::validate_webhook_url_for_create(
+            "HTTP://EXAMPLE.TEST:80/hook?kind=event",
+            &policy,
+        )
+        .expect("valid webhook URL");
+        assert_eq!(url.as_str(), "http://example.test/hook?kind=event");
+    }
+    #[cfg(not(feature = "app_api_https"))]
+    #[test]
+    fn webhook_url_validation_rejects_https_when_transport_is_absent() {
+        let policy = WebhookSecurityPolicy {
+            enabled: false,
+            allow_nets: Vec::new(),
+        };
+        super::validate_webhook_url_for_create("https://example.test/hook", &policy)
+            .expect_err("an unavailable HTTPS transport must be rejected at registration");
+    }
+    #[cfg(not(feature = "app_api_wss"))]
+    #[test]
+    fn webhook_url_validation_rejects_websockets_when_transport_is_absent() {
+        let policy = WebhookSecurityPolicy {
+            enabled: false,
+            allow_nets: Vec::new(),
+        };
+        for unavailable in ["ws://example.test/hook", "wss://example.test/hook"] {
+            super::validate_webhook_url_for_create(unavailable, &policy)
+                .expect_err("an unavailable WebSocket transport must be rejected at registration");
+        }
+    }
+    #[test]
     fn webhook_delivery_guard_rejects_private_ip_literal_when_enabled() {
         let policy = WebhookSecurityPolicy {
             enabled: true,
@@ -3824,6 +6129,57 @@ mod tests {
             super::https_delivery_dns_override(&url, &addrs).is_none(),
             "ip-literal URLs should not install a DNS override"
         );
+    }
+    #[cfg(feature = "app_api_https")]
+    #[test]
+    fn https_delivery_client_does_not_follow_redirects() {
+        let runtime = Runtime::new().expect("tokio runtime");
+        runtime.block_on(async {
+            use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+            let redirect_target = tokio::net::TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("bind redirect target");
+            let target_address = redirect_target
+                .local_addr()
+                .expect("redirect target address");
+            let redirect_source = tokio::net::TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("bind redirect source");
+            let source_address = redirect_source
+                .local_addr()
+                .expect("redirect source address");
+            let source_task = tokio::spawn(async move {
+                let (mut socket, _) = redirect_source.accept().await.expect("accept request");
+                let mut request = [0_u8; 2_048];
+                let _ = socket.read(&mut request).await.expect("read request");
+                let response = format!(
+                    "HTTP/1.1 302 Found\r\nLocation: http://{target_address}/private\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                );
+                socket
+                    .write_all(response.as_bytes())
+                    .await
+                    .expect("write redirect");
+            });
+
+            let client = super::webhook_https_client_builder()
+                .build()
+                .expect("build webhook client");
+            let response = client
+                .post(format!("http://{source_address}/hook"))
+                .body("event")
+                .send()
+                .await
+                .expect("receive redirect response");
+            assert_eq!(response.status(), reqwest::StatusCode::FOUND);
+            source_task.await.expect("redirect source task");
+            assert!(
+                tokio::time::timeout(Duration::from_millis(100), redirect_target.accept())
+                    .await
+                    .is_err(),
+                "the unvetted redirect target must not be contacted"
+            );
+        });
     }
     #[cfg(feature = "app_api_wss")]
     #[test]

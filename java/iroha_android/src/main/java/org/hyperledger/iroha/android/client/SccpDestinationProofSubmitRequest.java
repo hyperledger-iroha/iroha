@@ -13,7 +13,7 @@ import org.hyperledger.iroha.android.model.FeePaymentIntent;
  * <p>Detached signed submission is outside this surface; only unsigned preparation is
  * representable.
  */
-public final class SccpDestinationProofSubmitRequest {
+final class SccpDestinationProofSubmitRequest {
   private final String authority;
   private final FeePaymentIntent feePayment;
   private final String destinationProofB64;

@@ -148,29 +148,15 @@ class SccpClientExactTest {
             )
         }
 
-        val submitExecutor = SccpSubmitExecutor(listOf("application/json"))
-        val transport = HttpClientTransport.withExecutor(
-            submitExecutor,
-            ClientConfig.builder()
-                .setBaseUri(URI.create("https://torii.example"))
-                .build(),
-        )
-        transport.submitSccpDestinationProof(proof).join()
-        transport.submitSccpNativeMessage(message).join()
-        assertEquals(
-            listOf(64L * 1024L * 1024L, 64L * 1024L * 1024L),
-            submitExecutor.requests.map { it.maximumResponseBytes },
-        )
-
-        val missingContentType = SccpSubmitExecutor(emptyList())
-        val strictTransport = HttpClientTransport.withExecutor(
-            missingContentType,
-            ClientConfig.builder()
-                .setBaseUri(URI.create("https://torii.example"))
-                .build(),
-        )
-        assertFailsWith<CompletionException> {
-            strictTransport.submitSccpDestinationProof(proof).join()
+        for (removedWrite in listOf("submitSccpDestinationProof", "submitSccpNativeMessage")) {
+            assertFalse(
+                IrohaClient::class.java.methods.any { it.name == removedWrite },
+                "$removedWrite must not expose an unbound prepared-transaction signing surface",
+            )
+            assertFalse(
+                HttpClientTransport::class.java.methods.any { it.name == removedWrite },
+                "$removedWrite must not dispatch an SCCP write before exact local proof binding exists",
+            )
         }
     }
 
@@ -179,7 +165,7 @@ class SccpClientExactTest {
         for (schemaName in SCCP_PROOF_REQUEST_SCHEMA_NAMES) {
             val frame = canonicalArtifactBytes(schemaName)
             val executor = SccpNoritoExecutor(frame)
-            val transport = HttpClientTransport.withExecutor(
+            val transport = HttpClientTransport(
                 executor,
                 ClientConfig.builder()
                     .setBaseUri(URI.create("https://torii.example"))
@@ -191,7 +177,7 @@ class SccpClientExactTest {
         }
 
         val unknown = SccpNoritoExecutor(canonicalArtifactBytes("example::UnknownProofRequestV1"))
-        val transport = HttpClientTransport.withExecutor(
+        val transport = HttpClientTransport(
             unknown,
             ClientConfig.builder()
                 .setBaseUri(URI.create("https://torii.example"))
@@ -352,6 +338,51 @@ class SccpClientExactTest {
             )
         }
 
+    }
+
+    @Test
+    fun submitPreflightRejectsEveryDetachedSigningCombination() {
+        val codec = NoritoJavaCodecAdapter(SccpV1.TAIRA_I105_DISCRIMINANT_V1)
+        fun transactionBytes(signer: String): String = Base64.getEncoder().encodeToString(
+            codec.encodeTransaction(
+                TransactionPayload(
+                    networkId = TAIRA_NETWORK_ID,
+                    authority = signer,
+                    creationTimeMs = 7,
+                    executable = Executable.instructions(emptyList()),
+                    feePayment = bridgeFeePayment,
+                    admissionIntent = TransactionAdmissionIntent.QUEUE_PLAN_SYNCED,
+                ),
+            ),
+        )
+        val signature = Base64.getEncoder().encodeToString(ByteArray(64) { 1 })
+        val transaction = transactionBytes(authority)
+        val otherAuthority = AccountAddress
+            .fromAccount(TestEd25519Keys.publicKey(0x12), "ed25519")
+            .toI105(SccpV1.TAIRA_I105_DISCRIMINANT_V1)
+        val cases = listOf(
+            Triple(null, null, 0L),
+            Triple("AQ==", null, null),
+            Triple(signature, null, 7L),
+            Triple(null, transaction, 7L),
+            Triple(signature, transaction, null),
+            Triple(signature, transaction, 8L),
+            Triple(signature, transactionBytes(otherAuthority), 7L),
+            Triple(Base64.getEncoder().encodeToString(ByteArray(64)), transaction, 7L),
+            Triple(signature, transaction, 7L),
+        )
+        for ((signatureValue, transactionValue, creationTimeMs) in cases) {
+            val body = destinationRequest(authority, canonicalArtifact()).toJsonMap().toMutableMap()
+            signatureValue?.let { body["signature_b64"] = it }
+            transactionValue?.let { body["transaction_payload_b64"] = it }
+            creationTimeMs?.let { body["creation_time_ms"] = it }
+            assertFailsWith<IllegalArgumentException> {
+                HttpClientTransport.preflightSccpBridgeSubmitJson(
+                    jsonBytes(body),
+                    "/v1/bridge/proofs/submit",
+                )
+            }
+        }
     }
 
     @Test
@@ -2571,21 +2602,6 @@ class SccpClientExactTest {
     private fun jsonBytes(value: Any?): ByteArray =
         JsonEncoder.encode(value).toByteArray(Charsets.UTF_8)
 
-    private class SccpSubmitExecutor(
-        private val contentTypes: List<String>,
-    ) : HttpTransportExecutor {
-        val requests = mutableListOf<TransportRequest>()
-
-        override fun execute(request: TransportRequest): CompletableFuture<TransportResponse> {
-            requests += request
-            val builder = TransportResponse.builder()
-                .setStatusCode(200)
-                .setBody("{}".toByteArray(Charsets.UTF_8))
-            contentTypes.forEach { builder.addHeader("Content-Type", it) }
-            return CompletableFuture.completedFuture(builder.build())
-        }
-    }
-
     private class SccpNoritoExecutor(
         private val body: ByteArray,
     ) : HttpTransportExecutor {
@@ -2783,9 +2799,9 @@ class SccpClientExactTest {
         )
         // These authenticate this fixture's semantic commitments and deployment code hashes.
         const val DEFAULT_ROUTE_CONFIG_HASH =
-            "FDCE93E148D8A9BD3BE2E7051AF681A757CA273F409073F9402F5534D32C399B"
+            "C4A175427B008B94CC6E4F1276159F1D4B8ED189C3FC44FE82C2D61796C4087B"
         const val TRON_ROUTE_CONFIG_HASH =
-            "09091FF86A7F8E94B2EE53A398EF9CAC12346522457C3B466F3CA4ED4EF2DB70"
+            "3BE243342816715682C310E991E134099A1F7EE46B08ABE095FF130B0DD5CA2E"
         val BLS12381_SCALAR_MODULUS = BigInteger(
             "73eda753299d7d483339d80809a1d80553bda402fffe5bfeffffffff00000001",
             16,

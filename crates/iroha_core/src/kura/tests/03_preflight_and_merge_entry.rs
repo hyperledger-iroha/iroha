@@ -385,7 +385,11 @@ fn unknown_hash_has_no_body_status_or_durable_payload_len() {
     assert_eq!(kura.get_block_height_by_hash(unknown_hash), None);
     assert_eq!(kura.block_body_status_by_hash(unknown_hash), None);
     assert!(!kura.block_payload_available_by_hash(unknown_hash));
-    assert_eq!(kura.durable_block_payload_len_by_hash(unknown_hash), None);
+    assert_eq!(
+        kura.durable_block_payload_len_by_hash(unknown_hash)
+            .expect("unknown hash lookup"),
+        None
+    );
 }
 fn store_dummy_block_arcs(kura: &Kura, count: usize) -> Vec<Arc<SignedBlock>> {
     let mut generator = DummyBlocks::new();
@@ -452,6 +456,17 @@ fn advertise_required_replicas(kura: &Kura, height: NonZeroUsize) -> (HashOf<Blo
     metadata
 }
 fn sample_merge_entry(epoch: u64) -> MergeLedgerEntry {
+    let mut lane_validators = (0..4)
+        .map(|seed| {
+            PeerId::new(
+                iroha_crypto::KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                    .expect("deterministic merge fixture lane validator")
+                    .public_key()
+                    .clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    lane_validators.sort();
     let epoch_u8 = u8::try_from(epoch).expect("test epoch must fit in a u8");
     let epoch_plus_one = epoch_u8
         .checked_add(1)
@@ -519,6 +534,11 @@ fn sample_merge_entry(epoch: u64) -> MergeLedgerEntry {
             incarnation: Hash::new(b"kura-merge-test-lane-incarnation"),
             activation_height: 1,
         }],
+        lane_authority_catalog:
+            iroha_data_model::merge::MergeLaneAuthorityCatalogV1::from_lane_committees(&[
+                lane_validators,
+            ])
+            .expect("canonical Kura fixture lane authority"),
         incarnation_root: Hash::new(b"kura-merge-test-incarnation-root"),
         activation_root: Hash::new(b"kura-merge-test-activation-root"),
         lane_snapshots,
@@ -830,7 +850,7 @@ fn pending_certified_merge_work_binds_routing_legs_to_exact_active_incarnation()
             crate::queue::RouteLegRole::Participant,
         )],
     );
-    let entrypoint = offline_top_up_entrypoint_for_index([0x71; 32], [0x72; 32]);
+    let entrypoint = indexed_log_entrypoint([0x71; 32], [0x72; 32]);
     let mut retired_entry = merge_entry_with_indexed_entrypoint(entrypoint);
     let execution = retired_entry
         .execution_batch
@@ -1406,6 +1426,35 @@ fn pending_queue_plan_admission_store_rejects_empty_and_oversized_bytes() {
     assert!(
         !kura.pending_queue_plan_admission_dir().exists(),
         "rejected bytes must not create the admission store"
+    );
+}
+#[test]
+fn pending_queue_plan_admission_exact_height_rejects_frontier_drift_before_write() {
+    let kura = Kura::blank_kura_for_testing();
+    let bytes = b"queue-plan-admission-v1:exact-height".to_vec();
+    assert!(
+        kura.persist_pending_queue_plan_admission_certificate_at_exact_durable_height(1, &bytes)
+            .is_err(),
+        "a caller snapshot ahead of durable Kura must fail closed"
+    );
+    assert!(
+        !kura.pending_queue_plan_admission_dir().exists(),
+        "height mismatch must not create a sidecar directory or certificate"
+    );
+    let hash = kura
+        .persist_pending_queue_plan_admission_certificate_at_exact_durable_height(0, &bytes)
+        .expect("the exact empty-chain frontier permits durable publication");
+    kura.verify_pending_queue_plan_admission_durable_height(0)
+        .expect("an idempotent retry observes the exact durable frontier without rescanning");
+    assert!(
+        kura.verify_pending_queue_plan_admission_durable_height(1)
+            .is_err(),
+        "the retry-only height check must reject frontier drift"
+    );
+    assert_eq!(
+        kura.pending_queue_plan_admission_certificate(hash)
+            .expect("read exact-height sidecar"),
+        Some(bytes)
     );
 }
 #[test]
@@ -2504,7 +2553,7 @@ fn bodyless_finalized_execution_carrier_rebuilds_merge_entrypoint_index() {
     let (kura, _) =
         Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
             .expect("initialize Kura");
-    let entrypoint = offline_top_up_entrypoint_for_index([0x71; 32], [0x72; 32]);
+    let entrypoint = indexed_log_entrypoint([0x71; 32], [0x72; 32]);
     let entrypoint_hash = entrypoint.hash();
     let mut entry = merge_entry_with_indexed_entrypoint(entrypoint);
     let genesis: SignedBlock = BlockBuilder::new(Vec::<AcceptedTransaction<'static>>::new())

@@ -13,6 +13,8 @@ use thiserror::Error;
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::account::recovery::RecoveryGuardian")]
 pub struct RecoveryGuardian {
     /// Guardian account allowed to approve recovery.
     pub account: AccountId,
@@ -33,6 +35,8 @@ impl RecoveryGuardian {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::account::recovery::AccountRecoveryPolicy")]
 pub struct AccountRecoveryPolicy {
     /// Guardian set authorised to approve recovery.
     pub guardians: Vec<RecoveryGuardian>,
@@ -141,6 +145,8 @@ impl AccountRecoveryPolicy {
     feature = "json",
     norito(tag = "status", content = "value", rename_all = "snake_case")
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::account::recovery::AccountRecoveryStatus")]
 pub enum AccountRecoveryStatus {
     /// Recovery request is active and can still be approved, cancelled, or finalized.
     Pending,
@@ -156,6 +162,8 @@ pub enum AccountRecoveryStatus {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::account::recovery::AccountRecoveryRequest")]
 pub struct AccountRecoveryRequest {
     /// Stable alias targeted by the recovery request.
     pub alias: AccountAlias,
@@ -353,3 +361,6 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod captured_recovery_schema_tests;

@@ -92,10 +92,13 @@ def test_sccp_bls_verification_is_mandatory_in_every_crate_build() -> None:
     crypto_manifest = (ROOT / "crates" / "iroha_crypto" / "Cargo.toml").read_text(
         encoding="utf-8"
     )
-    assert re.search(
-        r'(?m)^node-crypto\s*=\s*\["application",\s*"consensus"\]$',
+    node_crypto = re.search(
+        r"(?m)^node-crypto\s*=\s*\[([^\n]*)\]$",
         crypto_manifest,
     )
+    assert node_crypto is not None
+    assert '"application"' in node_crypto.group(1)
+    assert '"consensus"' in node_crypto.group(1)
     assert re.search(r'(?m)^consensus\s*=\s*\[[^\n]*"bls"[^\n]*\]$', crypto_manifest)
 
     for relative in (

@@ -113,6 +113,7 @@ pub(crate) const TAIKAI_ANCHOR_REQUEST_MAX_BYTES: usize = 16 * 1024 * 1024;
 #[allow(clippy::redundant_pub_crate)]
 pub(crate) mod taikai_ingest {
     use super::*;
+    use crate::secure_file_metadata::{self, SecureMetadata};
     use sorafs_car::{CarBuildPlan, CarWriter};
     use std::{
         cmp::Reverse,
@@ -680,7 +681,7 @@ pub(crate) mod taikai_ingest {
             let path = base_dir.join(format!(
                 "{TAIKAI_TRM_LOCK_PREFIX}{slug}{TAIKAI_TRM_LOCK_SUFFIX}"
             ));
-            let before = match fs::symlink_metadata(&path) {
+            let before = match secure_file_metadata::from_path(&path) {
                 Ok(metadata) => Some(metadata),
                 Err(err) if err.kind() == ErrorKind::NotFound => None,
                 Err(err) => {
@@ -690,44 +691,53 @@ pub(crate) mod taikai_ingest {
                     )));
                 }
             };
-            if before.as_ref().is_some_and(|metadata| !metadata.is_file()) {
+            if before.as_ref().is_some_and(|metadata| {
+                !secure_file_metadata::is_direct_file(metadata)
+                    || secure_file_metadata::number_of_links(metadata) != Some(1)
+                    || metadata.len() != 0
+            }) {
                 return Err(internal_error(format!(
-                    "Taikai routing manifest lock is not a regular file: {}",
+                    "Taikai routing manifest lock is not an empty single-link regular file: {}",
                     path.display()
                 )));
             }
             let mut options = OpenOptions::new();
             options.read(true).write(true).create(true);
             set_taikai_no_follow_open_options(&mut options);
+            set_taikai_lock_share_mode(&mut options);
             #[cfg(unix)]
             {
                 use std::os::unix::fs::OpenOptionsExt as _;
                 options.mode(0o600);
             }
-            let mut file = options.open(&path).map_err(|err| {
+            let file = options.open(&path).map_err(|err| {
                 internal_error(format!(
                     "failed to open Taikai routing manifest lock `{}`: {err}",
                     path.display()
                 ))
             })?;
-            let opened = file.metadata().map_err(|err| {
+            let opened = secure_file_metadata::from_file(&file).map_err(|err| {
                 internal_error(format!(
                     "failed to inspect open Taikai routing manifest lock `{}`: {err}",
                     path.display()
                 ))
             })?;
-            let linked = fs::symlink_metadata(&path).map_err(|err| {
+            let linked = secure_file_metadata::from_path(&path).map_err(|err| {
                 internal_error(format!(
                     "failed to re-inspect Taikai routing manifest lock `{}`: {err}",
                     path.display()
                 ))
             })?;
-            if !opened.is_file()
-                || !linked.is_file()
+            if !secure_file_metadata::is_direct_file(&opened)
+                || !secure_file_metadata::is_direct_file(&linked)
+                || secure_file_metadata::number_of_links(&opened) != Some(1)
+                || secure_file_metadata::number_of_links(&linked) != Some(1)
+                || opened.len() != 0
+                || linked.len() != 0
                 || before
                     .as_ref()
-                    .is_some_and(|metadata| !taikai_metadata_same_identity(metadata, &opened))
-                || !taikai_metadata_same_identity(&opened, &linked)
+                    .is_some_and(|metadata| !secure_file_metadata::same_file(metadata, &opened))
+                || !secure_file_metadata::same_file(&opened, &linked)
             {
                 return Err(internal_error(format!(
                     "Taikai routing manifest lock changed identity while opening: {}",
@@ -749,30 +759,22 @@ pub(crate) mod taikai_ingest {
                     )));
                 }
             }
-            let locked_link = fs::symlink_metadata(&path).map_err(|err| {
+            let locked_link = secure_file_metadata::from_path(&path).map_err(|err| {
                 internal_error(format!(
                     "failed to inspect locked Taikai routing manifest lock `{}`: {err}",
                     path.display()
                 ))
             })?;
-            if !taikai_metadata_same_identity(&opened, &locked_link) {
+            if !secure_file_metadata::is_direct_file(&locked_link)
+                || secure_file_metadata::number_of_links(&locked_link) != Some(1)
+                || locked_link.len() != 0
+                || !secure_file_metadata::same_file(&opened, &locked_link)
+            {
                 return Err(internal_error(format!(
                     "Taikai routing manifest lock changed identity while acquiring ownership: {}",
                     path.display()
                 )));
             }
-            file.set_len(0).map_err(|err| {
-                internal_error(format!(
-                    "failed to reset Taikai routing manifest lock `{}`: {err}",
-                    path.display()
-                ))
-            })?;
-            writeln!(file, "{}", current_unix_seconds()).map_err(|err| {
-                internal_error(format!(
-                    "failed to write Taikai routing manifest lock `{}`: {err}",
-                    path.display()
-                ))
-            })?;
             file.sync_all().map_err(|err| {
                 internal_error(format!(
                     "failed to sync Taikai routing manifest lock `{}`: {err}",
@@ -846,7 +848,7 @@ pub(crate) mod taikai_ingest {
         label: &str,
         maximum: usize,
     ) -> io::Result<Vec<u8>> {
-        let before = fs::symlink_metadata(path)?;
+        let before = secure_file_metadata::from_path(path)?;
         validate_regular_taikai_metadata(path, label, &before)?;
         let maximum_u64 = u64::try_from(maximum).unwrap_or(u64::MAX);
         if before.len() > maximum_u64 {
@@ -859,16 +861,21 @@ pub(crate) mod taikai_ingest {
                 ),
             ));
         }
-        let mut options = OpenOptions::new();
-        options.read(true);
-        set_taikai_no_follow_open_options(&mut options);
-        let mut file = options.open(path)?;
-        let opened = file.metadata()?;
+        #[cfg(windows)]
+        let mut file = secure_file_metadata::open_direct_file(path)?;
+        #[cfg(not(windows))]
+        let mut file = {
+            let mut options = OpenOptions::new();
+            options.read(true);
+            set_taikai_no_follow_open_options(&mut options);
+            options.open(path)?
+        };
+        let opened = secure_file_metadata::from_file(&file)?;
         validate_regular_taikai_metadata(path, label, &opened)?;
-        let linked = fs::symlink_metadata(path)?;
+        let linked = secure_file_metadata::from_path(path)?;
         validate_regular_taikai_metadata(path, label, &linked)?;
-        if !taikai_metadata_same_identity(&before, &opened)
-            || !taikai_metadata_same_identity(&opened, &linked)
+        if !secure_file_metadata::same_file(&before, &opened)
+            || !secure_file_metadata::same_file(&opened, &linked)
         {
             return Err(io::Error::new(
                 ErrorKind::InvalidData,
@@ -887,9 +894,9 @@ pub(crate) mod taikai_ingest {
     fn validate_regular_taikai_metadata(
         path: &Path,
         label: &str,
-        metadata: &fs::Metadata,
+        metadata: &SecureMetadata,
     ) -> io::Result<()> {
-        if !metadata.file_type().is_file() {
+        if !secure_file_metadata::is_direct_file(metadata) {
             return Err(io::Error::new(
                 ErrorKind::InvalidData,
                 format!("{label} is not a regular file: {}", path.display()),
@@ -900,18 +907,16 @@ pub(crate) mod taikai_ingest {
     fn revalidate_regular_taikai_read(
         path: &Path,
         file: &fs::File,
-        original: &fs::Metadata,
+        original: &SecureMetadata,
         bytes_len: usize,
         label: &str,
     ) -> io::Result<()> {
-        let opened_after = file.metadata()?;
-        let linked_after = fs::symlink_metadata(path)?;
+        let opened_after = secure_file_metadata::from_file(file)?;
+        let linked_after = secure_file_metadata::from_path(path)?;
         validate_regular_taikai_metadata(path, label, &opened_after)?;
         validate_regular_taikai_metadata(path, label, &linked_after)?;
-        if !taikai_metadata_same_identity(original, &opened_after)
-            || !taikai_metadata_same_identity(&opened_after, &linked_after)
-            || opened_after.len() != original.len()
-            || linked_after.len() != original.len()
+        if !secure_file_metadata::unchanged(original, &opened_after)
+            || !secure_file_metadata::unchanged(&opened_after, &linked_after)
             || u64::try_from(bytes_len).ok() != Some(original.len())
         {
             return Err(io::Error::new(
@@ -934,23 +939,14 @@ pub(crate) mod taikai_ingest {
     }
     #[cfg(not(any(unix, windows)))]
     fn set_taikai_no_follow_open_options(_options: &mut OpenOptions) {}
-    #[cfg(unix)]
-    fn taikai_metadata_same_identity(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-        use std::os::unix::fs::MetadataExt as _;
-        left.dev() == right.dev() && left.ino() == right.ino()
-    }
     #[cfg(windows)]
-    fn taikai_metadata_same_identity(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-        use std::os::windows::fs::MetadataExt as _;
-        left.volume_serial_number().is_some()
-            && left.file_index().is_some()
-            && left.volume_serial_number() == right.volume_serial_number()
-            && left.file_index() == right.file_index()
+    fn set_taikai_lock_share_mode(options: &mut OpenOptions) {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        const FILE_SHARE_READ_WRITE: u32 = 0x0000_0001 | 0x0000_0002;
+        options.share_mode(FILE_SHARE_READ_WRITE);
     }
-    #[cfg(not(any(unix, windows)))]
-    fn taikai_metadata_same_identity(_left: &fs::Metadata, _right: &fs::Metadata) -> bool {
-        false
-    }
+    #[cfg(not(windows))]
+    fn set_taikai_lock_share_mode(_options: &mut OpenOptions) {}
     fn create_taikai_spool_dir_no_follow(base_dir: &Path) -> io::Result<()> {
         fs::create_dir_all(base_dir)?;
         validate_taikai_spool_dir_no_follow(base_dir)
@@ -963,11 +959,19 @@ pub(crate) mod taikai_ingest {
         base_dir: &Path,
         metadata: &fs::Metadata,
     ) -> io::Result<()> {
-        if !metadata.file_type().is_dir() {
+        let is_direct_directory =
+            !metadata.file_type().is_symlink() && metadata.file_type().is_dir();
+        #[cfg(windows)]
+        let is_direct_directory = {
+            use std::os::windows::fs::MetadataExt as _;
+            const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
+            is_direct_directory && metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT == 0
+        };
+        if !is_direct_directory {
             return Err(io::Error::new(
                 ErrorKind::InvalidData,
                 format!(
-                    "Taikai spool directory `{}` is not a directory",
+                    "Taikai spool directory `{}` is not a direct directory",
                     base_dir.display()
                 ),
             ));
@@ -1872,7 +1876,8 @@ pub(crate) mod taikai_ingest {
             let path = dir.path().join("taikai-artifact.norito");
             fs::write(&path, b"old-artifact").expect("seed artifact");
             let file = fs::File::open(&path).expect("open original artifact");
-            let original = file.metadata().expect("inspect original artifact");
+            let original =
+                secure_file_metadata::from_file(&file).expect("inspect original artifact");
             fs::write(&path, b"replacement-artifact").expect("replace artifact");
             let err = revalidate_regular_taikai_read(
                 &path,
@@ -1896,12 +1901,13 @@ pub(crate) mod taikai_ingest {
             let path = dir.path().join("taikai-artifact.norito");
             fs::write(&path, b"old-artifact").expect("seed artifact");
             let file = fs::File::open(&path).expect("open original artifact");
-            let original = file.metadata().expect("inspect original artifact");
+            let original =
+                secure_file_metadata::from_file(&file).expect("inspect original artifact");
             let target = dir.path().join("artifact-target.norito");
             fs::write(&target, b"old-artifact").expect("write symlink target");
             fs::remove_file(&path).expect("remove original artifact");
             symlink(&target, &path).expect("replace artifact with symlink");
-            let err = revalidate_regular_taikai_read(
+            revalidate_regular_taikai_read(
                 &path,
                 &file,
                 &original,
@@ -1909,11 +1915,6 @@ pub(crate) mod taikai_ingest {
                 "Taikai artifact test",
             )
             .expect_err("symlink replacement must reject");
-            assert_eq!(err.kind(), ErrorKind::InvalidData);
-            assert!(
-                err.to_string().contains("not a regular file"),
-                "unexpected error: {err}"
-            );
             assert!(
                 fs::symlink_metadata(&path)
                     .expect("inspect symlink")
@@ -2108,13 +2109,12 @@ pub(crate) mod taikai_ingest {
             "{TAIKAI_ANCHOR_SENTINEL_PREFIX}{base_id}{TAIKAI_ANCHOR_SENTINEL_SUFFIX}"
         ));
         match fs::symlink_metadata(&sentinel_path) {
-            Ok(metadata) if metadata.file_type().is_file() => {
-                // A durable acknowledgement wins over a replayed ingest. This
-                // closes the race between source retirement and later spool
-                // writes while the acknowledgement is inside the retention
-                // window.
-                return Ok(None);
-            }
+            // Only the anchor worker has the governed public key required to
+            // authenticate this receipt. A regular file here is therefore
+            // not sufficient evidence that the ingest was acknowledged: keep
+            // materializing the replay so the worker can either verify and
+            // retire it or quarantine the invalid receipt and upload it.
+            Ok(metadata) if metadata.file_type().is_file() => {}
             Ok(_) => {
                 return Err(io::Error::new(
                     ErrorKind::InvalidData,
@@ -2363,33 +2363,29 @@ pub(crate) mod taikai_ingest {
         }
         encoded
     }
-    pub fn spawn_anchor_worker(
+    /// Validate and start the configured Taikai anchor worker.
+    pub(crate) async fn spawn_anchor_worker(
         manifest_store_dir: PathBuf,
         anchor_cfg: DaTaikaiAnchor,
         shutdown: ShutdownSignal,
-    ) {
+    ) -> Result<tokio::task::JoinHandle<crate::ToriiCriticalWorkerExit>, String> {
         if anchor_cfg.poll_interval.is_zero() {
-            iroha_logger::warn!("Taikai anchor poll interval is zero; using 1 second");
+            return Err("Taikai anchor poll interval must be greater than zero".to_owned());
         }
-        let poll_interval = if anchor_cfg.poll_interval.is_zero() {
-            Duration::from_secs(1)
-        } else {
-            anchor_cfg.poll_interval
-        };
+        let poll_interval = anchor_cfg.poll_interval;
         let spool_dir = manifest_store_dir.join(TAIKAI_SPOOL_SUBDIR);
-        let sender = match HttpAnchorSender::new(anchor_cfg.request_timeout) {
-            Ok(sender) => sender,
-            Err(err) => {
-                iroha_logger::error!(?err, "failed to initialise Taikai anchor HTTP client");
-                return;
-            }
-        };
-        tokio::spawn(async move {
-            if let Err(err) = create_taikai_spool_dir_no_follow_async(&spool_dir).await {
-                iroha_logger::warn!(?err, ?spool_dir, "failed to prepare Taikai spool directory");
-            }
+        let sender = HttpAnchorSender::new(anchor_cfg.request_timeout)
+            .map_err(|err| format!("failed to initialise Taikai anchor HTTP client: {err}"))?;
+        create_taikai_spool_dir_no_follow_async(&spool_dir).await?;
+        let worker_shutdown = shutdown.clone();
+        Ok(tokio::spawn(async move {
             run_anchor_worker(spool_dir, anchor_cfg, sender, shutdown, poll_interval).await;
-        });
+            if worker_shutdown.is_sent() {
+                crate::ToriiCriticalWorkerExit::StoppedByShutdown
+            } else {
+                crate::ToriiCriticalWorkerExit::UnexpectedExit
+            }
+        }))
     }
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
     use tokio::{
@@ -3485,9 +3481,11 @@ pub(crate) mod taikai_ingest {
         let owned_path = path.to_path_buf();
         let owned_label = label.to_owned();
         let display_path = owned_path.clone();
-        let result = tokio::task::spawn_blocking(move || {
-            read_regular_taikai_file_bounded(&owned_path, &owned_label, maximum)
-        })
+        let result = crate::panic_recovery::join_recoverable(
+            crate::panic_recovery::spawn_blocking_recoverable(move || {
+                read_regular_taikai_file_bounded(&owned_path, &owned_label, maximum)
+            }),
+        )
         .await
         .map_err(|err| {
             format!(
@@ -3550,12 +3548,66 @@ pub(crate) mod taikai_ingest {
     #[cfg(test)]
     mod tests {
         use super::*;
+        fn anchor_worker_config(poll_interval: Duration) -> DaTaikaiAnchor {
+            DaTaikaiAnchor {
+                endpoint: reqwest::Url::parse("https://anchor.example")
+                    .expect("valid anchor endpoint"),
+                api_token: None,
+                receipt_public_key: test_anchor_receipt_public_key(),
+                poll_interval,
+                request_timeout: Duration::from_secs(1),
+            }
+        }
         fn anchor_test_base_id(sequence: usize) -> String {
             format!(
                 "00000001-0000000000000002-{sequence:016x}-\
                  aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-\
                  bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
             )
+        }
+        #[tokio::test]
+        async fn anchor_worker_startup_is_fallible_and_shutdown_owned() {
+            let directory = tempfile::tempdir().expect("tempdir");
+            let shutdown = ShutdownSignal::new();
+            let zero_interval = spawn_anchor_worker(
+                directory.path().to_path_buf(),
+                anchor_worker_config(Duration::ZERO),
+                shutdown.clone(),
+            )
+            .await
+            .err()
+            .expect("zero interval must fail startup");
+            assert!(zero_interval.contains("greater than zero"));
+
+            fs::write(
+                directory.path().join(TAIKAI_SPOOL_SUBDIR),
+                b"not a directory",
+            )
+            .expect("block spool directory");
+            let invalid_store = spawn_anchor_worker(
+                directory.path().to_path_buf(),
+                anchor_worker_config(Duration::from_secs(1)),
+                shutdown,
+            )
+            .await
+            .err()
+            .expect("unsafe spool path must fail startup");
+            assert!(invalid_store.contains("Taikai spool directory"));
+
+            let directory = tempfile::tempdir().expect("valid worker tempdir");
+            let shutdown = ShutdownSignal::new();
+            let worker = spawn_anchor_worker(
+                directory.path().to_path_buf(),
+                anchor_worker_config(Duration::from_secs(1)),
+                shutdown.clone(),
+            )
+            .await
+            .expect("valid worker starts");
+            shutdown.send();
+            assert_eq!(
+                worker.await.expect("worker joins"),
+                crate::ToriiCriticalWorkerExit::StoppedByShutdown
+            );
         }
         #[test]
         fn taikai_artifact_size_accepts_boundary_and_rejects_overflow() {
@@ -3586,6 +3638,41 @@ pub(crate) mod taikai_ingest {
             assert!(
                 !dir.path().join(TAIKAI_SPOOL_SUBDIR).exists(),
                 "oversized append must not create the spool directory"
+            );
+        }
+        #[test]
+        fn unverified_anchor_sentinel_does_not_suppress_replayed_artifact() {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let storage_ticket = StorageTicketId::new([0xAA; 32]);
+            let fingerprint = ReplayFingerprint::from_hash(blake3_hash(b"replayed-envelope"));
+            let base_id =
+                taikai_artifact_base_id(LaneId::new(1), 2, 3, &storage_ticket, &fingerprint);
+            let spool_dir = dir.path().join(TAIKAI_SPOOL_SUBDIR);
+            fs::create_dir(&spool_dir).expect("create spool directory");
+            fs::write(
+                spool_dir.join(format!(
+                    "{TAIKAI_ANCHOR_SENTINEL_PREFIX}{base_id}{TAIKAI_ANCHOR_SENTINEL_SUFFIX}"
+                )),
+                b"unverified receipt",
+            )
+            .expect("write unverified receipt");
+
+            let persisted = persist_envelope(
+                dir.path(),
+                LaneId::new(1),
+                2,
+                3,
+                &storage_ticket,
+                &fingerprint,
+                b"envelope",
+            )
+            .expect("replay must remain materialized for receipt verification");
+
+            assert!(persisted.is_some());
+            assert_eq!(
+                fs::read(spool_dir.join(format!("taikai-envelope-{base_id}.norito")))
+                    .expect("read replayed envelope"),
+                b"envelope"
             );
         }
         #[tokio::test]
@@ -3792,7 +3879,7 @@ pub(crate) mod taikai_ingest {
         }
     }
 }
-pub use taikai_ingest::spawn_anchor_worker;
+pub(crate) use taikai_ingest::spawn_anchor_worker;
 /// Extract the Taikai stream label from metadata for telemetry tagging.
 pub(crate) fn stream_label_from_metadata(metadata: &ExtraMetadata) -> Option<String> {
     metadata

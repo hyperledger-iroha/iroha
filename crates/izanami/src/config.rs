@@ -1129,13 +1129,6 @@ fn write_sumeragi_v2_layer(layer: &mut Table, sumeragi: &ActualSumeragi) {
         .iter()
         .map(|algorithm| Value::String(algorithm.to_string()))
         .collect();
-    let allowed_hsm_providers = sumeragi
-        .keys
-        .allowed_hsm_providers
-        .iter()
-        .cloned()
-        .map(Value::String)
-        .collect();
     TomlWriter::new(layer)
         .write(["sumeragi", "role"], role)
         .write(
@@ -1179,16 +1172,8 @@ fn write_sumeragi_v2_layer(layer: &mut Table, sumeragi: &ActualSumeragi) {
             i64::try_from(sumeragi.keys.expiry_grace_blocks).expect("key limit fits i64"),
         )
         .write(
-            ["sumeragi", "keys", "require_hsm"],
-            sumeragi.keys.require_hsm,
-        )
-        .write(
             ["sumeragi", "keys", "allowed_algorithms"],
             Value::Array(allowed_algorithms),
-        )
-        .write(
-            ["sumeragi", "keys", "allowed_hsm_providers"],
-            Value::Array(allowed_hsm_providers),
         );
 }
 fn dataspace_alias_map(

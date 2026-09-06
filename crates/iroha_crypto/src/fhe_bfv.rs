@@ -1740,6 +1740,8 @@ pub const RAM_LFE_BFV_MAX_FULL_BOOTSTRAPS_PER_JOB_V1: u8 = 1;
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::fhe_bfv::RamLfeBfvProfileV1")]
 pub struct RamLfeBfvProfileV1 {
     /// Exact sole profile identifier.
     pub profile_id: String,
@@ -1809,6 +1811,8 @@ pub fn validate_ram_lfe_bfv_profile_v1(profile: &RamLfeBfvProfileV1) -> Result<(
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[norito(tag = "reason", content = "details", rename_all = "snake_case")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::fhe_bfv::BfvProductionQualificationBlockerV1")]
 pub enum BfvProductionQualificationBlockerV1 {
     /// Deterministic parameter search, HE.org Category-128Q cap validation, pinned lattice
     /// estimates, exact circuit-derived noise analysis, and the aggregate-qROM query-count
@@ -2023,7 +2027,8 @@ pub enum BfvConvolutionBackend {
 }
 /// BFV parameter set.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::fhe_bfv::BfvParameters")]
 pub struct BfvParameters {
     /// Ring degree `n` for `Z_q[x] / (x^n + 1)`. Must be a power of two.
     pub polynomial_degree: u16,
@@ -2137,7 +2142,8 @@ impl BfvParameters {
 }
 /// BFV RNS coefficient-modulus chain.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::fhe_bfv::BfvRnsModulusChain")]
 pub struct BfvRnsModulusChain {
     /// Ordered RNS coefficient-modulus limbs.
     pub moduli: Vec<u64>,
@@ -2935,14 +2941,16 @@ impl BfvRnsModulusChain {
 }
 /// BFV polynomial represented as limb-major RNS residues.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::fhe_bfv::BfvRnsPolynomial")]
 pub struct BfvRnsPolynomial {
     /// Residues grouped by modulus-chain limb, then polynomial coefficient.
     pub residues_by_limb: Vec<Vec<u64>>,
 }
 /// BFV secret key.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::fhe_bfv::BfvSecretKey")]
 pub struct BfvSecretKey {
     /// Ternary secret polynomial in `R_q`.
     pub s: Vec<u64>,
@@ -2951,6 +2959,8 @@ pub struct BfvSecretKey {
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::fhe_bfv::BfvPublicKey")]
 pub struct BfvPublicKey {
     /// First public-key component.
     pub b: Vec<u64>,
@@ -2961,6 +2971,8 @@ pub struct BfvPublicKey {
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::fhe_bfv::BfvRelinearizationKeyEntry")]
 pub struct BfvRelinearizationKeyEntry {
     /// First evaluation-key component.
     pub b: Vec<u64>,
@@ -2971,6 +2983,8 @@ pub struct BfvRelinearizationKeyEntry {
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::fhe_bfv::BfvRelinearizationKey")]
 pub struct BfvRelinearizationKey {
     /// Decomposition entries, ordered from least- to most-significant digit.
     pub entries: Vec<BfvRelinearizationKeyEntry>,
@@ -2979,6 +2993,8 @@ pub struct BfvRelinearizationKey {
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::fhe_bfv::BfvGaloisKey")]
 pub struct BfvGaloisKey {
     /// Canonical odd automorphism power `k` for `x -> x^k`.
     pub automorphism_power: u32,
@@ -2989,6 +3005,8 @@ pub struct BfvGaloisKey {
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::fhe_bfv::BfvRotationKey")]
 pub struct BfvRotationKey {
     /// Positive left-rotation step supported by this key.
     pub rotation_steps: u32,
@@ -3005,6 +3023,8 @@ pub struct BfvRotationKey {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[norito(tag = "mode", content = "value", rename_all = "snake_case")]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::fhe_bfv::BfvBootstrapKeyMode")]
 pub enum BfvBootstrapKeyMode {
     /// First-release public encrypted-zero refresh masks.
     #[default]
@@ -3020,6 +3040,8 @@ pub enum BfvBootstrapKeyMode {
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::fhe_bfv::BfvFullBootstrapCircuitMaterialV1")]
 pub struct BfvFullBootstrapCircuitMaterialV1 {
     /// Canonical full-bootstrap circuit id.
     pub circuit_id: String,
@@ -3063,6 +3085,8 @@ pub struct BfvFullBootstrapCircuitMaterialV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[norito(tag = "role", content = "value", rename_all = "snake_case")]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::fhe_bfv::BfvFullBootstrapCircuitArtifactRoleV1")]
 pub enum BfvFullBootstrapCircuitArtifactRoleV1 {
     /// Coefficient-to-slot linear transform material.
     CoefficientToSlotKey,
@@ -3104,7 +3128,8 @@ impl BfvFullBootstrapCircuitArtifactRoleV1 {
 /// envelope makes role swaps, stale parameter profiles, and malformed proof/evaluator assets fail
 /// admission before artifact-aware execution or proof verification consumes them.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::fhe_bfv::BfvFullBootstrapCircuitArtifactPayloadV1")]
 pub struct BfvFullBootstrapCircuitArtifactPayloadV1 {
     /// Canonical full-bootstrap circuit id.
     pub circuit_id: String,
@@ -3127,6 +3152,8 @@ pub struct BfvFullBootstrapCircuitArtifactPayloadV1 {
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[norito(tag = "bound_mode", content = "value", rename_all = "snake_case")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::fhe_bfv::BfvFullBootstrapExecutionProofBoundModeV1")]
 pub enum BfvFullBootstrapExecutionProofBoundModeV1 {
     /// Exact evaluator residual-multiple metadata.
     ExactResidualMultiple,
@@ -3135,7 +3162,8 @@ pub enum BfvFullBootstrapExecutionProofBoundModeV1 {
 }
 /// Public input/output claim for one BFV full-bootstrap execution proof.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::fhe_bfv::BfvFullBootstrapExecutionProofClaimV1")]
 pub struct BfvFullBootstrapExecutionProofClaimV1 {
     /// Zero-based output envelope slot proved by this claim.
     pub slot_index: u32,
@@ -3165,6 +3193,8 @@ pub struct BfvFullBootstrapExecutionProofClaimV1 {
     clippy::struct_excessive_bools,
     reason = "wire profile exposes one boolean per required arithmetic trace binding"
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::fhe_bfv::BfvFullBootstrapArithmeticTraceProfileV1")]
 pub struct BfvFullBootstrapArithmeticTraceProfileV1 {
     /// Version of this arithmetic trace profile layout.
     pub version: u16,
@@ -3242,7 +3272,8 @@ pub struct BfvFullBootstrapArithmeticTraceProfileV1 {
 /// rows are deterministic padding up to the native STARK domain advertised by the proof-key
 /// profile.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::fhe_bfv::BfvFullBootstrapArithmeticTraceMaterialV1")]
 pub struct BfvFullBootstrapArithmeticTraceMaterialV1 {
     /// Version of this arithmetic trace material layout.
     pub version: u16,
@@ -3267,7 +3298,8 @@ pub struct BfvFullBootstrapArithmeticTraceMaterialV1 {
 /// trace-material-bound zero-residual composition vector. This material is the deterministic
 /// handoff a dedicated prover must commit before sampling verifier openings.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::fhe_bfv::BfvFullBootstrapArithmeticAirEvaluationMaterialV1")]
 pub struct BfvFullBootstrapArithmeticAirEvaluationMaterialV1 {
     /// Version of this AIR evaluation material layout.
     pub version: u16,
@@ -3293,7 +3325,10 @@ pub struct BfvFullBootstrapArithmeticAirEvaluationMaterialV1 {
 /// schedule, and the opened row/next-row values that can be replayed without exposing private
 /// active trace rows.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_crypto::fhe_bfv::BfvFullBootstrapArithmeticTracePublicOpeningMaterialV1"
+)]
 pub struct BfvFullBootstrapArithmeticTracePublicOpeningMaterialV1 {
     /// Version of this public opening material layout.
     pub version: u16,
@@ -3333,6 +3368,8 @@ pub struct BfvFullBootstrapArithmeticTracePublicOpeningMaterialV1 {
     clippy::struct_excessive_bools,
     reason = "wire schema exposes one boolean per required public-input binding"
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::fhe_bfv::BfvFullBootstrapProofPublicInputSchemaV1")]
 pub struct BfvFullBootstrapProofPublicInputSchemaV1 {
     /// Canonical full-bootstrap circuit id.
     pub circuit_id: String,
@@ -3531,7 +3568,8 @@ pub struct BfvFullBootstrapProofPublicInputSchemaV1 {
     clippy::struct_excessive_bools,
     reason = "contract material mirrors audited release-prover obligation bits"
 )]
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::fhe_bfv::BfvFullBootstrapReleaseProverContractMaterialV1")]
 struct BfvFullBootstrapReleaseProverContractMaterialV1 {
     version: u16,
     field_count: u16,
@@ -3576,7 +3614,8 @@ struct BfvFullBootstrapReleaseProverContractMaterialV1 {
     clippy::struct_excessive_bools,
     reason = "proof-key metadata exposes one boolean per audited verifier obligation"
 )]
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::fhe_bfv::BfvFullBootstrapProofKeyV1")]
 pub struct BfvFullBootstrapProofKeyV1 {
     /// Proof-key role claimed by the backend-native key material.
     pub key_role: BfvFullBootstrapCircuitArtifactRoleV1,
@@ -3672,7 +3711,8 @@ pub struct BfvFullBootstrapProofKeyV1 {
 /// STARK/FRI prover parameters from verifier-key payloads and binds both to the first-release
 /// native verifier floor before governed proof-key artifacts are admitted.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::fhe_bfv::BfvFullBootstrapNativeProofKeyMaterialV1")]
 pub struct BfvFullBootstrapNativeProofKeyMaterialV1 {
     /// Native material format version.
     pub version: u16,
@@ -3716,7 +3756,8 @@ pub struct BfvFullBootstrapNativeProofKeyMaterialV1 {
     pub native_payload: Vec<u8>,
 }
 #[allow(clippy::struct_excessive_bools)]
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::fhe_bfv::BfvFullBootstrapNativeGeneratedCircuitBodyV1")]
 struct BfvFullBootstrapNativeGeneratedCircuitBodyV1 {
     version: u16,
     field_count: u16,
@@ -3767,7 +3808,10 @@ struct BfvFullBootstrapNativeGeneratedCircuitBodyV1 {
     rejects_stale_proof_key_artifacts: bool,
     arithmetic_air_constraint_system_body: Vec<u8>,
 }
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_crypto::fhe_bfv::BfvFullBootstrapNativeStarkFriTransparentProverPayloadV1"
+)]
 struct BfvFullBootstrapNativeStarkFriTransparentProverPayloadV1 {
     version: u16,
     field_count: u16,
@@ -3788,7 +3832,10 @@ struct BfvFullBootstrapNativeStarkFriTransparentProverPayloadV1 {
     merkle_arity: u8,
 }
 /// Canonical native STARK/FRI verifier-key payload for BFV full-bootstrap proofs.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_crypto::fhe_bfv::BfvFullBootstrapNativeStarkFriVerifyingKeyPayloadV1"
+)]
 pub struct BfvFullBootstrapNativeStarkFriVerifyingKeyPayloadV1 {
     /// Payload version.
     pub version: u16,
@@ -3836,7 +3883,8 @@ pub struct BfvFullBootstrapNativeStarkFriVerifyingKeyPayloadV1 {
     clippy::struct_excessive_bools,
     reason = "proof-key material envelope mirrors audited verifier obligation bits"
 )]
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::fhe_bfv::BfvFullBootstrapProofKeyMaterialEnvelopeV1")]
 pub struct BfvFullBootstrapProofKeyMaterialEnvelopeV1 {
     /// Envelope version.
     pub version: u16,
@@ -3934,7 +3982,8 @@ pub struct BfvFullBootstrapProofKeyMaterialEnvelopeV1 {
 /// The evaluator rotates the input packed ciphertext left by `rotation_steps`, multiplies by
 /// `plaintext`, and adds the result to the transform accumulator.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::fhe_bfv::BfvFullBootstrapLinearTransformDiagonalV1")]
 pub struct BfvFullBootstrapLinearTransformDiagonalV1 {
     /// Packed-slot left rotation applied before the plaintext mask.
     pub rotation_steps: u32,
@@ -3947,7 +3996,8 @@ pub struct BfvFullBootstrapLinearTransformDiagonalV1 {
 /// artifacts. It uses the standard diagonal method over packed BFV slots, so artifact-aware
 /// execution consumes governed transform material without a side format.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::fhe_bfv::BfvFullBootstrapLinearTransformV1")]
 pub struct BfvFullBootstrapLinearTransformV1 {
     /// Number of input packed slots the transform expects.
     pub input_slot_count: u16,
@@ -3958,7 +4008,8 @@ pub struct BfvFullBootstrapLinearTransformV1 {
 }
 /// One automorphism/mask entry in a canonical packed-slot blind-rotation key.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::fhe_bfv::BfvFullBootstrapBlindRotationStepV1")]
 pub struct BfvFullBootstrapBlindRotationStepV1 {
     /// Galois automorphism power evaluated for this schedule entry.
     pub automorphism_power: u32,
@@ -3971,7 +4022,8 @@ pub struct BfvFullBootstrapBlindRotationStepV1 {
 /// accumulator/test-vector artifact and the deterministic packed left-rotation schedule consumed by
 /// artifact-aware bootstrap execution.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::fhe_bfv::BfvFullBootstrapBlindRotationKeyV1")]
 pub struct BfvFullBootstrapBlindRotationKeyV1 {
     /// Packed slot count targeted by the blind-rotation schedule.
     pub slot_count: u16,
@@ -3988,7 +4040,8 @@ pub struct BfvFullBootstrapBlindRotationKeyV1 {
 /// ciphertext shape and coefficient selected after the future blind rotation stage, so artifact
 /// admission can reject opaque placeholder bytes before the executable circuit consumes them.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::fhe_bfv::BfvFullBootstrapSampleExtractionV1")]
 pub struct BfvFullBootstrapSampleExtractionV1 {
     /// Packed slot count expected from the source accumulator ciphertext.
     pub source_slot_count: u16,
@@ -4001,7 +4054,10 @@ pub struct BfvFullBootstrapSampleExtractionV1 {
 }
 /// Key-switch entries for one raw sample secret coefficient.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_crypto::fhe_bfv::BfvFullBootstrapSampleExtractionSwitchKeyCoefficientV1"
+)]
 pub struct BfvFullBootstrapSampleExtractionSwitchKeyCoefficientV1 {
     /// Secret coefficient index this entry switches into coefficient zero.
     pub secret_coefficient_index: u16,
@@ -4015,7 +4071,8 @@ pub struct BfvFullBootstrapSampleExtractionSwitchKeyCoefficientV1 {
 /// so evaluators can switch a raw extracted LWE sample into a two-component RLWE ciphertext under
 /// the existing BFV secret without learning the secret key.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::fhe_bfv::BfvFullBootstrapSampleExtractionSwitchKeyV1")]
 pub struct BfvFullBootstrapSampleExtractionSwitchKeyV1 {
     /// Metadata describing the raw sample this switch key accepts.
     pub sample_extraction: BfvFullBootstrapSampleExtractionV1,
@@ -4028,7 +4085,8 @@ pub struct BfvFullBootstrapSampleExtractionSwitchKeyV1 {
 /// `constant_term` and `secret_coefficients` decrypt against [`BfvSecretKey::s`] to the selected
 /// coefficient of `c0 + c1 * s` in `R_q`.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::fhe_bfv::BfvFullBootstrapRawExtractedSampleV1")]
 pub struct BfvFullBootstrapRawExtractedSampleV1 {
     /// Source ring coefficient selected by the sample-extraction artifact.
     pub source_coefficient_index: u16,
@@ -4045,7 +4103,8 @@ pub struct BfvFullBootstrapRawExtractedSampleV1 {
 /// sample-extraction artifact carries switch-key material, the trace also includes the governed
 /// final sample switch and slot-to-coefficient output.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::fhe_bfv::BfvFullBootstrapExecutionPrefixTraceV1")]
 pub struct BfvFullBootstrapExecutionPrefixTraceV1 {
     /// Ciphertext emitted by the governed coefficient-to-slot transform.
     pub coefficient_to_slot_output: BfvCiphertext,
@@ -4068,7 +4127,8 @@ pub struct BfvFullBootstrapExecutionPrefixTraceV1 {
 /// `slot_to_coefficient` is the whole-ciphertext bound for the governed artifact-aware
 /// full-bootstrap output.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::fhe_bfv::BfvFullBootstrapExecutionPrefixTraceBoundsV1")]
 pub struct BfvFullBootstrapExecutionPrefixTraceBoundsV1 {
     /// Bound after the governed coefficient-to-slot transform.
     pub coefficient_to_slot: u128,
@@ -4088,7 +4148,8 @@ pub struct BfvFullBootstrapExecutionPrefixTraceBoundsV1 {
 /// This is the typed payload for the accumulator artifact. The accumulator must advertise the exact
 /// packed-slot test vector it contributes to the future executable circuit.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::fhe_bfv::BfvFullBootstrapAccumulatorV1")]
 pub struct BfvFullBootstrapAccumulatorV1 {
     /// Packed slot count targeted by `test_vector`.
     pub slot_count: u16,
@@ -4104,6 +4165,8 @@ pub struct BfvFullBootstrapAccumulatorV1 {
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::fhe_bfv::BfvFullBootstrapCircuitArtifactBundleV1")]
 pub struct BfvFullBootstrapCircuitArtifactBundleV1 {
     /// Coefficient-to-slot linear transform material.
     pub coefficient_to_slot_key: Vec<u8>,
@@ -4133,6 +4196,8 @@ pub struct BfvFullBootstrapCircuitArtifactBundleV1 {
     reason = "release-audit wire profile exposes one boolean per audited proof obligation"
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::fhe_bfv::BfvFullBootstrapReleaseAuditProofProfileV1")]
 pub struct BfvFullBootstrapReleaseAuditProofProfileV1 {
     /// Evidence proof-profile version.
     pub version: u16,
@@ -4253,6 +4318,8 @@ pub struct BfvFullBootstrapReleaseAuditProofProfileV1 {
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::fhe_bfv::BfvFullBootstrapReleaseAuditKeyEvidenceV1")]
 pub struct BfvFullBootstrapReleaseAuditKeyEvidenceV1 {
     /// Evidence proof-key record version.
     pub version: u16,
@@ -4286,6 +4353,8 @@ pub struct BfvFullBootstrapReleaseAuditKeyEvidenceV1 {
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::fhe_bfv::BfvFullBootstrapReleaseAuditEvidenceV1")]
 pub struct BfvFullBootstrapReleaseAuditEvidenceV1 {
     /// Evidence payload version.
     pub version: u16,
@@ -4343,6 +4412,8 @@ pub struct BfvFullBootstrapReleaseAuditEvidenceV1 {
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::fhe_bfv::BfvFullBootstrapReleaseAuditSignoffPayloadV1")]
 pub struct BfvFullBootstrapReleaseAuditSignoffPayloadV1 {
     /// Signoff payload version.
     pub version: u16,
@@ -4385,6 +4456,8 @@ pub struct BfvFullBootstrapReleaseAuditSignoffPayloadV1 {
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::fhe_bfv::BfvFullBootstrapReleaseAuditSignoffV1")]
 pub struct BfvFullBootstrapReleaseAuditSignoffV1 {
     /// Signoff envelope version.
     pub version: u16,
@@ -4403,6 +4476,8 @@ pub struct BfvFullBootstrapReleaseAuditSignoffV1 {
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::fhe_bfv::BfvFullBootstrapReleaseAuditRecordV1")]
 pub struct BfvFullBootstrapReleaseAuditRecordV1 {
     /// Record layout version.
     pub version: u16,
@@ -4418,6 +4493,8 @@ pub struct BfvFullBootstrapReleaseAuditRecordV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[norito(tag = "verdict", content = "value", rename_all = "snake_case")]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::fhe_bfv::BfvFullBootstrapReleaseAuditVerdictV1")]
 pub enum BfvFullBootstrapReleaseAuditVerdictV1 {
     /// The reviewed release artifacts are approved for publication.
     ApprovedForRelease,
@@ -4433,6 +4510,8 @@ pub enum BfvFullBootstrapReleaseAuditVerdictV1 {
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::fhe_bfv::BfvFullBootstrapReleaseAuditManifestV1")]
 pub struct BfvFullBootstrapReleaseAuditManifestV1 {
     /// Manifest layout version.
     pub version: u16,
@@ -4489,6 +4568,8 @@ pub struct BfvFullBootstrapReleaseAuditManifestV1 {
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::fhe_bfv::BfvFullBootstrapReleaseAuditPackageV1")]
 pub struct BfvFullBootstrapReleaseAuditPackageV1 {
     /// Package layout version.
     pub version: u16,
@@ -4511,6 +4592,8 @@ pub struct BfvFullBootstrapReleaseAuditPackageV1 {
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::fhe_bfv::BfvBootstrapKey")]
 pub struct BfvBootstrapKey {
     /// Stable bootstrap-key identifier.
     pub key_id: String,
@@ -4561,6 +4644,8 @@ pub struct BfvBootstrapKey {
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::fhe_bfv::BfvEvaluationKeyBundle")]
 pub struct BfvEvaluationKeyBundle {
     /// Relinearization key used after ciphertext-ciphertext multiplication.
     pub relinearization_key: BfvRelinearizationKey,
@@ -4590,28 +4675,33 @@ pub struct BfvBootstrapKeyTranscriptSeed<'a> {
     /// Seed used by [`bootstrap_key_with_max_refresh_rounds_from_seed`].
     pub seed: &'a [u8],
 }
-#[derive(Encode)]
+#[derive(Encode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::fhe_bfv::BfvRotationKeyTranscriptDigestMaterial")]
 struct BfvRotationKeyTranscriptDigestMaterial {
     rotation_steps: u32,
     seed: Vec<u8>,
 }
-#[derive(Encode)]
+#[derive(Encode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::fhe_bfv::BfvBootstrapKeyTranscriptDigestMaterial")]
 struct BfvBootstrapKeyTranscriptDigestMaterial {
     key_id: String,
     max_refresh_rounds: u16,
     seed: Vec<u8>,
 }
-#[derive(Encode)]
+#[derive(Encode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::fhe_bfv::BfvPublicKeyDigestMaterial")]
 struct BfvPublicKeyDigestMaterial {
     params: BfvParameters,
     public_key: BfvPublicKey,
 }
-#[derive(Encode)]
+#[derive(Encode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::fhe_bfv::BfvCiphertextDigestMaterial")]
 struct BfvCiphertextDigestMaterial {
     params: BfvParameters,
     ciphertext: BfvCiphertext,
 }
-#[derive(Encode)]
+#[derive(Encode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::fhe_bfv::BfvPublicKeyProofStatementMaterial")]
 struct BfvPublicKeyProofStatementMaterial {
     version: u16,
     field_count: u16,
@@ -4619,7 +4709,8 @@ struct BfvPublicKeyProofStatementMaterial {
     public_key: BfvPublicKey,
     public_key_digest: Hash,
 }
-#[derive(Encode)]
+#[derive(Encode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::fhe_bfv::BfvCiphertextProofStatementMaterial")]
 struct BfvCiphertextProofStatementMaterial {
     version: u16,
     field_count: u16,
@@ -4630,7 +4721,8 @@ struct BfvCiphertextProofStatementMaterial {
     ciphertext_digest: Hash,
     declared_bound: u128,
 }
-#[derive(Encode)]
+#[derive(Encode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::fhe_bfv::BfvRefreshTranscriptDigestMaterial")]
 struct BfvRefreshTranscriptDigestMaterial {
     version: u16,
     field_count: u16,
@@ -4640,7 +4732,8 @@ struct BfvRefreshTranscriptDigestMaterial {
     rotation_transcripts: Vec<BfvRotationKeyTranscriptDigestMaterial>,
     bootstrap_transcript: Option<BfvBootstrapKeyTranscriptDigestMaterial>,
 }
-#[derive(Encode)]
+#[derive(Encode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::fhe_bfv::BfvBootstrapKeyProofStatementMaterial")]
 struct BfvBootstrapKeyProofStatementMaterial {
     version: u16,
     field_count: u16,
@@ -4651,7 +4744,8 @@ struct BfvBootstrapKeyProofStatementMaterial {
     bootstrap_round_digests: Vec<Hash>,
     bootstrap_key: BfvBootstrapKey,
 }
-#[derive(Encode)]
+#[derive(Encode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::fhe_bfv::BfvBootstrapKeyTranscriptProofStatementMaterial")]
 struct BfvBootstrapKeyTranscriptProofStatementMaterial {
     version: u16,
     field_count: u16,
@@ -4665,7 +4759,8 @@ struct BfvBootstrapKeyTranscriptProofStatementMaterial {
     bootstrap_round_digests: Vec<Hash>,
     bootstrap_key: BfvBootstrapKey,
 }
-#[derive(Encode)]
+#[derive(Encode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::fhe_bfv::BfvFullBootstrapMaterialProofStatementMaterial")]
 struct BfvFullBootstrapMaterialProofStatementMaterial {
     version: u16,
     field_count: u16,
@@ -4685,7 +4780,8 @@ struct BfvFullBootstrapMaterialProofStatementMaterial {
 /// tooling cannot request material proofs from a bare, potentially stale hash or stale artifact
 /// witness.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::fhe_bfv::BfvFullBootstrapMaterialProofInputMaterialV1")]
 pub struct BfvFullBootstrapMaterialProofInputMaterialV1 {
     /// Version of this proof input material layout.
     pub version: u16,
@@ -4702,7 +4798,8 @@ pub struct BfvFullBootstrapMaterialProofInputMaterialV1 {
     /// Canonical statement hash exposed as the proof public input.
     pub statement_hash: Hash,
 }
-#[derive(Encode)]
+#[derive(Encode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::fhe_bfv::BfvFullBootstrapExecutionProofStatementMaterial")]
 struct BfvFullBootstrapExecutionProofStatementMaterial {
     version: u16,
     field_count: u16,
@@ -4720,7 +4817,8 @@ struct BfvFullBootstrapExecutionProofStatementMaterial {
 /// artifact-aware execution trace that are hashed into
 /// [`BfvFullBootstrapExecutionProofClaimV1::execution_witness_digest`].
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::fhe_bfv::BfvFullBootstrapExecutionWitnessDigestMaterialV1")]
 pub struct BfvFullBootstrapExecutionWitnessDigestMaterialV1 {
     /// Version of this witness digest material layout.
     pub version: u16,
@@ -4760,7 +4858,8 @@ pub struct BfvFullBootstrapExecutionWitnessDigestMaterialV1 {
 /// must be exposed to the governed verifier. Hash-only proof APIs are intentionally insufficient
 /// for production proving because they cannot constrain the BFV execution witness.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::fhe_bfv::BfvFullBootstrapExecutionProofInputMaterialV1")]
 pub struct BfvFullBootstrapExecutionProofInputMaterialV1 {
     /// Version of this proof input material layout.
     pub version: u16,
@@ -4781,7 +4880,8 @@ pub struct BfvFullBootstrapExecutionProofInputMaterialV1 {
 /// boundary a dedicated BFV full-bootstrap arithmetic prover must validate before producing a
 /// STARK/FRI proof.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::fhe_bfv::BfvFullBootstrapExecutionProverInputMaterialV1")]
 pub struct BfvFullBootstrapExecutionProverInputMaterialV1 {
     /// Version of this prover input material layout.
     pub version: u16,
@@ -4810,7 +4910,10 @@ pub struct BfvFullBootstrapExecutionProverInputMaterialV1 {
     /// Governed native STARK/FRI verifier key paired with `prover_key`.
     pub verifier_key: BfvFullBootstrapProofKeyV1,
 }
-#[derive(Encode)]
+#[derive(Encode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_crypto::fhe_bfv::BfvFullBootstrapCircuitArtifactBundleDigestMaterialV1"
+)]
 struct BfvFullBootstrapCircuitArtifactBundleDigestMaterialV1 {
     version: u16,
     artifact_digest_count: u16,
@@ -4824,7 +4927,10 @@ struct BfvFullBootstrapCircuitArtifactBundleDigestMaterialV1 {
     prover_key_digest: Hash,
     verifier_key_digest: Hash,
 }
-#[derive(Encode)]
+#[derive(Encode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_crypto::fhe_bfv::BfvFullBootstrapEvaluatorArtifactSetDigestMaterialV1"
+)]
 struct BfvFullBootstrapEvaluatorArtifactSetDigestMaterialV1 {
     version: u16,
     field_count: u16,
@@ -4855,6 +4961,10 @@ struct BfvFullBootstrapEvaluatorArtifactSetDigestMaterialV1 {
 #[expect(
     clippy::struct_excessive_bools,
     reason = "wire contract exposes one boolean per AIR enforcement obligation"
+)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_crypto::fhe_bfv::BfvFullBootstrapArithmeticAirConstraintSystemMaterialV1"
 )]
 pub struct BfvFullBootstrapArithmeticAirConstraintSystemMaterialV1 {
     /// Version of this AIR contract material layout.
@@ -4937,6 +5047,10 @@ pub struct BfvFullBootstrapArithmeticAirConstraintSystemMaterialV1 {
 #[expect(
     clippy::struct_excessive_bools,
     reason = "native fingerprint preimage exposes one boolean per audited proof obligation"
+)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_crypto::fhe_bfv::BfvFullBootstrapNativeProofCircuitFingerprintMaterialV1"
 )]
 struct BfvFullBootstrapNativeProofCircuitFingerprintMaterialV1 {
     version: u16,
@@ -5870,6 +5984,8 @@ pub fn validate_bfv_full_bootstrap_galois_key_set_bytes_for_witness_material_v1(
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::fhe_bfv::BfvCiphertext")]
 pub struct BfvCiphertext {
     /// First ciphertext polynomial.
     pub c0: Vec<u64>,
@@ -5883,7 +5999,8 @@ pub struct BfvCiphertext {
 /// evaluator bridge. It is a proof-producing boundary for exact-lift key admission; callers should
 /// not pass bare public-key statement hashes to future admission provers.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::fhe_bfv::BfvExactResidualPublicKeyProofInputMaterialV1")]
 pub struct BfvExactResidualPublicKeyProofInputMaterialV1 {
     /// Version of this proof input material layout.
     pub version: u16,
@@ -5913,7 +6030,8 @@ pub struct BfvExactResidualPublicKeyProofInputMaterialV1 {
 /// residual multiples. It is the proof-producing boundary for first-release exact-lift ciphertext
 /// admission.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::fhe_bfv::BfvExactResidualCiphertextProofInputMaterialV1")]
 pub struct BfvExactResidualCiphertextProofInputMaterialV1 {
     /// Version of this proof input material layout.
     pub version: u16,
@@ -5950,7 +6068,8 @@ pub struct BfvExactResidualCiphertextProofInputMaterialV1 {
 /// centered public-key residual polynomial. It is a proof-producing boundary for bounded-noise key
 /// admission; callers should not pass bare public-key statement hashes to future admission provers.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::fhe_bfv::BfvBoundedNoisePublicKeyProofInputMaterialV1")]
 pub struct BfvBoundedNoisePublicKeyProofInputMaterialV1 {
     /// Version of this proof input material layout.
     pub version: u16,
@@ -5978,7 +6097,8 @@ pub struct BfvBoundedNoisePublicKeyProofInputMaterialV1 {
 /// centered noise polynomial. It is the proof-producing boundary for bounded-noise ciphertext
 /// admission.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::fhe_bfv::BfvBoundedNoiseCiphertextProofInputMaterialV1")]
 pub struct BfvBoundedNoiseCiphertextProofInputMaterialV1 {
     /// Version of this proof input material layout.
     pub version: u16,
@@ -6047,7 +6167,8 @@ pub struct BfvBoundedNoiseProfile {
 }
 /// Public BFV parameters published to clients for encrypted identifier input.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::fhe_bfv::BfvIdentifierPublicParameters")]
 pub struct BfvIdentifierPublicParameters {
     /// Underlying BFV parameter set.
     pub parameters: BfvParameters,
@@ -6058,7 +6179,8 @@ pub struct BfvIdentifierPublicParameters {
 }
 /// BFV ciphertext envelope for identifier input.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::fhe_bfv::BfvIdentifierCiphertext")]
 pub struct BfvIdentifierCiphertext {
     /// Scalar ciphertext slots: slot 0 is the byte length, followed by one slot per byte.
     pub slots: Vec<BfvCiphertext>,
@@ -7964,7 +8086,8 @@ fn validate_public_key_not_all_zero(public_key: &BfvPublicKey) -> Result<(), Bfv
 }
 /// Public affine circuit over scalar ciphertext inputs.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::fhe_bfv::BfvAffineCircuit")]
 pub struct BfvAffineCircuit {
     /// Output rows; each row stores one plaintext weight per input ciphertext.
     pub weights: Vec<Vec<u64>>,
@@ -39126,3 +39249,6 @@ mod first_release_hard_cut_tests {
 #[cfg(test)]
 #[allow(clippy::too_many_lines)]
 mod tests;
+
+#[cfg(test)]
+mod captured_schema_tests;

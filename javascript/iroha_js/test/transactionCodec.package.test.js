@@ -58,8 +58,8 @@ test("package metadata and declarations expose the browser transaction codec", (
     fs.readFileSync(new URL("../package.json", import.meta.url), "utf8"),
   );
   assert.deepEqual(packageJson.exports["./transaction-codec"], {
-    browser: "./dist/transactionCodec.js",
-    import: "./dist/transactionCodec.js",
+    browser: "./dist/public/transactionCodec.js",
+    import: "./dist/public/transactionCodec.js",
     types: "./transaction-codec.d.ts",
   });
   assert.deepEqual(packageJson.typesVersions["*"]["transaction-codec"], [

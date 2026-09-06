@@ -438,12 +438,17 @@ for await (const nft of torii.iterateAccountNfts("<i105-account-id>", {
 // env-driven pagination/filters so you can smoke-test permissions against a live Torii.
 ```
 
-## Kagemusha offline cash
+## KAGEMUSHA V1
 
-The first-release JavaScript package does not expose Kagemusha readiness,
-top-up, redemption, or operation polling. Those flows require canonical Norito
-archives and device-bound mobile custody; use IrohaSwift or the JVM SDK instead
-of hand-encoding requests in JavaScript.
+The JavaScript package exposes the universal readiness endpoint plus typed
+KAGEMUSHA V1 top-up, redemption, and operation-status clients through
+`getKagemushaReadiness`, `submitKagemushaTopUp`,
+`submitKagemushaRedemption`, and `getKagemushaOperation`. Submit only
+canonical V1 Norito requests. The client derives the idempotency key from the
+request, validates the returned operation identity and kind, and withholds an
+applied result until the caller verifies it against an authenticated release
+anchor. JavaScript does not hold hardware-bound monetary state or produce
+recursive proofs; a qualified hardware wallet must create those artifacts.
 
 ## Torii Queries & Streaming
 
@@ -718,8 +723,8 @@ for await (const event of torii.streamEvents({
 ## Governance & ISO Bridge
 
 `ToriiClient` exposes the governance surfaces needed to inspect contract
-instances, draft deployment proposals, run standalone plain or ZK referenda,
-inspect the council roster, and use the authenticated Parliament attempt-draft,
+instances and typed proposal state, draft deployment proposals, run standalone
+plain or ZK referenda, and use the authenticated Parliament attempt-draft,
 attempt-read, and transition-draft APIs without rolling your own DTOs. Proposal
 finalization and enactment are automatic certificate-consensus outcomes and have
 no public client mutation helpers. Typed proposal reads are a closed discriminated

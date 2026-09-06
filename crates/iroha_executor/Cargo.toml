@@ -10,7 +10,7 @@ license.workspace = true
 workspace = true
 
 [features]
-default = []
+default = ["bridge"]
 # Enables typed bridge receipt helpers.
 bridge = []
 # Enables debugging tools such as `dbg()` and `DebugUnwrapExt`

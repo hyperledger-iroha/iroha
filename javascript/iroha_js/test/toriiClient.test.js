@@ -50,9 +50,12 @@ import {
   AccountAddress,
   AccountAddressError,
   AccountAddressErrorCode,
-  configureCurveSupport,
 } from "../src/address.js";
 import { sorafsGatewayFetch } from "../src/sorafs.js";
+import {
+  TORII_TEST_HOOKS,
+  TORII_TEST_NATIVE_BINDING,
+} from "../src/toriiTestHooks.js";
 import { IVM_ARTIFACT_MAX_BYTES } from "../src/ivmArtifact.js";
 import { blake2b256 } from "../src/blake2b.js";
 import { contractPayloadDigestHex } from "../src/contractPayload.js";
@@ -120,6 +123,10 @@ if (sumeragiDiagnosticsFocus !== null && typeof nodeTest.only === "function") {
 }
 
 const BASE_URL = "https://localhost:8080";
+
+function toriiTestHooks(hooks) {
+  return { [TORII_TEST_HOOKS]: hooks };
+}
 const GOVERNANCE_PROPOSAL_ID = "ab".repeat(32);
 const VK_SIGNING_NETWORK_ID = FocusNetworkId.parse(
   "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
@@ -197,6 +204,12 @@ const txStatusErrorMessageContract = JSON.parse(
 );
 const nativeTest = makeNativeTest(test);
 
+function assertRequestSignal(actual, caller, label = "request signal") {
+  assert.ok(actual, `${label} is present`);
+  assert.equal(typeof actual.addEventListener, "function", `${label} is abortable`);
+  assert.equal(actual.aborted, caller.aborted, `${label} preserves caller state`);
+}
+
 function canonicalTransactionCodecNative(overrides = {}) {
   return {
     encodeSignedTransactionVersioned: (payload) => {
@@ -209,6 +222,82 @@ function canonicalTransactionCodecNative(overrides = {}) {
     ...overrides,
   };
 }
+
+test("submitKagemushaTopUp posts the exact caller-signed bytes and binary idempotency key", async () => {
+  const operationId = Buffer.alloc(32, 0x41);
+  const signedTransaction = Buffer.from([0x01, 0xde, 0xad, 0xbe, 0xef]);
+  let captured = null;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async (url, init) => {
+      captured = { url, init };
+      return createResponse({
+        status: 202,
+        jsonData: {
+          version: 1,
+          operation_id: [...operationId],
+          kind: { kind: "top_up", value: null },
+          state: { state: "pending", value: null },
+          result: null,
+          rejection: null,
+        },
+        headers: {
+          "content-type": "application/json",
+          location: `/v1/kagemusha/operations/${operationId.toString("hex")}`,
+          "retry-after": "1",
+        },
+      });
+    },
+    [TORII_TEST_NATIVE_BINDING]: canonicalTransactionCodecNative(),
+  });
+
+  const status = await client.submitKagemushaTopUp(
+    signedTransaction,
+    operationId,
+  );
+
+  assert.equal(captured?.url, `${BASE_URL}/v1/kagemusha/top-up`);
+  assert.equal(captured?.init?.method, "POST");
+  assert.equal(captured?.init?.redirect, "error");
+  assert.equal(captured?.init?.headers["Content-Type"], "application/x-norito");
+  assert.equal(captured?.init?.headers["Idempotency-Key"], operationId.toString("hex"));
+  assert.deepEqual(captured?.init?.body, signedTransaction);
+  assert.equal(status.kind, "top_up");
+  assert.equal(status.state, "pending");
+
+  await assert.rejects(
+    () => client.submitKagemushaTopUp(signedTransaction, operationId.toString("hex")),
+    /operationId must be exact nonzero 32-byte binary data/u,
+  );
+});
+
+test("submitKagemushaTopUp rejects a terminal response carrying Retry-After", async () => {
+  const operationId = Buffer.alloc(32, 0x42);
+  const signedTransaction = Buffer.from([0x01, 0xca, 0xfe]);
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => createResponse({
+      status: 200,
+      jsonData: {
+        version: 1,
+        operation_id: [...operationId],
+        kind: { kind: "top_up", value: null },
+        state: { state: "applied", value: null },
+        result: { opaque: true },
+        rejection: null,
+      },
+      headers: {
+        "content-type": "application/json",
+        location: `/v1/kagemusha/operations/${operationId.toString("hex")}`,
+        "retry-after": "1",
+      },
+    }),
+    [TORII_TEST_NATIVE_BINDING]: canonicalTransactionCodecNative(),
+  });
+
+  await assert.rejects(
+    () => client.submitKagemushaTopUp(signedTransaction, operationId),
+    /must not have Retry-After/u,
+  );
+});
 
 test("governance lossless JSON writer preserves raw u64 tokens", () => {
   const encoded = stringifyStrictLosslessIntegerJson(
@@ -763,7 +852,8 @@ function createSumeragiV2StatusPayload(overrides = {}) {
     parent_state_root: fakeSumeragiHash(0x34),
     post_state_root: fakeSumeragiHash(0x35),
     ordinary_writes_root: fakeSumeragiHash(0x36),
-    topup_anchor_count: 0,
+    kagemusha_top_up_root: null,
+    kagemusha_top_up_count: 0,
     native_amx_application_manifest_version: 1,
     native_amx_application_manifest_root:
       NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT,
@@ -1649,9 +1739,17 @@ test("ToriiClient constructor enforces option shapes", () => {
     () =>
       new ToriiClient(BASE_URL, {
         fetchImpl,
+        __nativeBinding: {},
+      }),
+    /options\.__nativeBinding is not a public option/,
+  );
+  assert.throws(
+    () =>
+      new ToriiClient(BASE_URL, {
+        fetchImpl,
         sorafsGatewayFetch: "not-a-function",
       }),
-    /options\.sorafsGatewayFetch must be a function/,
+    /options\.sorafsGatewayFetch is not a public option/,
   );
   assert.throws(
     () =>
@@ -1659,7 +1757,7 @@ test("ToriiClient constructor enforces option shapes", () => {
         fetchImpl,
         generateDaProofSummary: 42,
       }),
-    /options\.generateDaProofSummary must be a function/,
+    /options\.generateDaProofSummary is not a public option/,
   );
   assert.throws(
     () =>
@@ -1679,6 +1777,64 @@ test("ToriiClient constructor enforces option shapes", () => {
   );
 });
 
+test("ToriiClient keeps credentials and security state out of its public object shape", () => {
+  const privateKey = Buffer.from(APPLICATION_CANONICAL_AUTH.privateKey);
+  const expectedPrivateKey = Buffer.from(privateKey);
+  const client = new SourceToriiClient(BASE_URL, {
+    apiToken: "api-token-secret",
+    authToken: "bearer-token-secret",
+    canonicalRequestAuth: {
+      accountId: APPLICATION_CANONICAL_AUTH.accountId,
+      privateKey,
+    },
+    defaultHeaders: {
+      Accept: "application/json",
+      "X-Credential": "header-secret",
+    },
+    fetchImpl: async () => createResponse({ status: 200, jsonData: {} }),
+    localSigningContext: VK_LOCAL_SIGNING_CONTEXT,
+  });
+
+  privateKey.fill(0);
+  assert.deepEqual(
+    SourceToriiClient._normalizePrivateKey(expectedPrivateKey),
+    expectedPrivateKey,
+  );
+  assert.deepEqual(Object.keys(client), []);
+  assert.equal(client._config, undefined);
+  assert.equal(client._allowInsecure, undefined);
+  assert.equal(client._canonicalRequestAuth, undefined);
+  const serialized = JSON.stringify(client);
+  for (const secret of [
+    "api-token-secret",
+    "bearer-token-secret",
+    "header-secret",
+    expectedPrivateKey.toString("hex"),
+  ]) {
+    assert.equal(serialized.includes(secret), false);
+  }
+});
+
+test("ToriiClient copies canonical-auth byte containers", () => {
+  const inputs = [
+    Buffer.alloc(32, 0x41),
+    new Uint8Array(32).fill(0x42),
+    new Uint8Array(32).fill(0x43).buffer,
+  ];
+  for (const input of inputs) {
+    const expected = Buffer.from(
+      ArrayBuffer.isView(input) ? input : new Uint8Array(input),
+    );
+    const normalized = SourceToriiClient._normalizePrivateKey(input);
+    if (ArrayBuffer.isView(input)) {
+      input.fill(0);
+    } else {
+      new Uint8Array(input).fill(0);
+    }
+    assert.deepEqual(normalized, expected);
+  }
+});
+
 function createIsoSubmissionPayload(overrides = {}) {
   return {
     message_id: "iso-msg",
@@ -1693,6 +1849,12 @@ function createIsoSubmissionPayload(overrides = {}) {
     payload_hash: null,
     reference_snapshot_id: null,
     embedded_signature_detected: false,
+    originator_participant_id: "originator-bank",
+    counterparty_participant_id: "counterparty-bank",
+    admitting_participant_id: "originator-bank",
+    admitting_operator_key: "ed0120fixture",
+    pinned_profile_id: "generic-iso20022",
+    pinned_signature_policy: "record_only",
     status_history: [],
     hold_reason_code: null,
     change_reason_codes: [],
@@ -1704,6 +1866,26 @@ function createIsoSubmissionPayload(overrides = {}) {
     target_account_address: null,
     asset_definition_id: null,
     asset_id: null,
+    settlement_amount: null,
+    settlement_currency: null,
+    settlement_date: null,
+    settlement_quantity: null,
+    settlement_movement_type: null,
+    settlement_payment_type: null,
+    security_instrument_id: null,
+    collateral_obligation_id: null,
+    collateral_original_amount: null,
+    collateral_original_currency: null,
+    collateral_original_instrument_id: null,
+    collateral_substitute_amount: null,
+    collateral_substitute_currency: null,
+    collateral_substitute_instrument_id: null,
+    collateral_effective_date: null,
+    collateral_substitution_type: null,
+    collateral_haircut: null,
+    collateral_reason_code: null,
+    plan_execution_order: null,
+    plan_atomicity: null,
     ...overrides,
   };
 }
@@ -1791,7 +1973,7 @@ test("listAccountAssets rejects retired domain-selector-prefixed segments", asyn
     called = true;
     return createResponse({ status: 200, jsonData: { items: [], total: 0 } });
   };
-  const client = new ToriiClient(BASE_URL, { fetchImpl, __nativeBinding: {} });
+  const client = new ToriiClient(BASE_URL, { fetchImpl, [TORII_TEST_NATIVE_BINDING]: {} });
   await assert.rejects(
     () => client.listAccountAssets(forms.selectorPrefixedHex),
     (error) => {
@@ -2003,7 +2185,7 @@ test("listAttachments returns attachment metadata", async () => {
 test("listAttachments forwards AbortSignal", async () => {
   const controller = new AbortController();
   const fetchImpl = async (_url, init) => {
-    assert.strictEqual(init.signal, controller.signal);
+    assertRequestSignal(init.signal, controller.signal);
     return createResponse({
       status: 200,
       jsonData: [],
@@ -2126,7 +2308,7 @@ test("getAttachment returns bytes and content type", async () => {
 test("getAttachment forwards AbortSignal", async () => {
   const controller = new AbortController();
   const fetchImpl = async (_url, init) => {
-    assert.strictEqual(init.signal, controller.signal);
+    assertRequestSignal(init.signal, controller.signal);
     return createResponse({
       status: 200,
       arrayData: new ArrayBuffer(0),
@@ -2640,7 +2822,7 @@ test("getIsoMessageStatus fetches status JSON and validates input", async () => 
   assert.equal(captured.url, `${BASE_URL}/v1/iso20022/messages/MSG999`);
   assert.equal(captured.init.method, "GET");
   assert.equal(captured.init.headers.Accept, "application/json");
-  assert.strictEqual(captured.init.signal, controller.signal);
+  assertRequestSignal(captured.init.signal, controller.signal);
   assert.deepEqual(payload, statusPayload);
 
   await assert.rejects(
@@ -2704,6 +2886,12 @@ test("getIsoMessageStatus normalizes ISO bridge status and pacs002 code", async 
   const payload = await client.getIsoMessageStatus("iso-normalize");
   assert.equal(payload?.status, "Pending");
   assert.equal(payload?.pacs002_code, "PDNG");
+  assert.equal(payload?.originator_participant_id, "originator-bank");
+  assert.equal(payload?.counterparty_participant_id, "counterparty-bank");
+  assert.equal(payload?.admitting_participant_id, "originator-bank");
+  assert.equal(payload?.admitting_operator_key, "ed0120fixture");
+  assert.equal(payload?.pinned_profile_id, "generic-iso20022");
+  assert.equal(payload?.pinned_signature_policy, "record_only");
 });
 
 test("getIsoMessageStatus rejects unknown ISO status values and pacs002 codes", async () => {
@@ -2894,7 +3082,7 @@ test("registerSorafsPinManifest posts only an exact canonical V1 transaction", a
   };
   const client = new ToriiClient(BASE_URL, {
     fetchImpl,
-    __nativeBinding: canonicalTransactionCodecNative(),
+    [TORII_TEST_NATIVE_BINDING]: canonicalTransactionCodecNative(),
   });
 
   const result = await client.registerSorafsPinManifestTyped(signedTransaction);
@@ -2929,7 +3117,7 @@ test("registerSorafsPinManifest rejects an unmarked transaction hash", async () 
   };
   const client = new ToriiClient(BASE_URL, {
     fetchImpl,
-    __nativeBinding: canonicalTransactionCodecNative(),
+    [TORII_TEST_NATIVE_BINDING]: canonicalTransactionCodecNative(),
   });
   await assert.rejects(
     () => client.registerSorafsPinManifestTyped(Buffer.from([0x01, 0xaa])),
@@ -2945,7 +3133,7 @@ test("registerSorafsPinManifest rejects missing or noncanonical V1 codecs before
   };
   const withoutCodec = new ToriiClient(BASE_URL, {
     fetchImpl,
-    __nativeBinding: {},
+    [TORII_TEST_NATIVE_BINDING]: {},
   });
   await assert.rejects(
     () => withoutCodec.registerSorafsPinManifest(Buffer.from([0x01, 0xaa])),
@@ -2954,7 +3142,7 @@ test("registerSorafsPinManifest rejects missing or noncanonical V1 codecs before
 
   const framed = new ToriiClient(BASE_URL, {
     fetchImpl,
-    __nativeBinding: canonicalTransactionCodecNative(),
+    [TORII_TEST_NATIVE_BINDING]: canonicalTransactionCodecNative(),
   });
   await assert.rejects(
     () => framed.registerSorafsPinManifest(Buffer.from("NRT0legacy", "ascii")),
@@ -2970,7 +3158,7 @@ test("registerSorafsPinManifest rejects legacy secret-bearing request objects", 
       fetchCalls += 1;
       throw new Error("fetch must not run");
     },
-    __nativeBinding: {},
+    [TORII_TEST_NATIVE_BINDING]: {},
   });
 
   await assert.rejects(
@@ -3008,7 +3196,7 @@ test("registerSorafsPinManifestTyped rejects pre-finality fee or custody claims"
   };
   const client = new ToriiClient(BASE_URL, {
     fetchImpl,
-    __nativeBinding: canonicalTransactionCodecNative(),
+    [TORII_TEST_NATIVE_BINDING]: canonicalTransactionCodecNative(),
   });
 
   await assert.rejects(
@@ -4546,7 +4734,7 @@ test("SoraFS orderbook rejects stale cursors and noncanonical transactions", asy
       fetchCount += 1;
       throw new Error("fetch must not run for invalid orderbook input");
     },
-    __nativeBinding: {
+    [TORII_TEST_NATIVE_BINDING]: {
       encodeSignedTransactionVersioned: () => {
         throw new Error("noncanonical signed transaction");
       },
@@ -5097,7 +5285,7 @@ test("publishSpaceDirectoryManifest forwards AbortSignal options", async () => {
     },
     { signal: controller.signal, canonicalAuth: APPLICATION_CANONICAL_AUTH },
   );
-  assert.equal(captured.init.signal, controller.signal);
+  assertRequestSignal(captured.init.signal, controller.signal);
 });
 
 test("publishSpaceDirectoryManifest rejects invalid options payloads", async () => {
@@ -5228,7 +5416,7 @@ test("revokeSpaceDirectoryManifest supports AbortSignal options", async () => {
     },
     { signal: controller.signal, canonicalAuth: APPLICATION_CANONICAL_AUTH },
   );
-  assert.equal(captured.init.signal, controller.signal);
+  assertRequestSignal(captured.init.signal, controller.signal);
 });
 
 test("revokeSpaceDirectoryManifest rejects unsupported option fields", async () => {
@@ -5548,46 +5736,6 @@ test("_iterateOffsetIterable enforces item-key whitelists", async () => {
   );
 });
 
-test("fetchSorafsPayloadRange normalizes request and response payloads", async () => {
-  let captured = null;
-  const manifestHex = "c".repeat(64);
-  const providerBytes = Buffer.alloc(32, 0xaa);
-  const fetchImpl = async (url, init) => {
-    captured = { url, init };
-    return createResponse({
-      status: 200,
-      jsonData: {
-        manifest_id_hex: manifestHex,
-        offset: 4,
-        length: 2,
-        data_b64: Buffer.from([9, 9]).toString("base64"),
-      },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.fetchSorafsPayloadRange({
-    manifestIdHex: manifestHex,
-    offset: 4,
-    length: 2,
-    providerIdHex: providerBytes,
-  });
-  assert.equal(captured?.url, `${BASE_URL}/v1/sorafs/storage/fetch`);
-  assert.ok(captured?.init?.headers?.["X-Iroha-Operator-Public-Key"]);
-  assert.ok(captured?.init?.headers?.["X-Iroha-Operator-Signature"]);
-  const body = JSON.parse(captured?.init?.body ?? "{}");
-  assert.equal(body.manifest_id_hex, manifestHex);
-  assert.equal(body.offset, 4);
-  assert.equal(body.length, 2);
-  assert.equal(body.provider_id_hex, providerBytes.toString("hex"));
-  assert.deepEqual(result, {
-    manifest_id_hex: manifestHex,
-    offset: 4,
-    length: 2,
-    data_b64: Buffer.from([9, 9]).toString("base64"),
-  });
-});
-
 test("getSorafsStorageState returns typed fields", async () => {
   const snapshot = {
     bytes_used: 10,
@@ -5625,10 +5773,6 @@ test("SoraFS local storage diagnostics require operator signing context", async 
       throw new Error("fetch should not run without operator authentication");
     },
   });
-  await assert.rejects(
-    () => client.fetchSorafsPayloadRange({}),
-    /fetchSorafsPayloadRange requires ToriiClient options\.operatorSigningContext/,
-  );
   await assert.rejects(
     () => client.getSorafsStorageState(),
     /getSorafsStorageState requires ToriiClient options\.operatorSigningContext/,
@@ -5899,7 +6043,7 @@ test("fetchDaPayloadViaGateway fetches manifest bundle and invokes gateway", asy
   const gatewayMock = t.mock.fn(() => gatewayResult);
   const client = new ToriiClient(BASE_URL, {
     fetchImpl,
-    sorafsGatewayFetch: gatewayMock,
+    ...toriiTestHooks({ sorafsGatewayFetch: gatewayMock }),
   });
   const providers = [
     {
@@ -5978,7 +6122,7 @@ test("fetchDaPayloadViaGateway validates signal option", async () => {
   ];
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: async () => createResponse({ status: 200, jsonData: {} }),
-    sorafsGatewayFetch: () => ({
+    ...toriiTestHooks({ sorafsGatewayFetch: () => ({
       manifestIdHex: manifestBundle.manifest_hash_hex,
       chunkerHandle: "sorafs.sf1@1.0.0",
       chunkCount: 1,
@@ -5991,7 +6135,7 @@ test("fetchDaPayloadViaGateway validates signal option", async () => {
       localProxyManifest: null,
       carVerification: null,
       metadata: {},
-    }),
+    }) }),
   });
 
   await assert.rejects(
@@ -6019,9 +6163,9 @@ test("fetchDaPayloadViaGateway rejects invalid stream tokens", async () => {
   };
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: async () => createResponse({ status: 200, jsonData: {} }),
-    sorafsGatewayFetch: () => {
+    ...toriiTestHooks({ sorafsGatewayFetch: () => {
       throw new Error("unexpected sorafsGatewayFetch call");
-    },
+    } }),
   });
 
   await assert.rejects(
@@ -6081,8 +6225,10 @@ test("fetchDaPayloadViaGateway uses custom hooks", async (t) => {
   const summaryMock = t.mock.fn(() => ({ summary: "ok" }));
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: async () => createResponse({ status: 200, jsonData: {} }),
-    sorafsGatewayFetch: gatewayMock,
-    generateDaProofSummary: summaryMock,
+    ...toriiTestHooks({
+      sorafsGatewayFetch: gatewayMock,
+      generateDaProofSummary: summaryMock,
+    }),
   });
   const session = await client.fetchDaPayloadViaGateway({
     manifestBundle,
@@ -6098,6 +6244,134 @@ test("fetchDaPayloadViaGateway uses custom hooks", async (t) => {
   assert.ok(Buffer.isBuffer(manifestArg));
   assert.ok(Buffer.isBuffer(payloadArg));
   assert.deepEqual(optionsArg, {});
+});
+
+test("fetchDaPayloadViaGateway keeps DA and gateway calls on the client runtime", async () => {
+  const manifestBytes = Buffer.from("runtime-manifest");
+  const manifestBundle = {
+    storage_ticket_hex: "aa".repeat(32),
+    client_blob_id_hex: "cc".repeat(32),
+    blob_hash_hex: "bb".repeat(32),
+    manifest_hash_hex: "bb".repeat(32),
+    chunk_root_hex: "dd".repeat(32),
+    chunk_plan: chunkFetchPlan(
+      [
+        {
+          chunk_index: 0,
+          offset: 0,
+          length: 1,
+          digest_blake3: "ee".repeat(32),
+        },
+      ],
+      "bb".repeat(32),
+    ),
+    manifest_bytes: manifestBytes,
+    manifest_len: manifestBytes.length,
+    lane_id: 1,
+    epoch: 2,
+  };
+  const providers = [
+    {
+      name: "alpha",
+      providerIdHex: "11".repeat(32),
+      gatewayPublicKeyHex: "dd".repeat(32),
+      baseUrl: "https://gateway-one.test",
+      streamTokenB64: Buffer.from("token-one").toString("base64"),
+    },
+    {
+      name: "beta",
+      providerIdHex: "22".repeat(32),
+      gatewayPublicKeyHex: "dd".repeat(32),
+      baseUrl: "https://gateway-two.test",
+      streamTokenB64: Buffer.from("token-two").toString("base64"),
+    },
+  ];
+  const binding = {
+    label: "original",
+    daManifestChunkerHandle() {
+      return `chunker-${this.label}`;
+    },
+    sorafsGatewayFetch(_manifest, chunkerHandle) {
+      throw new Error(`gateway-${this.label}:${chunkerHandle}`);
+    },
+  };
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      throw new Error("manifest fetch should not run");
+    },
+    [TORII_TEST_NATIVE_BINDING]: binding,
+  });
+  binding.label = "mutated";
+  binding.daManifestChunkerHandle = () => "chunker-mutated";
+  binding.sorafsGatewayFetch = () => {
+    throw new Error("gateway-mutated");
+  };
+
+  await assert.rejects(
+    () =>
+      client.fetchDaPayloadViaGateway({
+        manifestBundle,
+        gatewayProviders: providers,
+      }),
+    /gateway-original:chunker-original/u,
+  );
+});
+
+test("fetchDaPayloadViaGateway keeps proof generation on the client runtime", async () => {
+  const manifestBytes = Buffer.from("proof-runtime-manifest");
+  const manifestBundle = {
+    storage_ticket_hex: "aa".repeat(32),
+    client_blob_id_hex: "cc".repeat(32),
+    blob_hash_hex: "bb".repeat(32),
+    manifest_hash_hex: "bb".repeat(32),
+    chunk_root_hex: "dd".repeat(32),
+    chunk_plan: chunkFetchPlan(
+      [{ chunk_index: 0, offset: 0, length: 1, digest_blake3: "ee".repeat(32) }],
+      "bb".repeat(32),
+    ),
+    manifest_bytes: manifestBytes,
+    manifest_len: manifestBytes.length,
+    lane_id: 1,
+    epoch: 2,
+  };
+  const binding = {
+    label: "original",
+    daGenerateProofs() {
+      throw new Error(`proof-${this.label}`);
+    },
+  };
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      throw new Error("manifest fetch should not run");
+    },
+    [TORII_TEST_NATIVE_BINDING]: binding,
+    ...toriiTestHooks({
+      sorafsGatewayFetch: () => ({ payload: Buffer.from("payload") }),
+    }),
+  });
+  binding.label = "mutated";
+  binding.daGenerateProofs = () => {
+    throw new Error("proof-mutated");
+  };
+
+  await assert.rejects(
+    () =>
+      client.fetchDaPayloadViaGateway({
+        manifestBundle,
+        chunkerHandle: "sorafs.sf1@1.0.0",
+        gatewayProviders: [
+          {
+            name: "alpha",
+            providerIdHex: "11".repeat(32),
+            gatewayPublicKeyHex: "dd".repeat(32),
+            baseUrl: "https://gateway.test",
+            streamTokenB64: Buffer.from("token").toString("base64"),
+          },
+        ],
+        proofSummary: true,
+      }),
+    /proof-original/u,
+  );
 });
 
 test("fetchDaPayloadViaGateway reuses provided manifest bundle", async (t) => {
@@ -6173,7 +6447,7 @@ test("fetchDaPayloadViaGateway reuses provided manifest bundle", async (t) => {
     fetchImpl: async () => {
       throw new Error("manifest fetch should not be called");
     },
-    sorafsGatewayFetch: gatewayMock,
+    ...toriiTestHooks({ sorafsGatewayFetch: gatewayMock }),
   });
   const session = await client.fetchDaPayloadViaGateway({
     manifestBundle,
@@ -6249,7 +6523,7 @@ test("fetchDaPayloadViaGateway accepts providers alias", async (t) => {
     metadata: {},
   }));
   const client = new ToriiClient(BASE_URL, {
-    sorafsGatewayFetch: gatewayMock,
+    ...toriiTestHooks({ sorafsGatewayFetch: gatewayMock }),
   });
   const session = await client.fetchDaPayloadViaGateway({
     manifestBundle,
@@ -6350,8 +6624,10 @@ test("fetchDaPayloadViaGateway attaches proof summary when requested", async (t)
   const proofMock = t.mock.fn(() => proofSummary);
   const client = new ToriiClient(BASE_URL, {
     fetchImpl,
-    sorafsGatewayFetch: gatewayMock,
-    generateDaProofSummary: proofMock,
+    ...toriiTestHooks({
+      sorafsGatewayFetch: gatewayMock,
+      generateDaProofSummary: proofMock,
+    }),
   });
   const providers = [
       {
@@ -6395,7 +6671,7 @@ test("fetchDaPayloadViaGateway rejects invalid manifest_b64 for proof summary", 
   };
   const gatewayMock = t.mock.fn(() => ({ payload: Buffer.from([1]) }));
   const client = new ToriiClient(BASE_URL, {
-    sorafsGatewayFetch: gatewayMock,
+    ...toriiTestHooks({ sorafsGatewayFetch: gatewayMock }),
   });
   await assert.rejects(
     () =>
@@ -6829,10 +7105,16 @@ test("proveDaAvailabilityToDir persists CLI artefacts", async () => {
     ],
   };
   const tmpDir = await fs.mkdtemp(path.join(tmpdir(), "tmp-js-da-prove-"));
+  let proofCalls = 0;
   const client = new ToriiClient(BASE_URL, {
     fetchImpl,
-    sorafsGatewayFetch: async () => gatewayResult,
-    generateDaProofSummary: async () => proofSummary,
+    ...toriiTestHooks({
+      sorafsGatewayFetch: async () => gatewayResult,
+      generateDaProofSummary: async () => {
+        proofCalls += 1;
+        return proofSummary;
+      },
+    }),
   });
   try {
     const result = await client.proveDaAvailabilityToDir({
@@ -6870,9 +7152,37 @@ test("proveDaAvailabilityToDir persists CLI artefacts", async () => {
     assert.ok(await fileExists(payloadPath));
     assert.ok(await fileExists(proofPath));
     assert.ok(await fileExists(scoreboardPath));
+    assert.equal(proofCalls, 1);
 
     const scoreboardJson = JSON.parse(await fs.readFile(scoreboardPath, "utf8"));
     assert.equal(scoreboardJson[0].alias, "gw-alpha");
+
+    const withoutProof = await client.proveDaAvailabilityToDir({
+      storageTicketHex: ticketHex,
+      gatewayProviders: [
+        {
+          name: "alpha",
+          providerIdHex: "bb".repeat(32),
+          gatewayPublicKeyHex: "dd".repeat(32),
+          baseUrl: "https://gateway.test/",
+          streamTokenB64: Buffer.from("token").toString("base64"),
+        },
+        {
+          name: "beta",
+          providerIdHex: "bc".repeat(32),
+          gatewayPublicKeyHex: "dd".repeat(32),
+          baseUrl: "https://gateway-two.test/",
+          streamTokenB64: Buffer.from("token-2").toString("base64"),
+        },
+      ],
+      chunkerHandle: gatewayResult.chunker_handle,
+      proofSummary: false,
+      outputDir: path.join(tmpDir, "without-proof"),
+    });
+    assert.equal(withoutProof.proofSummary, null);
+    assert.equal(withoutProof.proofSummaryPath, null);
+    assert.equal(withoutProof.proofSummaryArtifact, null);
+    assert.equal(proofCalls, 1);
     const proofJson = JSON.parse(await fs.readFile(proofPath, "utf8"));
     assert.equal(proofJson.sample_count, 1);
     assert.equal(proofJson.manifest_path, manifestPath);
@@ -7521,11 +7831,11 @@ test("submitIsoMessage supports pacs.009 wait flow and reuses signals", async ()
 
   assert.equal(calls.length, 2);
   assert.equal(calls[0].url, "/v1/iso20022/pacs009");
-  assert.equal(calls[0].init.signal, controller.signal);
+  assertRequestSignal(calls[0].init.signal, controller.signal);
   assert.equal(calls[0].init.retryProfile, "iso-flow");
   assert.equal(calls[0].init.headers["Content-Type"], "application/pacs009+xml");
   assert.equal(calls[1].url, "/v1/iso20022/messages/flow-009");
-  assert.equal(calls[1].init.signal, controller.signal);
+  assertRequestSignal(calls[1].init.signal, controller.signal);
   assert.equal(calls[1].init.retryProfile, "iso-flow");
   assert.equal(status.status, "Accepted");
   assert.equal(status.transaction_hash, "h-1");
@@ -7626,10 +7936,10 @@ test("submitIsoPacs008AndWait reuses signal and retryProfile for polling", async
 
   assert.equal(calls.length, 2);
   assert.equal(calls[0].url, "/v1/iso20022/pacs008");
-  assert.equal(calls[0].init.signal, controller.signal);
+  assertRequestSignal(calls[0].init.signal, controller.signal);
   assert.equal(calls[0].init.retryProfile, "iso-wait");
   assert.equal(calls[1].url, "/v1/iso20022/messages/reuse-008");
-  assert.equal(calls[1].init.signal, controller.signal);
+  assertRequestSignal(calls[1].init.signal, controller.signal);
   assert.equal(calls[1].init.retryProfile, "iso-wait");
   assert.equal(status.status, "Accepted");
   assert.equal(status.transaction_hash, "0xiso008");
@@ -7655,6 +7965,42 @@ test("getIsoMessageStatus fetches status payload", async () => {
   const status = await client.getIsoMessageStatus("msg-2");
   assert.equal(requestedUrl, `${BASE_URL}/v1/iso20022/messages/msg-2`);
   assert.deepEqual(status, payload);
+});
+
+test("getIsoMessageStatus preserves schema-V3 settlement and plan provenance", async () => {
+  const payload = createIsoStatusPayload({
+    message_id: "msg-v3",
+    status: "Committed",
+    settlement_amount: "1250.00",
+    settlement_currency: "USD",
+    settlement_date: "2026-09-02",
+    settlement_quantity: "25",
+    settlement_movement_type: "DELIVERY",
+    settlement_payment_type: "AGAINST_PAYMENT",
+    security_instrument_id: "US0378331005",
+    collateral_obligation_id: "COLL-42",
+    collateral_original_amount: "1000",
+    collateral_original_currency: "USD",
+    collateral_original_instrument_id: "US0000000001",
+    collateral_substitute_amount: "990",
+    collateral_substitute_currency: "EUR",
+    collateral_substitute_instrument_id: "EU0000000002",
+    collateral_effective_date: "2026-09-03",
+    collateral_substitution_type: "FULL",
+    collateral_haircut: "0.01",
+    collateral_reason_code: "SUBS",
+    plan_execution_order: "1",
+    plan_atomicity: "atomic",
+  });
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => createResponse({
+      status: 200,
+      jsonData: payload,
+      headers: { "content-type": "application/json" },
+    }),
+  });
+
+  assert.deepEqual(await client.getIsoMessageStatus("msg-v3"), payload);
 });
 
 test("getIsoMessageStatus forwards retryProfile to _request", async () => {
@@ -8004,7 +8350,8 @@ test("waitForIsoMessageStatus forwards AbortSignal to status fetches", async () 
     maxAttempts: 1,
   });
   assert.equal(status.transaction_hash, "tx-1");
-  assert.deepEqual(signals, [controller.signal]);
+  assert.equal(signals.length, 1);
+  assertRequestSignal(signals[0], controller.signal);
 });
 
 test("submitIsoPacs008AndWait submits payload then waits for completion", async () => {
@@ -8236,23 +8583,61 @@ test("submitTransaction posts norito payload and decodes receipt response", asyn
       headers: { "content-type": "application/x-norito" },
     });
   };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const originalBinding = globalThis.__IROHA_NATIVE_BINDING__;
-  globalThis.__IROHA_NATIVE_BINDING__ = canonicalTransactionCodecNative({
+  const nativeBinding = canonicalTransactionCodecNative({
     decodeTransactionReceiptJson: (buffer) => {
       assert.ok(Buffer.isBuffer(buffer));
       return receiptJson;
     },
   });
-  try {
-    const result = await client.submitTransaction(payload);
-    assert.deepEqual(result, JSON.parse(receiptJson));
-  } finally {
-    if (originalBinding === undefined) {
-      delete globalThis.__IROHA_NATIVE_BINDING__;
-    } else {
-      globalThis.__IROHA_NATIVE_BINDING__ = originalBinding;
-    }
+  const client = new ToriiClient(BASE_URL, { fetchImpl, [TORII_TEST_NATIVE_BINDING]: nativeBinding });
+  const result = await client.submitTransaction(payload);
+  assert.deepEqual(result, JSON.parse(receiptJson));
+});
+
+test("non-empty Norito transaction receipts fail closed", async (t) => {
+  const receiptResponse = () =>
+    createResponse({
+      status: 202,
+      arrayData: new Uint8Array([0x01, 0x02, 0x03]),
+      headers: { "content-type": "application/x-norito" },
+    });
+  const cases = [
+    {
+      name: "missing decoder",
+      binding: {},
+      pattern: /does not expose decodeTransactionReceiptJson/u,
+    },
+    {
+      name: "decoder failure",
+      binding: {
+        decodeTransactionReceiptJson() {
+          throw new Error("malformed receipt bytes");
+        },
+      },
+      pattern: /failed to decode the non-empty Norito transaction receipt/u,
+    },
+    {
+      name: "invalid decoder JSON",
+      binding: {
+        decodeTransactionReceiptJson() {
+          return "not-json";
+        },
+      },
+      pattern: /decoder returned invalid JSON/u,
+    },
+  ];
+
+  for (const fixture of cases) {
+    await t.test(fixture.name, async () => {
+      const client = new SourceToriiClient(BASE_URL, {
+        fetchImpl: async () => receiptResponse(),
+        [TORII_TEST_NATIVE_BINDING]: fixture.binding,
+      });
+      await assert.rejects(
+        () => client._decodeTransactionIngressResponse(receiptResponse()),
+        fixture.pattern,
+      );
+    });
   }
 });
 
@@ -8323,7 +8708,7 @@ test("submitTransactionBatch posts a Norito transaction payload vector", async (
   };
   const client = new ToriiClient(BASE_URL, {
     fetchImpl,
-    __nativeBinding: canonicalTransactionCodecNative(),
+    [TORII_TEST_NATIVE_BINDING]: canonicalTransactionCodecNative(),
   });
 
   const result = await client.submitTransactionBatch(payloads);
@@ -8396,7 +8781,7 @@ test("submitTransactionBatch uses native framed Norito batch encoder when availa
   };
   const client = new ToriiClient(BASE_URL, {
     fetchImpl,
-    __nativeBinding: nativeBinding,
+    [TORII_TEST_NATIVE_BINDING]: nativeBinding,
   });
 
   const result = await client.submitTransactionBatch(payloads);
@@ -8415,7 +8800,7 @@ test("submitTransactionBatch rejects malformed batch inputs before network submi
     fetchImpl: async () => {
       throw new Error("submitTransactionBatch should not issue a request");
     },
-    __nativeBinding: {},
+    [TORII_TEST_NATIVE_BINDING]: {},
   });
 
   await assert.rejects(
@@ -8441,7 +8826,7 @@ test("submitTransactionBatch rejects native transaction versioning failures befo
     fetchImpl: async () => {
       throw new Error("submitTransactionBatch should not issue a request");
     },
-    __nativeBinding: {
+    [TORII_TEST_NATIVE_BINDING]: {
       encodeSignedTransactionVersioned: () => {
         throw new Error("native versioning failed");
       },
@@ -8459,7 +8844,7 @@ test("submitTransactionBatch rejects an empty canonical encoder result before ne
     fetchImpl: async () => {
       throw new Error("submitTransactionBatch should not issue a request");
     },
-    __nativeBinding: {
+    [TORII_TEST_NATIVE_BINDING]: {
       encodeSignedTransactionVersioned: () => Buffer.alloc(0),
     },
   });
@@ -8507,7 +8892,7 @@ test("submitTransactionBatch rejects native batch encoder failures without posti
   };
   const client = new ToriiClient(BASE_URL, {
     fetchImpl,
-    __nativeBinding: canonicalTransactionCodecNative({
+    [TORII_TEST_NATIVE_BINDING]: canonicalTransactionCodecNative({
       encodeTransactionPayloadBatch: () => {
         throw new Error("native batch encoder failed");
       },
@@ -8564,7 +8949,7 @@ test("submitTransactionBatch rejects malformed accepted-count admission headers"
   };
   const client = new ToriiClient(BASE_URL, {
     fetchImpl,
-    __nativeBinding: canonicalTransactionCodecNative(),
+    [TORII_TEST_NATIVE_BINDING]: canonicalTransactionCodecNative(),
   });
 
   await assert.rejects(
@@ -8597,7 +8982,7 @@ test("submitTransactionBatch requires a canonical accepted-count admission heade
     };
     const client = new ToriiClient(BASE_URL, {
       fetchImpl,
-      __nativeBinding: canonicalTransactionCodecNative(),
+      [TORII_TEST_NATIVE_BINDING]: canonicalTransactionCodecNative(),
     });
     await assert.rejects(
       () => client.submitTransactionBatch([Buffer.from([0x01, 0xde, 0xad])]),
@@ -8625,7 +9010,7 @@ test("submitTransactionBatch never retries a lost POST response", async () => {
     maxRetries: 9,
     retryMethods: ["POST"],
     retryStatuses: [503],
-    __nativeBinding: canonicalTransactionCodecNative(),
+    [TORII_TEST_NATIVE_BINDING]: canonicalTransactionCodecNative(),
   });
 
   await assert.rejects(
@@ -8656,7 +9041,7 @@ test("submitTransactionBatch never retries retryable HTTP statuses", async () =>
     maxRetries: 9,
     retryMethods: ["POST"],
     retryStatuses: [503],
-    __nativeBinding: canonicalTransactionCodecNative(),
+    [TORII_TEST_NATIVE_BINDING]: canonicalTransactionCodecNative(),
   });
 
   await assert.rejects(
@@ -8685,7 +9070,7 @@ test("submitTransactionBatch rejects 308 without redirecting or retrying", async
     maxRetries: 9,
     retryMethods: ["POST"],
     retryStatuses: [308],
-    __nativeBinding: canonicalTransactionCodecNative(),
+    [TORII_TEST_NATIVE_BINDING]: canonicalTransactionCodecNative(),
   });
 
   await assert.rejects(
@@ -8707,7 +9092,7 @@ test("submitTransaction rejects framed signed transactions before any request", 
       fetchCalls += 1;
       throw new Error("framed transaction must fail before fetch");
     },
-    __nativeBinding: canonicalTransactionCodecNative(),
+    [TORII_TEST_NATIVE_BINDING]: canonicalTransactionCodecNative(),
   });
   await assert.rejects(
     () => client.submitTransaction(framedPayload),
@@ -8723,7 +9108,7 @@ test("submitTransaction requires the canonical native V1 validator before any re
       fetchCalls += 1;
       throw new Error("unvalidated transaction must fail before fetch");
     },
-    __nativeBinding: {},
+    [TORII_TEST_NATIVE_BINDING]: {},
   });
   await assert.rejects(
     () => client.submitTransaction(Buffer.from([0x01, 0xaa])),
@@ -8750,7 +9135,7 @@ test("submitTransaction never retries a retryable HTTP status", async () => {
     maxRetries: 9,
     retryMethods: ["POST"],
     retryStatuses: [503],
-    __nativeBinding: canonicalTransactionCodecNative(),
+    [TORII_TEST_NATIVE_BINDING]: canonicalTransactionCodecNative(),
   });
   await assert.rejects(
     () => client.submitTransaction(payload),
@@ -8779,7 +9164,7 @@ test("submitTransaction never retries a network failure after dispatch", async (
     fetchImpl,
     maxRetries: 9,
     retryMethods: ["POST"],
-    __nativeBinding: canonicalTransactionCodecNative(),
+    [TORII_TEST_NATIVE_BINDING]: canonicalTransactionCodecNative(),
   });
   await assert.rejects(
     () => client.submitTransaction(payload),
@@ -8812,7 +9197,7 @@ test("submitTransaction never retries its authenticated capability preflight", a
     fetchImpl,
     maxRetries: 2,
     backoffInitialMs: 0,
-    __nativeBinding: canonicalTransactionCodecNative(),
+    [TORII_TEST_NATIVE_BINDING]: canonicalTransactionCodecNative(),
   });
 
   await assert.rejects(
@@ -8844,7 +9229,7 @@ for (const redirectStatus of [307, 308]) {
       maxRetries: 9,
       retryMethods: ["POST"],
       retryStatuses: [redirectStatus],
-      __nativeBinding: canonicalTransactionCodecNative(),
+      [TORII_TEST_NATIVE_BINDING]: canonicalTransactionCodecNative(),
     });
 
     await assert.rejects(
@@ -8905,7 +9290,7 @@ test("submitTransaction rejects unavailable pipeline submit", async () => {
     }
     throw new Error(`Unexpected URL ${url}`);
   };
-  const client = new ToriiClient(BASE_URL, { fetchImpl, __nativeBinding: nativeBinding });
+  const client = new ToriiClient(BASE_URL, { fetchImpl, [TORII_TEST_NATIVE_BINDING]: nativeBinding });
   await assert.rejects(() => client.submitTransaction(payload), /405/);
   assert.deepEqual(seenUrls, [
     `${BASE_URL}/v1/node/capabilities`,
@@ -8958,7 +9343,7 @@ test("submitTransaction posts unchanged canonical VersionedSignedTransaction V1 
     }
     assert.equal(url, `${BASE_URL}/v1/pipeline/transactions`);
     assert.equal(init.method, "POST");
-    assert.equal(init.signal, controller.signal);
+    assertRequestSignal(init.signal, controller.signal);
     assert.equal(init.headers["Content-Type"], "application/x-norito");
     assert.deepEqual([...Buffer.from(init.body).values()], [...payload]);
     return createResponse({
@@ -8967,7 +9352,7 @@ test("submitTransaction posts unchanged canonical VersionedSignedTransaction V1 
       headers: { "content-type": "application/json" },
     });
   };
-  const client = new ToriiClient(BASE_URL, { fetchImpl, __nativeBinding: nativeBinding });
+  const client = new ToriiClient(BASE_URL, { fetchImpl, [TORII_TEST_NATIVE_BINDING]: nativeBinding });
   const response = await client.submitTransaction(payload, {
     signal: controller.signal,
   });
@@ -9009,7 +9394,7 @@ test("submitTransaction rejects a native encoder result that changes the input",
     fetchCalls += 1;
     throw new Error("mutated signed transaction must fail before fetch");
   };
-  const client = new ToriiClient(BASE_URL, { fetchImpl, __nativeBinding: nativeBinding });
+  const client = new ToriiClient(BASE_URL, { fetchImpl, [TORII_TEST_NATIVE_BINDING]: nativeBinding });
   await assert.rejects(
     () => client.submitTransaction(payload),
     /not the exact canonical VersionedSignedTransaction V1 encoding/,
@@ -9067,7 +9452,7 @@ test("submitTransaction validates canonical versioned transaction payload exactl
       headers: { "content-type": "application/json" },
     });
   };
-  const client = new ToriiClient(BASE_URL, { fetchImpl, __nativeBinding: nativeBinding });
+  const client = new ToriiClient(BASE_URL, { fetchImpl, [TORII_TEST_NATIVE_BINDING]: nativeBinding });
   const response = await client.submitTransaction(payload);
   assert.deepEqual(response, { ok: true });
   assert.equal(versionedEncodeCalls, 1);
@@ -9089,7 +9474,7 @@ test("submitTransaction propagates canonical encoder rejection before any reques
     fetchCalls += 1;
     throw new Error("rejected transaction must fail before fetch");
   };
-  const client = new ToriiClient(BASE_URL, { fetchImpl, __nativeBinding: nativeBinding });
+  const client = new ToriiClient(BASE_URL, { fetchImpl, [TORII_TEST_NATIVE_BINDING]: nativeBinding });
   await assert.rejects(() => client.submitTransaction(payload), /schema mismatch/);
   assert.equal(nativeEncodeCalls, 1);
   assert.equal(fetchCalls, 0);
@@ -9145,7 +9530,7 @@ test("submitTransaction does not fall back to removed public submit route", asyn
     }
     throw new Error(`Unexpected URL ${url}`);
   };
-  const client = new ToriiClient(BASE_URL, { fetchImpl, __nativeBinding: nativeBinding });
+  const client = new ToriiClient(BASE_URL, { fetchImpl, [TORII_TEST_NATIVE_BINDING]: nativeBinding });
   await assert.rejects(() => client.submitTransaction(payload), /405/);
   assert.deepEqual(seenUrls, [
     `${BASE_URL}/v1/node/capabilities`,
@@ -9170,7 +9555,7 @@ test("submitTransaction rejects missing node capabilities advert", async () => {
   };
   const client = new ToriiClient(BASE_URL, {
     fetchImpl,
-    __nativeBinding: canonicalTransactionCodecNative(),
+    [TORII_TEST_NATIVE_BINDING]: canonicalTransactionCodecNative(),
   });
   await assert.rejects(
     () => client.submitTransaction(payload),
@@ -9221,7 +9606,7 @@ test("submitTransaction rejects mismatched data model version", async () => {
   };
   const client = new ToriiClient(BASE_URL, {
     fetchImpl,
-    __nativeBinding: canonicalTransactionCodecNative(),
+    [TORII_TEST_NATIVE_BINDING]: canonicalTransactionCodecNative(),
   });
   await assert.rejects(
     () => client.submitTransaction(payload),
@@ -9492,7 +9877,7 @@ test("getTransactionStatus forwards signal to fetch", async () => {
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   await client.getTransactionStatus(hashHex, { signal: controller.signal });
-  assert.equal(capturedSignal, controller.signal);
+  assertRequestSignal(capturedSignal, controller.signal);
 });
 
 test("getTransactionStatus validates signal option type", async () => {
@@ -10159,7 +10544,7 @@ test("getPipelineRecoveryFastpqProofs fetches committed proof batches", async ()
   const fetchImpl = async (url, init) => {
     capturedUrl = url;
     assert.equal(init?.method, "GET");
-    assert.equal(init?.signal, controller.signal);
+    assertRequestSignal(init?.signal, controller.signal);
     return createResponse({
       status: 200,
       jsonData: fixture,
@@ -10838,7 +11223,7 @@ test("getHealth requests JSON snapshot", async () => {
   assert.deepEqual(payload, { status: "healthy" });
 });
 
-test("getHealth returns null for non-JSON responses", async () => {
+test("getHealth rejects non-JSON protocol responses", async () => {
   const fetchImpl = async () =>
     createResponse({
       status: 200,
@@ -10846,8 +11231,10 @@ test("getHealth returns null for non-JSON responses", async () => {
       headers: { "content-type": "text/plain; charset=utf-8" },
     });
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const payload = await client.getHealth();
-  assert.equal(payload, null);
+  await assert.rejects(
+    () => client.getHealth(),
+    /must use application\/json/u,
+  );
 });
 
 test("getHealth returns null when the body is empty", async () => {
@@ -11796,6 +12183,36 @@ test("getSumeragiStatusTyped requires exact lane-finality and merge projections"
     else commitment[field] = value;
     await assert.rejects(() => sumeragiClientForPayload(payload).getSumeragiStatusTyped());
   }
+});
+
+test("getSumeragiStatusTyped accepts aggregate top-up commitments beyond the retired cap", async () => {
+  const payload = createSumeragiV2StatusPayload();
+  const commitment = payload.last_commit_qc.certificate.execution_commitment;
+  commitment.kagemusha_top_up_root = fakeSumeragiHash(0x38);
+  commitment.kagemusha_top_up_count = 1_000;
+
+  const parsed = await sumeragiClientForPayload(payload).getSumeragiStatusTyped();
+  assert.equal(
+    parsed.last_commit_qc.certificate.execution_commitment.kagemusha_top_up_count,
+    1_000,
+  );
+
+  const missingRoot = createSumeragiV2StatusPayload();
+  delete missingRoot.last_commit_qc.certificate.execution_commitment
+    .kagemusha_top_up_root;
+  await assert.rejects(
+    () => sumeragiClientForPayload(missingRoot).getSumeragiStatusTyped(),
+    /kagemusha_top_up_root is required/u,
+  );
+
+  const legacy = createSumeragiV2StatusPayload();
+  const legacyCommitment = legacy.last_commit_qc.certificate.execution_commitment;
+  legacyCommitment.topup_anchor_root = fakeSumeragiHash(0x38);
+  legacyCommitment.topup_anchor_count = 1;
+  await assert.rejects(
+    () => sumeragiClientForPayload(legacy).getSumeragiStatusTyped(),
+    /unknown field topup_anchor_root/u,
+  );
 });
 
 test("package distribution requires a nullable exact V1 merge carrier projection", async () => {
@@ -13506,7 +13923,7 @@ test("getStatusSnapshot forwards AbortSignal", async () => {
   const fetchImpl = async (url, init) => {
     assert.equal(url, `${BASE_URL}/status`);
     assert.equal(init.headers.Accept, "application/json");
-    assert.strictEqual(init.signal, controller.signal);
+    assertRequestSignal(init.signal, controller.signal);
     return createResponse({
       status: 200,
       jsonData: { peers: 1, queue_size: 0, commit_time_ms: 1 },
@@ -14112,8 +14529,8 @@ registerToriiClientGovernanceTests({
   ToriiClient,
   ValidationError,
   ValidationErrorCode,
+  assertRequestSignal,
   cloneFixture,
-  configureCurveSupport,
   createResponse,
   expectValidationErrorFixture,
   parseStrictLosslessIntegerJson,
@@ -14122,12 +14539,32 @@ registerToriiClientGovernanceTests({
   toriiFixtures,
 });
 
-test("listSumeragiEvidence encodes query parameters", async () => {
+function canonicalSumeragiEvidenceRecord(overrides = {}) {
+  return {
+    kind: "SumeragiV2Equivocation",
+    class: "phase_vote",
+    height: 31,
+    view: 4,
+    epoch: 2,
+    signer: 3,
+    context_id: "11".repeat(32),
+    artifact_hash_1: "22".repeat(32),
+    artifact_hash_2: "33".repeat(32),
+    recorded_height: 40,
+    recorded_view: 2,
+    recorded_ms: 1_700_000_000_000,
+    consensus_admitted_height: 41,
+    penalty_status: { status: "pending", details: null },
+    ...overrides,
+  };
+}
+
+test("listSumeragiEvidence encodes the bounded canonical query", async () => {
   let observedSignal;
   const fetchImpl = async (url, init) => {
     assert.equal(
       url,
-      `${BASE_URL}/v1/sumeragi/evidence?limit=25&offset=5&kind=DoublePrepare`,
+      `${BASE_URL}/v1/sumeragi/evidence?limit=25&offset=5&kind=SumeragiV2Equivocation`,
     );
     assert.equal(init.headers.Accept, "application/json");
     observedSignal = init.signal;
@@ -14135,23 +14572,8 @@ test("listSumeragiEvidence encodes query parameters", async () => {
     return createResponse({
       status: 200,
       jsonData: {
-        total: 1,
-        items: [
-          {
-            kind: "DoublePrepare",
-            phase: "Prepare",
-            height: 10,
-            view: 2,
-            epoch: 1,
-            signer: 0,
-            block_hash_1: "aa".repeat(32),
-            block_hash_2: "bb".repeat(32),
-            recorded_height: 10,
-            recorded_view: 2,
-            recorded_ms: 123,
-            consensus_admitted_height: null,
-          },
-        ],
+        total: 6,
+        items: [canonicalSumeragiEvidenceRecord()],
       },
       headers: { "content-type": "application/json" },
     });
@@ -14161,22 +14583,35 @@ test("listSumeragiEvidence encodes query parameters", async () => {
   const payload = await client.listSumeragiEvidence({
     limit: 25,
     offset: 5,
-    kind: "DoublePrepare",
+    kind: "SumeragiV2Equivocation",
     signal: controller.signal,
   });
-  assert.equal(payload.total, 1);
+  assert.equal(payload.total, 6);
   assert.equal(payload.items.length, 1);
-  assert.equal(payload.items[0].kind, "DoublePrepare");
+  assert.deepEqual(payload.items[0], canonicalSumeragiEvidenceRecord());
   controller.abort();
-  assert.ok(observedSignal?.aborted);
+  assert.equal(observedSignal?.aborted, false, "completed requests detach caller abort listeners");
 });
 
 test("listSumeragiEvidence rejects invalid kind", async () => {
   const client = new ToriiClient(BASE_URL, { fetchImpl: async () => createResponse({ status: 200 }) });
   await assert.rejects(
-    () => client.listSumeragiEvidence({ kind: "Invalid" }),
-    /kind must be one of/,
+    () => client.listSumeragiEvidence({ kind: "DoublePrepare" }),
+    /kind must be SumeragiV2Equivocation/,
   );
+});
+
+test("listSumeragiEvidence rejects out-of-range pagination before dispatch", async () => {
+  let calls = 0;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      calls += 1;
+      return createResponse({ status: 200 });
+    },
+  });
+  await assert.rejects(() => client.listSumeragiEvidence({ limit: 1001 }), /limit must be <= 1000/);
+  await assert.rejects(() => client.listSumeragiEvidence({ offset: 10001 }), /offset must be <= 10000/);
+  assert.equal(calls, 0);
 });
 
 test("listSumeragiEvidence accepts the exact v2 equivocation kind filter", async () => {
@@ -14205,7 +14640,7 @@ test("listSumeragiEvidence rejects unsupported options", async () => {
   await assert.rejects(
     () =>
       client.listSumeragiEvidence({
-        kind: "DoublePrepare",
+        kind: "SumeragiV2Equivocation",
         limit: 1,
         note: "extra",
       }),
@@ -14213,179 +14648,33 @@ test("listSumeragiEvidence rejects unsupported options", async () => {
   );
 });
 
-test("listSumeragiEvidence normalizes evidence payloads", async () => {
-  const fetchImpl = async () =>
-    createResponse({
-      status: 200,
-      jsonData: {
-        total: 5,
-        items: [
-          {
-            kind: "DoublePrepare",
-            phase: "Prepare",
-            height: 42,
-            view: 7,
-            epoch: 3,
-            signer: 1,
-            block_hash_1: "aa".repeat(32),
-            block_hash_2: "bb".repeat(32),
-            recorded_height: 80,
-            recorded_view: 1,
-            recorded_ms: 1234,
-            consensus_admitted_height: 79,
-          },
-          {
-            kind: "Censorship",
-            tx_hash: "44".repeat(32),
-            receipt_count: 2,
-            submitted_at_height_min: 10,
-            submitted_at_height_max: 12,
-            signers: ["alice@test", "bob@test"],
-            recorded_height: 81,
-            recorded_view: 3,
-            recorded_ms: 1500,
-            consensus_admitted_height: null,
-          },
-          {
-            kind: "InvalidQc",
-            height: 2,
-            view: 3,
-            epoch: 4,
-            subject_block_hash: "11".repeat(32),
-            phase: "Commit",
-            reason: "bad qc",
-            recorded_height: 82,
-            recorded_view: 4,
-            recorded_ms: 1600,
-            consensus_admitted_height: null,
-          },
-          {
-            kind: "InvalidProposal",
-            height: 6,
-            view: 7,
-            epoch: 8,
-            subject_block_hash: "22".repeat(32),
-            payload_hash: "33".repeat(32),
-            reason: "bad payload",
-            recorded_height: 83,
-            recorded_view: 5,
-            recorded_ms: 1700,
-            consensus_admitted_height: null,
-          },
-          {
-            kind: "SumeragiV2Equivocation",
-            class: "phase_vote",
-            height: 9,
-            view: 10,
-            epoch: 11,
-            signer: 2,
-            context_id: "55".repeat(32),
-            artifact_hash_1: "66".repeat(32),
-            artifact_hash_2: "77".repeat(32),
-            recorded_height: 84,
-            recorded_view: 6,
-            recorded_ms: 1800,
-            consensus_admitted_height: 84,
-          },
-        ],
-      },
-      headers: { "content-type": "application/json" },
-    });
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const payload = await client.listSumeragiEvidence();
-  assert.equal(payload.total, 5);
-  assert.deepEqual(payload.items, [
-    {
-      kind: "DoublePrepare",
-      recorded_height: 80,
-      recorded_view: 1,
-      recorded_ms: 1234,
-      consensus_admitted_height: 79,
-      phase: "Prepare",
-      height: 42,
-      view: 7,
-      epoch: 3,
-      signer: 1,
-      block_hash_1: "aa".repeat(32),
-      block_hash_2: "bb".repeat(32),
-    },
-    {
-      kind: "Censorship",
-      recorded_height: 81,
-      recorded_view: 3,
-      recorded_ms: 1500,
-      consensus_admitted_height: null,
-      tx_hash: "44".repeat(32),
-      receipt_count: 2,
-      signers: ["alice@test", "bob@test"],
-      submitted_at_height_min: 10,
-      submitted_at_height_max: 12,
-    },
-    {
-      kind: "InvalidQc",
-      recorded_height: 82,
-      recorded_view: 4,
-      recorded_ms: 1600,
-      consensus_admitted_height: null,
-      height: 2,
-      view: 3,
-      epoch: 4,
-      subject_block_hash: "11".repeat(32),
-      phase: "Commit",
-      reason: "bad qc",
-    },
-    {
-      kind: "InvalidProposal",
-      recorded_height: 83,
-      recorded_view: 5,
-      recorded_ms: 1700,
-      consensus_admitted_height: null,
-      height: 6,
-      view: 7,
-      epoch: 8,
-      subject_block_hash: "22".repeat(32),
-      payload_hash: "33".repeat(32),
-      reason: "bad payload",
-    },
-    {
-      kind: "SumeragiV2Equivocation",
-      recorded_height: 84,
-      recorded_view: 6,
-      recorded_ms: 1800,
-      consensus_admitted_height: 84,
-      class: "phase_vote",
-      height: 9,
-      view: 10,
-      epoch: 11,
-      signer: 2,
-      context_id: "55".repeat(32),
-      artifact_hash_1: "66".repeat(32),
-      artifact_hash_2: "77".repeat(32),
-    },
-  ]);
-});
-
-test("listSumeragiEvidence rejects malformed payloads", async () => {
+test("listSumeragiEvidence normalizes the closed evidence payload", async () => {
+  const canonical = canonicalSumeragiEvidenceRecord({
+    penalty_status: { status: "applied", details: { height: 84 } },
+  });
   const fetchImpl = async () =>
     createResponse({
       status: 200,
       jsonData: {
         total: 1,
-        items: [
-          {
-            kind: "DoublePrepare",
-            phase: "Prepare",
-            height: 1,
-            view: 0,
-            epoch: 0,
-            signer: 0,
-            block_hash_1: "aa".repeat(32),
-            block_hash_2: "bb".repeat(32),
-            recorded_view: 0,
-            recorded_ms: 0,
-            consensus_admitted_height: null,
-          },
-        ],
+        items: [canonical],
+      },
+      headers: { "content-type": "application/json" },
+    });
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const payload = await client.listSumeragiEvidence();
+  assert.deepEqual(payload, { total: 1, items: [canonical] });
+});
+
+test("listSumeragiEvidence rejects malformed payloads", async () => {
+  const item = canonicalSumeragiEvidenceRecord();
+  delete item.recorded_height;
+  const fetchImpl = async () =>
+    createResponse({
+      status: 200,
+      jsonData: {
+        total: 1,
+        items: [item],
       },
       headers: { "content-type": "application/json" },
     });
@@ -14393,106 +14682,161 @@ test("listSumeragiEvidence rejects malformed payloads", async () => {
   await assert.rejects(() => client.listSumeragiEvidence(), /recorded_height/);
 });
 
-test("listSumeragiEvidence rejects retired censorship height aliases", async () => {
-  const canonical = {
-    kind: "Censorship",
-    tx_hash: "44".repeat(32),
-    receipt_count: 1,
-    signers: ["alice@test"],
-    submitted_at_height_min: 10,
-    submitted_at_height_max: 10,
-    recorded_height: 11,
-    recorded_view: 0,
-    recorded_ms: 12,
-    consensus_admitted_height: null,
-  };
+test("listSumeragiEvidence requires the exact page envelope", async () => {
   await Promise.all(
     [
-      "min_height",
-      "max_height",
-      "minHeight",
-      "maxHeight",
-      "submittedAtHeightMin",
-      "submittedAtHeightMax",
-    ].map(async (alias) => {
+      [{ items: [] }, /missing total/],
+      [{ total: 0 }, /missing items/],
+      [{ total: 0, items: [], cursor: null }, /unexpected cursor/],
+      [{ total: "0", items: [] }, /total must be an unsigned JSON integer/],
+    ].map(async ([payload, expected]) => {
       const client = new ToriiClient(BASE_URL, {
         fetchImpl: async () =>
           createResponse({
             status: 200,
-            jsonData: { total: 1, items: [{ ...canonical, [alias]: 10 }] },
+            jsonData: payload,
             headers: { "content-type": "application/json" },
           }),
       });
-      await assert.rejects(() => client.listSumeragiEvidence(), /exact server fields/);
+      await assert.rejects(() => client.listSumeragiEvidence(), expected);
     }),
   );
 });
 
+test("listSumeragiEvidence rejects impossible or oversized pages", async () => {
+  for (const [options, payload, expected] of [
+    [
+      {},
+      { total: 51, items: Array.from({ length: 51 }, () => canonicalSumeragiEvidenceRecord()) },
+      /at most 50 records/,
+    ],
+    [
+      { offset: 1 },
+      { total: 1, items: [canonicalSumeragiEvidenceRecord()] },
+      /must cover offset plus returned items/,
+    ],
+  ]) {
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () =>
+        createResponse({
+          status: 200,
+          jsonData: payload,
+          headers: { "content-type": "application/json" },
+        }),
+    });
+    await assert.rejects(() => client.listSumeragiEvidence(options), expected);
+  }
+});
+
+test("listSumeragiEvidence accepts an empty page beyond the total", async () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () =>
+      createResponse({
+        status: 200,
+        jsonData: { total: 1, items: [] },
+        headers: { "content-type": "application/json" },
+      }),
+  });
+
+  assert.deepEqual(await client.listSumeragiEvidence({ offset: 10 }), {
+    total: 1,
+    items: [],
+  });
+});
+
+test("Sumeragi evidence reads preserve the full unsigned 64-bit range", async () => {
+  const maximum = "18446744073709551615";
+  const marker = "__U64_MAX__";
+  const item = canonicalSumeragiEvidenceRecord({
+    height: marker,
+    view: marker,
+    epoch: marker,
+    recorded_height: marker,
+    recorded_view: marker,
+    recorded_ms: marker,
+    consensus_admitted_height: marker,
+    penalty_status: { status: "applied", details: { height: marker } },
+  });
+  const listBody = JSON.stringify({ total: marker, items: [item] }).replaceAll(
+    `"${marker}"`,
+    maximum,
+  );
+  const countBody = `{"count":${maximum}}`;
+  const responses = [listBody, countBody];
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () =>
+      createResponse({
+        status: 200,
+        textBody: responses.shift(),
+        headers: { "content-type": "application/json" },
+      }),
+  });
+
+  const page = await client.listSumeragiEvidence();
+  assert.equal(page.total, 18446744073709551615n);
+  for (const field of [
+    "height",
+    "view",
+    "epoch",
+    "recorded_height",
+    "recorded_view",
+    "recorded_ms",
+    "consensus_admitted_height",
+  ]) {
+    assert.equal(page.items[0][field], 18446744073709551615n);
+  }
+  assert.equal(page.items[0].penalty_status.details.height, 18446744073709551615n);
+  assert.equal((await client.getSumeragiEvidenceCount()).count, 18446744073709551615n);
+});
+
+test("listSumeragiEvidence enforces its JSON media type and byte ceiling", async () => {
+  const canonicalBody = '{"total":0,"items":[]}';
+  for (const [textBody, headers, expected] of [
+    [canonicalBody, { "content-type": "text/plain" }, /application\/json media type/],
+    [
+      canonicalBody,
+      {
+        "content-type": "application/json",
+        "content-length": String(1024 * 1024 + 1),
+      },
+      /exceeds the 1048576-byte response limit/,
+    ],
+    [
+      canonicalBody.padEnd(1024 * 1024 + 1, " "),
+      { "content-type": "application/json" },
+      /exceeds the 1048576-byte response limit/,
+    ],
+  ]) {
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () =>
+        createResponse({
+          status: 200,
+          textBody,
+          headers,
+        }),
+    });
+    await assert.rejects(() => client.listSumeragiEvidence(), expected);
+  }
+});
+
 test("listSumeragiEvidence rejects malformed exact evidence shapes", async () => {
-  const equivocation = {
-    kind: "SumeragiV2Equivocation",
-    class: "proposal",
-    height: 10,
-    view: 2,
-    epoch: 1,
-    signer: 3,
-    context_id: "11".repeat(32),
-    artifact_hash_1: "22".repeat(32),
-    artifact_hash_2: "33".repeat(32),
-    recorded_height: 12,
-    recorded_view: 0,
-    recorded_ms: 13,
-    consensus_admitted_height: null,
-  };
+  const equivocation = canonicalSumeragiEvidenceRecord({ class: "proposal" });
   const missingContext = { ...equivocation };
   delete missingContext.context_id;
   const cases = [
     [{ ...equivocation, class: "Prepare" }, /\.class must be one of/],
-    [{ ...equivocation, signer: "3" }, /\.signer must be a non-negative JSON safe integer/],
-    [{ ...equivocation, signer: 0x100000000 }, /\.signer must be a non-negative JSON safe integer/],
+    [{ ...equivocation, signer: "3" }, /\.signer must be an unsigned JSON integer/],
+    [{ ...equivocation, signer: 0x100000000 }, /\.signer must be at most 4294967295/],
     [{ ...equivocation, context_id: "AA".repeat(32) }, /exact lowercase 32-byte hex/],
     [{ ...equivocation, artifact_hash_2: "22".repeat(32) }, /distinct artifacts/],
     [missingContext, /missing context_id/],
-    [
-      {
-        kind: "UnknownEvidence",
-        recorded_height: 11,
-        recorded_view: 0,
-        recorded_ms: 12,
-        consensus_admitted_height: null,
-      },
-      /\.kind must be one of/,
-    ],
-    [
-      {
-        kind: "Censorship",
-        tx_hash: "44".repeat(32),
-        receipt_count: 2,
-        signers: ["alice@test"],
-        submitted_at_height_min: 10,
-        submitted_at_height_max: 9,
-        recorded_height: 11,
-        recorded_view: 0,
-        recorded_ms: 12,
-        consensus_admitted_height: null,
-      },
-      /receipt_count must equal signers\.length/,
-    ],
-    [
-      {
-        kind: "Censorship",
-        tx_hash: "44".repeat(32),
-        receipt_count: 1,
-        signers: ["alice@test"],
-        submitted_at_height_min: 10,
-        submitted_at_height_max: 9,
-        recorded_height: 11,
-        recorded_view: 0,
-        recorded_ms: 12,
-        consensus_admitted_height: null,
-      },
-      /submitted_at_height_min must be <= submitted_at_height_max/,
-    ],
+    [{ ...equivocation, kind: "DoublePrepare" }, /kind must be SumeragiV2Equivocation/],
+    [{ ...equivocation, consensus_admitted_height: null }, /consensus_admitted_height/],
+    [{ ...equivocation, penalty_status: { status: "pending", details: {} } }, /details must be null/],
+    [{ ...equivocation, penalty_status: { status: "applied", details: null } }, /must be an object/],
+    [{ ...equivocation, penalty_status: { status: "cancelled", details: { height: 8, note: "x" } } }, /unexpected note/],
+    [{ ...equivocation, penalty_status: { status: "retired", details: null } }, /must be pending, applied, or cancelled/],
+    [{ ...equivocation, penalty_applied: false }, /unexpected penalty_applied/],
   ];
   await Promise.all(
     cases.map(async ([item, expected]) => {
@@ -14519,6 +14863,46 @@ test("getSumeragiEvidenceCount returns count payload", async () => {
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const result = await client.getSumeragiEvidenceCount();
   assert.deepEqual(result, { count: 7 });
+});
+
+test("getSumeragiEvidenceCount requires the exact count envelope", async () => {
+  for (const [payload, expected] of [
+    [{}, /missing count/],
+    [{ count: 1, total: 1 }, /unexpected total/],
+    [{ count: "1" }, /count must be an unsigned JSON integer/],
+  ]) {
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () =>
+        createResponse({
+          status: 200,
+          jsonData: payload,
+          headers: { "content-type": "application/json" },
+        }),
+    });
+    await assert.rejects(() => client.getSumeragiEvidenceCount(), expected);
+  }
+});
+
+test("getSumeragiEvidenceCount enforces the 1 KiB response ceiling", async () => {
+  const canonicalBody = '{"count":0}';
+  for (const [textBody, headers] of [
+    [
+      canonicalBody,
+      {
+        "content-type": "application/json",
+        "content-length": String(1024 + 1),
+      },
+    ],
+    [canonicalBody.padEnd(1024 + 1, " "), { "content-type": "application/json" }],
+  ]) {
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () => createResponse({ status: 200, textBody, headers }),
+    });
+    await assert.rejects(
+      () => client.getSumeragiEvidenceCount(),
+      /exceeds the 1024-byte response limit/,
+    );
+  }
 });
 
 test("getMetrics returns text when requested", async () => {
@@ -14586,7 +14970,7 @@ test("getMetrics forwards AbortSignal", async () => {
   const fetchImpl = async (url, init) => {
     assert.equal(url, `${BASE_URL}/v1/metrics`);
     assert.equal(init.headers.Accept, "application/json");
-    assert.strictEqual(init.signal, controller.signal);
+    assertRequestSignal(init.signal, controller.signal);
     return createResponse({
       status: 200,
       jsonData: { ok: true },
@@ -14738,7 +15122,7 @@ test("getBlock forwards AbortSignal", async () => {
   const controller = new AbortController();
   const fetchImpl = async (url, init) => {
     assert.equal(url, `${BASE_URL}/v1/explorer/blocks/7`);
-    assert.strictEqual(init.signal, controller.signal);
+    assertRequestSignal(init.signal, controller.signal);
     return createResponse({
       status: 200,
       jsonData: {
@@ -14771,17 +15155,21 @@ test("getBlock returns null when Torii replies 404", async () => {
   assert.equal(block, null);
 });
 
-test("listBlocks encodes pagination parameters", async () => {
+test("listBlocks encodes snapshot cursor pagination", async () => {
+  const cursor = "Y3Vyc29y";
+  const nextCursor = "bmV4dA";
+  const snapshotHash = "ab".repeat(32);
   const fetchImpl = async (url) => {
-    assert.equal(url, `${BASE_URL}/v1/explorer/blocks?page=2&per_page=5`);
+    assert.equal(url, `${BASE_URL}/v1/explorer/blocks?limit=5&cursor=${cursor}`);
     return createResponse({
       status: 200,
       jsonData: {
         pagination: {
-          page: 1,
-          per_page: 5,
-          total_pages: 2,
-          total_items: 8,
+          limit: 5,
+          snapshot_height: 8,
+          snapshot_hash: snapshotHash,
+          next_cursor: nextCursor,
+          has_more: true,
         },
         items: [
           {
@@ -14799,13 +15187,14 @@ test("listBlocks encodes pagination parameters", async () => {
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.listBlocks({ page: 2, perPage: 5 });
+  const result = await client.listBlocks({ cursor, limit: 5 });
   assert.deepEqual(result, {
     pagination: {
-      page: 1,
-      perPage: 5,
-      totalPages: 2,
-      totalItems: 8,
+      limit: 5,
+      snapshotHeight: 8,
+      snapshotHash,
+      nextCursor,
+      hasMore: true,
     },
     items: [
       {
@@ -14853,9 +15242,10 @@ test("listBlocks validates pagination bounds", async () => {
     /positive integer/,
   );
   await assert.rejects(
-    () => client.listBlocks({ page: -5 }),
-    /positive integer/,
+    () => client.listBlocks({ cursor: "padded==" }),
+    /canonical base64url without padding/,
   );
+  await assert.rejects(() => client.listBlocks({ limit: 101 }), /at most 100/);
 });
 
 test("listBlocks rejects non-object options", async () => {
@@ -14875,8 +15265,61 @@ test("listBlocks rejects unsupported option keys", async () => {
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   await assert.rejects(
-    () => client.listBlocks({ unexpected: true }),
-    /block list options contains unsupported fields: unexpected/,
+    () => client.listBlocks({ page: 2 }),
+    /block list options contains unsupported fields: page/,
+  );
+});
+
+test("listBlocks rejects retired totals and inconsistent snapshot metadata", async () => {
+  const responses = [
+    {
+      pagination: {
+        limit: 5,
+        snapshot_height: 8,
+        snapshot_hash: "ab".repeat(32),
+        next_cursor: null,
+        has_more: false,
+        total_items: 8,
+      },
+      items: [],
+    },
+    {
+      pagination: {
+        limit: 5,
+        snapshot_height: 0,
+        snapshot_hash: "ab".repeat(32),
+        next_cursor: null,
+        has_more: false,
+      },
+      items: [],
+    },
+    {
+      pagination: {
+        limit: 5,
+        snapshot_height: 8,
+        snapshot_hash: "ab".repeat(32),
+        next_cursor: null,
+        has_more: true,
+      },
+      items: [],
+    },
+  ];
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => createResponse({
+      status: 200,
+      jsonData: responses.shift(),
+      headers: { "content-type": "application/json" },
+    }),
+  });
+
+  await assert.rejects(() => client.listBlocks(), /unknown field total_items/);
+  await assert.rejects(
+    () => client.listBlocks(),
+    /snapshot_hash must be null exactly when snapshot_height is zero/,
+  );
+  await assert.rejects(
+    () => client.listBlocks(),
+    /has_more must match next_cursor availability/,
   );
 });
 
@@ -15213,9 +15656,9 @@ test("listNfts hits nft endpoint", async () => {
 
 test("listExplorerNfts validates cursor pagination and encodes filters", async () => {
   const calls = [];
-  const fetchImpl = async (url) => {
+  const fetchImpl = async (url, init) => {
     const parsed = new URL(url);
-    calls.push(parsed);
+    calls.push({ parsed, init });
     return createResponse({
       status: 200,
       jsonData: {
@@ -15235,7 +15678,13 @@ test("listExplorerNfts validates cursor pagination and encodes filters", async (
     limit: 5,
   });
   assert.equal(calls.length, 1);
-  const parsed = calls[0];
+  const { parsed, init } = calls[0];
+  assert.equal(init.redirect, "error");
+  assert.equal(
+    init.headers["X-Iroha-Account"],
+    AccountAddress.parseEncoded(APPLICATION_CANONICAL_AUTH.accountId).address.canonicalHex(),
+  );
+  assert.ok(init.headers["X-Iroha-Signature"]);
   assert.equal(parsed.pathname, "/v1/explorer/nfts");
   assert.equal(parsed.searchParams.get("owned_by"), SAMPLE_ACCOUNT_ID);
   assert.equal(parsed.searchParams.get("domain"), "wonderland");
@@ -15254,6 +15703,29 @@ test("listExplorerNfts validates cursor pagination and encodes filters", async (
     ownedBy: SAMPLE_ACCOUNT_ID,
     metadata: { role: "demo" },
   });
+});
+
+test("dataspace-visible Explorer reads stay anonymous without a default signer", async () => {
+  let capturedInit;
+  const client = new ToriiClient(BASE_URL, {
+    canonicalRequestAuth: null,
+    fetchImpl: async (_url, init) => {
+      capturedInit = init;
+      return createResponse({
+        status: 200,
+        jsonData: {
+          pagination: { limit: 25, next_cursor: null, has_more: false },
+          items: [],
+        },
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+
+  const page = await client.listExplorerNfts();
+  assert.deepEqual(page.items, []);
+  assert.equal(capturedInit.headers["X-Iroha-Account"], undefined);
+  assert.equal(capturedInit.headers["X-Iroha-Signature"], undefined);
 });
 
 test("world Explorer lists reject offset pagination and malformed cursor metadata", async () => {
@@ -16051,7 +16523,7 @@ test("listAccountPermissions rejects non-object options", async () => {
   });
   await assert.rejects(
     () => client.listAccountPermissions(FIXTURE_ALICE_ID, 1),
-    /listAccountPermissions options must be an object/,
+    /listAccountPermissions must be a plain object/,
   );
   assert.equal(fetchCalled, false);
 });
@@ -16097,7 +16569,7 @@ test("listAccountPermissions forwards AbortSignal instances", async () => {
     signal: controller.signal,
   });
   assert.ok(capturedInit);
-  assert.strictEqual(capturedInit.signal, controller.signal);
+  assertRequestSignal(capturedInit.signal, controller.signal);
 });
 
 test("iterateAccountPermissions paginates account-scoped permissions", async () => {
@@ -16676,7 +17148,7 @@ test("listContractEvents encodes generic contract event filters", async () => {
             provenance: "derived",
             authority: FIXTURE_ALICE_ID,
             timestamp_ms: 123,
-            tx_hash_hex: "abc",
+            tx_hash_hex: "ab".repeat(32),
             block_height: 9,
             block_hash_hex: "deadbeef",
             result_ok: true,
@@ -17271,8 +17743,26 @@ test("getGovernanceContract reads one governed binding", async () => {
       jsonData: {
         found: true,
         contract_address: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
+        contract_subject_account: FIXTURE_ALICE_ID,
         dataspace: "universal",
+        active: true,
+        lifecycle: {
+          version: 1,
+          origin: "direct",
+          origin_account: FIXTURE_ALICE_ID,
+          origin_proposal_content_id_hex: null,
+          origin_governance_attempt_id_hex: null,
+          owner: FIXTURE_ALICE_ID,
+          pending_owner: "parliament",
+          parliament_delegated: true,
+          active_code_hash_hex: fakeHashHex(0xaa),
+          revision: 7,
+          emergency_hold: null,
+        },
+        emergency_hold_active: false,
         code_hash_hex: fakeHashHex(0xaa),
+        abi_hash_hex: fakeHashHex(0xbb),
+        public_entrypoints: ["transfer", "view_balance"],
       },
       headers: { "content-type": "application/json" },
     });
@@ -17290,6 +17780,10 @@ test("getGovernanceContract reads one governed binding", async () => {
   assert.equal(result.found, true);
   assert.equal(result.dataspace, "universal");
   assert.equal(result.code_hash_hex, fakeHashHex(0xaa));
+  assert.equal(result.lifecycle.revision, 7);
+  assert.equal(result.lifecycle.active_code_hash_hex, fakeHashHex(0xaa));
+  assert.equal(result.lifecycle.pending_owner, "parliament");
+  assert.deepEqual(result.public_entrypoints, ["transfer", "view_balance"]);
 });
 
 test("iterateTriggers paginates list endpoint", async () => {
@@ -17365,6 +17859,7 @@ test("resolveToriiClientConfig merges config, env, and overrides", async () => {
     },
     () => {
       const resolved = resolveToriiClientConfig({
+        env: process.env,
         config: {
           torii: { apiTokens: ["from-config"] },
           toriiClient: {
@@ -17415,6 +17910,25 @@ test("removed transaction status fallback configuration fails fast", () => {
         },
       }),
     /transactionStatusScope is no longer supported/,
+  );
+});
+
+test("explicit Torii configuration wins over opt-in environment fallbacks", () => {
+  const resolved = resolveToriiClientConfig({
+    env: {
+      IROHA_TORII_TIMEOUT_MS: "999",
+      IROHA_TORII_AUTH_TOKEN: "ambient-auth",
+      IROHA_TORII_API_TOKEN: "ambient-api",
+    },
+    config: { toriiClient: { timeoutMs: 456, authToken: "config-auth" } },
+    overrides: { timeoutMs: 123, apiToken: "explicit-api" },
+  });
+  assert.equal(resolved.timeoutMs, 123);
+  assert.equal(resolved.authToken, "config-auth");
+  assert.equal(resolved.apiToken, "explicit-api");
+  assert.throws(
+    () => resolveToriiClientConfig({ overrides: { backoffMultiplier: 0.5 } }),
+    /backoffMultiplier must be at least 1/u,
   );
 });
 
@@ -17652,7 +18166,7 @@ test("ToriiClient.getConfigurationTyped returns null on 404", async () => {
   assert.strictEqual(snapshot, null);
 });
 
-test("ToriiClient applies default headers and tokens", async () => {
+test("ToriiClient ignores ambient credentials unless explicitly configured", async () => {
   await withEnv(
     {
       IROHA_TORII_API_TOKEN: "env-token",
@@ -17677,11 +18191,31 @@ test("ToriiClient applies default headers and tokens", async () => {
       assert.equal(captures.length, 1);
       const headers = captures[0].init.headers;
       assert.equal(headers["User-Agent"], "iroha-js");
-      assert.equal(headers["X-API-Token"], "env-token");
+      assert.equal(headers["X-API-Token"], undefined);
       assert.equal(headers["X-Iroha-API-Token"], undefined);
       assert.equal(headers.Authorization, "Bearer local-auth");
     },
   );
+});
+
+test("ToriiClient requires an exact boolean for insecure credential transport", () => {
+  let fetchCalls = 0;
+  const fetchImpl = async () => {
+    fetchCalls += 1;
+    throw new Error("unexpected fetch");
+  };
+  for (const allowInsecure of ["false", "true", 0, 1, {}, []]) {
+    assert.throws(
+      () =>
+        new ToriiClient("http://torii.example", {
+          allowInsecure,
+          authToken: "secret",
+          fetchImpl,
+        }),
+      /allowInsecure must be a boolean/u,
+    );
+  }
+  assert.equal(fetchCalls, 0);
 });
 
 test("ToriiClient retries retryable statuses", async () => {
@@ -17743,18 +18277,23 @@ test("ToriiClient emits retry telemetry events", async () => {
   assert.ok(event.durationMs >= 0);
 });
 
-test("ToriiClient enforces request timeout", async () => {
+test("ToriiClient composes request timeouts with caller cancellation", async () => {
   const fetchImpl = async (_url, init) =>
     new Promise((_, reject) => {
+      const abort = () => {
+        const abortError =
+          typeof DOMException !== "undefined"
+            ? new DOMException("Aborted", "AbortError")
+            : Object.assign(new Error("Aborted"), { name: "AbortError" });
+        reject(abortError);
+      };
+      if (init.signal?.aborted) {
+        abort();
+        return;
+      }
       init.signal?.addEventListener(
         "abort",
-        () => {
-          const abortError =
-            typeof DOMException !== "undefined"
-              ? new DOMException("Aborted", "AbortError")
-              : Object.assign(new Error("Aborted"), { name: "AbortError" });
-          reject(abortError);
-        },
+        abort,
         { once: true },
       );
     });
@@ -17763,19 +18302,59 @@ test("ToriiClient enforces request timeout", async () => {
     timeoutMs: 10,
     maxRetries: 0,
   });
+  const liveCaller = new AbortController();
   await assert.rejects(
-    () => client.listAttachments(canonicalReadOptions()),
+    () =>
+      client.listAttachments({
+        ...canonicalReadOptions(),
+        signal: liveCaller.signal,
+      }),
     /AbortError|aborted/i,
   );
+
+  const callerAbort = new AbortController();
+  const callerReason = new Error("caller stopped request");
+  const slowTimeoutClient = new ToriiClient(BASE_URL, {
+    fetchImpl,
+    timeoutMs: 1_000,
+    maxRetries: 0,
+  });
+  const pending = slowTimeoutClient.listAttachments({
+    ...canonicalReadOptions(),
+    signal: callerAbort.signal,
+  });
+  callerAbort.abort(callerReason);
+  await assert.rejects(pending, /AbortError|aborted/i);
 });
 
-test("streamEvents yields parsed SSE payloads", async () => {
+test("streamEvents signs the exact final path and query with the default identity", async () => {
   const fetchImpl = async (url, init) => {
     assert.equal(
       url,
       `${BASE_URL}/v1/events/sse?filter=${encodeURIComponent('{"Pipeline":{"Block":{}}}')}`,
     );
     assert.equal(init.headers["Last-Event-ID"], undefined);
+    assert.equal(init.redirect, "error");
+    assert.equal(
+      init.headers["X-Iroha-Account"],
+      AccountAddress.parseEncoded(
+        APPLICATION_CANONICAL_AUTH.accountId,
+      ).address.canonicalHex(),
+    );
+    const requestUrl = new URL(url);
+    const signatureMessage = canonicalRequestSignatureMessage({
+      networkId: VK_SIGNING_NETWORK_ID,
+      method: "GET",
+      path: requestUrl.pathname,
+      query: requestUrl.searchParams,
+      body: "",
+      timestampMs: Number(init.headers["X-Iroha-Timestamp-Ms"]),
+      nonce: init.headers["X-Iroha-Nonce"],
+    });
+    assert.deepEqual(
+      Buffer.from(init.headers["X-Iroha-Signature"], "base64"),
+      signEd25519(signatureMessage, APPLICATION_CANONICAL_AUTH.privateKey),
+    );
     return createSseResponse([
       "id: block-1\n",
       "event: pipeline.block\n",
@@ -17798,6 +18377,29 @@ test("streamEvents yields parsed SSE payloads", async () => {
   });
   const second = await iterator.next();
   assert.equal(second.done, true);
+});
+
+test("streamEvents stays anonymous when no default signer is configured", async () => {
+  let requestInit;
+  const client = new ToriiClient(BASE_URL, {
+    canonicalRequestAuth: null,
+    fetchImpl: async (_url, init) => {
+      requestInit = init;
+      return createSseResponse([
+        "event: pipeline.block\n",
+        'data: {"height":1}\n',
+        "\n",
+      ]);
+    },
+  });
+  const iterator = client.streamEvents();
+  assert.equal((await iterator.next()).done, false);
+  assert.equal((await iterator.next()).done, true);
+  assert.equal(requestInit.headers["X-Iroha-Account"], undefined);
+  assert.equal(requestInit.headers["X-Iroha-Signature"], undefined);
+  assert.equal(requestInit.headers["X-Iroha-Timestamp-Ms"], undefined);
+  assert.equal(requestInit.headers["X-Iroha-Nonce"], undefined);
+  assert.equal(requestInit.redirect, undefined);
 });
 
 test("streamEvents rejects unsupported production backend event filters before fetch", () => {
@@ -18039,7 +18641,11 @@ test("streamEvents retries SSE handshake using streaming profile", async () => {
       "\n",
     ]);
   };
-  const client = new ToriiClient(BASE_URL, { fetchImpl, maxRetries: 0 });
+  const client = new ToriiClient(BASE_URL, {
+    canonicalRequestAuth: null,
+    fetchImpl,
+    maxRetries: 0,
+  });
   const iterator = client.streamEvents();
   const first = await iterator.next();
   assert.equal(first.done, false);
@@ -18047,11 +18653,12 @@ test("streamEvents retries SSE handshake using streaming profile", async () => {
   assert.equal(attempts, 2);
 });
 
-test("streamSumeragiStatus streams SSE without filters", async () => {
-  let requestHeaders;
+test("streamSumeragiStatus signs each one-shot SSE subscription", async () => {
+  const requests = [];
   const fetchImpl = async (url, init) => {
-    requestHeaders = init.headers;
+    requests.push(init);
     assert.equal(url, `${BASE_URL}/v1/sumeragi/status/sse`);
+    assert.equal(init.redirect, "error");
     return createSseResponse([
       "event: sumeragi.status\n",
       'data: {"view":2}\n',
@@ -18071,7 +18678,34 @@ test("streamSumeragiStatus streams SSE without filters", async () => {
   });
   const next = await iterator.next();
   assert.equal(next.done, true);
-  assert.equal(requestHeaders.Accept, "text/event-stream");
+  const secondIterator = client.streamSumeragiStatus();
+  await secondIterator.next();
+  await secondIterator.next();
+  assert.equal(requests.length, 2);
+  for (const request of requests) {
+    assert.equal(request.headers.Accept, "text/event-stream");
+    assert.ok(request.headers["X-Iroha-Operator-Public-Key"]);
+    assert.ok(request.headers["X-Iroha-Operator-Signature"]);
+  }
+  assert.notEqual(
+    requests[0].headers["X-Iroha-Operator-Nonce"],
+    requests[1].headers["X-Iroha-Operator-Nonce"],
+  );
+});
+
+test("streamSumeragiStatus rejects a missing operator signer before fetch", () => {
+  let calls = 0;
+  const client = new SourceToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      calls += 1;
+      throw new Error("fetch must not run");
+    },
+  });
+  assert.throws(
+    () => client.streamSumeragiStatus(),
+    /requires an immutable OperatorSigningContext/u,
+  );
+  assert.equal(calls, 0);
 });
 
 test("streamEvents rejects unsupported filter types", () => {
@@ -18556,7 +19190,7 @@ test("listKaigiRelays forwards AbortSignal", async () => {
   const controller = new AbortController();
   const fetchImpl = async (url, init) => {
     assert.equal(url, `${BASE_URL}/v1/kaigi/relays`);
-    assert.strictEqual(init.signal, controller.signal);
+    assertRequestSignal(init.signal, controller.signal);
     return createResponse({
       status: 200,
       jsonData: { total: 0, items: [] },
@@ -18678,7 +19312,7 @@ test("getKaigiRelay forwards AbortSignal", async () => {
   const controller = new AbortController();
   const fetchImpl = async (url, init) => {
     assert.equal(url, `${BASE_URL}/v1/kaigi/relays/${encodeURIComponent(relayId)}`);
-    assert.strictEqual(init.signal, controller.signal);
+    assertRequestSignal(init.signal, controller.signal);
     return createResponse({
       status: 200,
       jsonData: {
@@ -18774,7 +19408,7 @@ test("getKaigiRelaysHealth forwards AbortSignal", async () => {
   const controller = new AbortController();
   const fetchImpl = async (url, init) => {
     assert.equal(url, `${BASE_URL}/v1/kaigi/relays/health`);
-    assert.strictEqual(init.signal, controller.signal);
+    assertRequestSignal(init.signal, controller.signal);
     return createResponse({
       status: 200,
       jsonData: {
@@ -19494,7 +20128,7 @@ test("listProverReports forwards AbortSignal options", async () => {
     },
   });
   await client.listProverReports({}, { signal: controller.signal });
-  assert.strictEqual(capturedSignal, controller.signal);
+  assertRequestSignal(capturedSignal, controller.signal);
 });
 
 test("countProverReports rejects invalid AbortSignal option", async () => {
@@ -19516,7 +20150,7 @@ test("getProverReport fetches report by id", async () => {
   const controller = new AbortController();
   const fetchImpl = async (url, init) => {
     assert.equal(url, `${BASE_URL}/v1/zk/prover/reports/r-1`);
-    assert.strictEqual(init?.signal, controller.signal);
+    assertRequestSignal(init?.signal, controller.signal);
     return createResponse({
       status: 200,
       jsonData: {
@@ -19556,7 +20190,7 @@ test("deleteProverReport issues delete", async () => {
     called = true;
     assert.equal(url, `${BASE_URL}/v1/zk/prover/reports/r-2`);
     assert.equal(init.method, "DELETE");
-    assert.strictEqual(init.signal, controller.signal);
+    assertRequestSignal(init.signal, controller.signal);
     return createResponse({ status: 204 });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
@@ -19584,7 +20218,7 @@ test("countProverReports returns parsed count", async () => {
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const count = await client.countProverReports({ failed_only: true }, { signal: controller.signal });
   assert.equal(count, 7);
-  assert.strictEqual(capturedSignal, controller.signal);
+  assertRequestSignal(capturedSignal, controller.signal);
   const missingPayloadClient = new ToriiClient(BASE_URL, {
     fetchImpl: async () => createResponse({ status: 200, jsonData: {} }),
   });
@@ -23268,7 +23902,7 @@ test("IVM response endpoints enforce declared caps before reads and forward sign
     });
     await assert.rejects(invoke(client), /exceeds the .*response limit/, name);
     assert.equal(bodyReads, 0, `${name} must reject before reading`);
-    assert.equal(capturedSignal, controller.signal, `${name} signal`);
+    assertRequestSignal(capturedSignal, controller.signal, `${name} signal`);
   }
 });
 
@@ -23983,7 +24617,7 @@ test("IVM proof job attachments enforce structural hashes and rolling wire compa
     ],
     [
       { ...valid, proof: { backend: "stark/fri", bytes_b64: "AQID" } },
-      /proof\.backend must match/,
+      /unsupported production verifier backend/,
     ],
     [
       { ...valid, proof: { backend: "halo2/ipa", bytes_b64: "AQID\n" } },
@@ -24654,7 +25288,7 @@ test("getContractCodeBytes returns a bounded record and forwards AbortSignal", a
     canonicalReadOptions({ signal: controller.signal }),
   );
   assert.deepEqual(result, { code_b64: "Y29kZQ==" });
-  assert.equal(capturedSignal, controller.signal);
+  assertRequestSignal(capturedSignal, controller.signal);
 });
 
 test("getContractCodeBytes validates options before fetch", async () => {
@@ -24690,7 +25324,7 @@ test("bounded code-byte responses cancel on early rejection and 404", async () =
       name: "wrong content type",
       status: 200,
       headers: { "content-type": "text/plain" },
-      expected: null,
+      error: /must use application\/json/,
     },
     {
       name: "oversized Content-Length",
@@ -24801,12 +25435,12 @@ test("bounded JSON responses require one exact application/json media type", asy
         },
       }),
     });
-    assert.equal(
-      await client.getContractCodeBytes(
+    await assert.rejects(
+      () => client.getContractCodeBytes(
         "1".repeat(64),
         canonicalReadOptions(),
       ),
-      null,
+      /must use application\/json/,
       contentType,
     );
     assert.equal(bodyReads, 0, `${contentType} body reads`);
@@ -24990,8 +25624,8 @@ test("bounded readers close reentrant abort and hostile signal cleanup races", a
         ),
       mode === "add throws" ? /listener boom/ : /non-byte chunk/,
     );
-    assert.equal(readerCancels, 1, mode);
-    assert.equal(releases, 1, mode);
+    assert.equal(readerCancels, mode === "add throws" ? 0 : 1, mode);
+    assert.equal(releases, mode === "add throws" ? 0 : 1, mode);
   }
 });
 
@@ -25454,6 +26088,7 @@ test("getContractCodeBytes rejects ambiguous or active DTO shapes", async () => 
 
 test("getGovernanceContract mirrors response handling", async () => {
   let calledUrl;
+  const owner = FIXTURE_ALICE_ID;
   const fetchImpl = async (url) => {
     calledUrl = url;
     return createResponse({
@@ -25461,8 +26096,26 @@ test("getGovernanceContract mirrors response handling", async () => {
       jsonData: {
         found: true,
         contract_address: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
+        contract_subject_account: owner,
         dataspace: "universal",
+        active: true,
+        lifecycle: {
+          version: 1,
+          origin: "direct",
+          origin_account: owner,
+          origin_proposal_content_id_hex: null,
+          origin_governance_attempt_id_hex: null,
+          owner,
+          pending_owner: null,
+          parliament_delegated: false,
+          active_code_hash_hex: "1".repeat(64),
+          revision: 1,
+          emergency_hold: null,
+        },
+        emergency_hold_active: false,
         code_hash_hex: "1".repeat(64),
+        abi_hash_hex: "2".repeat(64),
+        public_entrypoints: ["ping"],
       },
       headers: { "content-type": "application/json" },
     });
@@ -25478,9 +26131,117 @@ test("getGovernanceContract mirrors response handling", async () => {
   assert.equal(result.code_hash_hex, "1".repeat(64));
 });
 
+test("getGovernanceContract preserves u64 lifecycle tokens and rejects lossy wire values", async () => {
+  const contractAddress =
+    "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw";
+  const lifecycleWire = ({
+    revision = "18446744073709551615",
+    imposedAtHeight = "18446744073709551614",
+    expiresAtHeight = "18446744073709551615",
+  } = {}) => JSON.stringify({
+    found: true,
+    contract_address: contractAddress,
+    contract_subject_account: FIXTURE_ALICE_ID,
+    dataspace: "universal",
+    active: true,
+    lifecycle: {
+      version: 1,
+      origin: "direct",
+      origin_account: FIXTURE_ALICE_ID,
+      origin_proposal_content_id_hex: null,
+      origin_governance_attempt_id_hex: null,
+      owner: FIXTURE_ALICE_ID,
+      pending_owner: null,
+      parliament_delegated: false,
+      active_code_hash_hex: "1".repeat(64),
+      revision: "__REVISION__",
+      emergency_hold: {
+        incident_digest_hex: "4".repeat(64),
+        proposal_content_id_hex: "5".repeat(64),
+        governance_attempt_id_hex: "6".repeat(64),
+        reason: "containment",
+        imposed_at_height: "__IMPOSED__",
+        expires_at_height: "__EXPIRES__",
+      },
+    },
+    emergency_hold_active: true,
+    code_hash_hex: "1".repeat(64),
+    abi_hash_hex: "2".repeat(64),
+    public_entrypoints: ["ping"],
+  })
+    .replace('"__REVISION__"', revision)
+    .replace('"__IMPOSED__"', imposedAtHeight)
+    .replace('"__EXPIRES__"', expiresAtHeight);
+  const clientForWire = (body) => new ToriiClient(BASE_URL, {
+    fetchImpl: async () => new Response(body, {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }),
+  });
+
+  const result = await clientForWire(lifecycleWire()).getGovernanceContract(
+    contractAddress,
+    canonicalReadOptions(),
+  );
+  assert.equal(result.lifecycle.revision, 18446744073709551615n);
+  assert.equal(result.lifecycle.emergency_hold.imposed_at_height, 18446744073709551614n);
+  assert.equal(result.lifecycle.emergency_hold.expires_at_height, 18446744073709551615n);
+
+  for (const token of ['"1"', "true", "1.5", "18446744073709551616"]) {
+    await assert.rejects(
+      () => clientForWire(lifecycleWire({ revision: token })).getGovernanceContract(
+        contractAddress,
+        canonicalReadOptions(),
+      ),
+      /integer|unsigned 64-bit|at most/u,
+      `revision token ${token}`,
+    );
+  }
+  const duplicate = lifecycleWire({ revision: "1" }).replace(
+    '"revision":1',
+    '"revision":1,"revision":2',
+  );
+  await assert.rejects(
+    () => clientForWire(duplicate).getGovernanceContract(
+      contractAddress,
+      canonicalReadOptions(),
+    ),
+    /duplicate object key/u,
+  );
+
+  const declarations = readFileSync(new URL("../index.d.ts", import.meta.url), "utf8");
+  assert.match(declarations, /revision: ToriiU64;/u);
+  assert.match(declarations, /imposed_at_height: ToriiU64;/u);
+  assert.match(declarations, /expires_at_height: ToriiU64;/u);
+});
+
 test("getGovernanceContract rejects coercible, non-canonical, or unexpected fields", async () => {
   const contractAddress =
     "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw";
+  const activeResponse = {
+    found: true,
+    contract_address: contractAddress,
+    contract_subject_account: FIXTURE_ALICE_ID,
+    dataspace: "universal",
+    active: true,
+    lifecycle: {
+      version: 1,
+      origin: "direct",
+      origin_account: FIXTURE_ALICE_ID,
+      origin_proposal_content_id_hex: null,
+      origin_governance_attempt_id_hex: null,
+      owner: FIXTURE_ALICE_ID,
+      pending_owner: null,
+      parliament_delegated: false,
+      active_code_hash_hex: "1".repeat(64),
+      revision: 1,
+      emergency_hold: null,
+    },
+    emergency_hold_active: false,
+    code_hash_hex: "1".repeat(64),
+    abi_hash_hex: "2".repeat(64),
+    public_entrypoints: ["ping"],
+  };
   const cases = [
     [
       "string boolean",
@@ -25488,18 +26249,12 @@ test("getGovernanceContract rejects coercible, non-canonical, or unexpected fiel
         found: "false",
         contract_address: contractAddress,
         dataspace: "universal",
-        code_hash_hex: "1".repeat(64),
       },
       /found must be a boolean/,
     ],
     [
       "uppercase hash",
-      {
-        found: true,
-        contract_address: contractAddress,
-        dataspace: "universal",
-        code_hash_hex: "A".repeat(64),
-      },
+      { ...activeResponse, code_hash_hex: "A".repeat(64) },
       /code_hash_hex must be an exact lowercase 32-byte hex string/,
     ],
     [
@@ -25512,6 +26267,32 @@ test("getGovernanceContract rejects coercible, non-canonical, or unexpected fiel
         ignored: true,
       },
       /unsupported fields: ignored/,
+    ],
+    [
+      "mismatched lifecycle code hash",
+      {
+        ...activeResponse,
+        lifecycle: { ...activeResponse.lifecycle, active_code_hash_hex: "3".repeat(64) },
+      },
+      /active_code_hash_hex must match code_hash_hex/,
+    ],
+    [
+      "unsupported lifecycle version",
+      {
+        ...activeResponse,
+        lifecycle: { ...activeResponse.lifecycle, version: 0 },
+      },
+      /version must be the number 1/,
+    ],
+    [
+      "unsorted public entrypoints",
+      { ...activeResponse, public_entrypoints: ["view_balance", "transfer"] },
+      /must be sorted and contain no duplicates/,
+    ],
+    [
+      "absent response with active fields",
+      { found: false, contract_address: contractAddress, dataspace: "universal", active: null },
+      /unsupported fields: active/,
     ],
   ];
   for (const [label, jsonData, pattern] of cases) {
@@ -26408,7 +27189,7 @@ test("submitTransaction bounds node capabilities before any pipeline side effect
           };
     const client = new ToriiClient(BASE_URL, {
       timeoutMs: 10,
-      __nativeBinding: canonicalTransactionCodecNative(),
+      [TORII_TEST_NATIVE_BINDING]: canonicalTransactionCodecNative(),
       fetchImpl: async (url) => {
         if (url.endsWith("/v1/node/capabilities")) {
           return {
@@ -26440,7 +27221,7 @@ test("submitTransaction caller abort does not wait for shared capability validat
   let pipelineCalls = 0;
   const client = new ToriiClient(BASE_URL, {
     timeoutMs: 30,
-    __nativeBinding: canonicalTransactionCodecNative(),
+    [TORII_TEST_NATIVE_BINDING]: canonicalTransactionCodecNative(),
     fetchImpl: async (url) => {
       if (url.endsWith("/v1/node/capabilities")) {
         return {
@@ -26504,7 +27285,7 @@ test("submitTransaction bounds JSON and Norito success receipts after one submit
             };
       const client = new ToriiClient(BASE_URL, {
         timeoutMs: 10,
-        __nativeBinding: canonicalTransactionCodecNative(),
+        [TORII_TEST_NATIVE_BINDING]: canonicalTransactionCodecNative(),
         fetchImpl: async (url) => {
           if (url.endsWith("/v1/node/capabilities")) {
             return createResponse({
@@ -26743,7 +27524,7 @@ test("http errors surface reject header codes", async () => {
   };
   const client = new ToriiClient(BASE_URL, {
     fetchImpl,
-    __nativeBinding: canonicalTransactionCodecNative(),
+    [TORII_TEST_NATIVE_BINDING]: canonicalTransactionCodecNative(),
   });
   await assert.rejects(
     () => client.submitTransaction(new Uint8Array([0x01, 0x02])),
@@ -26816,9 +27597,24 @@ function createBatchCapabilitiesResponse() {
 }
 
 function createResponse({ status, jsonData, arrayData, textBody, headers }) {
-  const effectiveJsonData = jsonData === undefined ? {} : jsonData;
-  const responseText =
-    typeof textBody === "string" ? textBody : JSON.stringify(effectiveJsonData);
+  const implicitEmptyBody =
+    (status === 204 || status === 404) &&
+    jsonData === undefined &&
+    arrayData === undefined &&
+    textBody === undefined;
+  const effectiveJsonData = jsonData === undefined
+    ? (implicitEmptyBody ? null : {})
+    : jsonData;
+  const effectiveHeaders = headers ?? (
+    arrayData === undefined && textBody === undefined
+      ? { "content-type": "application/json" }
+      : {}
+  );
+  const responseText = implicitEmptyBody
+    ? ""
+    : typeof textBody === "string"
+      ? textBody
+      : JSON.stringify(effectiveJsonData);
   const bodyBytes =
     arrayData instanceof ArrayBuffer
       ? new Uint8Array(arrayData)
@@ -26853,11 +27649,8 @@ function createResponse({ status, jsonData, arrayData, textBody, headers }) {
     }),
     headers: {
       get(name) {
-        if (!headers) {
-          return null;
-        }
         const normalized = name.toLowerCase();
-        for (const [key, value] of Object.entries(headers)) {
+        for (const [key, value] of Object.entries(effectiveHeaders)) {
           if (key.toLowerCase() === normalized) {
             return value;
           }

@@ -35,6 +35,8 @@ pub const MAX_DA_INGEST_ADMISSION_PRODUCERS_V1: usize = 4_096;
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::da::ingest::DaIngestAdmissionLaneV1")]
 pub struct DaIngestAdmissionLaneV1 {
     /// Exact lane governed by this entry.
     pub lane_id: LaneId,
@@ -75,6 +77,8 @@ impl DaIngestAdmissionLaneV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::da::ingest::DaIngestAdmissionPolicyV1")]
 pub struct DaIngestAdmissionPolicyV1 {
     /// Payload layout version. This must be [`Self::VERSION`].
     pub version: u8,
@@ -469,6 +473,8 @@ pub enum DaIngestAdmissionPolicyError {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::da::ingest::DaIngestSignatureV1")]
 pub struct DaIngestSignatureV1 {
     /// Account-controller key that produced the signature.
     pub signer: PublicKey,
@@ -479,6 +485,8 @@ pub struct DaIngestSignatureV1 {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::da::ingest::DaPinScopeSignatureV1")]
 pub struct DaPinScopeSignatureV1 {
     /// Account-controller key that approved the exact pin scope.
     pub signer: PublicKey,
@@ -492,6 +500,8 @@ pub struct DaPinScopeSignatureV1 {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::da::ingest::DaIngestAuthorizationV1")]
 pub struct DaIngestAuthorizationV1 {
     /// Exact genesis-derived network identity authorising this admission.
     pub network_id: NetworkId,
@@ -559,13 +569,16 @@ impl DaIngestAuthorizationV1 {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::da::ingest::DaPinScopeV1")]
 pub struct DaPinScopeV1 {
     /// Exact genesis-derived network identity of the original ingest authorization.
     pub network_id: NetworkId,
     /// Account that signed the original request and this exact pin scope.
     pub owner: AccountId,
-    /// Digest signed by the original ingest authorization witnesses.
-    pub request_authorization_digest: Hash,
+    /// Exact raw BLAKE3 digest signed by the original ingest authorization witnesses.
+    /// Every bit is significant; no entity-hash marker is applied.
+    pub request_authorization_digest: BlobDigest,
     /// Nexus lane carried by both the request and resulting pin intent.
     pub lane_id: LaneId,
     /// Epoch carried by both the request and resulting pin intent.
@@ -592,7 +605,7 @@ impl DaPinScopeV1 {
         Self {
             network_id: authorization.network_id,
             owner: authorization.owner.clone(),
-            request_authorization_digest: Hash::prehashed(authorization.signing_digest()),
+            request_authorization_digest: BlobDigest::new(authorization.signing_digest()),
             lane_id: authorization.lane_id,
             epoch: authorization.epoch,
             sequence: authorization.sequence,
@@ -607,7 +620,7 @@ impl DaPinScopeV1 {
     pub fn matches_authorization(&self, authorization: &DaIngestAuthorizationV1) -> bool {
         self.network_id == authorization.network_id
             && self.owner == authorization.owner
-            && *self.request_authorization_digest.as_ref() == authorization.signing_digest()
+            && *self.request_authorization_digest.as_bytes() == authorization.signing_digest()
             && self.lane_id == authorization.lane_id
             && self.epoch == authorization.epoch
             && self.sequence == authorization.sequence
@@ -647,6 +660,8 @@ impl DaPinScopeV1 {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::da::ingest::DaPinScopeAuthorizationV1")]
 pub struct DaPinScopeAuthorizationV1 {
     /// Exact scope approved by the producer.
     pub scope: DaPinScopeV1,
@@ -806,6 +821,8 @@ pub struct DaIngestRequest {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::da::ingest::DaIngestRequestIntentV1")]
 pub struct DaIngestRequestIntentV1 {
     /// Exact genesis-derived network identity authorising this intent.
     pub network_id: NetworkId,
@@ -1212,6 +1229,52 @@ mod pin_scope_tests {
     }
 
     #[test]
+    fn pin_scope_preserves_every_authorization_digest_bit() {
+        let (key_pair, mut authorization) = signed_authorization();
+        let mut covered_low_bits = [false; 2];
+        for sequence in 0..64 {
+            authorization.sequence = sequence;
+            let digest = authorization.signing_digest();
+            authorization.signatures[0].signature =
+                Signature::try_new(key_pair.private_key(), &digest)
+                    .expect("sign the current authorization fixture");
+            covered_low_bits[usize::from(digest[31] & 1)] = true;
+            let scope = DaPinScopeV1::new(
+                &authorization,
+                StorageTicketId::new([0xA1; 32]),
+                ManifestDigest::new([0xA2; 32]),
+                None,
+            );
+            assert_eq!(scope.request_authorization_digest.as_bytes(), &digest);
+            assert!(scope.matches_authorization(&authorization));
+
+            let frame = norito::to_bytes(&scope).expect("encode exact pin scope");
+            let decoded: DaPinScopeV1 = norito::decode_from_bytes(&frame)
+                .expect("decode pin scope with either digest low bit");
+            assert_eq!(decoded, scope);
+            assert_eq!(
+                norito::to_bytes(&decoded).expect("re-encode pin scope"),
+                frame
+            );
+            #[cfg(feature = "json")]
+            {
+                let json = norito::json::to_json(&scope).expect("encode pin scope JSON");
+                let decoded: DaPinScopeV1 = norito::json::from_str(&json)
+                    .expect("decode pin scope JSON with either digest low bit");
+                assert_eq!(decoded, scope);
+            }
+
+            let mut signed = DaPinScopeAuthorizationV1::try_sign(scope, &key_pair)
+                .expect("sign exact pin scope");
+            assert!(signed.has_valid_canonical_signatures());
+            signed.scope.request_authorization_digest.0[31] ^= 1;
+            assert!(!signed.scope.matches_authorization(&authorization));
+            assert!(!signed.has_valid_canonical_signatures());
+        }
+        assert_eq!(covered_low_bits, [true, true]);
+    }
+
+    #[test]
     fn pin_scope_signatures_bind_ticket_manifest_and_alias() {
         let (key_pair, authorization) = signed_authorization();
         let scope = DaPinScopeV1::new(
@@ -1390,3 +1453,6 @@ mod admission_policy_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod captured_ingest_schema_tests;

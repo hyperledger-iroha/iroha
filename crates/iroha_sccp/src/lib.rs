@@ -70,6 +70,7 @@ use iroha_data_model::{
         sccp_ton_groth16_bls12381_proof_profile_commitment_v1 as structural_sccp_ton_groth16_bls12381_proof_profile_commitment_v1,
     },
 };
+#[cfg(test)]
 use norito::to_bytes;
 use sha2::{Digest as _, Sha256};
 #[cfg(any(test, feature = "test-fixtures"))]
@@ -186,9 +187,12 @@ pub const SCCP_DOMAIN_TON: u32 = 4;
 pub const SCCP_DOMAIN_TRON: u32 = 5;
 /// Public TAIRA chain label retained as SCCP deployment metadata.
 pub const SCCP_TAIRA_CHAIN_ID_V1: &str = "fc56984b-2be7-431d-840e-21514d1883f0";
+/// Canonical public TAIRA genesis hash bound into TAIRA-origin SCCP finality proofs.
+pub const SCCP_TAIRA_GENESIS_HASH_V1: &str =
+    "0466da18c70ca8cbd51b8cc60b1d4a4802fc5d7f928d505806d7cd6cb61d60ef";
 /// Canonical checked TAIRA network identity bound into TAIRA-origin SCCP finality proofs.
 pub const SCCP_TAIRA_FINALITY_NETWORK_ID_V1: &str =
-    "hash:82531CE8EAE8BFF6BEECA4698BFD13A3BC8BEC5F0EE0D23D428C97FC17AB0F3B#3E94";
+    "hash:0466DA18C70CA8CBD51B8CC60B1D4A4802FC5D7F928D505806D7CD6CB61D60EF#BA85";
 /// Return the exact genesis-derived TAIRA network identity governed by SCCP V1.
 #[must_use]
 pub fn sccp_taira_finality_network_id_v1() -> NetworkId {
@@ -242,30 +246,21 @@ pub const SCCP_SUPPORTED_LAUNCH_REMOTE_DOMAINS_V1: [u32; 4] = [
     SCCP_DOMAIN_TRON,
     SCCP_DOMAIN_TON,
 ];
-/// Return whether every key in an account controller is executable by the V1
-/// EVM/TVM destination contracts.
+/// Return whether an account controller is provable and executable by every V1
+/// destination route.
 ///
-/// Rust supports additional account-key algorithms, but accepting one as a Taira-origin SCCP sender
-/// would create an outbound lock that the immutable first-release destination routes cannot parse
-/// exactly. V1 therefore admits single-key and canonical multisig controllers composed only from
-/// Ed25519 and compressed secp256k1 public keys. This check is an economic admission rule, not a
-/// signature-policy shortcut: normal transaction authorization still verifies the complete
-/// controller before this predicate is reached.
+/// The fixed semantic circuits constrain the canonical 36-byte
+/// single-controller Ed25519 `AccountAddress`. Accepting any other Rust
+/// controller as a Taira-origin SCCP sender would create an outbound lock that
+/// no V1 destination proof can finalize. This is an economic admission rule,
+/// not a signature-policy shortcut: normal transaction authorization still
+/// verifies the complete controller before this predicate is reached.
 #[must_use]
 pub fn sccp_destination_contract_supports_account_v1(account: &AccountId) -> bool {
-    fn supports_key(key: &iroha_crypto::PublicKey) -> bool {
-        matches!(
-            key.try_algorithm(),
-            Ok(Algorithm::Ed25519 | Algorithm::Secp256k1)
-        )
-    }
-    match account.controller() {
-        AccountController::Single(key) => supports_key(key),
-        AccountController::Multisig(policy) => policy
-            .members()
-            .iter()
-            .all(|member| supports_key(member.public_key())),
-    }
+    matches!(
+        account.controller(),
+        AccountController::Single(key) if key.try_algorithm() == Ok(Algorithm::Ed25519)
+    )
 }
 /// External protocol domains that can safely originate native SCCP messages in V1.
 ///
@@ -2228,13 +2223,14 @@ pub fn sccp_counterparty_account_codec(domain: u32) -> Option<u8> {
 }
 /// Return the non-SORA endpoint of a valid SORA/external domain pair.
 pub fn sccp_counterparty_domain(primary: u32, secondary: u32) -> Option<u32> {
-    if primary != SCCP_DOMAIN_SORA {
-        return Some(primary);
+    match (primary, secondary) {
+        (SCCP_DOMAIN_SORA, external) | (external, SCCP_DOMAIN_SORA)
+            if is_supported_domain(external) && external != SCCP_DOMAIN_SORA =>
+        {
+            Some(external)
+        }
+        _ => None,
     }
-    if secondary != SCCP_DOMAIN_SORA {
-        return Some(secondary);
-    }
-    None
 }
 /// Return the external destination for one SORA-origin outbound message.
 ///
@@ -2247,6 +2243,36 @@ pub fn sccp_counterparty_domain_for_message_payload(payload: &SccpPayloadV1) -> 
         && target_domain != SCCP_DOMAIN_SORA
         && is_supported_domain(target_domain))
     .then_some(target_domain)
+}
+#[cfg(test)]
+mod counterparty_domain_tests {
+    use super::*;
+
+    #[test]
+    fn counterparty_domain_requires_exactly_one_sora_endpoint() {
+        for external in SCCP_CORE_REMOTE_DOMAINS {
+            assert_eq!(
+                sccp_counterparty_domain(SCCP_DOMAIN_SORA, external),
+                Some(external)
+            );
+            assert_eq!(
+                sccp_counterparty_domain(external, SCCP_DOMAIN_SORA),
+                Some(external)
+            );
+            assert_eq!(sccp_counterparty_domain(external, external), None);
+        }
+
+        assert_eq!(
+            sccp_counterparty_domain(SCCP_DOMAIN_SORA, SCCP_DOMAIN_SORA),
+            None
+        );
+        assert_eq!(
+            sccp_counterparty_domain(SCCP_DOMAIN_ETH, SCCP_DOMAIN_BSC),
+            None
+        );
+        assert_eq!(sccp_counterparty_domain(SCCP_DOMAIN_SORA, u32::MAX), None);
+        assert_eq!(sccp_counterparty_domain(u32::MAX, SCCP_DOMAIN_SORA), None);
+    }
 }
 /// Return the stable application-payload label for `payload`.
 pub fn sccp_message_payload_kind_key(payload: &SccpPayloadV1) -> &'static str {
@@ -4054,7 +4080,7 @@ pub fn encode_canonical_sccp_ton_groth16_bls12381_proof_request_v1(
     request: &SccpTonGroth16Bls12381ProofRequestV1,
 ) -> Option<Vec<u8>> {
     validate_sccp_ton_groth16_bls12381_request_v1(request)?;
-    let bytes = to_bytes(request).ok()?;
+    let bytes = norito::encode_canonical(request).ok()?;
     (bytes.len() <= SCCP_GROTH16_BN254_MAX_ENCODED_ARTIFACT_BYTES_V1).then_some(bytes)
 }
 /// Decode exactly one canonical, bounded TON proving request.
@@ -4110,7 +4136,7 @@ pub fn encode_canonical_sccp_ton_groth16_bls12381_proof_result_v1(
     {
         return None;
     }
-    let bytes = to_bytes(result).ok()?;
+    let bytes = norito::encode_canonical(result).ok()?;
     (bytes.len() <= SCCP_GROTH16_BN254_MAX_ENCODED_ARTIFACT_BYTES_V1).then_some(bytes)
 }
 /// Encode one fully self-canonical TON proof artifact.
@@ -4121,7 +4147,7 @@ pub fn encode_canonical_sccp_ton_groth16_bls12381_proof_artifact_v1(
     if !sccp_ton_groth16_bls12381_artifact_is_self_canonical_v1(artifact) {
         return None;
     }
-    let bytes = to_bytes(artifact).ok()?;
+    let bytes = norito::encode_canonical(artifact).ok()?;
     (bytes.len() <= SCCP_GROTH16_BN254_MAX_ENCODED_ARTIFACT_BYTES_V1).then_some(bytes)
 }
 /// Decode one fully self-canonical TON proof artifact.
@@ -4892,7 +4918,7 @@ where
         return None;
     }
     let decoded = norito::decode_from_bytes::<T>(bytes).ok()?;
-    if to_bytes(&decoded).ok()?.as_slice() != bytes {
+    if norito::encode_canonical(&decoded).ok()?.as_slice() != bytes {
         return None;
     }
     Some(decoded)
@@ -4927,7 +4953,7 @@ pub fn encode_canonical_sccp_groth16_bn254_proof_request_v1(
     if !sccp_groth16_bn254_proof_request_is_self_canonical(request) {
         return None;
     }
-    let bytes = to_bytes(request).ok()?;
+    let bytes = norito::encode_canonical(request).ok()?;
     (bytes.len() <= SCCP_GROTH16_BN254_MAX_ENCODED_ARTIFACT_BYTES_V1).then_some(bytes)
 }
 /// Decode exactly one canonical, size-bounded Groth16 request.
@@ -4955,7 +4981,7 @@ pub fn encode_canonical_sccp_groth16_bn254_proof_result_v1(
     if !sccp_groth16_bn254_proof_result_is_structurally_valid(result) {
         return None;
     }
-    let bytes = to_bytes(result).ok()?;
+    let bytes = norito::encode_canonical(result).ok()?;
     (bytes.len() <= SCCP_GROTH16_BN254_MAX_ENCODED_ARTIFACT_BYTES_V1).then_some(bytes)
 }
 /// Decode exactly one canonical, size-bounded minimal Groth16 result.
@@ -4983,7 +5009,7 @@ pub fn encode_canonical_sccp_groth16_bn254_proof_artifact_v1(
     if !sccp_groth16_bn254_proof_artifact_is_self_canonical(artifact) {
         return None;
     }
-    let bytes = to_bytes(artifact).ok()?;
+    let bytes = norito::encode_canonical(artifact).ok()?;
     (bytes.len() <= SCCP_GROTH16_BN254_MAX_ENCODED_ARTIFACT_BYTES_V1).then_some(bytes)
 }
 /// Decode exactly one canonical, bounded, pairing-verified Groth16 artifact.
@@ -5240,7 +5266,7 @@ pub fn decode_and_parse_canonical_sccp_destination_proof_v1(
     }
     let proof: BridgeSccpDestinationProofV1 = norito::decode_from_bytes(bytes).ok()?;
     if proof.encoded_artifact.len() > SCCP_GROTH16_BN254_MAX_ENCODED_ARTIFACT_BYTES_V1
-        || to_bytes(&proof).ok()?.as_slice() != bytes
+        || norito::encode_canonical(&proof).ok()?.as_slice() != bytes
     {
         return None;
     }
@@ -5551,6 +5577,37 @@ pub fn decode_sccp_normalized_codec_value(
         _ => None,
     }
 }
+/// Return whether a canonical recipient can be executed by the governed V1
+/// destination deployment.
+///
+/// TON cannot derive a usable Jetton wallet when its owner is the Jetton master
+/// itself. Rejecting that address at source admission prevents a permanently
+/// unacknowledgeable mint from locking SORA custody and destination capacity.
+#[must_use]
+pub fn sccp_destination_contract_accepts_recipient_v1(
+    destination: &SccpDestinationDeploymentV1,
+    recipient_codec: u8,
+    recipient: &[u8],
+) -> bool {
+    match (
+        destination,
+        decode_sccp_normalized_codec_value(recipient_codec, recipient),
+    ) {
+        (
+            SccpDestinationDeploymentV1::Evm(_),
+            Some(SccpNormalizedCodecValueV1::EvmAddress20 { .. }),
+        )
+        | (
+            SccpDestinationDeploymentV1::Tron(_),
+            Some(SccpNormalizedCodecValueV1::TronAddress21 { .. }),
+        ) => true,
+        (
+            SccpDestinationDeploymentV1::Ton(deployment),
+            Some(SccpNormalizedCodecValueV1::TonAccount36 { workchain, account }),
+        ) => (SccpTonAddressV1 { workchain, account }) != deployment.jetton_master_address,
+        _ => false,
+    }
+}
 fn validate_sccp_codec_bytes(codec_id: u8, bytes: &[u8]) -> bool {
     decode_sccp_normalized_codec_value(codec_id, bytes).is_some()
 }
@@ -5690,6 +5747,54 @@ mod canonical_payload_encoding_tests {
             recipient: vec![0x11; 20],
             route_id_codec: SCCP_CODEC_CANONICAL_TEXT,
             route_id: SCCP_TAIRA_ETH_XOR_ROUTE_ID_V1.as_bytes().to_vec(),
+        }
+    }
+    fn account_fixture(domain: u32) -> Vec<u8> {
+        match domain {
+            SCCP_DOMAIN_SORA => b"alice".to_vec(),
+            SCCP_DOMAIN_ETH | SCCP_DOMAIN_BSC => vec![0x11; 20],
+            SCCP_DOMAIN_TRON => {
+                let mut address = vec![0x11; 21];
+                address[0] = 0x41;
+                address
+            }
+            SCCP_DOMAIN_TON => canonical_sccp_ton_account36_bytes_v1(SccpTonAddressV1 {
+                workchain: 0,
+                account: [0x11; 32],
+            })
+            .expect("canonical basechain account")
+            .to_vec(),
+            _ => unreachable!("closed SCCP domain fixture"),
+        }
+    }
+    #[test]
+    fn payload_structure_accepts_only_sora_external_domain_pairs() {
+        let domains = [
+            SCCP_DOMAIN_SORA,
+            SCCP_DOMAIN_ETH,
+            SCCP_DOMAIN_BSC,
+            SCCP_DOMAIN_TRON,
+            SCCP_DOMAIN_TON,
+        ];
+        for source_domain in domains {
+            for dest_domain in domains {
+                let mut transfer = transfer_fixture();
+                transfer.source_domain = source_domain;
+                transfer.sender_codec = sccp_counterparty_account_codec(source_domain)
+                    .expect("closed source domain codec");
+                transfer.sender = account_fixture(source_domain);
+                transfer.dest_domain = dest_domain;
+                transfer.recipient_codec = sccp_counterparty_account_codec(dest_domain)
+                    .expect("closed destination domain codec");
+                transfer.recipient = account_fixture(dest_domain);
+                let expected =
+                    (source_domain == SCCP_DOMAIN_SORA) ^ (dest_domain == SCCP_DOMAIN_SORA);
+                assert_eq!(
+                    verify_sccp_payload_structure(&SccpPayloadV1::Transfer(transfer)),
+                    expected,
+                    "unexpected topology verdict for {source_domain}->{dest_domain}"
+                );
+            }
         }
     }
     #[test]
@@ -5930,9 +6035,8 @@ pub fn verify_sccp_payload_structure(payload: &SccpPayloadV1) -> bool {
             };
             payload.version == 1
                 && payload.route_revision != 0
-                && is_supported_domain(payload.source_domain)
                 && is_supported_domain(payload.asset_home_domain)
-                && payload.source_domain != payload.dest_domain
+                && sccp_counterparty_domain(payload.source_domain, payload.dest_domain).is_some()
                 && validate_sccp_codec_bytes(payload.asset_id_codec, &payload.asset_id)
                 && payload.amount != 0
                 && payload.sender_codec == expected_sender_codec
@@ -6214,7 +6318,7 @@ where
         return None;
     }
     let artifact = norito::decode_from_bytes(proof_bytes).ok()?;
-    (to_bytes(&artifact).ok()?.as_slice() == proof_bytes).then_some(artifact)
+    (norito::encode_canonical(&artifact).ok()?.as_slice() == proof_bytes).then_some(artifact)
 }
 fn preflight_uncompressed_norito_frame(bytes: &[u8], maximum: usize) -> bool {
     if bytes.is_empty()
@@ -6238,7 +6342,7 @@ pub fn verify_taira_bridge_finality_proof_structure(proof: &TairaBridgeFinalityP
     let Some(commitment_root) = proof.block_header.sccp_commitment_root() else {
         return false;
     };
-    let Ok(block_header_bytes) = to_bytes(&proof.block_header) else {
+    let Ok(block_header_bytes) = norito::encode_canonical(&proof.block_header) else {
         return false;
     };
     if proof.version != BRIDGE_FINALITY_PROOF_VERSION_V2
@@ -6454,10 +6558,17 @@ mod tests {
     }
     #[test]
     fn taira_finality_network_id_matches_the_governed_genesis_vector() {
+        let genesis_hash = SCCP_TAIRA_GENESIS_HASH_V1
+            .parse::<iroha_crypto::HashOf<BlockHeader>>()
+            .expect("compiled SCCP Taira genesis hash must be canonical and marked");
+        let derived = NetworkId::from_genesis_hash(genesis_hash);
+
         assert_eq!(
-            sccp_taira_finality_network_id_v1().to_string(),
-            SCCP_TAIRA_FINALITY_NETWORK_ID_V1
+            derived.to_string(),
+            SCCP_TAIRA_FINALITY_NETWORK_ID_V1,
+            "the checked SCCP identity must be derived from the governed genesis hash"
         );
+        assert_eq!(sccp_taira_finality_network_id_v1(), derived);
     }
     fn word_u64(value: u64) -> H256 {
         let mut word = [0; 32];
@@ -6756,7 +6867,7 @@ mod tests {
         }
     }
     #[test]
-    fn destination_contract_account_policy_is_closed_over_every_multisig_member() {
+    fn destination_contract_account_policy_matches_the_fixed_semantic_circuit() {
         let key = |seed: u8, algorithm| {
             KeyPair::try_from_seed(vec![seed; 32], algorithm)
                 .expect("destination-controller fixture key")
@@ -6769,22 +6880,22 @@ mod tests {
         assert!(sccp_destination_contract_supports_account_v1(
             &AccountId::new(ed25519.clone())
         ));
-        assert!(sccp_destination_contract_supports_account_v1(
+        assert!(!sccp_destination_contract_supports_account_v1(
             &AccountId::new(secp256k1.clone())
         ));
         assert!(!sccp_destination_contract_supports_account_v1(
             &AccountId::new(mldsa.clone())
         ));
-        let supported_multisig = MultisigPolicy::new(
+        let all_supported_key_algorithms = MultisigPolicy::new(
             2,
             vec![
                 MultisigMember::new(ed25519.clone(), 1).expect("Ed25519 member"),
                 MultisigMember::new(secp256k1, 1).expect("secp256k1 member"),
             ],
         )
-        .expect("supported mixed-curve policy");
-        assert!(sccp_destination_contract_supports_account_v1(
-            &AccountId::new_multisig(supported_multisig)
+        .expect("well-formed mixed-curve policy");
+        assert!(!sccp_destination_contract_supports_account_v1(
+            &AccountId::new_multisig(all_supported_key_algorithms)
         ));
         let unsupported_multisig = MultisigPolicy::new(
             2,
@@ -6796,6 +6907,38 @@ mod tests {
         .expect("valid Rust policy with one unsupported destination member");
         assert!(!sccp_destination_contract_supports_account_v1(
             &AccountId::new_multisig(unsupported_multisig)
+        ));
+        let one_member_ed25519 = MultisigPolicy::new(
+            1,
+            vec![MultisigMember::new(key(0x34, Algorithm::Ed25519), 1).expect("Ed25519 member")],
+        )
+        .expect("well-formed one-member policy");
+        assert!(!sccp_destination_contract_supports_account_v1(
+            &AccountId::new_multisig(one_member_ed25519)
+        ));
+    }
+    #[test]
+    fn destination_contract_recipient_policy_rejects_the_ton_jetton_master() {
+        let ton = ton_deployment();
+        let master = canonical_sccp_ton_account36_bytes_v1(ton.jetton_master_address)
+            .expect("fixture master is a canonical TON basechain address");
+        let wallet_owner = canonical_sccp_ton_account36_bytes_v1(ton_address(0x83))
+            .expect("fixture owner is a canonical TON basechain address");
+        let destination = SccpDestinationDeploymentV1::Ton(ton);
+        assert!(!sccp_destination_contract_accepts_recipient_v1(
+            &destination,
+            SCCP_CODEC_TON_ACCOUNT36,
+            &master,
+        ));
+        assert!(sccp_destination_contract_accepts_recipient_v1(
+            &destination,
+            SCCP_CODEC_TON_ACCOUNT36,
+            &wallet_owner,
+        ));
+        assert!(!sccp_destination_contract_accepts_recipient_v1(
+            &destination,
+            SCCP_CODEC_EVM_ADDRESS20,
+            &[0x11; 20],
         ));
     }
     #[test]
@@ -7406,6 +7549,51 @@ mod tests {
             decode_canonical_sccp_ton_groth16_bls12381_proof_artifact_v1(&artifact_bytes),
             Some(artifact.clone())
         );
+        let result_bytes =
+            encode_canonical_sccp_ton_groth16_bls12381_proof_result_v1(&artifact.result)
+                .expect("canonical TON result bytes");
+        {
+            let alternate_flags =
+                norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+            let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            let alternate_request =
+                to_bytes(&request).expect("alternate-layout TON request encoding");
+            let alternate_result =
+                to_bytes(&artifact.result).expect("alternate-layout TON result encoding");
+            let alternate_artifact =
+                to_bytes(&artifact).expect("alternate-layout TON artifact encoding");
+            assert_ne!(alternate_request, request_bytes);
+            assert_ne!(alternate_result, result_bytes);
+            assert_ne!(alternate_artifact, artifact_bytes);
+            assert_eq!(
+                encode_canonical_sccp_ton_groth16_bls12381_proof_request_v1(&request),
+                Some(request_bytes.clone())
+            );
+            assert_eq!(
+                encode_canonical_sccp_ton_groth16_bls12381_proof_result_v1(&artifact.result),
+                Some(result_bytes)
+            );
+            assert_eq!(
+                encode_canonical_sccp_ton_groth16_bls12381_proof_artifact_v1(&artifact),
+                Some(artifact_bytes.clone())
+            );
+            assert_eq!(
+                decode_canonical_sccp_ton_groth16_bls12381_proof_request_v1(&request_bytes),
+                Some(request.clone())
+            );
+            assert!(
+                decode_canonical_sccp_ton_groth16_bls12381_proof_request_v1(&alternate_request)
+                    .is_none()
+            );
+            assert_eq!(
+                decode_canonical_sccp_ton_groth16_bls12381_proof_artifact_v1(&artifact_bytes),
+                Some(artifact.clone())
+            );
+            assert!(
+                decode_canonical_sccp_ton_groth16_bls12381_proof_artifact_v1(&alternate_artifact)
+                    .is_none()
+            );
+        }
         let bridge_proof =
             bridge_sccp_ton_destination_proof_v1(&artifact).expect("closed TON bridge proof");
         let finality = trusted_finality(&bundle);
@@ -7789,6 +7977,77 @@ mod tests {
         );
     }
     #[test]
+    fn canonical_destination_and_finality_boundaries_ignore_ambient_norito_layout() {
+        let fixture = fixture();
+        let finality = trusted_finality(&fixture.bundle);
+        let canonical_request =
+            encode_canonical_sccp_groth16_bn254_proof_request_v1(&fixture.request)
+                .expect("canonical request encoding");
+        let canonical_result =
+            encode_canonical_sccp_groth16_bn254_proof_result_v1(&fixture.artifact.result)
+                .expect("canonical result encoding");
+        let canonical_artifact =
+            encode_canonical_sccp_groth16_bn254_proof_artifact_v1(&fixture.artifact)
+                .expect("canonical artifact encoding");
+        let canonical_bridge =
+            norito::encode_canonical(&fixture.bridge_proof).expect("canonical bridge encoding");
+        let canonical_finality =
+            norito::encode_canonical(&finality).expect("canonical finality encoding");
+
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+        let alternate_request = to_bytes(&fixture.request).expect("alternate request encoding");
+        let alternate_result =
+            to_bytes(&fixture.artifact.result).expect("alternate result encoding");
+        let alternate_artifact = to_bytes(&fixture.artifact).expect("alternate artifact encoding");
+        let alternate_bridge = to_bytes(&fixture.bridge_proof).expect("alternate bridge encoding");
+        let alternate_finality = to_bytes(&finality).expect("alternate finality encoding");
+
+        assert_ne!(alternate_request, canonical_request);
+        assert_ne!(alternate_result, canonical_result);
+        assert_ne!(alternate_artifact, canonical_artifact);
+        assert_ne!(alternate_bridge, canonical_bridge);
+        assert_ne!(alternate_finality, canonical_finality);
+        assert_eq!(
+            encode_canonical_sccp_groth16_bn254_proof_request_v1(&fixture.request),
+            Some(canonical_request.clone())
+        );
+        assert_eq!(
+            encode_canonical_sccp_groth16_bn254_proof_result_v1(&fixture.artifact.result),
+            Some(canonical_result.clone())
+        );
+        assert_eq!(
+            encode_canonical_sccp_groth16_bn254_proof_artifact_v1(&fixture.artifact),
+            Some(canonical_artifact.clone())
+        );
+        assert_eq!(
+            decode_canonical_sccp_groth16_bn254_proof_request_v1(&canonical_request),
+            Some(fixture.request.clone())
+        );
+        assert!(decode_canonical_sccp_groth16_bn254_proof_request_v1(&alternate_request).is_none());
+        assert_eq!(
+            decode_canonical_sccp_groth16_bn254_proof_result_v1(&canonical_result),
+            Some(fixture.artifact.result.clone())
+        );
+        assert!(decode_canonical_sccp_groth16_bn254_proof_result_v1(&alternate_result).is_none());
+        assert_eq!(
+            decode_canonical_sccp_groth16_bn254_proof_artifact_v1(&canonical_artifact),
+            Some(fixture.artifact.clone())
+        );
+        assert!(
+            decode_canonical_sccp_groth16_bn254_proof_artifact_v1(&alternate_artifact).is_none()
+        );
+        assert!(decode_and_parse_canonical_sccp_destination_proof_v1(&canonical_bridge).is_some());
+        assert!(decode_and_parse_canonical_sccp_destination_proof_v1(&alternate_bridge).is_none());
+        assert_eq!(
+            decode_taira_bridge_finality_proof(&canonical_finality),
+            Some(finality.clone())
+        );
+        assert!(decode_taira_bridge_finality_proof(&alternate_finality).is_none());
+        assert!(verify_taira_bridge_finality_proof_structure(&finality));
+    }
+    #[test]
     fn artifact_admission_decodes_bundle_once_across_pairing_and_binding() {
         let fixture = fixture();
         let decode_calls = Cell::new(0usize);
@@ -7825,7 +8084,7 @@ mod tests {
             &trusted_finality(&fixture.bundle),
         )
         .expect("parsed artifact binds to governed route");
-        assert_eq!(*verified.public_inputs(), fixture.request.public_inputs);
+        assert_eq!(verified.public_inputs(), &fixture.request.public_inputs);
         assert_eq!(
             verified.public_inputs().finality_height,
             fixture.request.public_inputs.finality_height
@@ -8269,7 +8528,7 @@ mod tests {
         .expect("TRON contract route config");
         assert_eq!(
             route_config,
-            hex32("27da5c364f20fdee0bdd8cd84bb01908d88f40d9eb5171f9dec8b330f604258d")
+            hex32("50faee41147745888794c789a954c2506194abbc779266e7dc7e46700350d252")
         );
         let request = &fixture().request;
         let signals = sccp_groth16_bn254_public_signal_words(

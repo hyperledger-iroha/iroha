@@ -13,8 +13,10 @@ These guidelines apply to the entire repository, which is organised as a Cargo w
 - Test one crate: `cargo test -p <crate>`
 - Run one test: `cargo test -p <crate> <test_name> -- --nocapture`
 - Swift SDK: from the `IrohaSwift` directory run `swift test` to execute the Swift package tests.
-- Kotlin SDK: from the `kotlin` directory run `./gradlew :core-jvm:test --console=plain`; build Android artifacts with `./gradlew :client-android:assembleRelease :offline-wallet-android:assembleRelease --quiet`.
-- Android SDK: from `java/iroha_android` run `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test`.
+- Kotlin SDK: from the `kotlin` directory run `./gradlew :core-jvm:test --console=plain`; build Android artifacts with `./gradlew :client-android:assembleRelease :kagemusha-wallet-android:assembleRelease --quiet`.
+- JVM attestation tooling: from `kotlin`, run `./gradlew :tools:test :tools:installDist --console=plain`; the repository shell launcher invokes the same Kotlin-owned command.
+- Android managed consumers: from `kotlin`, run `./gradlew :client-android:testDebugUnitTest :kagemusha-wallet-android:testDebugUnitTest --console=plain` with JDK 21 and the Android SDK configured.
+- Android consumers of host JNI: from `kotlin`, run `IROHA_NATIVE_LIBRARY_PATH=<absolute-rebuilt-host-library-directory> ./gradlew :client-android:testDebugHostNative --console=plain`. Missing native artifacts fail; this is separate from physical-device qualification.
 - Scripts dependencies (Python 3.10+): `python3 -m pip install -r scripts/requirements.txt`.
 - Script tests: `pytest pytests/scripts`.
 
@@ -38,14 +40,14 @@ These guidelines apply to the entire repository, which is organised as a Cargo w
 - `Cargo.toml` at the repository root defines the workspace and lists all member crates.
 - `crates/` – Rust crates implementing Iroha components. Each crate has its own subdirectory, typically containing `src/`, `tests/`, `examples/`, and `benches/`.
   - Important crates include:
-    - `iroha` – top-level library aggregating core functionality.
+    - `iroha` – Rust client SDK; node execution and service runtimes have separate owners.
     - `irohad` – daemon crate providing the `iroha3d` node executable.
     - `ivm` – the Iroha Virtual Machine.
     - `iroha_cli` – command-line interface for interacting with a node.
     - `iroha_core`, `iroha_data_model`, `iroha_crypto`, and other supporting crates.
 - `IrohaSwift/` – Swift Package for the client/mobile SDK. Its sources live under `Sources/IrohaSwift/` and its unit tests under `Tests/IrohaSwiftTests/`. Run `swift test` from this directory to exercise the Swift suite.
-- `kotlin/` – default JVM/Android SDK for new mobile work. `core-jvm` contains the pure Kotlin/JVM Norito + client/model stack, `client-android` adds Android-only client/keystore integration, and `offline-wallet-android` contains Android-only offline wallet code and JNI libraries.
-- `java/` – Java SDKs kept in sync with the Kotlin SDK during the migration period. `java/norito_java` mirrors the Kotlin Norito implementation and `java/iroha_android` mirrors the Android/client surface until the Kotlin SDK fully replaces it.
+- `kotlin/` – default JVM/Android SDK for new mobile work. `core-jvm` contains the pure Kotlin/JVM Norito + client/model stack, `client-android` adds Android-only client/keystore integration, and `kagemusha-wallet-android` contains Android-only KAGEMUSHA wallet code and JNI libraries. `tools` owns the offline attestation command and depends on the pure JVM evidence verifier in `core-jvm`.
+- `java/` – duplicate implementations awaiting capability, fixture and delivery migration into Kotlin-owned modules. Track retirement in `specs/jvm_consolidation_inventory.md`; do not add new implementation surface here. Java-source consumer tests target the canonical Kotlin API.
 - `integration_tests/` – Cargo crate hosting cross-component tests under `tests/`.
 - `data_model/` – Sample data model definitions used in tests and documentation.
 - `docs/` – Concise repository-local guidance, generated references, and
@@ -66,8 +68,7 @@ These guidelines apply to the entire repository, which is organised as a Cargo w
 - Main implementations are in `crates/`
 - Data model is in `data_model/`
 - Make sure you look across all crates when making changes.
-- Don't modify any Cargo.lock files
-- Avoid adding new crates to `Cargo.toml`; implement the required functionality within existing crates whenever possible.
+- Use focused crates for real dependency or compilation boundaries and internal modules for cohesion within a boundary. Update workspace membership and regenerate `Cargo.lock` coherently for approved dependency changes; preserve unrelated working-tree changes.
 - If a workflow needs the repository-root `dist/` directory, keep only `dist/.gitkeep` tracked and keep generated `dist/*` artifacts untracked.
 - For strict corridor/deploy tooling, assume repository-root `dist/` must exist; keep `dist/.gitkeep` tracked so clones always have the directory.
 - If some work is too big, don't reject doing it. Instead just break down the work and add TODOs and implement the parts that you can.
@@ -79,10 +80,10 @@ These guidelines apply to the entire repository, which is organised as a Cargo w
   `iroha-docs`.
 - Make sure that all logic added is done in such a way that it won't hurt the use of the IVM in a blockchain setting where different nodes on a P2P network have different hardware, but still the output should be the same given the same input block.
 - When answering questions about behaviour or implementation details, read the relevant code paths first and ensure you understand how they work before responding.
-- Treat the Kotlin SDK as the default solution for Android consumers. Keep Kotlin API/behavior changes mirrored in the corresponding `java/` implementation until the Java Android SDK is fully retired.
-- Kotlin SDK constraints from `kotlin/CLAUDE.md` are repository policy for new Kotlin SDK code: no `java.lang.reflect.*`, keep `core-jvm` free of Android dependencies, keep Android client code in `client-android`, and keep offline wallet Android/JNI code in `offline-wallet-android`.
+- Kotlin owns the canonical implementation for Kotlin and Java consumers. Migrate every Java-only capability, fixture, generator, example and delivery path before removing its duplicate. Keep Java-source runtime tests against Kotlin; remove superseded APIs without compatibility aliases or shims.
+- Kotlin SDK constraints from `kotlin/CLAUDE.md` are repository policy for new Kotlin SDK code: no `java.lang.reflect.*`, keep `core-jvm` free of Android dependencies, keep Android client code in `client-android`, and keep KAGEMUSHA wallet Android/JNI code in `kagemusha-wallet-android`.
 - Kotlin SDK enforces JDK 8 API compatibility at compile time via `-Xjdk-release=8`. All modules will fail to compile if JDK 9+ APIs are used (e.g. `Optional.isEmpty()`, `BigInteger.TWO`, `URLEncoder.encode(String, Charset)`, `Arrays.compareUnsigned()`). Use Kotlin stdlib equivalents or JDK 8 overloads instead. **Do not remove `-Xjdk-release=8`** — it is the only compile-time guard; without it, incompatible calls compile silently and crash at runtime.
-- Any cross-library wire-format or fixture test that currently validates Java SDK classes must validate the Kotlin SDK classes against the same shared fixtures as well.
+- Cross-library wire-format and fixture tests use the Kotlin implementation against the shared fixtures, including Java-source consumers. Preserve every assertion when retiring a Java implementation suite.
 - Configuration: Prefer `iroha_config` parameters over environment variables for all runtime behavior. Add new knobs to `crates/iroha_config` (user → actual → defaults) and thread values explicitly through constructors or dependency injection (e.g., host setters). Keep any environment-based toggles only for developer convenience in tests and do not rely on them in production paths. We do not support shipping features behind environment variables—production behavior must always be sourced from the configuration files, and those configs must expose sensible defaults so a newcomer can clone the repo, run the binaries, and have everything “just work” without editing values manually.
   - For IVM/Kotodama v1, strict pointer‑ABI type policy is always enforced. There is no ABI-policy toggle; contracts and hosts must adhere to the ABI policy unconditionally.
 - Don't gate anything used in IVM syscalls or opcodes; every Iroha build must ship those code paths to keep deterministic behavior across nodes.
@@ -154,12 +155,12 @@ Note: First release policy
 ## Project Status and Plan
 - Check `status.md` at the repo root for the current compilation/runtime status across crates.
 - Check `roadmap.md` for the prioritized TODOs and implementation plan.
-- After completing work, update status in `status.md` and keep `roadmap.md` focused on outstanding tasks.
+- Keep `status.md` focused on current health, scoped evidence and blockers, and `roadmap.md` on outstanding outcomes, component owners and completion criteria. Each root is limited to 300 lines. Historical evidence belongs once in dated subsystem records under `docs/history/`; preserve exact originals and verify with `python3 scripts/archive_project_history.py verify --archive docs/history/2026-09-06 --check-current`. Do not assert release readiness from historical prose.
 
 ## Agent workflow (for code editors/automation)
 - If you need clarification on any requirement, stop and draft a ChatGPT prompt with your question, then share it with the user before continuing.
 - Keep changes minimal and scoped; avoid unrelated edits in the same patch.
-- Prefer internal modules over adding new dependencies; do not edit `Cargo.lock`.
+- Keep dependencies acyclic and owned by the lowest appropriate layer. A new crate must establish a real boundary; approved manifest and lock changes belong in the same reviewed candidate.
 - Never bypass commit signing (do not use `git commit --no-gpg-sign`). If GPG signing is not available in the automation environment, leave the change uncommitted and ask the user to create a signed commit locally.
 - Never kill, signal, or interrupt other Codex processes or Codex-owned agent sessions, even if they appear idle or are holding resources; ask the user to resolve the contention.
 - Never kill `cargo` or `rustc` processes unless the user explicitly requests it. If there is build-lock contention, wait or ask first.

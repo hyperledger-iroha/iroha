@@ -3,7 +3,9 @@ package org.hyperledger.iroha.android.offline;
 /** Allocation limits shared by all peer V1 transports. */
 public final class IrohaPeerWireLimitsV1 {
   public static final IrohaPeerWireLimitsV1 PEER_V1 =
-      new IrohaPeerWireLimitsV1(32 * 1024, 24_576);
+      new IrohaPeerWireLimitsV1(
+          KagemushaWireV1.MAXIMUM_PAYMENT_BYTES,
+          KagemushaWireV1.MAXIMUM_PAYMENT_BYTES);
 
   private final int maximumCanonicalBytes;
   private final int maximumKagemushaEncodedBytes;
@@ -11,8 +13,11 @@ public final class IrohaPeerWireLimitsV1 {
   public IrohaPeerWireLimitsV1(
       final int maximumCanonicalBytes,
       final int maximumKagemushaEncodedBytes) {
-    require(maximumCanonicalBytes > 0 && maximumCanonicalBytes <= 32 * 1_024);
-    require(maximumKagemushaEncodedBytes > 0 && maximumKagemushaEncodedBytes <= 24_576);
+    require(maximumCanonicalBytes > 0
+        && maximumCanonicalBytes <= KagemushaWireV1.MAXIMUM_PAYMENT_BYTES);
+    require(maximumKagemushaEncodedBytes > 0
+        && maximumKagemushaEncodedBytes
+            <= KagemushaWireV1.MAXIMUM_PAYMENT_BYTES);
     this.maximumCanonicalBytes = maximumCanonicalBytes;
     this.maximumKagemushaEncodedBytes = maximumKagemushaEncodedBytes;
   }

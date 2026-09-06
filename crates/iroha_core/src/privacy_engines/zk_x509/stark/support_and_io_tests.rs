@@ -68,7 +68,7 @@ fn main_transcript_is_release_only_and_domain_separated() {
     let changed_public =
         new_main_transcript_after_profile_validation_v1(&[0x72; 32], first_release_digest)
             .expect("public-bound release transcript");
-    let focused = new_transcript_v1(&public_digest).expect("focused transcript");
+    let focused = new_transcript_v1(&test_stark_digest_v1(0x71)).expect("focused transcript");
     assert_ne!(first.state(), second.state());
     assert_ne!(first.state(), changed_public.state());
     assert_ne!(first.state(), focused.state());
@@ -1339,10 +1339,13 @@ fn projection_layout() -> SegmentLayoutV1 {
 fn projection_provider_post_base_v1(
     statement: &IrohaZkX509StarkP256StatementV1,
 ) -> ZkX509CredentialMainPostBaseChallengesV1 {
-    let digest = projection_public_digest_v1(statement).expect("projection public digest");
+    let consensus_context_digest =
+        ZkX509CredentialPublicBindingV1::from_consensus_context_v1(statement, [0x91; 32])
+            .expect("projection fixture consensus binding")
+            .consensus_context_digest;
     derive_zk_x509_credential_pre_aux_binding_v1(
         ZkX509CredentialMainPreAuxV1::fixture_for_test_v1(
-            digest,
+            consensus_context_digest,
             [0x31; 32],
             core::array::from_fn(|index| {
                 test_stark_digest_v1(u8::try_from(index + 1).expect("six roots"))

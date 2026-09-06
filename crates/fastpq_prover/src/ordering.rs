@@ -8,12 +8,18 @@ use norito::core;
 const ORDERING_DOMAIN: &[u8] = b"fastpq:v1:ordering";
 /// Compute the canonical ordering commitment for a batch.
 ///
+/// The committed Norito layout is fixed independently of any enclosing decode
+/// context, so identical transitions have one ordering hash on every caller.
+///
 /// # Errors
 ///
 /// Propagates Norito serialization failures.
 pub fn ordering_hash(batch: &TransitionBatch) -> Result<Hash> {
     let canonical = batch.canonicalized();
-    let encoded = core::to_bytes(&canonical.transitions)?;
+    let encoded = {
+        let _canonical = core::DecodeFlagsGuard::enter(core::default_encode_flags());
+        core::to_bytes(&canonical.transitions)?
+    };
     Ok(Hash::new_from_chunks(&[ORDERING_DOMAIN, &encoded]))
 }
 #[cfg(test)]
@@ -50,6 +56,33 @@ mod tests {
         let h1 = ordering_hash(&original).expect("ordering hash");
         let h2 = ordering_hash(&permuted).expect("ordering hash");
         assert_eq!(h1, h2);
+    }
+    #[test]
+    fn ordering_hash_is_independent_of_ambient_norito_layout() {
+        let mut batch = TransitionBatch::new(
+            "fastpq-state-transition-stark-v1",
+            crate::PublicInputs::default(),
+        );
+        batch.push(StateTransition::new(
+            b"metadata/layout".to_vec(),
+            vec![1, 2, 3],
+            vec![4, 5, 6],
+            OperationKind::MetaSet,
+        ));
+        let expected = ordering_hash(&batch).expect("canonical ordering commitment");
+        let canonical_bytes = core::to_bytes(&batch.transitions).expect("canonical encoding");
+        let alternate_flags = core::default_encode_flags() ^ core::header_flags::COMPACT_LEN;
+        let _ambient = core::DecodeFlagsGuard::enter(alternate_flags);
+        let alternate_bytes = core::to_bytes(&batch.transitions).expect("alternate encoding");
+        assert_ne!(
+            canonical_bytes, alternate_bytes,
+            "fixture must exercise another layout"
+        );
+        assert_eq!(
+            ordering_hash(&batch).expect("ordering commitment in another decode context"),
+            expected
+        );
+        assert_eq!(core::effective_decode_flags(), Some(alternate_flags));
     }
     #[test]
     fn ordering_hash_uses_the_full_domain_separated_digest() {

@@ -2799,6 +2799,7 @@ pub(crate) fn prove_zk_x509_ca_accumulator_stark_v1_with_rng<R: TryCryptoRng + ?
         &mut checked_rng,
     )?;
     let base_tree = aggregate::row_tree_v1(
+        CA_AGGREGATE_DOMAINS_V1.digest_context,
         CA_BASE_LEAF_DOMAIN_V1,
         CA_BASE_NODE_DOMAIN_V1,
         0,
@@ -2844,6 +2845,7 @@ pub(crate) fn prove_zk_x509_ca_accumulator_stark_v1_with_rng<R: TryCryptoRng + ?
         &mut checked_rng,
     )?;
     let aux_tree = aggregate::row_tree_v1(
+        CA_AGGREGATE_DOMAINS_V1.digest_context,
         CA_AUX_LEAF_DOMAIN_V1,
         CA_AUX_NODE_DOMAIN_V1,
         0,
@@ -2887,9 +2889,13 @@ pub(crate) fn prove_zk_x509_ca_accumulator_stark_v1_with_rng<R: TryCryptoRng + ?
         &composition_roots,
     )
     .map_err(map_aggregate_proof_error_v1)?;
-    let fri_masks =
-        aggregate::build_fri_mask_oracles_v1(CA_AGGREGATE_PARAMETERS_V1, &layout, &mut checked_rng)
-            .map_err(map_aggregate_proof_error_v1)?;
+    let fri_masks = aggregate::build_fri_mask_oracles_v1(
+        CA_AGGREGATE_PARAMETERS_V1,
+        CA_AGGREGATE_DOMAINS_V1,
+        &layout,
+        &mut checked_rng,
+    )
+    .map_err(map_aggregate_proof_error_v1)?;
     let fri_mask_roots = fri_masks
         .iter()
         .map(|mask| mask.tree.root())
@@ -2897,6 +2903,7 @@ pub(crate) fn prove_zk_x509_ca_accumulator_stark_v1_with_rng<R: TryCryptoRng + ?
     aggregate::absorb_fri_mask_roots_v1(
         &mut transcript,
         CA_AGGREGATE_PARAMETERS_V1,
+        CA_AGGREGATE_DOMAINS_V1,
         &fri_mask_roots,
     )
     .map_err(map_aggregate_proof_error_v1)?;
@@ -3121,6 +3128,7 @@ fn verify_ca_accumulator_and_binding_v1(
     aggregate::absorb_fri_mask_roots_v1(
         &mut transcript,
         CA_AGGREGATE_PARAMETERS_V1,
+        CA_AGGREGATE_DOMAINS_V1,
         &proof.fri_mask_roots,
     )
     .map_err(map_aggregate_proof_error_v1)?;

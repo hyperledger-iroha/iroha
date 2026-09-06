@@ -73,13 +73,26 @@ impl<'params, C: CurveAffine> GuardIPA<'params, C> {
 
 /// A verifier that checks multiple proofs in a batch.
 #[derive(Debug)]
-pub struct AccumulatorStrategy<'params, C: CurveAffine> {
+pub struct AccumulatorStrategy<
+    'params,
+    C: CurveAffine,
+    const QUERY_INSTANCE: bool = true,
+    const PROOF_SUPPLIED_INSTANCE_COMMITMENT_MASK: u64 = 0,
+> {
     msm: MSMIPA<'params, C>,
 }
 
-impl<'params, C: CurveAffine>
-    VerificationStrategy<'params, IPACommitmentScheme<C>, VerifierIPA<'params, C>>
-    for AccumulatorStrategy<'params, C>
+impl<
+    'params,
+    C: CurveAffine,
+    const QUERY_INSTANCE: bool,
+    const PROOF_SUPPLIED_INSTANCE_COMMITMENT_MASK: u64,
+>
+    VerificationStrategy<
+        'params,
+        IPACommitmentScheme<C>,
+        VerifierIPA<'params, C, QUERY_INSTANCE, PROOF_SUPPLIED_INSTANCE_COMMITMENT_MASK>,
+    > for AccumulatorStrategy<'params, C, QUERY_INSTANCE, PROOF_SUPPLIED_INSTANCE_COMMITMENT_MASK>
 {
     type Output = Self;
 
@@ -113,13 +126,26 @@ impl<'params, C: CurveAffine>
 
 /// A verifier that checks single proof
 #[derive(Debug)]
-pub struct SingleStrategy<'params, C: CurveAffine> {
+pub struct SingleStrategy<
+    'params,
+    C: CurveAffine,
+    const QUERY_INSTANCE: bool = true,
+    const PROOF_SUPPLIED_INSTANCE_COMMITMENT_MASK: u64 = 0,
+> {
     msm: MSMIPA<'params, C>,
 }
 
-impl<'params, C: CurveAffine>
-    VerificationStrategy<'params, IPACommitmentScheme<C>, VerifierIPA<'params, C>>
-    for SingleStrategy<'params, C>
+impl<
+    'params,
+    C: CurveAffine,
+    const QUERY_INSTANCE: bool,
+    const PROOF_SUPPLIED_INSTANCE_COMMITMENT_MASK: u64,
+>
+    VerificationStrategy<
+        'params,
+        IPACommitmentScheme<C>,
+        VerifierIPA<'params, C, QUERY_INSTANCE, PROOF_SUPPLIED_INSTANCE_COMMITMENT_MASK>,
+    > for SingleStrategy<'params, C, QUERY_INSTANCE, PROOF_SUPPLIED_INSTANCE_COMMITMENT_MASK>
 {
     type Output = ();
 

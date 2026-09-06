@@ -153,4 +153,3 @@ fn fail_after_next_autonomous_merge_bundle_pair_for_tests() {
 }
 const CANONICAL_HASH_READER_OBSERVED: usize = 1 << 0;
 const CANONICAL_BLOCK_READER_OBSERVED: usize = 1 << 1;
-const OFFLINE_OPERATION_READER_OBSERVED: usize = 1 << 2;

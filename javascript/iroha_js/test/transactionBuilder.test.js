@@ -3,59 +3,26 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import {
+  _createTransactionApi,
   buildRegisterDomainTransaction,
-  buildExecutableBatchTransaction,
-  buildExecutableBatchTransactionPayload,
   buildTransaction,
-  buildTransactionPayload,
-  signQuotedTransactionPayload,
-  quoteAndSignTransaction,
   buildRegisterPinManifestInstruction,
   buildRegisterPinManifestTransaction,
-  buildIvmProvedTransaction,
-  buildIvmProvedTransactionPayload,
-  signQuotedIvmProvedTransactionPayload,
   submitIvmProvedContractCall,
-  buildConfidentialTransferProofV2,
-  buildConfidentialUnshieldProofV2,
-  buildConfidentialUnshieldProofV3,
   buildApplySccpRouteGovernanceInstruction,
-  buildApplySccpRouteGovernanceTransaction,
   buildMintAssetTransaction,
   buildMintAndTransferTransaction,
-  buildRegisterDomainAndMintTransaction,
-  buildRegisterAssetDefinitionAndMintTransaction,
   buildRegisterAssetDefinitionMintAndTransferTransaction,
   buildTransferAssetTransaction,
-  buildRegisterRwaTransaction,
   buildTransferRwaTransaction,
-  buildSetRwaKeyValueTransaction,
-  buildRemoveRwaKeyValueTransaction,
-  buildCreateKaigiTransaction,
-  buildJoinKaigiTransaction,
-  buildRegisterKaigiRelayTransaction,
-  buildUnregisterKaigiRelayTransaction,
-  buildReportKaigiRelayHealthTransaction,
-  buildRegisterSmartContractCodeTransaction,
-  buildRegisterSmartContractBytesTransaction,
-  buildRemoveSmartContractBytesTransaction,
-  buildProposeDeployContractTransaction,
   buildProposeSccpRouteGovernanceTransaction,
-  buildCastZkBallotTransaction,
-  buildCastPlainBallotTransaction,
-  buildPersistCouncilForEpochTransaction,
-  buildRegisterZkAssetTransaction,
-  buildScheduleConfidentialPolicyTransitionTransaction,
-  buildCancelConfidentialPolicyTransitionTransaction,
-  buildCreateElectionTransaction,
-  buildSubmitBallotTransaction,
-  buildFinalizeElectionTransaction,
   hashSignedTransaction,
   hashSignedTransactionPayload,
   hashInstructionBatch,
   feePaymentIntentToNoritoJson,
 } from "../src/transaction.js";
 import * as transactionExports from "../src/transaction.js";
+import { createNativeRuntime } from "../src/nativeRuntime.js";
 import {
   buildBurnAssetInstruction,
   buildMintAssetInstruction,
@@ -365,7 +332,7 @@ test("buildTransaction normalizes instruction objects", () => {
     hash: Buffer.alloc(32, 0xaa),
   };
 
-  withNativeBinding(
+  withTransactionApi(
     {
       buildTransaction: (
         networkId,
@@ -394,8 +361,8 @@ test("buildTransaction normalizes instruction objects", () => {
         return fakeResult;
       },
     },
-    () => {
-      const built = buildTransaction({
+    (transaction) => {
+      const built = transaction.buildTransaction({
         networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
@@ -443,15 +410,15 @@ test("mixed executable batch builder forwards ordered copied entries", () => {
     signed_transaction: Buffer.from([0x04, 0x01]),
     hash: Buffer.alloc(32, 0xab),
   };
-  withNativeBinding(
+  withTransactionApi(
     {
       buildExecutableBatchTransaction: (...args) => {
         captures.push(args);
         return fakeResult;
       },
     },
-    () => {
-      const result = buildExecutableBatchTransaction({
+    (transaction) => {
+      const result = transaction.buildExecutableBatchTransaction({
         networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         entries: [
@@ -496,7 +463,7 @@ test("mixed executable batch draft and validation reject missing requirements", 
     expectedCodeHash: Buffer.alloc(32, 0x41),
     entrypoint: "run",
   };
-  withNativeBinding(
+  withTransactionApi(
     {
       buildExecutableBatchTransactionPayload: (...args) => ({
         payload_json: JSON.stringify({ instructions: { Batch: [] } }),
@@ -505,10 +472,10 @@ test("mixed executable batch draft and validation reject missing requirements", 
         args,
       }),
     },
-    () => {
+    (transaction) => {
       assert.throws(
         () =>
-          buildExecutableBatchTransactionPayload({
+          transaction.buildExecutableBatchTransactionPayload({
             networkId: NETWORK_ID,
             authority: AUTHORITY_ID_INPUT,
             entries: [call],
@@ -518,7 +485,7 @@ test("mixed executable batch draft and validation reject missing requirements", 
       );
       assert.throws(
         () =>
-          buildExecutableBatchTransactionPayload({
+          transaction.buildExecutableBatchTransactionPayload({
             networkId: NETWORK_ID,
             authority: AUTHORITY_ID_INPUT,
             entries: [],
@@ -528,7 +495,7 @@ test("mixed executable batch draft and validation reject missing requirements", 
       );
       assert.throws(
         () =>
-          buildExecutableBatchTransactionPayload({
+          transaction.buildExecutableBatchTransactionPayload({
             networkId: NETWORK_ID,
             authority: AUTHORITY_ID_INPUT,
             entries: [{ ...call, expectedCodeHash: Buffer.alloc(31) }],
@@ -545,7 +512,7 @@ test("mixed executable batch draft and validation reject missing requirements", 
       ]) {
         assert.throws(
           () =>
-            buildExecutableBatchTransactionPayload({
+            transaction.buildExecutableBatchTransactionPayload({
               networkId: NETWORK_ID,
               authority: AUTHORITY_ID_INPUT,
               entries: [{ ...call, contractAddress }],
@@ -579,7 +546,7 @@ test("quote-to-sign helpers preserve the exact unsigned payload", () => {
   const payloadJson = JSON.stringify(payload);
   const draftCaptures = [];
   const signCaptures = [];
-  withNativeBinding(
+  withTransactionApi(
     {
       buildTransactionPayload: (...args) => {
         draftCaptures.push(args);
@@ -597,8 +564,8 @@ test("quote-to-sign helpers preserve the exact unsigned payload", () => {
         };
       },
     },
-    () => {
-      const draft = buildTransactionPayload({
+    (transaction) => {
+      const draft = transaction.buildTransactionPayload({
         networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         instructions: [instruction],
@@ -623,7 +590,7 @@ test("quote-to-sign helpers preserve the exact unsigned payload", () => {
           gas_limit: null,
         },
       };
-      const signed = signQuotedTransactionPayload({
+      const signed = transaction.signQuotedTransactionPayload({
         networkId: NETWORK_ID,
         payload: draft,
         quotedFeePayment: quotedIntent,
@@ -670,7 +637,7 @@ test("quoteAndSignTransaction performs the guided exact-payload flow", async () 
     },
   };
   const calls = [];
-  await withNativeBindingAsync(
+  await withTransactionApi(
     {
       buildTransactionPayload: () => ({
         payload_json: JSON.stringify(payload),
@@ -685,14 +652,14 @@ test("quoteAndSignTransaction performs the guided exact-payload flow", async () 
         };
       },
     },
-    async () => {
+    async (transaction) => {
       const client = {
         async quoteFees(draft, options) {
           calls.push(["quote", draft, options]);
           return acceptedAuthorityFeeQuote(payload, quotedIntent);
         },
       };
-      const result = await quoteAndSignTransaction(client, {
+      const result = await transaction.quoteAndSignTransaction(client, {
         networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         instructions: [instruction],
@@ -725,7 +692,7 @@ baseTest("quoteAndSignTransaction rejects an unbound injectable-client quote bef
     },
   };
   let signCalls = 0;
-  await withNativeBindingAsync(
+  await withTransactionApi(
     {
       buildTransactionPayload: () => ({
         payload_json: JSON.stringify(payload),
@@ -740,11 +707,11 @@ baseTest("quoteAndSignTransaction rejects an unbound injectable-client quote bef
         };
       },
     },
-    async () => {
+    async (transaction) => {
       const invalidQuote = acceptedAuthorityFeeQuote(payload);
       invalidQuote.observation.next_block_height = 0;
       await assert.rejects(
-        () => quoteAndSignTransaction(
+        () => transaction.quoteAndSignTransaction(
           { async quoteFees() { return invalidQuote; } },
           {
             networkId: NETWORK_ID,
@@ -773,17 +740,17 @@ baseTest("quoted transaction signers require one nominal NetworkId", () => {
       throw new Error("native signer must not run");
     },
   };
-  withNativeBinding(binding, () => {
+  withTransactionApi(binding, (transaction) => {
     for (const signer of [
       (networkInput) =>
-        signQuotedTransactionPayload({
+        transaction.signQuotedTransactionPayload({
           ...networkInput,
           payload: {},
           quotedFeePayment: AUTHORITY_FEE_PAYMENT,
           privateKey: PRIVATE_KEY,
         }),
       (networkInput) =>
-        signQuotedIvmProvedTransactionPayload({
+        transaction.signQuotedIvmProvedTransactionPayload({
           ...networkInput,
           payload: {},
           attachment: {},
@@ -878,7 +845,7 @@ test("buildRegisterPinManifestTransaction quotes and signs exactly one instructi
     },
   };
   const quotedIntent = payload.fee_payment;
-  await withNativeBindingAsync(
+  await withTransactionApi(
     {
       buildTransactionPayload: (...args) => {
         draftCalls.push(args);
@@ -893,13 +860,13 @@ test("buildRegisterPinManifestTransaction quotes and signs exactly one instructi
         hash: Buffer.alloc(32, 4),
       }),
     },
-    async () => {
+    async (transaction) => {
       const client = {
         async quoteFees() {
           return acceptedAuthorityFeeQuote(payload, quotedIntent);
         },
       };
-      const result = await buildRegisterPinManifestTransaction(client, {
+      const result = await transaction.buildRegisterPinManifestTransaction(client, {
         networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
@@ -938,7 +905,7 @@ test("proved-IVM quote draft preserves the proof attachment through signing", ()
     vk_ref: { backend: "halo2/ipa", name: "ivm-exec-v1" },
   };
   const calls = [];
-  withNativeBinding(
+  withTransactionApi(
     {
       buildIvmProvedTransactionPayload: (...args) => {
         calls.push(["draft", ...args]);
@@ -956,8 +923,8 @@ test("proved-IVM quote draft preserves the proof attachment through signing", ()
         };
       },
     },
-    () => {
-      const draft = buildIvmProvedTransactionPayload({
+    (transaction) => {
+      const draft = transaction.buildIvmProvedTransactionPayload({
         networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         proved,
@@ -967,7 +934,7 @@ test("proved-IVM quote draft preserves the proof attachment through signing", ()
           gasLimit: 5000,
         },
       });
-      const signed = signQuotedIvmProvedTransactionPayload({
+      const signed = transaction.signQuotedIvmProvedTransactionPayload({
         networkId: NETWORK_ID,
         payload: draft,
         quotedFeePayment: payload.fee_payment,
@@ -1024,16 +991,16 @@ test("feePaymentIntentToNoritoJson binds exact sponsor revision and limits", () 
 });
 
 test("buildTransaction requires an explicit fee payment intent", () => {
-  withNativeBinding(
+  withTransactionApi(
     {
       buildTransaction: () => {
         throw new Error("native builder should not be called");
       },
     },
-    () => {
+    (transaction) => {
       assert.throws(
         () =>
-          buildTransaction({
+          transaction.buildTransaction({
             networkId: NETWORK_ID,
             authority: AUTHORITY_ID_INPUT,
             instructions: [{ Log: { level: "INFO", message: "hello" } }],
@@ -1071,7 +1038,7 @@ test("SCCP route governance transaction submits one typed atomic action", () => 
     hash: Buffer.alloc(32, 0xb1),
   };
 
-  withNativeBinding(
+  withTransactionApi(
     {
       buildTransaction: (
         networkId,
@@ -1098,8 +1065,8 @@ test("SCCP route governance transaction submits one typed atomic action", () => 
         return fakeResult;
       },
     },
-    () => {
-      const built = buildApplySccpRouteGovernanceTransaction({
+    (transaction) => {
+      const built = transaction.buildApplySccpRouteGovernanceTransaction({
         networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
@@ -1135,7 +1102,7 @@ test("transaction helper wrappers forward privateKeyAlgorithm", () => {
     hash: Buffer.alloc(32, 0xbb),
   };
 
-  withNativeBinding(
+  withTransactionApi(
     {
       buildTransaction: (
         _chainId,
@@ -1153,8 +1120,8 @@ test("transaction helper wrappers forward privateKeyAlgorithm", () => {
         return fakeResult;
       },
     },
-    () => {
-      buildMintAssetTransaction({
+    (transaction) => {
+      transaction.buildMintAssetTransaction({
         networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
@@ -1224,7 +1191,7 @@ test("buildTransaction rejects empty instruction arrays", () => {
     },
   };
 
-  withNativeBinding(
+  withTransactionApi(
     {
       buildIvmProvedTransaction: (
         networkId,
@@ -1253,8 +1220,8 @@ test("buildTransaction rejects empty instruction arrays", () => {
         return fakeResult;
       },
     },
-    () => {
-      const built = buildIvmProvedTransaction({
+    (transaction) => {
+      const built = transaction.buildIvmProvedTransaction({
         networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: IVM_AUTHORITY_FEE_PAYMENT,
@@ -1288,16 +1255,16 @@ test("buildTransaction rejects empty instruction arrays", () => {
 });
 
 test("buildIvmProvedTransaction rejects empty proved payload strings", () => {
-  withNativeBinding(
+  withTransactionApi(
     {
       buildIvmProvedTransaction: () => {
         throw new Error("native builder should not be called");
       },
     },
-    () => {
+    (transaction) => {
       assert.throws(
         () =>
-          buildIvmProvedTransaction({
+          transaction.buildIvmProvedTransaction({
             networkId: NETWORK_ID,
             authority: AUTHORITY_ID_INPUT,
             feePayment: IVM_AUTHORITY_FEE_PAYMENT,
@@ -1410,37 +1377,32 @@ test("submitIvmProvedContractCall rejects code and proof substitution before sig
       throw new Error("transaction must not submit");
     };
 
-    const previous = globalThis.__IROHA_NATIVE_BINDING__;
-    globalThis.__IROHA_NATIVE_BINDING__ = {
+    const transaction = _createTransactionApi(createNativeRuntime({
       buildIvmProvedTransaction: () => {
         calls.sign += 1;
         throw new Error("transaction must not be signed");
       },
-    };
-    try {
-      await assert.rejects(
-        () =>
-          submitIvmProvedContractCall(
-            client,
-            {
-              networkId: NETWORK_ID,
-              authority: AUTHORITY_ID_INPUT,
-              privateKey: PRIVATE_KEY,
-              vkRef: { backend: "halo2/ipa", name: "ivm-exec-v1" },
-              contractAlias: "dlmm_router::dlmm.universal",
-              feePayment: {
-                ...IVM_AUTHORITY_FEE_PAYMENT,
-                gasLimit: 5000,
-              },
-              ...input,
+    }));
+    await assert.rejects(
+      () =>
+        transaction.submitIvmProvedContractCall(
+          client,
+          {
+            networkId: NETWORK_ID,
+            authority: AUTHORITY_ID_INPUT,
+            privateKey: PRIVATE_KEY,
+            vkRef: { backend: "halo2/ipa", name: "ivm-exec-v1" },
+            contractAlias: "dlmm_router::dlmm.universal",
+            feePayment: {
+              ...IVM_AUTHORITY_FEE_PAYMENT,
+              gasLimit: 5000,
             },
-            options,
-          ),
-        expected,
-      );
-    } finally {
-      globalThis.__IROHA_NATIVE_BINDING__ = previous;
-    }
+            ...input,
+          },
+          options,
+        ),
+      expected,
+    );
     assert.equal(calls.sign, 0);
     assert.equal(calls.submit, 0);
     return calls;
@@ -1487,15 +1449,6 @@ test("submitIvmProvedContractCall rejects code and proof substitution before sig
       sign: 0,
       submit: 0,
     });
-    const duplicate = await rejectsBeforeSigning({
-      input: {
-        expectedCodeHashHex: ZK_IVM_CODE_HASH_HEX,
-        expected_code_hash_hex: ZK_IVM_CODE_HASH_HEX,
-      },
-      expected: /must use exactly one of expectedCodeHashHex, expected_code_hash_hex/,
-    });
-    assert.equal(duplicate.simulate, 0);
-
     const missingArtifactHash = await rejectsBeforeSigning({
       input: { expectedCodeHashHex: ZK_IVM_CODE_HASH_HEX },
       expected: /expectedArtifactSha256Hex must be exactly 32 hexadecimal bytes/,
@@ -1503,7 +1456,85 @@ test("submitIvmProvedContractCall rejects code and proof substitution before sig
     assert.equal(missingArtifactHash.simulate, 0);
   });
 
-  await t.test("rejects every conflicting input alias before simulation", async () => {
+  await t.test("rejects removed input aliases before simulation", async () => {
+    const trusted = {
+      expectedCodeHashHex: ZK_IVM_CODE_HASH_HEX,
+      expectedArtifactSha256Hex: ZK_IVM_ARTIFACT_SHA256_HEX,
+    };
+    const removedAliases = [
+      ["private_key", PRIVATE_KEY, "privateKey"],
+      ["private_key_algorithm", "ed25519", "privateKeyAlgorithm"],
+      [
+        "vk_ref",
+        { backend: "halo2/ipa", name: "ivm-exec-v1" },
+        "vkRef",
+      ],
+      ["contract_address", "irohac1attacker", "contractAddress"],
+      ["contract_alias", "attacker::router.universal", "contractAlias"],
+      ["fee_payment", IVM_AUTHORITY_FEE_PAYMENT, "feePayment"],
+      ["creation_time_ms", 1, "creationTimeMs"],
+      ["ttl_ms", 1, "ttlMs"],
+      ["required_overlay_transfer", null, "requiredOverlayTransfer"],
+      [
+        "expected_code_hash_hex",
+        ZK_IVM_CODE_HASH_HEX,
+        "expectedCodeHashHex",
+      ],
+      [
+        "expected_artifact_sha256_hex",
+        ZK_IVM_ARTIFACT_SHA256_HEX,
+        "expectedArtifactSha256Hex",
+      ],
+    ];
+    for (const [alias, value, canonical] of removedAliases) {
+      const calls = await rejectsBeforeSigning({
+        input: { ...trusted, [alias]: value },
+        expected: new RegExp(
+          `input\\.${alias} is unsupported; use input\\.${canonical}`,
+          "u",
+        ),
+      });
+      assert.equal(calls.simulate, 0);
+      assert.equal(calls.derive, 0);
+      assert.equal(calls.prove, 0);
+    }
+
+    const requiredTransfer = {
+      sourceAssetHoldingId: CANONICAL_ASSET_ID_INPUT,
+      quantity: "1",
+      destinationAccountId: RELAY_ACCOUNT_ID_INPUT,
+    };
+    for (const [alias, value, canonical] of [
+      [
+        "source_asset_holding_id",
+        CANONICAL_ASSET_ID_INPUT,
+        "sourceAssetHoldingId",
+      ],
+      ["sourceAssetId", CANONICAL_ASSET_ID_INPUT, "sourceAssetHoldingId"],
+      ["source_asset_id", CANONICAL_ASSET_ID_INPUT, "sourceAssetHoldingId"],
+      [
+        "destination_account_id",
+        RELAY_ACCOUNT_ID_INPUT,
+        "destinationAccountId",
+      ],
+    ]) {
+      const calls = await rejectsBeforeSigning({
+        input: {
+          ...trusted,
+          requiredOverlayTransfer: { ...requiredTransfer, [alias]: value },
+        },
+        expected: new RegExp(
+          `requiredOverlayTransfer\\.${alias} is unsupported; use requiredOverlayTransfer\\.${canonical}`,
+          "u",
+        ),
+      });
+      assert.equal(calls.simulate, 0);
+      assert.equal(calls.derive, 0);
+      assert.equal(calls.prove, 0);
+    }
+  });
+
+  await t.test("rejects retired and ambiguous inputs before simulation", async () => {
     const trusted = {
       expectedCodeHashHex: ZK_IVM_CODE_HASH_HEX,
       expectedArtifactSha256Hex: ZK_IVM_ARTIFACT_SHA256_HEX,
@@ -1512,30 +1543,9 @@ test("submitIvmProvedContractCall rejects code and proof substitution before sig
       [{ ...trusted, chain: "test-chain" }, /input\.chain is unsupported/u],
       [{ ...trusted, chainId: "test-chain" }, /input\.chainId is unsupported/u],
       [{ ...trusted, chain_id: "test-chain" }, /input\.chain_id is unsupported/u],
-      [{ ...trusted, private_key: PRIVATE_KEY }, /exactly one of privateKey, private_key/],
-      [
-        {
-          ...trusted,
-          privateKeyAlgorithm: "ed25519",
-          private_key_algorithm: "ed25519",
-        },
-        /exactly one of privateKeyAlgorithm, private_key_algorithm/,
-      ],
-      [
-        { ...trusted, vk_ref: { backend: "halo2/ipa", name: "ivm-exec-v1" } },
-        /exactly one of vkRef, vk_ref/,
-      ],
-      [
-        { ...trusted, contract_alias: "attacker::router.universal" },
-        /exactly one of contractAlias, contract_alias/,
-      ],
       [
         { ...trusted, contractAddress: "irohac1attacker" },
         /exactly one of contractAddress or contractAlias/,
-      ],
-      [
-        { ...trusted, fee_payment: IVM_AUTHORITY_FEE_PAYMENT },
-        /exactly one of feePayment, fee_payment/,
       ],
       [
         { ...trusted, gasAssetId: null },
@@ -1550,40 +1560,12 @@ test("submitIvmProvedContractCall rejects code and proof substitution before sig
         /gasLimit is retired/,
       ],
       [
-        { ...trusted, creationTimeMs: 1, creation_time_ms: 1 },
-        /exactly one of creationTimeMs, creation_time_ms/,
-      ],
-      [{ ...trusted, ttlMs: 1, ttl_ms: 1 }, /exactly one of ttlMs, ttl_ms/],
-      [
-        {
-          ...trusted,
-          requiredOverlayTransfer: null,
-          required_overlay_transfer: null,
-        },
-        /exactly one of requiredOverlayTransfer, required_overlay_transfer/,
-      ],
-      [
         {
           ...trusted,
           validationFeePolicy: null,
           validation_fee_policy: null,
         },
         /exactly one of validationFeePolicy, validation_fee_policy/,
-      ],
-      [
-        {
-          expectedCodeHashHex: ZK_IVM_CODE_HASH_HEX,
-          expected_code_hash_hex: ZK_IVM_CODE_HASH_HEX,
-          expectedArtifactSha256Hex: ZK_IVM_ARTIFACT_SHA256_HEX,
-        },
-        /exactly one of expectedCodeHashHex, expected_code_hash_hex/,
-      ],
-      [
-        {
-          ...trusted,
-          expected_artifact_sha256_hex: ZK_IVM_ARTIFACT_SHA256_HEX,
-        },
-        /exactly one of expectedArtifactSha256Hex, expected_artifact_sha256_hex/,
       ],
     ];
     for (const [input, expected] of cases) {
@@ -1603,6 +1585,10 @@ test("submitIvmProvedContractCall rejects code and proof substitution before sig
     circularPayload.self = circularPayload;
     for (const [input, expected] of [
       [{ ...trusted, privateKey: Buffer.alloc(31) }, /32- or 64-byte Ed25519 key/],
+      [
+        { ...trusted, privateKeyAlgorithm: null },
+        /privateKeyAlgorithm must be a supported crypto algorithm string/,
+      ],
       [{ ...trusted, privateKeyAlgorithm: " ed25519" }, /surrounding whitespace/],
       [{ ...trusted, privateKeyAlgorithm: "attacker" }, /unsupported crypto algorithm/],
       [{ ...trusted, metadata: { contract_address: "attacker" } }, /reserved/],
@@ -1961,8 +1947,7 @@ test("submitIvmProvedContractCall proof-binds, quotes, rebuilds, and signs", asy
     return { accepted: true };
   };
 
-  const previous = globalThis.__IROHA_NATIVE_BINDING__;
-  globalThis.__IROHA_NATIVE_BINDING__ = {
+  const transaction = _createTransactionApi(createNativeRuntime({
     buildIvmProvedTransactionPayload: (
       networkId,
       authority,
@@ -2015,34 +2000,29 @@ test("submitIvmProvedContractCall proof-binds, quotes, rebuilds, and signs", asy
         hash: Buffer.alloc(32, 0xbb),
       };
     },
-  };
-  let result;
-  try {
-    result = await submitIvmProvedContractCall(
-      client,
-      {
-        networkId: NETWORK_ID,
-        authority: AUTHORITY_ID_INPUT,
-        privateKey: PRIVATE_KEY,
-        vkRef: { backend: "halo2/ipa", name: "ivm-exec-v1" },
-        expectedCodeHashHex: ZK_IVM_CODE_HASH_HEX,
-        expectedArtifactSha256Hex: ZK_IVM_ARTIFACT_SHA256_HEX,
-        contractAlias: "dlmm_router::dlmm.universal",
-        entrypoint: "route_swap",
-        payload: { amount: "7" },
-        feePayment: { ...IVM_AUTHORITY_FEE_PAYMENT, gasLimit: 5000 },
-        metadata: { request_id: "swap-7" },
-        requiredOverlayTransfer,
-      },
-      {
-        proofIntervalMs: 0,
-        proofTimeoutMs: 1000,
-        signal: submissionController.signal,
-      },
-    );
-  } finally {
-    globalThis.__IROHA_NATIVE_BINDING__ = previous;
-  }
+  }));
+  const result = await transaction.submitIvmProvedContractCall(
+    client,
+    {
+      networkId: NETWORK_ID,
+      authority: AUTHORITY_ID_INPUT,
+      privateKey: PRIVATE_KEY,
+      vkRef: { backend: "halo2/ipa", name: "ivm-exec-v1" },
+      expectedCodeHashHex: ZK_IVM_CODE_HASH_HEX,
+      expectedArtifactSha256Hex: ZK_IVM_ARTIFACT_SHA256_HEX,
+      contractAlias: "dlmm_router::dlmm.universal",
+      entrypoint: "route_swap",
+      payload: { amount: "7" },
+      feePayment: { ...IVM_AUTHORITY_FEE_PAYMENT, gasLimit: 5000 },
+      metadata: { request_id: "swap-7" },
+      requiredOverlayTransfer,
+    },
+    {
+      proofIntervalMs: 0,
+      proofTimeoutMs: 1000,
+      signal: submissionController.signal,
+    },
+  );
 
   assert.equal(captures.codeHash, ZK_IVM_CODE_HASH_HEX);
   assert.equal(
@@ -2121,31 +2101,26 @@ test("submitIvmProvedContractCall keeps a 4 MiB proof request below Torii's defa
     submitCalls += 1;
     throw new Error("must not submit");
   };
-  const previous = globalThis.__IROHA_NATIVE_BINDING__;
-  globalThis.__IROHA_NATIVE_BINDING__ = {
+  const transaction = _createTransactionApi(createNativeRuntime({
     buildIvmProvedTransaction() {
       signCalls += 1;
       throw new Error("must not sign");
     },
-  };
-  try {
-    await assert.rejects(
-      () =>
-        submitIvmProvedContractCall(client, {
-          networkId: NETWORK_ID,
-          authority: AUTHORITY_ID_INPUT,
-          privateKey: PRIVATE_KEY,
-          vkRef: { backend: "halo2/ipa", name: "ivm-exec-v1" },
-          expectedCodeHashHex: hashes.codeHashHex,
-          expectedArtifactSha256Hex: hashes.artifactSha256Hex,
-          contractAlias: "dlmm_router::dlmm.universal",
-          feePayment: { ...IVM_AUTHORITY_FEE_PAYMENT, gasLimit: 5000 },
-        }),
-      /stop after capturing the proof request/,
-    );
-  } finally {
-    globalThis.__IROHA_NATIVE_BINDING__ = previous;
-  }
+  }));
+  await assert.rejects(
+    () =>
+      transaction.submitIvmProvedContractCall(client, {
+        networkId: NETWORK_ID,
+        authority: AUTHORITY_ID_INPUT,
+        privateKey: PRIVATE_KEY,
+        vkRef: { backend: "halo2/ipa", name: "ivm-exec-v1" },
+        expectedCodeHashHex: hashes.codeHashHex,
+        expectedArtifactSha256Hex: hashes.artifactSha256Hex,
+        contractAlias: "dlmm_router::dlmm.universal",
+        feePayment: { ...IVM_AUTHORITY_FEE_PAYMENT, gasLimit: 5000 },
+      }),
+    /stop after capturing the proof request/,
+  );
   assert.equal(Object.hasOwn(proofRequest, "proved"), false);
   assert.equal(proofRequest.bytecode, bytecode);
   assert.ok(
@@ -2453,7 +2428,7 @@ test("buildTransferRwaTransaction returns canonical hash", () => {
 
 baseTest("transaction builders reject padded authority and asset definition IDs before native dispatch", () => {
   const calls = [];
-  withNativeBinding(
+  withTransactionApi(
     {
       buildTransaction: () => {
         calls.push("buildTransaction");
@@ -2463,10 +2438,10 @@ baseTest("transaction builders reject padded authority and asset definition IDs 
         };
       },
     },
-    () => {
+    (transaction) => {
       assert.throws(
         () =>
-          buildTransaction({
+          transaction.buildTransaction({
             networkId: NETWORK_ID,
             authority: ` ${AUTHORITY_ID_INPUT}`,
             feePayment: AUTHORITY_FEE_PAYMENT,
@@ -2477,7 +2452,7 @@ baseTest("transaction builders reject padded authority and asset definition IDs 
       );
       assert.throws(
         () =>
-          buildRegisterAssetDefinitionAndMintTransaction({
+          transaction.buildRegisterAssetDefinitionAndMintTransaction({
             networkId: NETWORK_ID,
             authority: AUTHORITY_ID_INPUT,
             feePayment: AUTHORITY_FEE_PAYMENT,
@@ -2499,7 +2474,7 @@ baseTest("transaction builders reject padded authority and asset definition IDs 
 
 test("buildRegisterRwaTransaction forwards canonical instruction payload", () => {
   const captures = [];
-  withNativeBinding(
+  withTransactionApi(
     {
       buildTransaction: (_chain, authority, instructions) => {
         captures.push({
@@ -2512,8 +2487,8 @@ test("buildRegisterRwaTransaction forwards canonical instruction payload", () =>
         };
       },
     },
-    () =>
-      buildRegisterRwaTransaction({
+    (transaction) =>
+      transaction.buildRegisterRwaTransaction({
         networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
@@ -2553,7 +2528,7 @@ test("buildRegisterRwaTransaction forwards canonical instruction payload", () =>
 
 test("buildRwaKeyValueTransactions forward canonical instruction payloads", () => {
   const captures = [];
-  withNativeBinding(
+  withTransactionApi(
     {
       buildTransaction: (_chain, authority, instructions) => {
         captures.push({
@@ -2566,8 +2541,8 @@ test("buildRwaKeyValueTransactions forward canonical instruction payloads", () =
         };
       },
     },
-    () => {
-      buildSetRwaKeyValueTransaction({
+    (transaction) => {
+      transaction.buildSetRwaKeyValueTransaction({
         networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
@@ -2576,7 +2551,7 @@ test("buildRwaKeyValueTransactions forward canonical instruction payloads", () =
         value: { origin: "AE", score: BigInt(9) },
         privateKey: PRIVATE_KEY,
       });
-      buildRemoveRwaKeyValueTransaction({
+      transaction.buildRemoveRwaKeyValueTransaction({
         networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
@@ -2609,15 +2584,15 @@ test("buildMintAndTransferTransaction composes instructions in order", () => {
     signed_transaction: Buffer.from([0x10, 0x20]),
     hash: Buffer.alloc(32, 0xbb),
   };
-  withNativeBinding(
+  withTransactionApi(
     {
       buildTransaction: (_, __, instructions) => {
         captures.push(instructions.map((payload) => JSON.parse(payload)));
         return fakeResult;
       },
     },
-    () => {
-      const result = buildMintAndTransferTransaction({
+    (transaction) => {
+      const result = transaction.buildMintAndTransferTransaction({
         networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
@@ -2649,7 +2624,7 @@ test("buildMintAndTransferTransaction composes instructions in order", () => {
 
 test("buildRegisterDomainAndMintTransaction supports mint arrays", () => {
   const captures = [];
-  withNativeBinding(
+  withTransactionApi(
     {
       buildTransaction: (_chain, authority, instructions) => {
         captures.push({
@@ -2662,8 +2637,8 @@ test("buildRegisterDomainAndMintTransaction supports mint arrays", () => {
         };
       },
     },
-    () =>
-      buildRegisterDomainAndMintTransaction({
+    (transaction) =>
+      transaction.buildRegisterDomainAndMintTransaction({
         networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
@@ -2705,7 +2680,7 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction supports transfer a
   const secondAccountIdInput = i105FromEd25519PublicKeyHex(
     secondAccountIdPublicKeyHex,
   );
-  withNativeBinding(
+  withTransactionApi(
     {
       buildTransaction: (_chain, authority, instructions) => {
         captures.push({
@@ -2718,8 +2693,8 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction supports transfer a
         };
       },
     },
-    () =>
-      buildRegisterAssetDefinitionMintAndTransferTransaction({
+    (transaction) =>
+      transaction.buildRegisterAssetDefinitionMintAndTransferTransaction({
         networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
@@ -2785,7 +2760,7 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction supports transfer a
 
 test("buildRegisterAssetDefinitionMintAndTransferTransaction derives asset ids from accountId", () => {
   const captures = [];
-  withNativeBinding(
+  withTransactionApi(
     {
       encodeAssetId: encodeAssetIdForKnownAccount,
       buildTransaction: (_chain, authority, instructions) => {
@@ -2799,8 +2774,8 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction derives asset ids f
         };
       },
     },
-    () =>
-      buildRegisterAssetDefinitionMintAndTransferTransaction({
+    (transaction) =>
+      transaction.buildRegisterAssetDefinitionMintAndTransferTransaction({
         networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
@@ -2886,7 +2861,7 @@ test("buildCreateKaigiTransaction composes Kaigi create instruction", () => {
     signed_transaction: Buffer.from([0x40]),
     hash: Buffer.alloc(32, 0x55),
   };
-  withNativeBinding(
+  withTransactionApi(
     {
       buildTransaction: (_chain, authority, instructions) => {
         captures.push({
@@ -2896,8 +2871,8 @@ test("buildCreateKaigiTransaction composes Kaigi create instruction", () => {
         return fakeResult;
       },
     },
-    () =>
-      buildCreateKaigiTransaction({
+    (transaction) =>
+      transaction.buildCreateKaigiTransaction({
         networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
@@ -2952,7 +2927,7 @@ test("buildCreateKaigiTransaction preserves privacy artifacts", () => {
   const commitment = Buffer.alloc(32, 0x33);
   const nullifier = Buffer.alloc(32, 0x44);
   const proof = Buffer.from([0xfa, 0xce]);
-  withNativeBinding(
+  withTransactionApi(
     {
       buildTransaction: (_chain, authority, instructions) => {
         captures.push({
@@ -2965,8 +2940,8 @@ test("buildCreateKaigiTransaction preserves privacy artifacts", () => {
         };
       },
     },
-    () =>
-      buildCreateKaigiTransaction({
+    (transaction) =>
+      transaction.buildCreateKaigiTransaction({
         networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
@@ -2997,7 +2972,7 @@ test("buildJoinKaigiTransaction normalizes binary fields", () => {
     signed_transaction: Buffer.from([0x41]),
     hash: Buffer.alloc(32, 0x66),
   };
-  withNativeBinding(
+  withTransactionApi(
     {
       buildTransaction: (_chain, authority, instructions) => {
         captures.push({
@@ -3007,8 +2982,8 @@ test("buildJoinKaigiTransaction normalizes binary fields", () => {
         return fakeResult;
       },
     },
-    () =>
-      buildJoinKaigiTransaction({
+    (transaction) =>
+      transaction.buildJoinKaigiTransaction({
         networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
@@ -3043,7 +3018,7 @@ test("buildRegisterKaigiRelayTransaction encodes hpke key", () => {
   };
   const relayId = RELAY_ACCOUNT_ID;
   const relayIdInput = RELAY_ACCOUNT_ID_INPUT;
-  withNativeBinding(
+  withTransactionApi(
     {
       buildTransaction: (_chain, authority, instructions) => {
         captures.push({
@@ -3053,8 +3028,8 @@ test("buildRegisterKaigiRelayTransaction encodes hpke key", () => {
         return fakeResult;
       },
     },
-    () =>
-      buildRegisterKaigiRelayTransaction({
+    (transaction) =>
+      transaction.buildRegisterKaigiRelayTransaction({
         networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
@@ -3083,7 +3058,7 @@ test("buildUnregisterKaigiRelayTransaction composes relay retirement", () => {
     signed_transaction: Buffer.from([0x42]),
     hash: Buffer.alloc(32, 0x77),
   };
-  withNativeBinding(
+  withTransactionApi(
     {
       buildTransaction: (_chain, authority, instructions) => {
         captures.push({
@@ -3093,8 +3068,8 @@ test("buildUnregisterKaigiRelayTransaction composes relay retirement", () => {
         return fakeResult;
       },
     },
-    () =>
-      buildUnregisterKaigiRelayTransaction({
+    (transaction) =>
+      transaction.buildUnregisterKaigiRelayTransaction({
         networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
@@ -3115,7 +3090,7 @@ test("buildReportKaigiRelayHealthTransaction composes relay feedback", () => {
     signed_transaction: Buffer.from([0x42]),
     hash: Buffer.alloc(32, 0x77),
   };
-  withNativeBinding(
+  withTransactionApi(
     {
       buildTransaction: (_chain, authority, instructions) => {
         captures.push({
@@ -3125,8 +3100,8 @@ test("buildReportKaigiRelayHealthTransaction composes relay feedback", () => {
         return fakeResult;
       },
     },
-    () =>
-      buildReportKaigiRelayHealthTransaction({
+    (transaction) =>
+      transaction.buildReportKaigiRelayHealthTransaction({
         networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
@@ -3160,7 +3135,7 @@ baseTest("buildProposeDeployContractTransaction wraps proposal", () => {
     signed_transaction: Buffer.from([0x10]),
     hash: Buffer.alloc(32, 0x10),
   };
-  withNativeBinding(
+  withTransactionApi(
     {
       buildTransaction: (_chain, authority, instructions) => {
         captures.push({
@@ -3170,8 +3145,8 @@ baseTest("buildProposeDeployContractTransaction wraps proposal", () => {
         return fakeResult;
       },
     },
-    () =>
-      buildProposeDeployContractTransaction({
+    (transaction) =>
+      transaction.buildProposeDeployContractTransaction({
         networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
@@ -3186,6 +3161,7 @@ baseTest("buildProposeDeployContractTransaction wraps proposal", () => {
   );
   assert.equal(captures.length, 1);
   const propose = captures[0].instructions[0].ProposeDeployContract;
+  assert.equal(Object.hasOwn(propose, "proposal_operator"), false);
   assert.equal(
     propose.contract_address,
     "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
@@ -3197,6 +3173,35 @@ baseTest("buildProposeDeployContractTransaction wraps proposal", () => {
   assert.equal(Object.hasOwn(propose, "mode"), false);
 });
 
+baseTest("buildProposeDeployContractTransaction rejects the retired operator field", () => {
+  let nativeCalls = 0;
+  assert.throws(
+    () => withTransactionApi(
+      {
+        buildTransaction: () => {
+          nativeCalls += 1;
+          throw new Error("mismatched proposal reached transaction construction");
+        },
+      },
+      (transaction) => transaction.buildProposeDeployContractTransaction({
+        networkId: NETWORK_ID,
+        authority: AUTHORITY_ID_INPUT,
+        feePayment: AUTHORITY_FEE_PAYMENT,
+        proposal: {
+          proposalOperator: RELAY_ACCOUNT_ID_INPUT,
+          contractAddress:
+            "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
+          codeHash: "aa".repeat(32),
+          abiHash: "bb".repeat(32),
+        },
+        privateKey: PRIVATE_KEY,
+      }),
+    ),
+    /proposalOperator/u,
+  );
+  assert.equal(nativeCalls, 0);
+});
+
 baseTest("buildProposeSccpRouteGovernanceTransaction binds the exact network anchor", () => {
   const captures = [];
   const fakeResult = {
@@ -3204,14 +3209,14 @@ baseTest("buildProposeSccpRouteGovernanceTransaction binds the exact network anc
     hash: Buffer.alloc(32, 0x10),
   };
   const action = buildSampleSccpRemoveAction();
-  withNativeBinding(
+  withTransactionApi(
     {
       buildTransaction: (_network, _authority, instructions) => {
         captures.push(JSON.parse(instructions[0]));
         return fakeResult;
       },
     },
-    () => buildProposeSccpRouteGovernanceTransaction({
+    (transaction) => transaction.buildProposeSccpRouteGovernanceTransaction({
       networkId: NETWORK_ID,
       authority: AUTHORITY_ID_INPUT,
       feePayment: AUTHORITY_FEE_PAYMENT,
@@ -3258,15 +3263,15 @@ baseTest("buildCastZkBallotTransaction encodes ballot", () => {
     signed_transaction: Buffer.from([0x11]),
     hash: Buffer.alloc(32, 0x11),
   };
-  withNativeBinding(
+  withTransactionApi(
     {
       buildTransaction: (_chain, authority, instructions) => {
         captures.push(JSON.parse(instructions[0]));
         return fakeResult;
       },
     },
-    () =>
-      buildCastZkBallotTransaction({
+    (transaction) =>
+      transaction.buildCastZkBallotTransaction({
         networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
@@ -3287,15 +3292,15 @@ test("buildCastPlainBallotTransaction normalizes amount", () => {
     signed_transaction: Buffer.from([0x12]),
     hash: Buffer.alloc(32, 0x12),
   };
-  withNativeBinding(
+  withTransactionApi(
     {
       buildTransaction: (_chain, authority, instructions) => {
         captures.push(JSON.parse(instructions[0]));
         return fakeResult;
       },
     },
-    () =>
-      buildCastPlainBallotTransaction({
+    (transaction) =>
+      transaction.buildCastPlainBallotTransaction({
         networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
@@ -3312,41 +3317,13 @@ test("buildCastPlainBallotTransaction normalizes amount", () => {
   assert.equal(captures[0].CastPlainBallot.direction, 0);
 });
 
-test("buildPersistCouncilForEpochTransaction wraps council", () => {
-  const captures = [];
-  const fakeResult = {
-    signed_transaction: Buffer.from([0x15]),
-    hash: Buffer.alloc(32, 0x15),
-  };
-  withNativeBinding(
-    {
-      buildTransaction: (_chain, authority, instructions) => {
-        captures.push(JSON.parse(instructions[0]));
-        return fakeResult;
-      },
-    },
-    () =>
-      buildPersistCouncilForEpochTransaction({
-        networkId: NETWORK_ID,
-        authority: AUTHORITY_ID_INPUT,
-        feePayment: AUTHORITY_FEE_PAYMENT,
-        record: {
-          epoch: 1,
-          members: [AUTHORITY_ID_INPUT],
-        },
-        privateKey: PRIVATE_KEY,
-      }),
-  );
-  assert.equal(captures[0].PersistCouncilForEpoch.members.length, 1);
-});
-
 test("buildRegisterSmartContractCodeTransaction wraps manifest instruction", () => {
   const captures = [];
   const fakeResult = {
     signed_transaction: Buffer.from([0x01]),
     hash: Buffer.alloc(32, 0xbb),
   };
-  withNativeBinding(
+  withTransactionApi(
     {
       buildTransaction: (
         networkId,
@@ -3371,8 +3348,8 @@ test("buildRegisterSmartContractCodeTransaction wraps manifest instruction", () 
         return fakeResult;
       },
     },
-    () => {
-      const result = buildRegisterSmartContractCodeTransaction({
+    (transaction) => {
+      const result = transaction.buildRegisterSmartContractCodeTransaction({
         networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
@@ -3400,7 +3377,7 @@ test("buildRegisterSmartContractBytesTransaction encodes code payload", () => {
     signed_transaction: Buffer.from([0x02]),
     hash: Buffer.alloc(32, 0xcc),
   };
-  withNativeBinding(
+  withTransactionApi(
     {
       buildTransaction: (
         networkId,
@@ -3425,8 +3402,8 @@ test("buildRegisterSmartContractBytesTransaction encodes code payload", () => {
         return fakeResult;
       },
     },
-    () => {
-      const result = buildRegisterSmartContractBytesTransaction({
+    (transaction) => {
+      const result = transaction.buildRegisterSmartContractBytesTransaction({
         networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
@@ -3450,15 +3427,15 @@ test("buildRemoveSmartContractBytesTransaction wraps removal payload", () => {
     signed_transaction: Buffer.from([0x04]),
     hash: Buffer.alloc(32, 0xee),
   };
-  withNativeBinding(
+  withTransactionApi(
     {
       buildTransaction: (...args) => {
         captures.push(args[2]);
         return fakeResult;
       },
     },
-    () => {
-      buildRemoveSmartContractBytesTransaction({
+    (transaction) => {
+      transaction.buildRemoveSmartContractBytesTransaction({
         networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
@@ -3505,7 +3482,7 @@ baseTest("confidential proof builders preserve exact canonical native results", 
   const proof = Buffer.from([0x64]);
   const calls = [];
 
-  withNativeBinding(
+  withTransactionApi(
     {
       buildConfidentialTransferProofV2: (...args) => {
         calls.push(["transfer", args]);
@@ -3530,8 +3507,8 @@ baseTest("confidential proof builders preserve exact canonical native results", 
         };
       },
     },
-    () => {
-      const transfer = buildConfidentialTransferProofV2({
+    (transaction) => {
+      const transfer = transaction.buildConfidentialTransferProofV2({
         networkId: NETWORK_ID,
         assetDefinitionId: ASSET_DEFINITION_ID,
         spendKey,
@@ -3548,7 +3525,7 @@ baseTest("confidential proof builders preserve exact canonical native results", 
         outputCommitments: [outputCommitment],
       });
 
-      const unshieldV2 = buildConfidentialUnshieldProofV2({
+      const unshieldV2 = transaction.buildConfidentialUnshieldProofV2({
         networkId: NETWORK_ID,
         assetDefinitionId: ASSET_DEFINITION_ID,
         spendKey,
@@ -3560,7 +3537,7 @@ baseTest("confidential proof builders preserve exact canonical native results", 
       });
       assert.deepEqual(unshieldV2, { nullifiers: [nullifier], root, proof });
 
-      const unshieldV3 = buildConfidentialUnshieldProofV3({
+      const unshieldV3 = transaction.buildConfidentialUnshieldProofV3({
         networkId: NETWORK_ID,
         assetDefinitionId: ASSET_DEFINITION_ID,
         spendKey,
@@ -3578,7 +3555,7 @@ baseTest("confidential proof builders preserve exact canonical native results", 
         outputCommitments: [outputCommitment],
       });
 
-      buildConfidentialUnshieldProofV3({
+      transaction.buildConfidentialUnshieldProofV3({
         networkId: NETWORK_ID,
         assetDefinitionId: ASSET_DEFINITION_ID,
         spendKey,
@@ -3614,8 +3591,8 @@ test("supported confidential transaction builders wrap expected instruction payl
     proof: Buffer.from("proof"),
     verifyingKeyRef: { backend: "halo2/ipa", name: "vk_governance" },
   };
-  const register = captureInstructionObject(() =>
-    buildRegisterZkAssetTransaction({
+  const register = captureInstructionObject((transaction) =>
+    transaction.buildRegisterZkAssetTransaction({
       networkId: NETWORK_ID,
       authority: AUTHORITY_ID_INPUT,
       feePayment: AUTHORITY_FEE_PAYMENT,
@@ -3627,8 +3604,8 @@ test("supported confidential transaction builders wrap expected instruction payl
   );
   assert.ok(register.zk?.RegisterZkAsset);
 
-  const policy = captureInstructionObject(() =>
-    buildScheduleConfidentialPolicyTransitionTransaction({
+  const policy = captureInstructionObject((transaction) =>
+    transaction.buildScheduleConfidentialPolicyTransitionTransaction({
       networkId: NETWORK_ID,
       authority: AUTHORITY_ID_INPUT,
       feePayment: AUTHORITY_FEE_PAYMENT,
@@ -3643,8 +3620,8 @@ test("supported confidential transaction builders wrap expected instruction payl
   );
   assert.ok(policy.zk?.ScheduleConfidentialPolicyTransition);
 
-  const cancel = captureInstructionObject(() =>
-    buildCancelConfidentialPolicyTransitionTransaction({
+  const cancel = captureInstructionObject((transaction) =>
+    transaction.buildCancelConfidentialPolicyTransitionTransaction({
       networkId: NETWORK_ID,
       authority: AUTHORITY_ID_INPUT,
       feePayment: AUTHORITY_FEE_PAYMENT,
@@ -3657,8 +3634,8 @@ test("supported confidential transaction builders wrap expected instruction payl
   );
   assert.ok(cancel.zk?.CancelConfidentialPolicyTransition);
 
-  const election = captureInstructionObject(() =>
-    buildCreateElectionTransaction({
+  const election = captureInstructionObject((transaction) =>
+    transaction.buildCreateElectionTransaction({
       networkId: NETWORK_ID,
       authority: AUTHORITY_ID_INPUT,
       feePayment: AUTHORITY_FEE_PAYMENT,
@@ -3676,8 +3653,8 @@ test("supported confidential transaction builders wrap expected instruction payl
   );
   assert.ok(election.zk?.CreateElection);
 
-  const ballot = captureInstructionObject(() =>
-    buildSubmitBallotTransaction({
+  const ballot = captureInstructionObject((transaction) =>
+    transaction.buildSubmitBallotTransaction({
       networkId: NETWORK_ID,
       authority: AUTHORITY_ID_INPUT,
       feePayment: AUTHORITY_FEE_PAYMENT,
@@ -3692,8 +3669,8 @@ test("supported confidential transaction builders wrap expected instruction payl
   );
   assert.ok(ballot.zk?.SubmitBallot);
 
-  const finalize = captureInstructionObject(() =>
-    buildFinalizeElectionTransaction({
+  const finalize = captureInstructionObject((transaction) =>
+    transaction.buildFinalizeElectionTransaction({
       networkId: NETWORK_ID,
       authority: AUTHORITY_ID_INPUT,
       feePayment: AUTHORITY_FEE_PAYMENT,
@@ -3714,7 +3691,7 @@ function captureInstructionObject(buildFn) {
     signed_transaction: Buffer.from([0xff]),
     hash: Buffer.alloc(32, 0xff),
   };
-  withNativeBinding(
+  withTransactionApi(
     {
       buildTransaction: (
         networkId,
@@ -3744,22 +3721,6 @@ function captureInstructionObject(buildFn) {
   return captures[0].instructions[0];
 }
 
-function withNativeBinding(binding, fn) {
-  const previous = globalThis.__IROHA_NATIVE_BINDING__;
-  globalThis.__IROHA_NATIVE_BINDING__ = binding;
-  try {
-    return fn();
-  } finally {
-    globalThis.__IROHA_NATIVE_BINDING__ = previous;
-  }
-}
-
-async function withNativeBindingAsync(binding, fn) {
-  const previous = globalThis.__IROHA_NATIVE_BINDING__;
-  globalThis.__IROHA_NATIVE_BINDING__ = binding;
-  try {
-    return await fn();
-  } finally {
-    globalThis.__IROHA_NATIVE_BINDING__ = previous;
-  }
+function withTransactionApi(binding, fn) {
+  return fn(_createTransactionApi(createNativeRuntime(binding)));
 }

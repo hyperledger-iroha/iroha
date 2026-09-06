@@ -9,9 +9,9 @@ use iroha_data_model::{
     da::commitment::DaCommitmentBundle,
     nexus::{DataSpaceId, LaneFinalityAuthorityV1, LaneId, LaneRelayEnvelope, LaneRelayError},
 };
-use iroha_logger::prelude::*;
 use std::collections::HashSet;
 use thiserror::Error;
+use tracing::warn;
 /// Error surfaced when validating or building cross-lane relay proofs.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum CrossLaneProofError {

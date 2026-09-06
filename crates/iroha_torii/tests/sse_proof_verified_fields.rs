@@ -76,7 +76,7 @@ async fn proof_verified_fields_and_filtering() {
         "/v1/events/sse",
         get({
             let events = events.clone();
-            move |q| async move { iroha_torii::handle_v1_events_sse(events, q) }
+            move |q| async move { iroha_torii::handle_v1_events_sse_for_tests(events, q) }
         }),
     );
     // SSE with filter on proof_backend and proof_call_hash

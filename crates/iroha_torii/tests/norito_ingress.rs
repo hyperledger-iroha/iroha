@@ -11,28 +11,26 @@ const ERROR_HEADER: &str = "x-iroha-error-code";
 fn default_alias_policy() -> sorafs_manifest::alias_cache::AliasCachePolicy {
     sorafs_manifest::alias_cache::AliasCachePolicy::new(
         std::time::Duration::from_secs(
-            iroha_config::parameters::defaults::torii::SORAFS_ALIAS_POSITIVE_TTL_SECS,
+            iroha_service_model::sorafs::DEFAULT_ALIAS_POSITIVE_TTL_SECS,
         ),
         std::time::Duration::from_secs(
-            iroha_config::parameters::defaults::torii::SORAFS_ALIAS_REFRESH_WINDOW_SECS,
+            iroha_service_model::sorafs::DEFAULT_ALIAS_REFRESH_WINDOW_SECS,
+        ),
+        std::time::Duration::from_secs(iroha_service_model::sorafs::DEFAULT_ALIAS_HARD_EXPIRY_SECS),
+        std::time::Duration::from_secs(
+            iroha_service_model::sorafs::DEFAULT_ALIAS_NEGATIVE_TTL_SECS,
         ),
         std::time::Duration::from_secs(
-            iroha_config::parameters::defaults::torii::SORAFS_ALIAS_HARD_EXPIRY_SECS,
+            iroha_service_model::sorafs::DEFAULT_ALIAS_REVOCATION_TTL_SECS,
         ),
         std::time::Duration::from_secs(
-            iroha_config::parameters::defaults::torii::SORAFS_ALIAS_NEGATIVE_TTL_SECS,
+            iroha_service_model::sorafs::DEFAULT_ALIAS_ROTATION_MAX_AGE_SECS,
         ),
         std::time::Duration::from_secs(
-            iroha_config::parameters::defaults::torii::SORAFS_ALIAS_REVOCATION_TTL_SECS,
+            iroha_service_model::sorafs::DEFAULT_ALIAS_SUCCESSOR_GRACE_SECS,
         ),
         std::time::Duration::from_secs(
-            iroha_config::parameters::defaults::torii::SORAFS_ALIAS_ROTATION_MAX_AGE_SECS,
-        ),
-        std::time::Duration::from_secs(
-            iroha_config::parameters::defaults::torii::SORAFS_ALIAS_SUCCESSOR_GRACE_SECS,
-        ),
-        std::time::Duration::from_secs(
-            iroha_config::parameters::defaults::torii::SORAFS_ALIAS_GOVERNANCE_GRACE_SECS,
+            iroha_service_model::sorafs::DEFAULT_ALIAS_GOVERNANCE_GRACE_SECS,
         ),
     )
 }
@@ -42,7 +40,7 @@ async fn post_ga_norito(path: &str, body: impl Into<axum::body::Body>) -> axum::
     let harness = NoritoRpcHarness::new(|cfg| {
         cfg.torii.transport.norito_rpc.stage = NoritoRpcStage::Ga;
     });
-    harness
+    let response = harness
         .app
         .clone()
         .oneshot(
@@ -55,7 +53,9 @@ async fn post_ga_norito(path: &str, body: impl Into<axum::body::Body>) -> axum::
                 .expect("request"),
         )
         .await
-        .expect("response")
+        .expect("response");
+    harness.shutdown().await;
+    response
 }
 async fn response_text(resp: axum::response::Response) -> String {
     use http_body_util::BodyExt;
@@ -129,6 +129,7 @@ async fn missing_content_type_is_rejected() {
     });
     let resp = harness.post_transaction(false, &[]).await;
     assert_eq!(resp.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    harness.shutdown().await;
 }
 #[tokio::test]
 async fn disabled_stage_blocks_norito_requests() {
@@ -147,6 +148,7 @@ async fn disabled_stage_blocks_norito_requests() {
         resp.headers().get(RETRY_AFTER).map(|v| v.to_str().unwrap()),
         Some("300")
     );
+    harness.shutdown().await;
 }
 #[tokio::test]
 async fn canary_stage_enforces_allowlist() {
@@ -176,6 +178,7 @@ async fn canary_stage_enforces_allowlist() {
         .await;
     assert_ne!(allowed.status(), StatusCode::FORBIDDEN);
     assert!(allowed.headers().get(ERROR_HEADER).is_none());
+    harness.shutdown().await;
 }
 #[tokio::test]
 async fn norito_transaction_returns_submission_receipt() {
@@ -223,6 +226,7 @@ async fn norito_transaction_returns_submission_receipt() {
         receipt.payload.signer,
         harness.cfg.common.key_pair.public_key().clone()
     );
+    harness.shutdown().await;
 }
 #[tokio::test]
 async fn norito_transaction_rejects_invalid_signature_without_decode_panic() {
@@ -273,6 +277,7 @@ async fn norito_transaction_rejects_invalid_signature_without_decode_panic() {
         "unexpected decode panic response: {}",
         envelope.message()
     );
+    harness.shutdown().await;
 }
 #[tokio::test]
 async fn public_transaction_route_rejects_internal_entrypoint_payload() {
@@ -302,6 +307,7 @@ async fn public_transaction_route_rejects_internal_entrypoint_payload() {
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     let envelope = response_error_envelope(resp).await;
     assert_transaction_decode_rejection_without_panic(&envelope);
+    harness.shutdown().await;
 }
 #[tokio::test]
 async fn public_transaction_route_rejects_bare_signed_transaction_payload() {
@@ -331,6 +337,7 @@ async fn public_transaction_route_rejects_bare_signed_transaction_payload() {
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     let envelope = response_error_envelope(resp).await;
     assert_transaction_decode_rejection_without_panic(&envelope);
+    harness.shutdown().await;
 }
 #[tokio::test]
 async fn public_transaction_route_rejects_unsupported_version_without_decode_panic() {
@@ -365,6 +372,7 @@ async fn public_transaction_route_rejects_unsupported_version_without_decode_pan
         "version failure should be visible in response: {}",
         envelope.message()
     );
+    harness.shutdown().await;
 }
 #[tokio::test]
 async fn public_transaction_route_rejects_empty_body_without_decode_panic() {
@@ -432,6 +440,7 @@ async fn public_transaction_route_rejects_malformed_json_with_exact_decode_code(
     let envelope: ErrorEnvelope =
         norito::json::from_slice(&body).expect("decode JSON error envelope");
     assert_transaction_decode_rejection_without_panic(&envelope);
+    harness.shutdown().await;
 }
 #[tokio::test]
 async fn public_transaction_route_rejects_version_only_body_without_decode_panic() {
@@ -472,6 +481,7 @@ async fn norito_query_accepts_versioned_signed_query_payload() {
         .to_bytes();
     let text = String::from_utf8_lossy(&body);
     assert_eq!(status, StatusCode::OK, "unexpected error body: {text}");
+    harness.shutdown().await;
 }
 #[tokio::test]
 async fn norito_query_rejects_invalid_signature_without_decode_panic() {
@@ -513,6 +523,7 @@ async fn norito_query_rejects_invalid_signature_without_decode_panic() {
         !text.contains("panic during decode"),
         "unexpected decode panic response: {text}"
     );
+    harness.shutdown().await;
 }
 #[tokio::test]
 async fn public_query_route_rejects_bare_signed_query_payload() {
@@ -549,6 +560,7 @@ async fn public_query_route_rejects_bare_signed_query_payload() {
         !text.contains("panic during decode"),
         "unexpected decode panic response: {text}"
     );
+    harness.shutdown().await;
 }
 #[tokio::test]
 async fn public_query_route_rejects_unsupported_version_without_decode_panic() {
@@ -594,6 +606,7 @@ async fn public_query_route_rejects_unsupported_version_without_decode_panic() {
         !text.contains("panic during decode"),
         "unexpected decode panic response: {text}"
     );
+    harness.shutdown().await;
 }
 #[tokio::test]
 async fn public_query_route_rejects_empty_body_without_decode_panic() {
@@ -651,8 +664,8 @@ async fn iroha_client_submit_transaction_succeeds_against_torii_public_signed_tr
         connect_queue_root: iroha::config::default_connect_queue_root(),
         soracloud_http_witness_file: None,
         sorafs_alias_cache: default_alias_policy(),
-        sorafs_anonymity_policy: iroha::config::AnonymityPolicy::GuardPq,
-        sorafs_rollout_phase: iroha_config::parameters::actual::SorafsRolloutPhase::Canary,
+        sorafs_anonymity_policy: iroha_service_model::soranet::AnonymityPolicy::GuardPq,
+        sorafs_rollout_phase: iroha_service_model::soranet::RolloutPhase::Canary,
     });
     let tx = TransactionBuilder::new(
         network_id,
@@ -667,4 +680,5 @@ async fn iroha_client_submit_transaction_succeeds_against_torii_public_signed_tr
         .expect("join client submit")
         .expect("submit transaction");
     assert_eq!(actual_hash, expected_hash);
+    harness.shutdown().await;
 }

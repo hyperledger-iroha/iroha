@@ -232,9 +232,12 @@ A `kotoage fn`/`言挙げ fn` mutates or submits ledger state and always declare
 caller authorization. Authorization is checked at runtime and is separate from
 compiler-derived effects and operation-specific host authorization. Views are
 public unless they add `authorize`. Lifecycle declarations never accept
-source-level authorization: ABI V1 requires the runtime-defined
-`CanRegisterSmartContractCode` permission for both `hajimari`/`始まり` and
-`kaizen`/`改善`.
+source-level authorization: ABI V1 binds both `hajimari`/`始まり` and
+`kaizen`/`改善` hook dispatch to the runtime-defined
+`CanInvokeContractEntrypoint` permission. That hook permission does not grant
+address lifecycle control: deployment creates the address atomically, while
+later activation and deactivation require its account owner plus an exact
+lifecycle revision or the certified Parliament corridor.
 
 Lifecycle hooks are accepted only as top-level calls to a deployed seiyaku
 instance. A hash-only governance stub can never become active: the complete
@@ -856,10 +859,10 @@ private VM memory.
 The V1 source declassifier is `crypto::valcom`. Both operands must be typed
 secrets. It binds the nominal kind and every byte of each canonical numeric TLV,
 derives full-width BLS12-381 scalars without `u64` truncation, and returns the
-complete compressed Pedersen point as a public `int`. The scalar `POSEIDON2`,
-`POSEIDON6`, `PUBKGEN`, and legacy `VALCOM` opcodes are internal proof/gadget
-operations. They reject private operands and are not Kotodama source
-commitments, hashes, or public-key APIs.
+complete compressed Pedersen point as a public `int`. The scalar `POSEIDON2`
+and `POSEIDON6` opcodes are internal proof gadgets that reject private
+operands. ABI V1 has no register-level BLS12-381 public-key, commitment, or
+curve operations; full-width typed syscall boundaries provide those semantics.
 
 Secrets cannot influence public control flow, public returns, logs, error
 selection, state keys, state values, ledger writes, host queries, seiyaku calls,

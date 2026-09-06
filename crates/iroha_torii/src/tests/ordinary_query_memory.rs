@@ -7,7 +7,7 @@ mod ordinary_query_memory_tests {
     };
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::Duration;
-    fn default_geometry() -> (QueryMemoryGeometry, QueryWeightedMemoryPool) {
+    fn default_geometry() -> (QueryMemoryGeometry, ByteWeightedMemoryPool) {
         let geometry = query_memory_geometry(
             usize::try_from(defaults::torii::QUERY_FANOUT_MAX_RETAINED_BYTES.get())
                 .expect("default pool fits usize"),
@@ -16,13 +16,13 @@ mod ordinary_query_memory_tests {
             defaults::torii::QUERY_HEAVY_MAX_INFLIGHT.get(),
         )
         .expect("default query geometry");
-        let pool = QueryWeightedMemoryPool::new(geometry.fanout_pool_bytes)
+        let pool = ByteWeightedMemoryPool::new(geometry.fanout_pool_bytes)
             .expect("default weighted pool");
         (geometry, pool)
     }
     fn default_policy(
         geometry: QueryMemoryGeometry,
-        pool: &QueryWeightedMemoryPool,
+        pool: &ByteWeightedMemoryPool,
     ) -> OrdinaryQueryServerPolicy {
         let working_set = geometry
             .fanout_working_set_bytes
@@ -127,7 +127,7 @@ mod ordinary_query_memory_tests {
     }
     #[test]
     fn weighted_pool_rounding_is_conservative_and_never_overcommits() {
-        let pool = QueryWeightedMemoryPool::with_max_permits(10, 3).expect("small test pool");
+        let pool = ByteWeightedMemoryPool::with_max_permits(10, 3).expect("small test pool");
         assert_eq!(pool.bytes_per_permit.get(), 4);
         assert_eq!(pool.total_permits.get(), 2);
         assert_eq!(pool.capacity_bytes(), 8);
@@ -145,7 +145,7 @@ mod ordinary_query_memory_tests {
         let Ok(larger_than_u32) = usize::try_from(u64::from(u32::MAX) + 17) else {
             return;
         };
-        let pool = QueryWeightedMemoryPool::new(larger_than_u32).expect("large weighted pool");
+        let pool = ByteWeightedMemoryPool::new(larger_than_u32).expect("large weighted pool");
         assert!(pool.bytes_per_permit.get() > 1);
         assert!(pool.capacity_bytes() <= u64::try_from(larger_than_u32).unwrap());
         assert!(pool.capacity_bytes() > 0);
@@ -153,7 +153,7 @@ mod ordinary_query_memory_tests {
     }
     #[test]
     fn independently_rounded_start_parts_split_without_losing_p() {
-        let pool = QueryWeightedMemoryPool::with_max_permits(32, 8).expect("split test pool");
+        let pool = ByteWeightedMemoryPool::with_max_permits(32, 8).expect("split test pool");
         let permit = pool
             .try_acquire_parts([5, 3])
             .expect("P and R round independently");
@@ -175,7 +175,7 @@ mod ordinary_query_memory_tests {
     }
     #[test]
     fn failed_split_leaves_parent_weight_unchanged() {
-        let pool = QueryWeightedMemoryPool::with_max_permits(16, 4).expect("split test pool");
+        let pool = ByteWeightedMemoryPool::with_max_permits(16, 4).expect("split test pool");
         let permit = pool.try_acquire_parts([8]).expect("two permits");
         let mut reservation = ToriiOrdinaryQueryMemoryReservation {
             permit,
@@ -190,7 +190,7 @@ mod ordinary_query_memory_tests {
         let (geometry, first_pool) = default_geometry();
         let first_policy = default_policy(geometry, &first_pool);
         let second_pool =
-            QueryWeightedMemoryPool::new(geometry.fanout_pool_bytes).expect("second weighted pool");
+            ByteWeightedMemoryPool::new(geometry.fanout_pool_bytes).expect("second weighted pool");
         let second_policy = default_policy(geometry, &second_pool);
         assert_ne!(first_pool.generation(), second_pool.generation());
         assert_ne!(
@@ -272,7 +272,7 @@ mod ordinary_query_memory_tests {
     }
     #[test]
     fn response_body_owns_ordinary_lease_after_extension_is_removed() {
-        let pool = QueryWeightedMemoryPool::with_max_permits(16, 16).expect("body test pool");
+        let pool = ByteWeightedMemoryPool::with_max_permits(16, 16).expect("body test pool");
         let permit = pool.try_acquire_parts([8]).expect("body lease");
         let lease = iroha_core::smartcontracts::isi::query::OrdinaryQueryMemoryLease::new(
             ToriiOrdinaryQueryMemoryReservation {
@@ -640,7 +640,7 @@ mod ordinary_query_memory_tests {
     }
     #[tokio::test]
     async fn aborted_blocking_join_keeps_weight_until_worker_exits() {
-        let pool = QueryWeightedMemoryPool::with_max_permits(16, 16).expect("cancel test pool");
+        let pool = ByteWeightedMemoryPool::with_max_permits(16, 16).expect("cancel test pool");
         let permit = pool.try_acquire_parts([8]).expect("worker lease");
         let reservation = ToriiOrdinaryQueryMemoryReservation {
             permit,
@@ -671,7 +671,7 @@ mod ordinary_query_memory_tests {
     #[cfg(feature = "connect")]
     #[tokio::test]
     async fn proxy_snapshot_and_rebuilt_body_keep_ordinary_weight() {
-        let pool = QueryWeightedMemoryPool::with_max_permits(16, 16).expect("proxy test pool");
+        let pool = ByteWeightedMemoryPool::with_max_permits(16, 16).expect("proxy test pool");
         let permit = pool.try_acquire_parts([8]).expect("proxy lease");
         let lease = iroha_core::smartcontracts::isi::query::OrdinaryQueryMemoryLease::new(
             ToriiOrdinaryQueryMemoryReservation {

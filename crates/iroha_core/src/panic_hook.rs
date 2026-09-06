@@ -1,5 +1,9 @@
 //! Panic hook suppression helpers.
-use std::{cell::Cell, future::Future};
+use std::{
+    cell::Cell,
+    future::Future,
+    panic::{AssertUnwindSafe, catch_unwind},
+};
 thread_local! {
     static SUPPRESSION_DEPTH: Cell<u32> = const { Cell::new(0) };
 }
@@ -43,6 +47,14 @@ pub fn with_hook_suppressed<R>(f: impl FnOnce() -> R) -> R {
     let _guard = ScopedSuppressor::new();
     f()
 }
+/// Catch an unwind while suppressing shutdown-hook side effects on the same thread.
+///
+/// This is the recovery boundary for operations that deliberately translate a
+/// third-party/provider panic into a typed error. Consensus and supervisor
+/// invariants must continue to panic without using this helper.
+pub fn catch_unwind_suppressed<R>(f: impl FnOnce() -> R) -> std::thread::Result<R> {
+    catch_unwind(AssertUnwindSafe(|| with_hook_suppressed(f)))
+}
 /// Poll a future with panic-hook shutdown signalling suppressed for this task.
 ///
 /// A thread-local guard cannot safely be held across an `.await`, because the
@@ -83,6 +95,37 @@ mod tests {
         });
         assert_eq!(value, 42);
         assert!(!is_suppressed());
+    }
+    #[test]
+    fn caught_panic_is_suppressed_only_for_the_recovery_boundary() {
+        assert!(!is_suppressed());
+        let result = catch_unwind_suppressed(|| {
+            assert!(is_suppressed());
+            panic!("injected recoverable panic");
+        });
+        assert!(result.is_err());
+        assert!(!is_suppressed());
+    }
+    #[test]
+    fn blocking_worker_reuse_does_not_retain_suppression() {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .max_blocking_threads(1)
+            .enable_all()
+            .build()
+            .expect("build single blocking-thread runtime");
+        runtime.block_on(async {
+            let recovered = tokio::task::spawn_blocking(|| {
+                catch_unwind_suppressed(|| panic!("recoverable blocking panic"))
+            })
+            .await
+            .expect("blocking task must join");
+            assert!(recovered.is_err());
+            let stale = tokio::task::spawn_blocking(is_suppressed)
+                .await
+                .expect("reused blocking worker must join");
+            assert!(!stale, "suppression must clear before worker reuse");
+        });
     }
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn async_suppression_follows_only_the_scoped_task() {

@@ -14,6 +14,7 @@ use norito::literal;
 use sha2::Sha256;
 use sha3::Keccak256;
 use std::{borrow::ToOwned as _, format, hash, marker::PhantomData, str::FromStr, string::String};
+use zeroize::Zeroize;
 /// Hash of Iroha entities. Currently supports only blake2b-32.
 /// The least significant bit of hash is set to 1.
 ///
@@ -25,6 +26,11 @@ use std::{borrow::ToOwned as _, format, hash, marker::PhantomData, str::FromStr,
 #[debug("{}", hex::encode(self.as_ref()))]
 #[repr(transparent)]
 pub struct Hash([u8; Self::LENGTH]);
+impl Zeroize for Hash {
+    fn zeroize(&mut self) {
+        self.0.zeroize();
+    }
+}
 impl Hash {
     /// Length of hash
     pub const LENGTH: usize = 32;
@@ -384,6 +390,11 @@ impl<T> AsRef<[u8; Hash::LENGTH]> for HashOf<T> {
 }
 /// Archived representation of [`HashOf`].
 pub type ArchivedHashOf<T> = norito::core::Archived<HashOf<T>>;
+impl<T: norito::NoritoSchema> norito::NoritoSchema for HashOf<T> {
+    fn nominal_name() -> String {
+        norito::schema::identity::generic_name("iroha_crypto::hash::HashOf", &[T::nominal_name()])
+    }
+}
 impl<T> norito::core::NoritoSerialize for HashOf<T> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         writer.write_all(self.0.as_ref())?;
@@ -574,6 +585,16 @@ mod tests {
         // be inspected safely before validation, including under Miri.
         let all_zero = Hash([0; Hash::LENGTH]);
         assert_eq!(<[u8; Hash::LENGTH]>::from(all_zero), [0; Hash::LENGTH]);
+    }
+    #[test]
+    fn hash_zeroize_clears_storage_idempotently() {
+        let mut hash = Hash::new(b"confidential digest");
+
+        hash.zeroize();
+        assert_eq!(hash.0, [0; Hash::LENGTH]);
+
+        hash.zeroize();
+        assert_eq!(hash.0, [0; Hash::LENGTH]);
     }
     #[test]
     fn bounded_streaming_hash_matches_contiguous_hash_and_rejects_oversize() {

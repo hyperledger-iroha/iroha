@@ -167,11 +167,10 @@ declare_permissions! {
     iroha_executor_data_model::permission::parameter::{CanSetHijiriParameters},
     iroha_executor_data_model::permission::sccp::{CanManageSccpGovernance},
     iroha_executor_data_model::permission::sccp::{CanProposeSccpRouteGovernance},
-    iroha_executor_data_model::permission::offline::{CanManageOfflineEscrow},
-    iroha_executor_data_model::permission::offline::{CanActivateKagemushaRecursiveReleaseV4},
-    iroha_executor_data_model::permission::offline::{CanManageOfflineDeviceAttestationPolicy},
+    iroha_executor_data_model::permission::kagemusha::{CanManageKagemushaReserve},
     iroha_executor_data_model::permission::role::{CanManageRoles},
     iroha_executor_data_model::permission::trigger::{CanRegisterTrigger},
+    iroha_executor_data_model::permission::trigger::{CanRegisterGlobalDataTrigger},
     iroha_executor_data_model::permission::trigger::{CanUnregisterTrigger},
     iroha_executor_data_model::permission::trigger::{CanModifyTrigger},
     iroha_executor_data_model::permission::trigger::{CanExecuteTrigger},
@@ -242,9 +241,8 @@ impl AnyPermission {
                 | Self::CanRegisterDomain(_)
                 | Self::CanReadAllLedgerData(_)
                 | Self::CanReadRestrictedDataspace(_)
-                | Self::CanManageOfflineEscrow(_)
-                | Self::CanActivateKagemushaRecursiveReleaseV4(_)
-                | Self::CanManageOfflineDeviceAttestationPolicy(_)
+                | Self::CanRegisterGlobalDataTrigger(_)
+                | Self::CanManageKagemushaReserve(_)
                 | Self::CanManageRoles(_)
                 | Self::CanUpgradeExecutor(_)
                 | Self::CanRegisterSmartContractCode(_)
@@ -1059,18 +1057,11 @@ mod sccp {
         }
     }
 }
-mod offline {
-    //! Pass conditions for governed offline-settlement releases.
+mod kagemusha {
+    //! Pass conditions for KAGEMUSHA reserve settlement.
     use super::*;
-    use iroha_executor_data_model::permission::offline::{
-        CanActivateKagemushaRecursiveReleaseV4, CanManageOfflineDeviceAttestationPolicy,
-        CanManageOfflineEscrow,
-    };
-    impl_validate_grant_revoke_via!(OnlyGenesis::from =>
-        CanManageOfflineEscrow,
-        CanActivateKagemushaRecursiveReleaseV4,
-        CanManageOfflineDeviceAttestationPolicy,
-    );
+    use iroha_executor_data_model::permission::kagemusha::CanManageKagemushaReserve;
+    impl_validate_grant_revoke_via!(OnlyGenesis::from => CanManageKagemushaReserve,);
 }
 pub mod asset {
     //! Module with pass conditions for asset related tokens
@@ -1677,8 +1668,8 @@ pub mod trigger {
         query::{error::FindError, trigger::FindTriggers},
     };
     use iroha_executor_data_model::permission::trigger::{
-        CanExecuteTrigger, CanModifyTrigger, CanModifyTriggerMetadata, CanRegisterTrigger,
-        CanUnregisterTrigger,
+        CanExecuteTrigger, CanModifyTrigger, CanModifyTriggerMetadata,
+        CanRegisterGlobalDataTrigger, CanRegisterTrigger, CanUnregisterTrigger,
     };
     /// Check if `authority` is the owner of trigger.
     ///
@@ -1730,6 +1721,7 @@ pub mod trigger {
         }
     }
     impl_validate_grant_revoke_via!(super::account::Owner::from => CanRegisterTrigger);
+    impl_validate_grant_revoke_via!(OnlyGenesis::from => CanRegisterGlobalDataTrigger);
     impl_validate_grant_revoke_via!(Owner::from =>
         CanExecuteTrigger,
         CanUnregisterTrigger,
@@ -1971,10 +1963,7 @@ mod tests {
         },
     };
     use iroha_crypto::{Hash, PublicKey};
-    use iroha_executor_data_model::permission::offline::{
-        CanActivateKagemushaRecursiveReleaseV4, CanManageOfflineDeviceAttestationPolicy,
-        CanManageOfflineEscrow,
-    };
+    use iroha_executor_data_model::permission::kagemusha::CanManageKagemushaReserve;
     use iroha_executor_data_model::permission::{
         account::{
             AccountAliasPermissionScope, CanDelegateAccountAliasResolution, CanResolveAccountAlias,
@@ -2316,42 +2305,14 @@ mod tests {
         test_override::replace_permissions(previous);
     }
     #[test]
-    fn governed_offline_permissions_are_immutable_after_genesis() {
+    fn governed_kagemusha_permissions_are_immutable_after_genesis() {
         let banking_authority = make_account_id();
         let context = make_context(&banking_authority, 2);
-        let results = [
-            (
-                "CanManageOfflineEscrow",
-                CanManageOfflineEscrow.validate_grant(&banking_authority, &context, &Iroha),
-                CanManageOfflineEscrow.validate_revoke(&banking_authority, &context, &Iroha),
-            ),
-            (
-                "CanActivateKagemushaRecursiveReleaseV4",
-                CanActivateKagemushaRecursiveReleaseV4.validate_grant(
-                    &banking_authority,
-                    &context,
-                    &Iroha,
-                ),
-                CanActivateKagemushaRecursiveReleaseV4.validate_revoke(
-                    &banking_authority,
-                    &context,
-                    &Iroha,
-                ),
-            ),
-            (
-                "CanManageOfflineDeviceAttestationPolicy",
-                CanManageOfflineDeviceAttestationPolicy.validate_grant(
-                    &banking_authority,
-                    &context,
-                    &Iroha,
-                ),
-                CanManageOfflineDeviceAttestationPolicy.validate_revoke(
-                    &banking_authority,
-                    &context,
-                    &Iroha,
-                ),
-            ),
-        ];
+        let results = [(
+            "CanManageKagemushaReserve",
+            CanManageKagemushaReserve.validate_grant(&banking_authority, &context, &Iroha),
+            CanManageKagemushaReserve.validate_revoke(&banking_authority, &context, &Iroha),
+        )];
         for (name, grant, revoke) in results {
             for result in [grant, revoke] {
                 let error = result.expect_err(
@@ -2368,42 +2329,14 @@ mod tests {
         }
     }
     #[test]
-    fn governed_offline_permissions_can_only_be_seeded_in_genesis() {
+    fn governed_kagemusha_permissions_can_only_be_seeded_in_genesis() {
         let genesis_authority = make_account_id();
         let context = make_context(&genesis_authority, 1);
-        let results = [
-            (
-                "CanManageOfflineEscrow",
-                CanManageOfflineEscrow.validate_grant(&genesis_authority, &context, &Iroha),
-                CanManageOfflineEscrow.validate_revoke(&genesis_authority, &context, &Iroha),
-            ),
-            (
-                "CanActivateKagemushaRecursiveReleaseV4",
-                CanActivateKagemushaRecursiveReleaseV4.validate_grant(
-                    &genesis_authority,
-                    &context,
-                    &Iroha,
-                ),
-                CanActivateKagemushaRecursiveReleaseV4.validate_revoke(
-                    &genesis_authority,
-                    &context,
-                    &Iroha,
-                ),
-            ),
-            (
-                "CanManageOfflineDeviceAttestationPolicy",
-                CanManageOfflineDeviceAttestationPolicy.validate_grant(
-                    &genesis_authority,
-                    &context,
-                    &Iroha,
-                ),
-                CanManageOfflineDeviceAttestationPolicy.validate_revoke(
-                    &genesis_authority,
-                    &context,
-                    &Iroha,
-                ),
-            ),
-        ];
+        let results = [(
+            "CanManageKagemushaReserve",
+            CanManageKagemushaReserve.validate_grant(&genesis_authority, &context, &Iroha),
+            CanManageKagemushaReserve.validate_revoke(&genesis_authority, &context, &Iroha),
+        )];
         for (name, grant, revoke) in results {
             assert!(grant.is_ok(), "genesis must grant {name}: {grant:?}");
             assert!(revoke.is_ok(), "genesis must revoke {name}: {revoke:?}");

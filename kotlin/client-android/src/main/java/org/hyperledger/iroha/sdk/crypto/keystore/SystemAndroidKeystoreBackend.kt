@@ -18,6 +18,46 @@ import org.hyperledger.iroha.sdk.crypto.KeyManagementException
 import org.hyperledger.iroha.sdk.crypto.KeyProviderMetadata
 
 private const val ANDROID_KEYSTORE = "AndroidKeyStore"
+private const val ANDROID_STRONGBOX_UNAVAILABLE_EXCEPTION =
+    "android.security.keystore.StrongBoxUnavailableException"
+
+private fun Throwable.isAndroidStrongBoxUnavailableFailure(): Boolean =
+    generateSequence(this) { it.cause }.any {
+        it is StrongBoxUnavailableFailure ||
+            it.javaClass.name == ANDROID_STRONGBOX_UNAVAILABLE_EXCEPTION
+    }
+
+internal fun generateAndroidKeystoreWithPreferredStrongBoxFallback(
+    parameters: KeyGenParameters,
+    attempt: (KeyGenParameters) -> KeyGenerationResult,
+): KeyGenerationResult {
+    val result = try {
+        attempt(parameters)
+    } catch (strongBoxFailure: KeyManagementException) {
+        if (!parameters.preferStrongBox ||
+            parameters.requireStrongBox ||
+            !strongBoxFailure.isAndroidStrongBoxUnavailableFailure()
+        ) {
+            throw strongBoxFailure
+        }
+        val fallback = parameters.toBuilder()
+            .setRequireStrongBox(false)
+            .setPreferStrongBox(false)
+            .build()
+        try {
+            attempt(fallback)
+        } catch (fallbackFailure: KeyManagementException) {
+            fallbackFailure.addSuppressed(strongBoxFailure)
+            throw fallbackFailure
+        }
+    }
+    if (parameters.requireStrongBox && !result.strongBoxBacked) {
+        throw KeyManagementException(
+            "StrongBox required but Android Keystore produced a weaker security level"
+        )
+    }
+    return result
+}
 
 /**
  * `AndroidKeystoreBackend` implementation that bridges to the platform Android Keystore.
@@ -45,9 +85,22 @@ internal class SystemAndroidKeystoreBackend private constructor(
     @Throws(KeyManagementException::class)
     override fun generate(alias: String, parameters: KeyGenParameters): KeyGenerationResult {
         require(alias.isNotBlank()) { "alias must not be blank" }
-        val generator = createKeyPairGenerator(parameters.algorithm)
-        val strongBoxRequested = parameters.requireStrongBox || parameters.preferStrongBox
-        return generateInternal(generator, alias, parameters, strongBoxRequested)
+        if (parameters.requireStrongBox && !_metadata.strongBoxBacked) {
+            throw KeyManagementException("StrongBox required but backend is not StrongBox-capable")
+        }
+        val effective = if (parameters.preferStrongBox && !_metadata.strongBoxBacked) {
+            parameters.toBuilder()
+                .setRequireStrongBox(false)
+                .setPreferStrongBox(false)
+                .build()
+        } else {
+            parameters
+        }
+        return generateAndroidKeystoreWithPreferredStrongBoxFallback(effective) { request ->
+            val generator = createKeyPairGenerator(request.algorithm)
+            val strongBoxRequested = request.requireStrongBox || request.preferStrongBox
+            generateInternal(generator, alias, request, strongBoxRequested)
+        }
     }
 
     private fun generateInternal(

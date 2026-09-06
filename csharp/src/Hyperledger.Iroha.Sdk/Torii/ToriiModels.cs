@@ -829,7 +829,7 @@ public sealed class ToriiVerifyingKeyTransactionDraft
     public byte[] TransactionPayload => transactionPayload.ToArray();
 
     /// <summary>
-    /// Already-prehashed bytes for raw signature primitives and HSM integrations.
+    /// Already-prehashed bytes for external signature primitives.
     /// </summary>
     [JsonIgnore]
     public byte[] SigningMessage => signingMessage.ToArray();
@@ -2445,31 +2445,11 @@ internal static class ToriiAccountFaucetMetadata
     }
 }
 
-public record class ToriiExplorerPaginationQuery
-{
-    public ulong? Page { get; init; }
-
-    public ulong? PerPage { get; init; }
-}
-
 public record class ToriiExplorerCursorQuery
 {
     public string? Cursor { get; init; }
 
     public uint? Limit { get; init; }
-}
-
-public sealed record class ToriiContractInstancesQuery
-{
-    public string? Contains { get; init; }
-
-    public string? HashPrefix { get; init; }
-
-    public ulong? Offset { get; init; }
-
-    public ulong? Limit { get; init; }
-
-    public string? Order { get; init; }
 }
 
 public sealed record class ToriiContractStateQuery
@@ -2543,7 +2523,7 @@ public enum ToriiExplorerTransactionStatusFilter
     Rejected,
 }
 
-public sealed record class ToriiExplorerTransactionsQuery : ToriiExplorerPaginationQuery
+public sealed record class ToriiExplorerTransactionsQuery : ToriiExplorerCursorQuery
 {
     public string? Authority { get; init; }
 
@@ -2554,7 +2534,7 @@ public sealed record class ToriiExplorerTransactionsQuery : ToriiExplorerPaginat
     public string? AssetId { get; init; }
 }
 
-public sealed record class ToriiExplorerInstructionsQuery : ToriiExplorerPaginationQuery
+public sealed record class ToriiExplorerInstructionsQuery : ToriiExplorerCursorQuery
 {
     public string? Authority { get; init; }
 
@@ -2571,33 +2551,6 @@ public sealed record class ToriiExplorerInstructionsQuery : ToriiExplorerPaginat
     public string? AssetId { get; init; }
 }
 
-[JsonConverter(typeof(ToriiExplorerPaginationMetaJsonConverter))]
-public sealed record class ToriiExplorerPaginationMeta
-{
-    private ulong page;
-    private ulong perPage;
-
-    [JsonPropertyName("page")]
-    public ulong Page
-    {
-        get => page;
-        init => page = ToriiExplorerDirectMetadata.RequirePositive(value, nameof(Page));
-    }
-
-    [JsonPropertyName("per_page")]
-    public ulong PerPage
-    {
-        get => perPage;
-        init => perPage = ToriiExplorerDirectMetadata.RequirePositive(value, nameof(PerPage));
-    }
-
-    [JsonPropertyName("total_pages")]
-    public ulong TotalPages { get; init; }
-
-    [JsonPropertyName("total_items")]
-    public ulong TotalItems { get; init; }
-}
-
 [JsonConverter(typeof(ToriiExplorerCursorMetaJsonConverter))]
 public sealed record class ToriiExplorerCursorMeta
 {
@@ -2609,6 +2562,46 @@ public sealed record class ToriiExplorerCursorMeta
     {
         get => limit;
         init => limit = ToriiExplorerDirectMetadata.RequireExplorerCursorLimit(value, nameof(Limit));
+    }
+
+    [JsonPropertyName("next_cursor")]
+    public string? NextCursor
+    {
+        get => nextCursor;
+        init => nextCursor = ToriiExplorerDirectMetadata.RequireOptionalCanonicalExplorerCursor(
+            value,
+            nameof(NextCursor));
+    }
+
+    [JsonPropertyName("has_more")]
+    public bool HasMore { get; init; }
+}
+
+[JsonConverter(typeof(ToriiExplorerHistoryCursorMetaJsonConverter))]
+public sealed record class ToriiExplorerHistoryCursorMeta
+{
+    private uint limit;
+    private string? snapshotHash;
+    private string? nextCursor;
+
+    [JsonPropertyName("limit")]
+    public uint Limit
+    {
+        get => limit;
+        init => limit = ToriiExplorerDirectMetadata.RequireExplorerCursorLimit(value, nameof(Limit));
+    }
+
+    [JsonPropertyName("snapshot_height")]
+    public ulong SnapshotHeight { get; init; }
+
+    [JsonPropertyName("snapshot_hash")]
+    public string? SnapshotHash
+    {
+        get => snapshotHash;
+        init => snapshotHash = ToriiExplorerDirectMetadata.RequireOptionalExactSizedHex(
+            value,
+            nameof(SnapshotHash),
+            32);
     }
 
     [JsonPropertyName("next_cursor")]
@@ -3474,7 +3467,7 @@ public sealed record class ToriiExplorerBlocksPage
     private ToriiExplorerBlock[] items = Array.Empty<ToriiExplorerBlock>();
 
     [JsonPropertyName("pagination")]
-    public ToriiExplorerPaginationMeta Pagination { get; init; } = new();
+    public ToriiExplorerHistoryCursorMeta Pagination { get; init; } = new();
 
     [JsonPropertyName("items")]
     public IReadOnlyList<ToriiExplorerBlock> Items
@@ -3647,7 +3640,7 @@ public sealed record class ToriiExplorerTransactionsPage
     private ToriiExplorerTransaction[] items = Array.Empty<ToriiExplorerTransaction>();
 
     [JsonPropertyName("pagination")]
-    public ToriiExplorerPaginationMeta Pagination { get; init; } = new();
+    public ToriiExplorerHistoryCursorMeta Pagination { get; init; } = new();
 
     [JsonPropertyName("items")]
     public IReadOnlyList<ToriiExplorerTransaction> Items
@@ -3669,6 +3662,9 @@ public sealed record class ToriiExplorerLatestTransactionsResponse
         get => sampledAt;
         init => sampledAt = ToriiExplorerDirectMetadata.RequireExactNonEmptyText(value, nameof(SampledAt));
     }
+
+    [JsonPropertyName("pagination")]
+    public ToriiExplorerHistoryCursorMeta Pagination { get; init; } = new();
 
     [JsonPropertyName("items")]
     public IReadOnlyList<ToriiExplorerTransaction> Items
@@ -4090,7 +4086,7 @@ public sealed record class ToriiExplorerInstructionsPage
     private ToriiExplorerInstruction[] items = Array.Empty<ToriiExplorerInstruction>();
 
     [JsonPropertyName("pagination")]
-    public ToriiExplorerPaginationMeta Pagination { get; init; } = new();
+    public ToriiExplorerHistoryCursorMeta Pagination { get; init; } = new();
 
     [JsonPropertyName("items")]
     public IReadOnlyList<ToriiExplorerInstruction> Items
@@ -4112,6 +4108,9 @@ public sealed record class ToriiExplorerLatestInstructionsResponse
         get => sampledAt;
         init => sampledAt = ToriiExplorerDirectMetadata.RequireExactNonEmptyText(value, nameof(SampledAt));
     }
+
+    [JsonPropertyName("pagination")]
+    public ToriiExplorerHistoryCursorMeta Pagination { get; init; } = new();
 
     [JsonPropertyName("items")]
     public IReadOnlyList<ToriiExplorerInstruction> Items
@@ -5780,73 +5779,111 @@ public sealed record class ToriiContractCodeBytesResponse
     }
 }
 
-[JsonConverter(typeof(ToriiContractInstanceJsonConverter))]
-public sealed record class ToriiContractInstance
+[JsonConverter(typeof(ToriiGovernedContractResponseJsonConverter))]
+public sealed record class ToriiGovernedContractResponse
 {
-    private string contractId = string.Empty;
-    private string codeHashHex = string.Empty;
+    private string contractAddress = string.Empty;
+    private string dataspace = string.Empty;
+    private string[]? publicEntrypoints;
 
-    [JsonPropertyName("contract_id")]
-    public string ContractId
+    [JsonPropertyName("found")]
+    public bool Found { get; init; }
+
+    [JsonPropertyName("contract_address")]
+    public string ContractAddress
     {
-        get => contractId;
-        init => contractId = ToriiContractInstancesDirectMetadata.RequireExactTokenText(value, nameof(ContractId));
+        get => contractAddress;
+        init => contractAddress = value;
     }
+
+    [JsonPropertyName("contract_subject_account")]
+    public string? ContractSubjectAccount { get; init; }
+
+    [JsonPropertyName("dataspace")]
+    public string Dataspace
+    {
+        get => dataspace;
+        init => dataspace = value;
+    }
+
+    [JsonPropertyName("active")]
+    public bool? Active { get; init; }
+
+    [JsonPropertyName("lifecycle")]
+    public ToriiGovernedContractLifecycle? Lifecycle { get; init; }
+
+    [JsonPropertyName("emergency_hold_active")]
+    public bool? EmergencyHoldActive { get; init; }
 
     [JsonPropertyName("code_hash_hex")]
-    public string CodeHashHex
+    public string? CodeHashHex { get; init; }
+
+    [JsonPropertyName("abi_hash_hex")]
+    public string? AbiHashHex { get; init; }
+
+    [JsonPropertyName("public_entrypoints")]
+    public IReadOnlyList<string>? PublicEntrypoints
     {
-        get => codeHashHex;
-        init => codeHashHex = ToriiContractInstancesDirectMetadata.RequireExactSizedHex(value, nameof(CodeHashHex));
+        get => ToriiListSnapshots.Copy(publicEntrypoints);
+        init => publicEntrypoints = ToriiListSnapshots.Copy(value);
     }
 }
 
-[JsonConverter(typeof(ToriiContractInstancesResponseJsonConverter))]
-public sealed record class ToriiContractInstancesResponse
+public sealed record class ToriiGovernedContractLifecycle
 {
-    private string @namespace = string.Empty;
-    private ToriiContractInstance[] instances = Array.Empty<ToriiContractInstance>();
+    [JsonPropertyName("version")]
+    public ushort Version { get; init; }
 
-    [JsonPropertyName("namespace")]
-    public string Namespace
-    {
-        get => @namespace;
-        init => @namespace = ToriiContractInstancesDirectMetadata.RequireExactTokenText(value, nameof(Namespace));
-    }
+    [JsonPropertyName("origin")]
+    public string Origin { get; init; } = string.Empty;
 
-    [JsonPropertyName("instances")]
-    public IReadOnlyList<ToriiContractInstance> Instances
-    {
-        get => ToriiListSnapshots.CopyRequired(instances);
-        init => instances = ToriiListSnapshots.CopyRequired(value);
-    }
+    [JsonPropertyName("origin_account")]
+    public string OriginAccount { get; init; } = string.Empty;
 
-    [JsonPropertyName("total")]
-    public ulong Total { get; init; }
+    [JsonPropertyName("origin_proposal_content_id_hex")]
+    public string? OriginProposalContentIdHex { get; init; }
 
-    [JsonPropertyName("offset")]
-    public ulong Offset { get; init; }
+    [JsonPropertyName("origin_governance_attempt_id_hex")]
+    public string? OriginGovernanceAttemptIdHex { get; init; }
 
-    [JsonPropertyName("limit")]
-    public ulong Limit { get; init; }
+    [JsonPropertyName("owner")]
+    public string Owner { get; init; } = string.Empty;
+
+    [JsonPropertyName("pending_owner")]
+    public string? PendingOwner { get; init; }
+
+    [JsonPropertyName("parliament_delegated")]
+    public bool ParliamentDelegated { get; init; }
+
+    [JsonPropertyName("active_code_hash_hex")]
+    public string? ActiveCodeHashHex { get; init; }
+
+    [JsonPropertyName("revision")]
+    public ulong Revision { get; init; }
+
+    [JsonPropertyName("emergency_hold")]
+    public ToriiGovernedContractEmergencyHold? EmergencyHold { get; init; }
 }
 
-internal static class ToriiContractInstancesDirectMetadata
+public sealed record class ToriiGovernedContractEmergencyHold
 {
-    internal static string RequireExactTokenText(string? value, string paramName)
-    {
-        return ToriiExplorerDirectMetadata.RequireExactTokenText(value, paramName);
-    }
+    [JsonPropertyName("incident_digest_hex")]
+    public string IncidentDigestHex { get; init; } = string.Empty;
 
-    internal static string RequireExactSizedHex(string? value, string paramName)
-    {
-        if (value is not null && value.Length == 0)
-        {
-            throw new ArgumentException("Value must be a non-empty 32-byte hex string.", paramName);
-        }
+    [JsonPropertyName("proposal_content_id_hex")]
+    public string ProposalContentIdHex { get; init; } = string.Empty;
 
-        return ToriiExplorerDirectMetadata.RequireExactSizedHex(value, paramName, 32);
-    }
+    [JsonPropertyName("governance_attempt_id_hex")]
+    public string GovernanceAttemptIdHex { get; init; } = string.Empty;
+
+    [JsonPropertyName("reason")]
+    public string Reason { get; init; } = string.Empty;
+
+    [JsonPropertyName("imposed_at_height")]
+    public ulong ImposedAtHeight { get; init; }
+
+    [JsonPropertyName("expires_at_height")]
+    public ulong ExpiresAtHeight { get; init; }
 }
 
 

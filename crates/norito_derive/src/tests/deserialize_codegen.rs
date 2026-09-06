@@ -126,23 +126,22 @@ fn context_field_paths_delegate_copy_and_context_setup_to_core() {
             "full-consumption validation must remain shared"
         );
     }
-    assert!(
-        struct_expansion.contains("payload_range_from_ptr(ptr.wrapping_add(__o),__bitset_len,)"),
-        "packed-struct bitsets must use the bounded payload helper; expansion: \
-         {struct_expansion}"
-    );
     for expansion in [&struct_expansion, &tuple_expansion] {
         assert!(
-            expansion.contains("NonCanonicalEncoding"),
-            "packed-struct decoders must validate the wire bitset"
+            expansion.contains("decode_context_packed_header(ptr,__count,__expected_bitset"),
+            "packed-struct headers must delegate bounded bitset and size decoding to core"
         );
         assert!(
-            expansion.contains("payload_slice_from_ptr(ptr)"),
-            "size headers must be read from the bounded payload slice"
+            expansion.contains("decode_context_packed_offsets(ptr,__count)"),
+            "packed-struct offset tables must delegate bounded decoding to core"
         );
         assert!(
-            expansion.contains("read_len_dyn_slice(__size_bytes)"),
-            "size headers must use the fallible slice decoder"
+            !expansion.contains("payload_slice_from_ptr(ptr)"),
+            "generated decoders must not duplicate payload-bound setup"
+        );
+        assert!(
+            !expansion.contains("read_len_dyn_slice"),
+            "generated decoders must not duplicate dynamic size parsing"
         );
         assert!(
             !expansion.contains("try_read_len_ptr_unchecked"),

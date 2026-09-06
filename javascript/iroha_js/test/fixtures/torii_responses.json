@@ -19,6 +19,7 @@
         "kind": {
           "kind": "DeployContract",
           "payload": {
+            "proposal_operator": "sorauﾛ1P738ｷﾈｹｵﾙﾍﾉﾂUｿﾚｹﾑbﾄ1xYﾆｷvWzﾒkﾒ5ﾛﾘuE1ﾌsﾛXB6V1Y",
             "contract_address": "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
             "code_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             "abi_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
@@ -74,9 +75,6 @@
         {
           "wire_id": "CreateParliamentGovernanceAttemptV1",
           "payload_hex": "0XAAAAAAAA"
-        },
-        {
-          "wire_id": "PersistCouncilForEpoch"
         }
       ]
     },
@@ -89,33 +87,21 @@
         }
       ]
     },
-    "plainBallotResponse": {
-      "ok": true,
-      "accepted": true,
-      "reason": null,
+    "plainBallotDraftResponse": {
+      "drafted": true,
       "tx_instructions": [
         {
-          "wire_id": "CastPlainBallot"
+          "wire_id": "CastPlainBallot",
+          "payload_hex": "00"
         }
       ]
     },
-    "zkBallotAccepted": {
-      "ok": true,
-      "accepted": true,
-      "reason": null,
+    "zkBallotDraftResponse": {
+      "drafted": true,
       "tx_instructions": [
         {
-          "wire_id": "CastZkBallot"
-        }
-      ]
-    },
-    "zkBallotDeferred": {
-      "ok": true,
-      "accepted": false,
-      "reason": "build transaction skeleton",
-      "tx_instructions": [
-        {
-          "wire_id": "CastZkBallot"
+          "wire_id": "CastZkBallot",
+          "payload_hex": "00"
         }
       ]
     },
@@ -129,24 +115,6 @@
         "apps",
         "system"
       ]
-    },
-    "councilCurrent": {
-      "epoch": 77,
-      "members": [
-        {
-          "account_id": "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx"
-        },
-        {
-          "account_id": "34mSYnDgbaJM58rbLoif4Tkp7G7xyPF1PgLSee8pqojx4ez57GhytrmGcqoufRsDGSX2Umc7i"
-        }
-      ],
-      "alternates": [
-        {
-          "account_id": "34mSYnDgbaJM58rbLoif4Tkp7G7YZ5g3PsY6LcceZ1Kf1tcQGqPbGs7g4fy6LPy8AjNxDXGrg"
-        }
-      ],
-      "candidate_count": 3,
-      "derived_by": "Manual"
     }
   },
   "repo": {

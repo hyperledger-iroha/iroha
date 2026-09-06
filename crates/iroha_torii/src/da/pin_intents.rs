@@ -58,7 +58,7 @@ pub struct DaPinIntentListCursor {
     norito::derive::NoritoSerialize,
 )]
 pub struct DaPinIntentListRequest {
-    /// Maximum raw index rows to inspect, capped by the server at 1,000.
+    /// Maximum raw index rows to inspect; values above 1,000 are rejected.
     #[norito(default)]
     pub limit: Option<NonZeroU64>,
     /// Server-issued continuation cursor from the preceding page.
@@ -129,7 +129,7 @@ pub async fn handler_list_pin_intents(
     let nexus = app.state.nexus_snapshot();
     let page = {
         let store = app.state.da_pin_intents();
-        list_active_from_store(&store, &request, &nexus, snapshot).map_err(pin_cursor_error)?
+        list_active_from_store(&store, &request, &nexus, snapshot).map_err(pin_list_error)?
     };
     if list_snapshot_for_state(app.state.as_ref()) != snapshot {
         return Err(Error::AppConflict {
@@ -165,7 +165,7 @@ fn list_active_from_store(
     request: &DaPinIntentListRequest,
     nexus: &Nexus,
     snapshot: DaListSnapshot,
-) -> Result<DaPinIntentPage, DaPinIntentCursorError> {
+) -> Result<DaPinIntentPage, DaPinIntentListError> {
     let policy_context = ActiveLaneProofPolicyContext::new(nexus);
     list_page_from_store(store, request, snapshot, |entry| {
         pin_intent_lane_is_active(&policy_context, entry)
@@ -187,30 +187,34 @@ fn validate_pin_intent_query_request(request: &DaPinIntentQueryRequest) -> Resul
     })
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DaPinIntentCursorError {
+enum DaPinIntentListError {
+    LimitOutOfRange { provided: u64 },
     NonCanonicalSnapshot,
     StaleSnapshot,
     UnknownLocation,
 }
-fn pin_cursor_error(error: DaPinIntentCursorError) -> Error {
+fn pin_list_error(error: DaPinIntentListError) -> Error {
     let (code, message) = match error {
-        DaPinIntentCursorError::NonCanonicalSnapshot => (
-            "invalid_da_pin_intent_cursor",
-            "DA pin-intent cursor snapshot must contain no block hash at height 0 and exactly one block hash at non-zero height",
+        DaPinIntentListError::LimitOutOfRange { provided } => (
+            "invalid_da_pin_intent_limit",
+            format!(
+                "DA pin-intent list limit is {provided}; maximum is {MAX_PIN_INTENT_PAGE_SIZE}"
+            ),
         ),
-        DaPinIntentCursorError::StaleSnapshot => (
+        DaPinIntentListError::NonCanonicalSnapshot => (
+            "invalid_da_pin_intent_cursor",
+            "DA pin-intent cursor snapshot must contain no block hash at height 0 and exactly one block hash at non-zero height".to_owned(),
+        ),
+        DaPinIntentListError::StaleSnapshot => (
             "stale_da_pin_intent_cursor",
-            "DA pin-intent cursor does not target the current committed ledger tip; restart from the first page",
+            "DA pin-intent cursor does not target the current committed ledger tip; restart from the first page".to_owned(),
         ),
-        DaPinIntentCursorError::UnknownLocation => (
+        DaPinIntentListError::UnknownLocation => (
             "invalid_da_pin_intent_cursor",
-            "DA pin-intent cursor location is absent from the current active query index",
+            "DA pin-intent cursor location is absent from the current active query index".to_owned(),
         ),
     };
-    Error::AppQueryValidation {
-        code,
-        message: message.to_owned(),
-    }
+    Error::AppQueryValidation { code, message }
 }
 #[derive(Debug)]
 struct DaPinIntentPage {
@@ -222,22 +226,25 @@ fn list_page_from_store(
     request: &DaPinIntentListRequest,
     snapshot: DaListSnapshot,
     mut is_visible: impl FnMut(&DaPinIntentWithLocation) -> bool,
-) -> Result<DaPinIntentPage, DaPinIntentCursorError> {
+) -> Result<DaPinIntentPage, DaPinIntentListError> {
     let limit = request
         .limit
-        .map(NonZeroU64::get)
-        .and_then(|n| usize::try_from(n).ok())
-        .unwrap_or(DEFAULT_PIN_INTENT_PAGE_SIZE)
-        .min(MAX_PIN_INTENT_PAGE_SIZE);
+        .map_or(Ok(DEFAULT_PIN_INTENT_PAGE_SIZE), |limit| {
+            let provided = limit.get();
+            usize::try_from(provided)
+                .ok()
+                .filter(|&limit| limit <= MAX_PIN_INTENT_PAGE_SIZE)
+                .ok_or(DaPinIntentListError::LimitOutOfRange { provided })
+        })?;
     let after = request.cursor.map(|cursor| {
         if !cursor.snapshot.is_canonical() {
-            return Err(DaPinIntentCursorError::NonCanonicalSnapshot);
+            return Err(DaPinIntentListError::NonCanonicalSnapshot);
         }
         if cursor.snapshot != snapshot {
-            return Err(DaPinIntentCursorError::StaleSnapshot);
+            return Err(DaPinIntentListError::StaleSnapshot);
         }
         if !store.contains_query_location(cursor.after) {
-            return Err(DaPinIntentCursorError::UnknownLocation);
+            return Err(DaPinIntentListError::UnknownLocation);
         }
         Ok(cursor.after)
     });
@@ -686,48 +693,33 @@ mod tests {
         assert!(second.next_cursor.is_none());
     }
     #[test]
-    fn list_overlarge_limit_is_hard_capped() {
-        let entries = (0_u64..=MAX_PIN_INTENT_PAGE_SIZE as u64)
-            .map(|sequence| {
-                let mut ticket = [0_u8; 32];
-                ticket[..8].copy_from_slice(&sequence.to_le_bytes());
-                let mut manifest = [0_u8; 32];
-                manifest[..8].copy_from_slice(&sequence.to_be_bytes());
-                manifest[31] = 1;
-                DaPinIntentWithLocation {
-                    intent: {
-                        let key_pair = KeyPair::try_from_seed(vec![0xD5; 32], Algorithm::Ed25519)
-                            .expect("valid deterministic DA query key");
-                        let authorization = sample_authorization(LaneId::new(1), 1, sequence);
-                        let scope = DaPinScopeV1::new(
-                            &authorization,
-                            StorageTicketId::new(ticket),
-                            ManifestDigest::new(manifest),
-                            None,
-                        );
-                        let scope_authorization =
-                            DaPinScopeAuthorizationV1::try_sign(scope, &key_pair)
-                                .expect("sign deterministic DA query pin scope");
-                        DaPinIntent::new(authorization, scope_authorization)
-                    },
-                    location: DaCommitmentLocation {
-                        block_height: 1,
-                        index_in_bundle: u32::try_from(sequence)
-                            .expect("bounded fixture index fits u32"),
-                    },
-                }
-            })
-            .collect::<Vec<_>>();
-        let store = DaPinStore::from_intents(&entries);
+    fn list_overlarge_limit_is_rejected_before_scan() {
+        use std::cell::Cell;
+
+        let store = store_with_records();
         let snapshot = DaListSnapshot {
             block_height: 0,
             block_hash: None,
         };
-        let page = list_page_from_store(&store, &list_request(Some(u64::MAX)), snapshot, |_| true)
-            .expect("bounded page");
-        assert_eq!(page.intents.len(), MAX_PIN_INTENT_PAGE_SIZE);
-        assert!(page.intents.len() < store.len());
-        assert!(page.next_cursor.is_some());
+        let examined = Cell::new(0_usize);
+        let provided = u64::try_from(MAX_PIN_INTENT_PAGE_SIZE).expect("page limit fits u64") + 1;
+        let error = list_page_from_store(&store, &list_request(Some(provided)), snapshot, |_| {
+            examined.set(examined.get() + 1);
+            true
+        })
+        .expect_err("limit above the exact maximum must be rejected");
+        assert_eq!(error, DaPinIntentListError::LimitOutOfRange { provided });
+        assert_eq!(
+            examined.get(),
+            0,
+            "invalid limits must fail before scanning"
+        );
+
+        assert_eq!(
+            list_page_from_store(&store, &list_request(Some(u64::MAX)), snapshot, |_| true)
+                .expect_err("unrepresentable or overlarge limits must be rejected"),
+            DaPinIntentListError::LimitOutOfRange { provided: u64::MAX }
+        );
     }
     #[test]
     fn list_cursor_rejects_unknown_location_and_stale_snapshot() {
@@ -749,7 +741,7 @@ mod tests {
         assert_eq!(
             list_page_from_store(&store, &unknown, snapshot, |_| true)
                 .expect_err("foreign location must fail closed"),
-            DaPinIntentCursorError::UnknownLocation
+            DaPinIntentListError::UnknownLocation
         );
         let stale = DaPinIntentListRequest {
             limit: NonZeroU64::new(1),
@@ -768,7 +760,7 @@ mod tests {
         assert_eq!(
             list_page_from_store(&store, &stale, snapshot, |_| true)
                 .expect_err("stale tip must fail closed"),
-            DaPinIntentCursorError::StaleSnapshot
+            DaPinIntentListError::StaleSnapshot
         );
     }
     #[test]
@@ -795,7 +787,7 @@ mod tests {
         assert_eq!(
             list_page_from_store(&store, &request, snapshot, |_| true)
                 .expect_err("malformed snapshot must fail closed"),
-            DaPinIntentCursorError::NonCanonicalSnapshot
+            DaPinIntentListError::NonCanonicalSnapshot
         );
     }
     #[test]
@@ -875,6 +867,33 @@ mod tests {
         .expect("handler should succeed");
         assert!(page.intents.is_empty());
         assert!(page.next_cursor.is_none());
+    }
+    #[tokio::test]
+    async fn list_handler_enforces_exact_limit_maximum() {
+        let app = crate::mk_app_state_for_tests();
+        let accepted = u64::try_from(MAX_PIN_INTENT_PAGE_SIZE).expect("page limit fits u64");
+        let JsonBody(page) = super::handler_list_pin_intents(
+            State(app.clone()),
+            NoritoJson(list_request(Some(accepted))),
+        )
+        .await
+        .expect("the exact page-limit maximum must be accepted");
+        assert!(page.intents.is_empty());
+
+        let rejected = accepted + 1;
+        let error =
+            super::handler_list_pin_intents(State(app), NoritoJson(list_request(Some(rejected))))
+                .await
+                .expect_err("a page limit above the maximum must be rejected");
+        assert!(matches!(
+            &error,
+            Error::AppQueryValidation {
+                code: "invalid_da_pin_intent_limit",
+                ..
+            }
+        ));
+        let response = axum::response::IntoResponse::into_response(error);
+        assert_eq!(response.status(), axum::http::StatusCode::BAD_REQUEST);
     }
     #[tokio::test]
     async fn list_handler_rejects_cursor_bound_to_another_tip() {

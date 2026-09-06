@@ -38,8 +38,7 @@ public sealed class ToriiRuntimeGovernanceAuthenticationTests
             new HttpClient(handler),
             new ToriiClientOptions
             {
-                LocalSigningContext = new ToriiLocalSigningContext(
-                    NetworkId.Parse(ExactNetworkIdLiteral)),
+                NetworkId = NetworkId.Parse(ExactNetworkIdLiteral),
             });
 
         var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
@@ -62,12 +61,13 @@ public sealed class ToriiRuntimeGovernanceAuthenticationTests
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     AccountId,
                     PrivateKeySeed),
-            });
+            },
+            TransactionSubmissionTransportAssurance.OneShotWithoutRedirectsOrRetries);
 
         var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             InvokeAsync(client, path));
 
-        Assert.Contains(nameof(ToriiClientOptions.LocalSigningContext), error.Message);
+        Assert.Contains(nameof(ToriiClientOptions.NetworkId), error.Message);
         Assert.Empty(handler.Requests);
     }
 
@@ -193,12 +193,12 @@ public sealed class ToriiRuntimeGovernanceAuthenticationTests
             new HttpClient(handler),
             new ToriiClientOptions
             {
-                LocalSigningContext = new ToriiLocalSigningContext(
-                    NetworkId.Parse(ForeignNetworkIdLiteral)),
+                NetworkId = NetworkId.Parse(ForeignNetworkIdLiteral),
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     AccountId,
                     PrivateKeySeed),
-            });
+            },
+            TransactionSubmissionTransportAssurance.OneShotWithoutRedirectsOrRetries);
 
         var error = await Assert.ThrowsAsync<ToriiApiException>(() =>
             client.GetNodeCapabilitiesAsync(TestContext.Current.CancellationToken));
@@ -307,12 +307,12 @@ public sealed class ToriiRuntimeGovernanceAuthenticationTests
             new HttpClient(handler),
             new ToriiClientOptions
             {
-                LocalSigningContext = new ToriiLocalSigningContext(
-                    NetworkId.Parse(ExactNetworkIdLiteral)),
+                NetworkId = NetworkId.Parse(ExactNetworkIdLiteral),
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     AccountId,
                     PrivateKeySeed),
-            });
+            },
+            TransactionSubmissionTransportAssurance.OneShotWithoutRedirectsOrRetries);
 
     private static async Task InvokeAsync(ToriiClient client, string path)
     {

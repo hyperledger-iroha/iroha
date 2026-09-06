@@ -11,15 +11,23 @@ the reservation workflow (`device_lab_reservation.md`) and the incident log
 (`device_lab_contingency.md`) so compliance reviewers, legal counsel, and SRE
 have a single source of truth for how we validate failover readiness.
 
+This runbook applies only after a team explicitly selects a physical-device or
+StrongBox qualification profile. Software-backed signing and custody remain
+valid for ordinary production, governance, build, test, deployment, and release
+workflows; hardware availability, drill cadence, and device-lab evidence never
+gate that baseline.
+
 ## Purpose & Cadence
 
-- Demonstrate that the Android StrongBox + general device pools can fail over
-  to the fallback Pixel lanes, shared pool, Firebase Test Lab burst queue, and
-  external StrongBox retainer without missing AND6/AND7 SLAs.
-- Produce an evidence bundle that legal can attach to ETSI/FISC submissions
-  ahead of the Feb compliance review.
-- Run at least once per quarter, plus any time the lab hardware roster changes
-  (new devices, retirement, or maintenance longer than 24 h).
+- For the selected hardware profile, demonstrate that the Android StrongBox +
+  general device pools can fail over to the fallback Pixel lanes, shared pool,
+  Firebase Test Lab burst queue, and external StrongBox retainer without
+  missing AND6/AND7 SLAs.
+- Produce an evidence bundle when that hardware profile is included in an
+  ETSI/FISC submission ahead of the Feb compliance review.
+- While the hardware profile remains selected, run at least once per quarter,
+  plus any time the lab hardware roster changes (new devices, retirement, or
+  maintenance longer than 24 h).
 
 | Drill ID | Date | Scenario | Evidence Bundle | Status |
 |----------|------|----------|-----------------|--------|

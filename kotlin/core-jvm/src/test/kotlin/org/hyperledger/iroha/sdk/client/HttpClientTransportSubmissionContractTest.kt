@@ -29,7 +29,7 @@ class HttpClientTransportSubmissionContractTest {
     @Test
     fun submitTransactionJsonUsesJsonIngressWithConfiguredAccept() {
         val executor = CapturingExecutor()
-        val transport = HttpClientTransport.withExecutor(
+        val transport = HttpClientTransport(
             executor = executor,
             config = ClientConfig.builder()
                 .setBaseUri(URI.create("https://127.0.0.1:8080"))
@@ -55,7 +55,7 @@ class HttpClientTransportSubmissionContractTest {
         val body = byteArrayOf(1, 2, 3)
         for (statusCode in listOf(200, 201, 204)) {
             val executor = CapturingExecutor(submitStatus = statusCode)
-            val transport = HttpClientTransport.withExecutor(
+            val transport = HttpClientTransport(
                 executor = executor,
                 config = ClientConfig.builder()
                     .setBaseUri(URI.create("https://127.0.0.1:8080"))
@@ -81,7 +81,7 @@ class HttpClientTransportSubmissionContractTest {
             submitStatus = 202,
             entrypointHash = entrypointHash,
         )
-        val transport = HttpClientTransport.withExecutor(
+        val transport = HttpClientTransport(
             executor = executor,
             config = ClientConfig.builder()
                 .setBaseUri(URI.create("https://127.0.0.1:8080"))
@@ -116,7 +116,7 @@ class HttpClientTransportSubmissionContractTest {
                 submitBody = "rejected-$statusCode".toByteArray(StandardCharsets.UTF_8),
                 rejectCode = "submit_$statusCode",
             )
-            val transport = HttpClientTransport.withExecutor(
+            val transport = HttpClientTransport(
                 executor = executor,
                 config = ClientConfig.builder()
                     .setBaseUri(URI.create("https://127.0.0.1:8080"))
@@ -148,7 +148,7 @@ class HttpClientTransportSubmissionContractTest {
                 submitBody = responseBody.toByteArray(StandardCharsets.UTF_8),
                 rejectCode = rejectCode,
             )
-            val transport = HttpClientTransport.withExecutor(
+            val transport = HttpClientTransport(
                 executor = executor,
                 config = ClientConfig.builder()
                     .setBaseUri(URI.create("https://127.0.0.1:8080"))
@@ -180,7 +180,7 @@ class HttpClientTransportSubmissionContractTest {
                 rejectCode = "submit_$statusCode",
                 entrypointHash = "malformed-receipt-hash",
             )
-            val transport = HttpClientTransport.withExecutor(
+            val transport = HttpClientTransport(
                 executor = executor,
                 config = ClientConfig.builder()
                     .setBaseUri(URI.create("https://127.0.0.1:8080"))
@@ -230,7 +230,7 @@ class HttpClientTransportSubmissionContractTest {
         val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
         val auth = ToriiCanonicalRequestAuth(
             "alice@universal",
-            keyPair.private,
+            RequestSigner.ed25519(keyPair.private),
             1_717_171_717_000L,
             "canonical-one-shot-nonce",
         )
@@ -247,7 +247,7 @@ class HttpClientTransportSubmissionContractTest {
         auth: ToriiCanonicalRequestAuth,
         executor: OutcomeExecutor,
     ) {
-        val transport = HttpClientTransport.withExecutor(
+        val transport = HttpClientTransport(
             executor,
             ClientConfig.builder()
                 .setBaseUri(URI.create("https://127.0.0.1:8080"))

@@ -13,6 +13,7 @@ friendly to local experiments and CI smoke tests.
 
 ```bash
 cargo install --path crates/sorafs_orchestrator --bin sorafs_cli
+cargo install --path crates/iroha_cli --bin iroha
 ```
 
 Optional helpers:
@@ -26,10 +27,10 @@ Optional helpers:
 
 ```bash
 # Compile Kotodama bytecode and capture a reproducible summary
-sorafs_cli norito build \
+iroha app sorafs toolkit compile \
   --source contracts/register_domain.ko \
   --bytecode-out artifacts/register_domain.to \
-  --summary-out artifacts/register_domain.summary.json
+  --json-out artifacts/register_domain.summary.json
 
 # Produce a CAR archive plus chunk plan for deterministic pinning
 sorafs_cli car pack \

@@ -276,6 +276,38 @@ seiyaku Hidden {}
         with self.assertRaisesRegex(DOCS.DocumentationCheckError, "normalized"):
             DOCS.load_document_set(escaped, self.root)
 
+    def test_history_cannot_supply_normative_or_required_examples(self) -> None:
+        source = "```ko\nseiyaku Example {}\n```\n"
+        self.write_document("docs/current.md", source)
+        self.write_document("docs/history/2026-09-06/old.md", source)
+        for grammar, documents, roots in (
+            ("docs/history/2026-09-06/old.md", ["docs/history/2026-09-06/old.md"], ["docs"]),
+            ("docs/current.md", ["docs/current.md", "docs/history/2026-09-06/old.md"], ["docs"]),
+            ("docs/current.md", ["docs/current.md"], ["docs", "docs/history"]),
+        ):
+            with self.subTest(grammar=grammar, roots=roots):
+                manifest = self.write_manifest(json.dumps({
+                    "schema": 2, "normative_grammar": grammar,
+                    "source_documents": documents, "source_roots": roots,
+                }))
+                with self.assertRaisesRegex(DOCS.DocumentationCheckError, "historical evidence"):
+                    DOCS.load_document_set(manifest, self.root)
+
+    def test_direct_required_document_set_cannot_bypass_history_ownership(self) -> None:
+        historical = Path("docs/history/2026-09-06/old.md")
+        self.write_document(historical.as_posix(), "```ko\nseiyaku Old {}\n```\n")
+        with self.assertRaisesRegex(DOCS.DocumentationCheckError, "historical evidence"):
+            DOCS.collect_source_fences(DOCS.DocumentSet(historical, (historical,)), self.root)
+
+    def test_current_paths_cannot_alias_historical_inputs(self) -> None:
+        historical = self.write_document("docs/history/old.md", "```ko\nseiyaku Old {}\n```\n")
+        (self.root / "docs/current.md").symlink_to(historical)
+        (self.root / "archived-source-root").symlink_to(historical.parent, target_is_directory=True)
+        with self.assertRaisesRegex(DOCS.DocumentationCheckError, "historical evidence"):
+            DOCS._relative_document(self.root, "docs/current.md", "normative_grammar")
+        with self.assertRaisesRegex(DOCS.DocumentationCheckError, "historical evidence"):
+            DOCS._relative_source_root(self.root, "archived-source-root", "source_roots[0]")
+
     def test_manifest_requires_every_document_below_a_scanned_root(self) -> None:
         source = "```ko\nseiyaku A {}\n```\n"
         self.write_document("specs/grammar.md", source)

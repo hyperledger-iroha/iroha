@@ -38,7 +38,10 @@ exists, no bounce or refund path can undo the debit.
 The master enforces `totalSupply + mint_amount <= maxWrappedSupply` with a
 checked subtraction. The bridge rejects a single admission above the same
 immutable cap. Both expose the cap and breaker state for authenticated
-deployment readback.
+deployment readback. The governed Jetton master address is not a valid mint
+recipient: both SORA admission and the TON bridge reject it before custody,
+replay, pending-mint, or supply state changes, and the master repeats the check
+before its own replay boundary.
 
 Every replay boundary owns one SHA-256 256-shard, depth-248 sparse forest and
 mutates only its operation tag. A witness header is exactly 769 bits with zero
@@ -48,6 +51,13 @@ three nondefault hashes per nonterminal cell and one to three in the final
 cell. No trailing bits, references, default siblings, or alternate snake
 chunking are accepted. Payload and auxiliary commitments each add exactly one
 canonical SHA-256 layer.
+
+Runtime checks of contract-owned forests validate counters and emptiness in
+constant work and validate the selected shard root on access. Canonical empty
+initialization and append-only admission preserve all other roots. Scanning
+all 256 shard roots at each message would exceed the wallet gas limit as its
+four forests fill. The full forest validator remains available for supplied
+state validation; admission never writes zero or the canonical empty root.
 
 The bridge commits the exact immutable configuration cell and derives the one
 canonical master StateInit from its embedded code and known zero initial state.

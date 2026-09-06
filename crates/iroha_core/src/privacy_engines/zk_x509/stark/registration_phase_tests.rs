@@ -2299,6 +2299,7 @@ fn tiny_authenticated_main_polynomial_fixture_v1(
 ) -> aggregate::MaskedTracePolynomialSetV1 {
     let mut rng = StdRng::from_seed([seed; 32]);
     let (_, polynomials) = aggregate::commit_masked_trace_polynomial_columns_v1(
+        ZK_X509_DIGEST_CONTEXT_V1,
         b"iroha:test:zk-x509:main-scratch-leaf:v1",
         b"iroha:test:zk-x509:main-scratch-node:v1",
         usize::from(seed),

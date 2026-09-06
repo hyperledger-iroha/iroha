@@ -234,9 +234,9 @@ public final class Java8CompatibilitySurfaceTests {
   @Test
   public void verifierParserAndFakeTransportJava8SurfaceRejectsDrift() throws Exception {
     assertTrue(
-        "exact Kagemusha verifier profile must remain registry-admissible",
+        "exact IVM verifier profile must remain registry-admissible",
         VerifyingKeyBackendTag.isVerifierBackendRegistryLabelV1(
-            "halo2/pasta/kagemusha-topup-shield-merkle16-axiom-poseidon-v3"));
+            "halo2/pasta/ivm-execution-v1"));
     try {
       VerifyingKeyBackendTag.requireVerifierBackendRegistryLabelV1(" halo2/ipa", "backend");
       fail("verifier-registry labels must reject padding");

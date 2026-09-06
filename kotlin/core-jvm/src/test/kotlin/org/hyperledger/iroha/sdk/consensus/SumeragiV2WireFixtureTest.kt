@@ -22,7 +22,7 @@ class SumeragiV2WireFixtureTest {
                     it[31] = (it[31].toInt() or 1).toByte()
                 },
             )
-        val base = SumeragiV2Wire.ExecutionCommitment.withoutTopups(
+        val base = SumeragiV2Wire.ExecutionCommitment.withoutKagemushaTopUps(
             hash(0x21), hash(0x23), hash(0x25), 123, hash(0x27),
         )
         val laneFinality = SumeragiV2Wire.LaneFinalityManifestCommitment(hash(0x2b), 1)
@@ -31,8 +31,8 @@ class SumeragiV2WireFixtureTest {
             base.parentStateRoot,
             base.postStateRoot,
             base.ordinaryWritesRoot,
-            base.topupAnchorRoot,
-            base.topupAnchorCount,
+            base.kagemushaTopUpRoot,
+            base.kagemushaTopUpCount,
             base.nativeAmxApplicationManifestVersion,
             base.nativeAmxApplicationManifestRoot,
             base.nativeAmxApplicationManifestCount,
@@ -516,7 +516,8 @@ class SumeragiV2WireFixtureTest {
 
         val changedParentState = response.certificate.executionCommitment.parentStateRoot.bytes()
         changedParentState[0] = (changedParentState[0].toInt() xor 1).toByte()
-        val changedExecutionCommitment = SumeragiV2Wire.ExecutionCommitment.withoutTopups(
+        val changedExecutionCommitment =
+            SumeragiV2Wire.ExecutionCommitment.withoutKagemushaTopUps(
             SumeragiV2Wire.Hash32(changedParentState),
             response.certificate.executionCommitment.postStateRoot,
             response.certificate.executionCommitment.ordinaryWritesRoot,
@@ -545,7 +546,7 @@ class SumeragiV2WireFixtureTest {
     }
 
     @Test
-    fun `execution commitments reject noncanonical topup bindings`() {
+    fun `execution commitments enforce canonical KAGEMUSHA top-up bindings`() {
         val responseMessage = fixtureRows().single {
             it.kind == "message" && it.name == "commit_certificate_response"
         }
@@ -554,14 +555,14 @@ class SumeragiV2WireFixtureTest {
                 responseMessage.hex.hexBytes(),
             ).payload as SumeragiV2Wire.ConsensusPayload.CommitCertificateResponseMessage
         val base = responsePayload.value.certificate.executionCommitment
-        val topupRoot = base.parentStateRoot
+        val kagemushaTopUpRoot = base.parentStateRoot
 
         assertFailsWith<IllegalArgumentException> {
             SumeragiV2Wire.ExecutionCommitment(
                 base.parentStateRoot,
                 base.postStateRoot,
                 base.ordinaryWritesRoot,
-                topupRoot,
+                kagemushaTopUpRoot,
                 0,
                 base.nativeAmxApplicationManifestVersion,
                 base.nativeAmxApplicationManifestRoot,
@@ -593,8 +594,8 @@ class SumeragiV2WireFixtureTest {
                 base.parentStateRoot,
                 base.postStateRoot,
                 base.ordinaryWritesRoot,
-                topupRoot,
-                SumeragiV2Wire.MAX_KAGEMUSHA_TOPUP_ANCHORS_PER_BLOCK + 1,
+                kagemushaTopUpRoot,
+                0x1_0000_0000L,
                 base.nativeAmxApplicationManifestVersion,
                 base.nativeAmxApplicationManifestRoot,
                 base.nativeAmxApplicationManifestCount,
@@ -609,7 +610,7 @@ class SumeragiV2WireFixtureTest {
                 base.parentStateRoot,
                 base.postStateRoot,
                 base.ordinaryWritesRoot,
-                topupRoot,
+                kagemushaTopUpRoot,
                 1,
                 base.nativeAmxApplicationManifestVersion,
                 base.nativeAmxApplicationManifestRoot,
@@ -621,17 +622,19 @@ class SumeragiV2WireFixtureTest {
             )
         }
 
-        val canonicalPostState = SumeragiV2Wire.ExecutionCommitment.topupPostStateRoot(
-            1,
-            base.ordinaryWritesRoot,
-            topupRoot,
-        )
+        val largeCount = 1_000L
+        val canonicalPostState =
+            SumeragiV2Wire.ExecutionCommitment.kagemushaTopUpPostStateRoot(
+                largeCount,
+                base.ordinaryWritesRoot,
+                kagemushaTopUpRoot,
+            )
         val valid = SumeragiV2Wire.ExecutionCommitment(
             base.parentStateRoot,
             canonicalPostState,
             base.ordinaryWritesRoot,
-            topupRoot,
-            1,
+            kagemushaTopUpRoot,
+            largeCount,
             base.nativeAmxApplicationManifestVersion,
             base.nativeAmxApplicationManifestRoot,
             base.nativeAmxApplicationManifestCount,
@@ -640,6 +643,8 @@ class SumeragiV2WireFixtureTest {
             base.executedBlockWireLen,
             base.executedBlockWireHash,
         )
+        assertEquals(largeCount, valid.kagemushaTopUpCount)
+        assertEquals(kagemushaTopUpRoot, valid.kagemushaTopUpRoot)
         assertEquals(base.executedBlockWireHash, valid.executedBlockWireHash)
         assertContentEquals(
             valid.encode(),
@@ -732,8 +737,8 @@ class SumeragiV2WireFixtureTest {
                 base.parentStateRoot,
                 base.postStateRoot,
                 base.ordinaryWritesRoot,
-                base.topupAnchorRoot,
-                base.topupAnchorCount,
+                base.kagemushaTopUpRoot,
+                base.kagemushaTopUpCount,
                 base.nativeAmxApplicationManifestVersion,
                 base.nativeAmxApplicationManifestRoot,
                 base.nativeAmxApplicationManifestCount,
@@ -877,7 +882,6 @@ class SumeragiV2WireFixtureTest {
             "commit_quorum_certificate_reproposal",
             "timeout_vote",
             "timeout_certificate",
-            "payload_manifest",
             "payload_chunk",
             "certified_body_request",
             "certified_body_response",

@@ -37,13 +37,12 @@ This note summarises the authorization and abuse controls around SoraFS control-
   compute. Their response pages are bounded, but the current implementation
   materializes the authoritative inventory before applying `limit`/`offset`,
   so they are not anonymous scan endpoints.
-- `GET /v1/sorafs/storage/state` and the legacy
-  `POST /v1/sorafs/storage/fetch` diagnostic require fresh exact-network
-  operator signatures; fetch authentication runs before JSON decoding. Public
-  content transfer uses request-bound stream tokens with the CAR/chunk GET
-  handlers. A CID-site or query-projection cache miss without such a capability
-  now fails closed instead of inventing operator credentials or retrying the
-  legacy fetch unsigned; already-local cache paths remain available.
+- `GET /v1/sorafs/storage/state` requires a fresh exact-network operator
+  signature. Public content transfer uses request-bound stream tokens with the
+  CAR/chunk GET handlers. A CID-site or query-projection cache miss without
+  such a capability fails closed instead of inventing operator credentials or
+  falling back to a JSON range endpoint; already-local cache paths remain
+  available.
 - Local moderation quarantine review, release, and encrypted object store/read endpoints require canonical request signatures from accounts holding the `sorafs_moderation_operator` role. Keep this as a dedicated empty role for the Torii API gate; do not attach broad ledger permissions to it unless a separate governance change requires them.
 - SoraNet privacy ingest endpoints (`/v1/soranet/privacy/{event,share}`) require the four exact `X-Iroha-Operator-*` signature headers bound to the active `NetworkId`, method, path, query, body, timestamp, and fresh nonce. A non-empty CIDR allow-list and the per-operator burst limits under `torii.soranet_privacy_ingest` remain secondary controls; bearer collector and generic API tokens are rejected.
 

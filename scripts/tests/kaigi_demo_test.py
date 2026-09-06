@@ -32,6 +32,17 @@ class KaigiDemoSafetyTest(unittest.TestCase):
         self.assertIn('--torii-url "$TORII_URL"', text)
         self.assertNotIn('curl -sf "$TORII_URL/status"', text)
 
+    def test_genesis_must_be_an_operator_materialized_manifest(self) -> None:
+        text = SCRIPT.read_text(encoding="utf-8")
+
+        self.assertIn('GENESIS_MANIFEST="${KAIGI_GENESIS_MANIFEST:-}"', text)
+        self.assertIn(
+            "KAIGI_GENESIS_MANIFEST must name an operator-materialized complete genesis manifest",
+            text,
+        )
+        self.assertIn('if [[ "$GENESIS_MANIFEST" == *.template.json ]]', text)
+        self.assertNotIn("defaults/nexus/" + "genesis.json", text)
+
     def test_background_liveness_uses_owned_job_and_ps_without_sigkill(self) -> None:
         text = SCRIPT.read_text(encoding="utf-8")
 

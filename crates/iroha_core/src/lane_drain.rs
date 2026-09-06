@@ -1,8 +1,8 @@
 //! Crash-safe local signing guard for automatic lane drain certificates.
-use crate::{lane_consensus::validate_lane_drain_certificate_body, sumeragi::consensus::Phase};
+use crate::lane_consensus::validate_lane_drain_certificate_body;
 use iroha_crypto::Hash;
 use iroha_data_model::{
-    block::consensus::LaneBlockVoteBodyV1,
+    block::consensus::{CertPhase, LaneBlockVoteBodyV1},
     merge::LaneDrainCertificateBodyV1,
     nexus::{DataSpaceId, LaneId},
 };
@@ -337,7 +337,7 @@ impl LaneDrainSigningGuard {
         &self,
         body: &LaneBlockVoteBodyV1,
     ) -> Result<(), LaneDrainSigningGuardError> {
-        if body.phase != Phase::Commit || body.lane_block_height == 0 {
+        if body.phase != CertPhase::Commit || body.lane_block_height == 0 {
             return Err(LaneDrainSigningGuardError::InvalidInput(
                 "expected a non-zero lane Commit vote".to_owned(),
             ));
@@ -684,7 +684,7 @@ mod tests {
     }
     fn commit_vote(height: u64, descriptor_byte: u8) -> LaneBlockVoteBodyV1 {
         LaneBlockVoteBodyV1 {
-            phase: Phase::Commit,
+            phase: CertPhase::Commit,
             lane_id: LaneId::new(3),
             dataspace_id: DataSpaceId::new(7),
             lane_incarnation: incarnation(),

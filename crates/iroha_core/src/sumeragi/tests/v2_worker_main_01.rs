@@ -2207,7 +2207,7 @@ fn routing_vote(service: &ProductionV2Services, view: u64, phase: wire::GlobalPh
             block_hash: HashOf::from_untyped_unchecked(Hash::new(b"routing vote block")),
             payload_hash: Hash::new(b"routing vote payload"),
         },
-        execution_commitment: wire::ExecutionCommitment::without_topups_or_merge_carrier(
+        execution_commitment: wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
             Hash::new(b"routing vote parent state"),
             Hash::new(b"routing vote post state"),
             Hash::new(b"routing vote ordinary writes"),
@@ -2444,6 +2444,8 @@ fn recovered_proposal_exact_output_is_atomic_retryable_and_store_bound() {
                     == wire::ConsensusMessageV2Payload::Proposal(proposal.clone())
         ));
         let manifest = payload.manifest();
+        let validated = wire::ValidatedPayloadManifest::new(&service.context, manifest.clone())
+            .expect("validate retained chunk manifest once");
         let signer = &service.context.roster[proposer].validator;
         let mut observed_chunk_indices = BTreeSet::new();
         for encoded in &chunks.messages {
@@ -2456,18 +2458,13 @@ fn recovered_proposal_exact_output_is_atomic_retryable_and_store_bound() {
             let wire::ConsensusMessageV2Payload::PayloadChunk(chunk) = &message.payload else {
                 panic!("the recovered Proposal chunk fanout mixed message classes")
             };
-            chunk
-                .validate(&service.context, manifest)
+            let signature_payload = chunk
+                .validate_for_authentication(&validated)
                 .expect("the retained chunk matches its canonical manifest");
             let signature = Signature::try_from_bytes(&chunk.signature)
                 .expect("the retained chunk signature is canonical");
             signature
-                .verify(
-                    signer.public_key(),
-                    &chunk
-                        .signature_preimage(&service.context, manifest)
-                        .expect("the retained chunk has a canonical signature preimage"),
-                )
+                .verify(signer.public_key(), &signature_payload.signature_preimage())
                 .expect("the retained chunk is signed by the recovered proposer");
             assert!(observed_chunk_indices.insert(chunk.index));
         }
@@ -2640,6 +2637,66 @@ fn same_round_proposal_retransmission_expands_chunks_to_set_b_and_all_voters() {
         expected_all
     );
 }
+
+#[test]
+fn proposal_retransmission_reuses_retained_preencoded_chunk_arcs() {
+    let (mut service, keys) = fixture_with_block_payload();
+    let (_, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
+    set_local_validator(&mut service, &keys, proposal.proposer);
+    let manifest_hash = HashOf::new(payload.manifest());
+    service
+        .register_outbound_payload(service.active_tag, payload)
+        .expect("retain preencoded proposal chunks");
+    let retained = service
+        .outbound_chunks
+        .get(&manifest_hash)
+        .expect("registered payload owns its exact manifest")
+        .messages
+        .iter()
+        .map(|message| {
+            let NetworkMessage::SumeragiBlock(envelope) = message else {
+                panic!("retained payload chunk changed network lane")
+            };
+            assert!(envelope.as_ref().encoded_len().is_some());
+            Arc::clone(envelope)
+        })
+        .collect::<Vec<_>>();
+    let observed = Arc::new(Mutex::new(Vec::<Arc<BlockMessageWire>>::new()));
+    let observed_for_hook = Arc::clone(&observed);
+    service.set_exact_output_admission_hook(move |post, ticket| {
+        assert!(ticket.is_none());
+        let NetworkMessage::SumeragiBlock(envelope) = &post.data else {
+            panic!("proposal fanout changed network lane")
+        };
+        if matches!(
+            envelope.as_message(),
+            BlockMessage::V2(message)
+                if matches!(&message.payload, wire::ConsensusMessageV2Payload::PayloadChunk(_))
+        ) {
+            observed_for_hook
+                .lock()
+                .expect("record routed chunk envelope")
+                .push(Arc::clone(envelope));
+        }
+        Ok(())
+    });
+    let message =
+        wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Proposal(proposal));
+    service
+        .broadcast_consensus(message.clone())
+        .expect("broadcast first proposal occurrence");
+    service
+        .broadcast_consensus(message)
+        .expect("broadcast proposal fallback occurrence");
+
+    let observed = observed.lock().expect("inspect routed chunk envelopes");
+    assert!(observed.len() > retained.len());
+    assert!(observed.iter().all(|routed| {
+        routed.as_ref().encoded_len().is_some()
+            && retained.iter().any(|cached| Arc::ptr_eq(cached, routed))
+    }));
+}
+
 #[test]
 fn proposal_broadcast_reports_source_retained_until_corridor_acceptance() {
     let (mut service, keys) = fixture_with_block_payload();
@@ -2875,11 +2932,6 @@ fn certified_view_transition_resets_fast_path_before_new_set_a_fanout() {
         BTreeSet::from([proposal.round])
     );
 }
-fn install_temporary_chunk_root(service: &mut ProductionV2Services) -> TempDir {
-    let directory = TempDir::new().expect("temporary chunk root");
-    service.chunk_root = directory.path().to_path_buf();
-    directory
-}
 fn certified_fetch_task(
     service: &ProductionV2Services,
     id: u64,
@@ -2893,7 +2945,7 @@ fn certified_fetch_task(
         proposal_round: round,
         phase: wire::GlobalPhase::Prepare,
         subject,
-        execution_commitment: wire::ExecutionCommitment::without_topups_or_merge_carrier(
+        execution_commitment: wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
             Hash::new(b"fetch fixture parent state"),
             Hash::new(b"fetch fixture post state"),
             Hash::new(b"fetch fixture writes"),
@@ -4618,6 +4670,98 @@ fn replayed_proposal_signature_restores_exact_durable_payload() {
     assert_eq!(work_id, expected_work_id);
     assert!(!signature.is_empty());
     assert_eq!(restored, payload);
+}
+
+#[test]
+fn zero_top_up_epoch_boundary_commit_signs_next_pasta_roster() {
+    let (service, keys) = fixture();
+    let mut context = service.context.clone();
+    context.epoch_end_height = context.height;
+    let next_mint_roster = fixture_kagemusha_mint_finality_roster(
+        context.network_id,
+        context.epoch + 1,
+        &context.roster,
+        0xC0,
+    );
+    let next_mint_id = next_mint_roster
+        .finality_epoch_id()
+        .expect("derive next mint-finality roster ID");
+    context.next_epoch_snapshot = Some(wire::finality::FinalizedNextEpochSnapshot {
+        epoch: context.epoch + 1,
+        kagemusha_mint_finality_epoch_id: next_mint_id,
+        kagemusha_mint_finality_epoch_roster: next_mint_roster,
+        epoch_end_height: context.height + 8,
+        mode: context.mode,
+        roster: context.roster.clone(),
+        validator_set_pops: keys
+            .iter()
+            .map(|key| {
+                iroha_crypto::bls_normal_pop_prove(key.private_key())
+                    .expect("derive fixture BLS proof of possession")
+            })
+            .collect(),
+        quorum: context.quorum,
+        leader_seed: [0xC7; 32],
+    });
+    context.validate().expect("valid boundary context");
+    let round = wire::ConsensusRound {
+        context_id: context.id(),
+        height: context.height,
+        view: 0,
+    };
+    let subject = wire::BlockSubject {
+        parent_block_hash: None,
+        block_hash: HashOf::from_untyped_unchecked(Hash::new(b"boundary block")),
+        payload_hash: Hash::new(b"boundary payload"),
+    };
+    let ordinary_writes_root = Hash::new(b"boundary ordinary writes");
+    let execution_commitment = wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+        Hash::new(b"boundary parent state"),
+        ordinary_writes_root,
+        ordinary_writes_root,
+        1,
+        Hash::new(b"boundary executed block"),
+    );
+    let vote = wire::Vote {
+        round,
+        proposal_round: round,
+        phase: wire::GlobalPhase::Commit,
+        subject,
+        execution_commitment,
+        signer: 0,
+        signature: Vec::new(),
+    };
+    let authority =
+        crate::zk::kagemusha_v1_recursion::KagemushaMintFinalityLocalAuthorityV1::new(
+            std::sync::Arc::new(context.kagemusha_mint_finality_epoch_roster.clone()),
+            zeroize::Zeroizing::new([0xA0; 32]),
+            0,
+        )
+        .expect("bind fixture Pasta signing authority");
+    let signature = sign_consensus_request_with_kagemusha_authority(
+        &context,
+        &keys[0],
+        &super::super::v2::SignRequest::Vote(vote.clone()),
+        &vote.signature_preimage(),
+        Some(&authority),
+    )
+    .expect("sign boundary Commit vote");
+    let parts = wire::decode_kagemusha_consensus_signature_envelope_v1(&signature)
+        .expect("decode signature framing")
+        .expect("boundary vote carries an Kagemusha envelope");
+    let share = crate::zk::kagemusha_v1_recursion::decode_kagemusha_mint_finality_seal_share_v1(
+        parts.auxiliary_payload,
+    )
+    .expect("decode boundary seal share");
+    assert_eq!(share.message.kagemusha_top_up_count, 0);
+    assert_eq!(share.message.next_finality_epoch_id, Some(next_mint_id));
+    crate::zk::kagemusha_v1_recursion::verify_kagemusha_mint_finality_seal_share_v1(
+        &context.kagemusha_mint_finality_epoch_roster,
+        &context,
+        &vote,
+        &share,
+    )
+    .expect("old epoch authorizes the next Pasta roster");
 }
 include!("v2_worker_nonzero_view_restart.rs");
 #[test]

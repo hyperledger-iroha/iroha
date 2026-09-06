@@ -6,6 +6,8 @@ mod bls_batch;
 mod bls_keys_match;
 #[path = "../check_pop.rs"]
 mod check_pop;
+#[path = "../confidential_discard_zeroize.rs"]
+mod confidential_discard_zeroize;
 #[path = "../confidential_keyset_vectors.rs"]
 mod confidential_keyset_vectors;
 #[path = "../confidential_vectors.rs"]
@@ -64,3 +66,12 @@ mod sm_cli_matrix;
 mod sm_openssl_smoke;
 #[path = "../streaming_handshake.rs"]
 mod streaming_handshake;
+
+#[path = "../schema_identity.rs"]
+mod schema_identity;
+
+#[path = "../merkle_schema_identity.rs"]
+mod merkle_schema_identity;
+
+#[path = "../key_wire_schema_identity.rs"]
+mod key_wire_schema_identity;

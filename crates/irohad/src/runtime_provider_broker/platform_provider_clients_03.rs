@@ -159,11 +159,15 @@ impl crate::sorafs_provider_ingest_runtime::ProviderIngestGovernedSignerResolver
     > {
         let resolver = self.clone();
         Box::pin(async move {
-            tokio::task::spawn_blocking(move || resolver.resolve_blocking(context))
-                .await
-                .unwrap_or(Err(
-                    sorafs_node::ProviderIngestCompletionSignerResolverErrorV1::Unavailable,
-                ))
+            crate::panic_recovery::join_recoverable(
+                crate::panic_recovery::spawn_blocking_recoverable(move || {
+                    resolver.resolve_blocking(context)
+                }),
+            )
+            .await
+            .unwrap_or(Err(
+                sorafs_node::ProviderIngestCompletionSignerResolverErrorV1::Unavailable,
+            ))
         })
     }
 }
@@ -314,11 +318,15 @@ impl sorafs_node::ProviderIngestCompletionSignerV1 for ProviderIngestBrokerCompl
     > {
         let signer = self.clone();
         Box::pin(async move {
-            tokio::task::spawn_blocking(move || signer.sign_blocking(&payload))
-                .await
-                .unwrap_or(Err(
-                    sorafs_node::ProviderIngestCompletionSignerErrorV1::Unavailable,
-                ))
+            crate::panic_recovery::join_recoverable(
+                crate::panic_recovery::spawn_blocking_recoverable(move || {
+                    signer.sign_blocking(&payload)
+                }),
+            )
+            .await
+            .unwrap_or(Err(
+                sorafs_node::ProviderIngestCompletionSignerErrorV1::Unavailable,
+            ))
         })
     }
 }

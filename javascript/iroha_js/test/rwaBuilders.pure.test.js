@@ -18,11 +18,9 @@ const {
   buildRemoveRwaKeyValueInstruction,
 } = await import("../src/instructionBuilders.js");
 const {
-  buildRegisterRwaTransaction,
-  buildTransferRwaTransaction,
-  buildSetRwaKeyValueTransaction,
-  buildRemoveRwaKeyValueTransaction,
+  _createTransactionApi,
 } = await import("../src/transaction.js");
+const { createNativeRuntime } = await import("../src/nativeRuntime.js");
 
 const AUTHORITY = AccountAddress.fromAccount({ publicKey: Buffer.from(
     "ce7fa46c9dce7ea4b125e2e36bdb63ea33073e7590ac92816ae1e861b7048b03",
@@ -178,19 +176,9 @@ test("RWA instruction builders normalize canonical payloads", () => {
 
 test("RWA transaction builders serialize canonical instructions through injected native binding", () => {
   const captures = [];
-  globalThis.__IROHA_NATIVE_BINDING__ = {
-    buildTransaction(
-      networkId,
-      authority,
-      instructions,
-      feePaymentJson,
-      metadataPayload,
-      creationTimeMs,
-      ttlMs,
-      nonce,
-      secret,
-    ) {
-      captures.push({
+  const transaction = _createTransactionApi(
+    createNativeRuntime({
+      buildTransaction(
         networkId,
         authority,
         instructions,
@@ -200,70 +188,78 @@ test("RWA transaction builders serialize canonical instructions through injected
         ttlMs,
         nonce,
         secret,
-      });
-      return {
-        signed_transaction: Buffer.from([0x01, 0x02, 0x03]),
-        hash: Buffer.alloc(32, 0xaa),
-      };
-    },
-  };
-
-  try {
-    const register = buildRegisterRwaTransaction({
-      networkId: NETWORK_ID,
-      authority: AUTHORITY,
-      feePayment: AUTHORITY_FEE_PAYMENT,
-      rwa: {
-        domain: "commodities",
-        quantity: "10.5",
-        spec: { scale: 1 },
-        primaryReference: "vault-cert-001",
+      ) {
+        captures.push({
+          networkId,
+          authority,
+          instructions,
+          feePaymentJson,
+          metadataPayload,
+          creationTimeMs,
+          ttlMs,
+          nonce,
+          secret,
+        });
+        return {
+          signed_transaction: Buffer.from([0x01, 0x02, 0x03]),
+          hash: Buffer.alloc(32, 0xaa),
+        };
       },
-      metadata: { tag: "register" },
-      creationTimeMs: 10,
-      ttlMs: 20,
-      nonce: 5,
-      privateKey: PRIVATE_KEY,
-    });
-    const transfer = buildTransferRwaTransaction({
-      networkId: NETWORK_ID,
-      authority: AUTHORITY,
-      feePayment: AUTHORITY_FEE_PAYMENT,
-      sourceAccountId: AUTHORITY,
-      rwaId: RWA_ID_HASH_UPPER,
-      quantity: "2.5",
-      destinationAccountId: DESTINATION,
-      privateKey: PRIVATE_KEY,
-    });
-    const setMetadata = buildSetRwaKeyValueTransaction({
-      networkId: NETWORK_ID,
-      authority: AUTHORITY,
-      feePayment: AUTHORITY_FEE_PAYMENT,
-      rwaId: RWA_ID,
-      key: "grade",
-      value: { score: BigInt(9) },
-      privateKey: PRIVATE_KEY,
-    });
-    const removeMetadata = buildRemoveRwaKeyValueTransaction({
-      networkId: NETWORK_ID,
-      authority: AUTHORITY,
-      feePayment: AUTHORITY_FEE_PAYMENT,
-      rwaId: RWA_ID,
-      key: "grade",
-      privateKey: PRIVATE_KEY,
-    });
+    }),
+  );
 
-    assert.equal(register.hash.length, 32);
-    assert.equal(transfer.hash.length, 32);
-    assert.equal(setMetadata.hash.length, 32);
-    assert.equal(removeMetadata.hash.length, 32);
-    assert.deepEqual(register.signedTransaction, Buffer.from([0x01, 0x02, 0x03]));
-    assert.deepEqual(transfer.signedTransaction, Buffer.from([0x01, 0x02, 0x03]));
-    assert.deepEqual(setMetadata.signedTransaction, Buffer.from([0x01, 0x02, 0x03]));
-    assert.deepEqual(removeMetadata.signedTransaction, Buffer.from([0x01, 0x02, 0x03]));
-  } finally {
-    delete globalThis.__IROHA_NATIVE_BINDING__;
-  }
+  const register = transaction.buildRegisterRwaTransaction({
+    networkId: NETWORK_ID,
+    authority: AUTHORITY,
+    feePayment: AUTHORITY_FEE_PAYMENT,
+    rwa: {
+      domain: "commodities",
+      quantity: "10.5",
+      spec: { scale: 1 },
+      primaryReference: "vault-cert-001",
+    },
+    metadata: { tag: "register" },
+    creationTimeMs: 10,
+    ttlMs: 20,
+    nonce: 5,
+    privateKey: PRIVATE_KEY,
+  });
+  const transfer = transaction.buildTransferRwaTransaction({
+    networkId: NETWORK_ID,
+    authority: AUTHORITY,
+    feePayment: AUTHORITY_FEE_PAYMENT,
+    sourceAccountId: AUTHORITY,
+    rwaId: RWA_ID_HASH_UPPER,
+    quantity: "2.5",
+    destinationAccountId: DESTINATION,
+    privateKey: PRIVATE_KEY,
+  });
+  const setMetadata = transaction.buildSetRwaKeyValueTransaction({
+    networkId: NETWORK_ID,
+    authority: AUTHORITY,
+    feePayment: AUTHORITY_FEE_PAYMENT,
+    rwaId: RWA_ID,
+    key: "grade",
+    value: { score: BigInt(9) },
+    privateKey: PRIVATE_KEY,
+  });
+  const removeMetadata = transaction.buildRemoveRwaKeyValueTransaction({
+    networkId: NETWORK_ID,
+    authority: AUTHORITY,
+    feePayment: AUTHORITY_FEE_PAYMENT,
+    rwaId: RWA_ID,
+    key: "grade",
+    privateKey: PRIVATE_KEY,
+  });
+
+  assert.equal(register.hash.length, 32);
+  assert.equal(transfer.hash.length, 32);
+  assert.equal(setMetadata.hash.length, 32);
+  assert.equal(removeMetadata.hash.length, 32);
+  assert.deepEqual(register.signedTransaction, Buffer.from([0x01, 0x02, 0x03]));
+  assert.deepEqual(transfer.signedTransaction, Buffer.from([0x01, 0x02, 0x03]));
+  assert.deepEqual(setMetadata.signedTransaction, Buffer.from([0x01, 0x02, 0x03]));
+  assert.deepEqual(removeMetadata.signedTransaction, Buffer.from([0x01, 0x02, 0x03]));
 
   assert.equal(captures.length, 4);
   assert.deepEqual(Buffer.from(captures[0].networkId), NETWORK_ID_BYTES);

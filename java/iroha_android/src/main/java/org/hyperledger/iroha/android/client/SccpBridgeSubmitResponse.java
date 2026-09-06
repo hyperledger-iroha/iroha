@@ -14,7 +14,7 @@ import org.hyperledger.iroha.android.sccp.SccpNetworkV1;
 import org.hyperledger.iroha.android.sccp.SccpV1;
 
 /** Unified strict detached-signing response returned by both SCCP submit endpoints. */
-public final class SccpBridgeSubmitResponse {
+final class SccpBridgeSubmitResponse {
   private static final Pattern HASH = Pattern.compile("[0-9a-f]{64}");
   private static final Set<String> CLOSED_BACKENDS =
       Set.of(

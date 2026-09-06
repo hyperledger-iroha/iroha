@@ -1,6 +1,6 @@
 import { Buffer } from "buffer";
-import { createHash } from "./cryptoHash.js";
 import { blake2b256 } from "./blake2b.js";
+import { KAIGI_MAX_PARTICIPANTS_V1 } from "./commonLiterals.js";
 import {
   noritoEncodeInstruction,
   validateSorafsReplicationOrderPayloadV1,
@@ -10,7 +10,6 @@ import {
   ensureCanonicalAccountId,
   normalizeAccountAliasLiteral,
   normalizeAccountId,
-  normalizeAccountIdOrAliasLiteral,
   normalizeAssetDefinitionId,
   normalizeAssetId,
   normalizeAssetHoldingId,
@@ -57,7 +56,6 @@ import {
   assertAllowedFields,
   assertExactNonBlankString,
   assertExactFields,
-  assertNonBlankString,
   assertString,
   assertWellFormedUtf16,
   canonicalHashLiteral,
@@ -65,7 +63,6 @@ import {
   normalizeGovernanceSelectorV1,
   parseHashLiteral,
   parseHashLiteralToBuffer,
-  requireExactLowerHex32String,
 } from "./instructionBuilderPrimitives.js";
 
 const MAX_SAFE_INTEGER = Number.MAX_SAFE_INTEGER;
@@ -100,7 +97,7 @@ export const CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1 = 4_096;
 /** Maximum UTF-8 bytes accepted for an asset-transfer availability reason. */
 export const ASSET_TRANSFER_AVAILABILITY_MAX_REASON_BYTES_V1 = 512;
 /** Maximum concurrent participants excluding the host in a first-release Kaigi call. */
-export const KAIGI_MAX_PARTICIPANTS_V1 = 4_096;
+export { KAIGI_MAX_PARTICIPANTS_V1 };
 /** Maximum relay hops accepted by a first-release Kaigi manifest. */
 export const KAIGI_RELAY_MANIFEST_MAX_HOPS_V1 = 8;
 /** Maximum decoded bytes accepted for a first-release Kaigi HPKE public key. */
@@ -2599,7 +2596,7 @@ function normalizeManifestSignatureLiteral(value, name) {
   if (Buffer.isBuffer(value) || value instanceof Uint8Array) {
     body = Buffer.from(value).toString("hex");
   } else if (Array.isArray(value)) {
-    body = normalizeBytesLikeToBuffer(value, name).toString("hex");
+    body = Buffer.from(normalizeByteArray(value, name)).toString("hex");
   } else {
     const literal = assertString(value, name).trim();
     body =
@@ -3329,18 +3326,6 @@ function normalizeDirection(value, name) {
   );
 }
 
-function normalizeAccountIds(values, name, { allowEmpty = false } = {}) {
-  if (!Array.isArray(values) || (values.length === 0 && !allowEmpty)) {
-    fail(ValidationErrorCode.INVALID_OBJECT, `${name} must be a non-empty array`, name);
-  }
-  if (values.length === 0) {
-    return [];
-  }
-  return values.map((account, index) =>
-    normalizeAccountId(account, `${name}[${index}]`),
-  );
-}
-
 function normalizeSorafsReplicationIdentifier(value, name) {
   if (typeof value !== "string" || !/^[0-9a-f]{64}$/u.test(value)) {
     fail(
@@ -3756,6 +3741,178 @@ export function buildSetAssetTransferAvailabilityInstruction(options) {
         "setAssetTransferAvailability.outgoing",
       ),
       reason,
+    },
+  };
+}
+
+/**
+ * Build the canonical outbound-transfer blacklist instruction.
+ *
+ * @param {{accountId: string, assetDefinitionId: string, blacklisted: boolean}} options
+ * @returns {{SetAssetTransferBlacklist: {
+ *   account_id: string,
+ *   asset_definition_id: string,
+ *   blacklisted: boolean,
+ * }}}
+ */
+export function buildSetAssetTransferBlacklistInstruction(options) {
+  const source = assertPlainObject(options, "setAssetTransferBlacklist");
+  assertAllowedFields(
+    source,
+    new Set(["accountId", "assetDefinitionId", "blacklisted"]),
+    "setAssetTransferBlacklist",
+  );
+  const accountLiteral = assertExactNonBlankString(
+    source.accountId,
+    "setAssetTransferBlacklist.accountId",
+  );
+  const assetDefinitionLiteral = assertExactNonBlankString(
+    source.assetDefinitionId,
+    "setAssetTransferBlacklist.assetDefinitionId",
+  );
+  if (typeof source.blacklisted !== "boolean") {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      "setAssetTransferBlacklist.blacklisted must be a boolean",
+      "setAssetTransferBlacklist.blacklisted",
+    );
+  }
+  return {
+    SetAssetTransferBlacklist: {
+      account_id: ensureCanonicalAccountId(
+        accountLiteral,
+        "setAssetTransferBlacklist.accountId",
+      ),
+      asset_definition_id: normalizeAssetDefinitionId(
+        assetDefinitionLiteral,
+        "setAssetTransferBlacklist.assetDefinitionId",
+      ),
+      blacklisted: source.blacklisted,
+    },
+  };
+}
+
+const ASSET_TRANSFER_CONTROL_WINDOW = Object.freeze({
+  DAY: Object.freeze({ wire: "Day", rank: 0 }),
+  WEEK: Object.freeze({ wire: "Week", rank: 1 }),
+  MONTH: Object.freeze({ wire: "Month", rank: 2 }),
+});
+
+function normalizeAssetTransferControlWindow(value, name) {
+  if (
+    typeof value !== "string" ||
+    !Object.prototype.hasOwnProperty.call(ASSET_TRANSFER_CONTROL_WINDOW, value)
+  ) {
+    fail(
+      ValidationErrorCode.INVALID_STRING,
+      `${name} must be exactly "DAY", "WEEK", or "MONTH"`,
+      name,
+    );
+  }
+  return ASSET_TRANSFER_CONTROL_WINDOW[value];
+}
+
+/**
+ * Build the canonical complete replacement for calendar-window outbound caps.
+ *
+ * Limits are unique and emitted in DAY/WEEK/MONTH order. A null `capAmount`
+ * clears that window, while an empty list clears every transfer cap.
+ *
+ * @param {{
+ *   accountId: string,
+ *   assetDefinitionId: string,
+ *   limits: ReadonlyArray<{
+ *     window: "DAY"|"WEEK"|"MONTH",
+ *     capAmount: KotodamaQuantity|string|bigint|null,
+ *   }>,
+ * }} options
+ * @returns {{SetAssetTransferControl: {
+ *   account_id: string,
+ *   asset_definition_id: string,
+ *   limits: Array<{
+ *     window: "Day"|"Week"|"Month",
+ *     cap_amount: string|null,
+ *   }>,
+ * }}}
+ */
+export function buildSetAssetTransferControlInstruction(options) {
+  const source = assertPlainObject(options, "setAssetTransferControl");
+  assertAllowedFields(
+    source,
+    new Set(["accountId", "assetDefinitionId", "limits"]),
+    "setAssetTransferControl",
+  );
+  const accountLiteral = assertExactNonBlankString(
+    source.accountId,
+    "setAssetTransferControl.accountId",
+  );
+  const assetDefinitionLiteral = assertExactNonBlankString(
+    source.assetDefinitionId,
+    "setAssetTransferControl.assetDefinitionId",
+  );
+  if (!Array.isArray(source.limits)) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      "setAssetTransferControl.limits must be an array",
+      "setAssetTransferControl.limits",
+    );
+  }
+  for (let index = 0; index < source.limits.length; index += 1) {
+    if (!Object.prototype.hasOwnProperty.call(source.limits, index)) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        "setAssetTransferControl.limits must not contain holes",
+        "setAssetTransferControl.limits",
+      );
+    }
+  }
+  const windows = new Set();
+  const limits = source.limits.map((limit, index) => {
+    const name = `setAssetTransferControl.limits[${index}]`;
+    const item = assertPlainObject(limit, name);
+    assertAllowedFields(item, new Set(["window", "capAmount"]), name);
+    if (!Object.prototype.hasOwnProperty.call(item, "capAmount")) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${name}.capAmount is required; use null to clear the window`,
+        `${name}.capAmount`,
+      );
+    }
+    const window = normalizeAssetTransferControlWindow(
+      item.window,
+      `${name}.window`,
+    );
+    if (windows.has(window.wire)) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${name}.window duplicates ${item.window}`,
+        `${name}.window`,
+      );
+    }
+    windows.add(window.wire);
+    return {
+      rank: window.rank,
+      value: {
+        window: window.wire,
+        cap_amount:
+          item.capAmount === null
+            ? null
+            : asQuantity(item.capAmount, `${name}.capAmount`),
+      },
+    };
+  });
+  limits.sort((left, right) => left.rank - right.rank);
+  return {
+    SetAssetTransferControl: {
+      account_id: ensureCanonicalAccountId(
+        accountLiteral,
+        "setAssetTransferControl.accountId",
+      ),
+      asset_definition_id: normalizeAssetDefinitionId(
+        assetDefinitionLiteral,
+        "setAssetTransferControl.assetDefinitionId",
+      ),
+      limits: limits.map(({ value }) => value),
     },
   };
 }
@@ -5466,29 +5623,6 @@ export function buildCancelTwitterEscrowInstruction(options) {
 }
 
 /**
- * Build a `PersistCouncilForEpoch` instruction payload.
- * @param {object} options
- * @returns {{PersistCouncilForEpoch: object}}
- */
-export function buildPersistCouncilForEpochInstruction(options) {
-  const source = assertPlainObject(options, "persistCouncilForEpoch");
-  return {
-    PersistCouncilForEpoch: {
-      epoch: asNonNegativeInteger(source.epoch, "epoch"),
-      members: normalizeAccountIds(
-        source.members ?? source.council,
-        "members",
-      ),
-      alternates: normalizeAccountIds(
-        source.alternates ?? [],
-        "alternates",
-        { allowEmpty: true },
-      ),
-    },
-  };
-}
-
-/**
  * Build a `SubmitAgendaProposal` instruction payload.
  * @param {{ proposal: object }} options
  * @returns {{SubmitAgendaProposal: { proposal: object }}}
@@ -6015,13 +6149,3 @@ export function buildFinalizeElectionInstruction(options) {
 }
 
 export { normalizeAccountId, normalizeAssetId, normalizeAssetHoldingId, normalizeRwaId };
-
-/**
- * Helper that encodes a builder result to ensure structural validity.
- * Mostly used by tests; exposed for convenience.
- * @param {object} instruction
- * @returns {Buffer}
- */
-export function encodeInstruction(instruction) {
-  return noritoEncodeInstruction(instruction);
-}

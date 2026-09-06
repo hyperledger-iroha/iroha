@@ -1,7 +1,5 @@
 using System.Buffers.Binary;
 using System.Security.Cryptography;
-using System.Text;
-using Hyperledger.Iroha.Norito;
 
 namespace Hyperledger.Iroha.Sccp;
 
@@ -68,7 +66,7 @@ public sealed class SccpReplayPrincipalV1
 
     internal byte[] Bytes { get; }
 
-    /// <summary>Construct from exact canonical Norito <c>AccountId</c> bytes.</summary>
+    /// <summary>Construct from exact canonical compact-Norito <c>AccountId</c> bytes.</summary>
     public static SccpReplayPrincipalV1 SoraAccount(ReadOnlySpan<byte> canonicalAccountId) =>
         new(0, SccpReplayV1.CanonicalSoraAccountId(canonicalAccountId));
 
@@ -140,7 +138,6 @@ public static class SccpReplayV1
     public const int Depth = 248;
 
     private static readonly byte[] Magic = "SCCP-REPLAY-SMT-V1"u8.ToArray();
-    private static readonly UTF8Encoding StrictUtf8 = new(false, true);
 
     /// <summary>Hash one complete production replay domain.</summary>
     public static byte[] DomainHash(
@@ -194,10 +191,14 @@ public static class SccpReplayV1
         ReadOnlySpan<byte> auxiliaryIdentitySha256)
     {
         ArgumentNullException.ThrowIfNull(principal);
-        if (!Enum.IsDefined(typeof(SccpReplayBoundaryV1), operation)
-            || amountScale9 == 0)
+        if (!Enum.IsDefined(typeof(SccpReplayBoundaryV1), operation))
         {
-            throw new ArgumentException("Replay operation and amount must be canonical.");
+            throw new ArgumentOutOfRangeException(
+                nameof(operation), operation, "Unknown SCCP replay boundary.");
+        }
+        if (amountScale9 == 0)
+        {
+            throw new ArgumentException("Replay amount must be a positive u128.", nameof(amountScale9));
         }
         if (principal.Kind != PrincipalKindForBoundary(operation))
         {
@@ -302,6 +303,28 @@ public static class SccpReplayV1
         return reconstructed;
     }
 
+    internal static byte[] CanonicalSoraAccountId(ReadOnlySpan<byte> canonicalAccountId)
+    {
+        if (canonicalAccountId.IsEmpty || canonicalAccountId.Length > ushort.MaxValue)
+        {
+            throw new ArgumentException(
+                "SORA replay principal must be canonical nonempty u16-sized AccountId bytes.",
+                nameof(canonicalAccountId));
+        }
+
+        try
+        {
+            return SccpSubmitValidation.RequireCanonicalAccountIdPayload(canonicalAccountId);
+        }
+        catch (Exception error) when (error is ArgumentException or FormatException or OverflowException)
+        {
+            throw new ArgumentException(
+                "SORA replay principal is not a canonical compact-Norito AccountId.",
+                nameof(canonicalAccountId),
+                error);
+        }
+    }
+
     internal static byte[] Exact(
         ReadOnlySpan<byte> value,
         int length,
@@ -333,238 +356,6 @@ public static class SccpReplayV1
         var result = new byte[sizeof(int)];
         BinaryPrimitives.WriteInt32BigEndian(result, value);
         return result;
-    }
-
-    internal static byte[] CanonicalSoraAccountId(ReadOnlySpan<byte> payload)
-    {
-        if (payload.IsEmpty || payload.Length > ushort.MaxValue)
-        {
-            throw new ArgumentException(
-                "SORA replay principal must be canonical nonempty AccountId bytes.");
-        }
-
-        var reader = new CanonicalNoritoReader(
-            payload,
-            "SORA replay principal",
-            nameof(payload));
-        var controllerTag = reader.ReadUInt32LittleEndian("controller");
-        var controllerPayload = reader.ReadField("controller_payload");
-        var canonicalController = controllerTag switch
-        {
-            0 => CanonicalSingleController(controllerPayload),
-            1 => CanonicalMultisigController(controllerPayload),
-            _ => throw new ArgumentException(
-                "SORA replay principal uses an unknown AccountId controller tag.",
-                nameof(payload)),
-        };
-        reader.RequireEnd();
-        var writer = new CanonicalNoritoWriter();
-        writer.WriteUInt32LittleEndian(controllerTag);
-        writer.WriteField(canonicalController);
-        var canonical = writer.ToArray();
-        if (!canonical.AsSpan().SequenceEqual(payload))
-        {
-            throw new ArgumentException(
-                "SORA replay principal is not the canonical AccountId encoding.");
-        }
-        return canonical;
-    }
-
-    private static byte[] CanonicalSingleController(ReadOnlySpan<byte> payload)
-    {
-        var reader = new CanonicalNoritoReader(
-            payload,
-            "SORA replay principal single-key controller",
-            nameof(payload));
-        var publicKey = ReadCanonicalCompactPublicKey(ref reader, "public_key");
-        reader.RequireEnd();
-        return publicKey.Encoded;
-    }
-
-    private static byte[] CanonicalMultisigController(ReadOnlySpan<byte> payload)
-    {
-        var reader = new CanonicalNoritoReader(
-            payload,
-            "SORA replay principal multisig controller",
-            nameof(payload));
-        var version = reader.ReadByte("version");
-        var threshold = BinaryPrimitives.ReadUInt16LittleEndian(
-            reader.ReadExact(sizeof(ushort), "threshold"));
-        var memberCount = reader.ReadSequenceLength("members");
-        if (version != 1 || threshold == 0 || memberCount is 0 or > ushort.MaxValue)
-        {
-            throw new ArgumentException(
-                "SORA replay principal multisig controller has an invalid version, threshold, or member count.",
-                nameof(payload));
-        }
-
-        uint totalWeight = 0;
-        byte[]? previousSortKey = null;
-        var canonicalMembers = new List<byte[]>(checked((int)memberCount));
-        for (var index = 0UL; index < memberCount; index++)
-        {
-            var memberPayload = reader.ReadField($"members[{index}]");
-            var memberReader = new CanonicalNoritoReader(
-                memberPayload,
-                $"SORA replay principal multisig member {index}",
-                nameof(payload));
-            var publicKey = ReadCanonicalCompactPublicKey(ref memberReader, "public_key");
-            var weight = BinaryPrimitives.ReadUInt16LittleEndian(
-                memberReader.ReadExact(sizeof(ushort), "weight"));
-            memberReader.RequireEnd();
-            var sortKey = CompactPublicKeySortKey(publicKey.Raw);
-            if (weight == 0
-                || previousSortKey is not null
-                    && previousSortKey.AsSpan().SequenceCompareTo(sortKey) >= 0)
-            {
-                throw new ArgumentException(
-                    "SORA replay principal multisig members must have nonzero weights and be unique and canonically sorted.",
-                    nameof(payload));
-            }
-
-            totalWeight = checked(totalWeight + weight);
-            previousSortKey = sortKey;
-            var canonicalMember = new CanonicalNoritoWriter();
-            canonicalMember.WriteBytes(publicKey.Encoded);
-            canonicalMember.WriteUInt16LittleEndian(weight);
-            canonicalMembers.Add(canonicalMember.ToArray());
-        }
-
-        reader.RequireEnd();
-        if (totalWeight < threshold)
-        {
-            throw new ArgumentException(
-                "SORA replay principal multisig threshold exceeds total member weight.",
-                nameof(payload));
-        }
-
-        var canonical = new CanonicalNoritoWriter();
-        canonical.WriteByte(version);
-        canonical.WriteUInt16LittleEndian(threshold);
-        canonical.WriteSequenceLength(memberCount);
-        foreach (var member in canonicalMembers)
-        {
-            canonical.WriteField(member);
-        }
-        return canonical.ToArray();
-    }
-
-    private static (byte[] Encoded, byte[] Raw) ReadCanonicalCompactPublicKey(
-        ref CanonicalNoritoReader reader,
-        string field)
-    {
-        var byteCount = reader.ReadSequenceLength($"{field}.bytes");
-        if (byteCount is 0 or > ushort.MaxValue)
-        {
-            throw new ArgumentException($"{field} length is invalid.", nameof(reader));
-        }
-
-        var raw = new byte[checked((int)byteCount)];
-        for (var index = 0; index < raw.Length; index++)
-        {
-            var element = reader.ReadField($"{field}[{index}]");
-            if (element.Length != 1)
-            {
-                throw new ArgumentException(
-                    $"{field} byte element is not canonically framed.",
-                    nameof(reader));
-            }
-            raw[index] = element[0];
-        }
-        ValidateCompactPublicKey(raw, field);
-
-        var canonical = new CanonicalNoritoWriter();
-        canonical.WriteSequenceLength(byteCount);
-        canonical.WriteByteElements(raw);
-        return (canonical.ToArray(), raw);
-    }
-
-    private static void ValidateCompactPublicKey(ReadOnlySpan<byte> compact, string field)
-    {
-        if (compact.Length < 2)
-        {
-            throw new ArgumentException($"{field} is not a compact public key.", nameof(compact));
-        }
-
-        var payload = compact[1..];
-        var expectedLength = compact[0] switch
-        {
-            0 => 32,
-            1 => 33,
-            2 => 48,
-            3 => 96,
-            4 => 1_952,
-            5 or 6 or 7 => 64,
-            8 or 9 => 128,
-            10 => Sm2PayloadLength(payload, field),
-            _ => throw new ArgumentException($"{field} uses an unknown public-key algorithm.", nameof(compact)),
-        };
-        if (payload.Length != expectedLength || IsZero(payload))
-        {
-            throw new ArgumentException($"{field} has an invalid public-key envelope.", nameof(compact));
-        }
-        if (compact[0] == 1 && payload[0] is not (0x02 or 0x03))
-        {
-            throw new ArgumentException($"{field} has an invalid secp256k1 public-key envelope.", nameof(compact));
-        }
-    }
-
-    private static int Sm2PayloadLength(ReadOnlySpan<byte> payload, string field)
-    {
-        const int lengthPrefixBytes = 2;
-        const int sec1Bytes = 65;
-        if (payload.Length < lengthPrefixBytes)
-        {
-            throw new ArgumentException($"{field} has a truncated SM2 public-key envelope.", nameof(payload));
-        }
-
-        var identifierLength = BinaryPrimitives.ReadUInt16BigEndian(payload[..lengthPrefixBytes]);
-        if (identifierLength > ushort.MaxValue / 8)
-        {
-            throw new ArgumentException($"{field} has an oversized SM2 identifier.", nameof(payload));
-        }
-        var sec1Offset = checked(lengthPrefixBytes + identifierLength);
-        var expectedLength = checked(sec1Offset + sec1Bytes);
-        if (payload.Length != expectedLength || payload[sec1Offset] != 0x04)
-        {
-            throw new ArgumentException($"{field} has an invalid SM2 public-key envelope.", nameof(payload));
-        }
-        try
-        {
-            _ = StrictUtf8.GetString(payload[lengthPrefixBytes..sec1Offset]);
-        }
-        catch (DecoderFallbackException error)
-        {
-            throw new ArgumentException($"{field} has a non-UTF-8 SM2 identifier.", nameof(payload), error);
-        }
-        return expectedLength;
-    }
-
-    private static byte[] CompactPublicKeySortKey(ReadOnlySpan<byte> compact)
-    {
-        var algorithm = compact[0] switch
-        {
-            0 => "ed25519",
-            1 => "secp256k1",
-            2 => "bls_normal",
-            3 => "bls_small",
-            4 => "ml-dsa",
-            5 => "gost3410-2012-256-paramset-a",
-            6 => "gost3410-2012-256-paramset-b",
-            7 => "gost3410-2012-256-paramset-c",
-            8 => "gost3410-2012-512-paramset-a",
-            9 => "gost3410-2012-512-paramset-b",
-            10 => "sm2",
-            _ => throw new ArgumentException("Public-key algorithm is unknown.", nameof(compact)),
-        };
-        var prefix = StrictUtf8.GetBytes(algorithm);
-        var sortKey = new byte[prefix.Length + compact.Length];
-        prefix.CopyTo(sortKey, 0);
-        // Rust orders members by (algorithm.as_static_str(), raw_payload).
-        // A zero separator preserves that tuple order because every algorithm
-        // label is nonempty ASCII and public-key payloads follow it verbatim.
-        compact[1..].CopyTo(sortKey.AsSpan(prefix.Length + 1));
-        return sortKey;
     }
 
     private static byte PrincipalKindForBoundary(SccpReplayBoundaryV1 boundary) => boundary switch

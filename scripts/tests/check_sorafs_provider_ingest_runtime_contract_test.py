@@ -1,8 +1,15 @@
 """Static contracts for the production SoraFS provider-ingest runtime."""
 
-import hashlib
-
 from pathlib import Path
+import re
+
+import pytest
+
+from scripts.tests.executor_visitor_delegation_source_test import (
+    mask_rust,
+    matching_delimiter,
+    preceding_attributes,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -32,9 +39,6 @@ QUARANTINE_RESTART_TEST = (
     / "sorafs_provider_ingest_runtime"
     / "tests"
     / "quarantine_restart.rs"
-)
-QUARANTINE_RESTART_SHA256 = (
-    "5c13efd115fce53b9ef2d4036a1a04394047ea4162d75b4f1252dd9cbc756fc7"
 )
 CONFIG_USER = (
     REPO_ROOT / "crates" / "iroha_config" / "src" / "parameters" / "user.rs"
@@ -67,18 +71,164 @@ def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def test_quarantine_restart_proof_is_frozen_connected_and_unignored() -> None:
-    raw = QUARANTINE_RESTART_TEST.read_bytes()
-    source = raw.decode("utf-8")
-    parent = _read(DAEMON_RUNTIME_TESTS)
-    name = "post_admission_quarantine_survives_restart_with_shared_chunks"
+def _code(source: str) -> str:
+    """Compare executable Rust structure independently of comments and formatting."""
 
-    assert hashlib.sha256(raw).hexdigest() == QUARANTINE_RESTART_SHA256
-    assert parent.count("mod quarantine_restart;") == 1
-    assert source.count("#[tokio::test]") == 1
-    assert source.count(f"async fn {name}()") == 1
-    assert "#[ignore]" not in source
-    assert "#[should_panic" not in source
+    return re.sub(r"\s+", "", mask_rust(source))
+
+
+def _body(source: str, declaration: str) -> str:
+    """Extract one required item body without matching comments or literals."""
+
+    masked = mask_rust(source)
+    matches = list(re.finditer(declaration + r"[^{};]*\{", masked))
+    assert len(matches) == 1, f"expected one canonical item: {declaration}"
+    opening = matches[0].end() - 1
+    closing = matching_delimiter(masked, opening)
+    return source[opening + 1 : closing]
+
+
+def _assert_quarantine_restart_contract(source: str, parent: str) -> None:
+    """Keep the actual restart phases and every safety assertion connected.
+
+    The former file hash pinned import order, explicit lifetimes, Copy-value
+    clones and a lint attribute. These checks instead describe the reviewed
+    sealed-outbox, no-refetch, dead-letter, second-reopen and shared-byte proof.
+    The native test must still execute to establish runtime behavior.
+    """
+
+    name = "post_admission_quarantine_survives_restart_with_shared_chunks"
+    assert _code(parent).count("modquarantine_restart;") == 1
+    module = re.search(r"\bmod\s+quarantine_restart\s*;", mask_rust(parent))
+    assert module is not None
+    assert not mask_rust(parent)[: module.start()].rstrip().endswith("]")
+    assert _code(source).count("#[tokio::test]") == 1
+    assert not re.search(r"#\s*\[\s*(?:ignore|should_panic|cfg|cfg_attr)\b", mask_rust(source))
+    declaration = re.search(rf"\basync\s+fn\s+{name}\s*\(\s*\)", mask_rust(source))
+    assert declaration is not None
+    attributes = "\n".join(preceding_attributes(source, declaration.start()))
+    assert "#[tokio::test]" in _code(attributes)
+    body = _body(source, rf"\basync\s+fn\s+{name}\s*\(\s*\)")
+    masked = mask_rust(body)
+    assert not re.search(r"\b(?:return|for|while|loop|fn|macro_rules)\b", masked)
+    # The only conditional is the exact final matches! guard inventoried below.
+    assert len(re.findall(r"\bif\b", masked)) == 1
+    expected_assertions = (
+        'assert_ne!(manifest.digest().expect("primary manifest digest"), '
+        'shared_manifest.digest().expect("shared manifest digest"));',
+        '''assert!(matches!(outbox.status(authorization.job_id())
+            .expect("pre-crash status").state,
+            ProviderIngestDeliveryStateV1::SourceClaimed { attempts: 0, .. }));''',
+        "assert_ne!(manifest_id, shared_manifest_id);",
+        'assert_eq!(node.stored_manifests().expect("stored manifests").len(), 2);',
+        "assert_eq!(fetch.calls.load(Ordering::SeqCst), 0);",
+        "assert_eq!(outcome.source_jobs_claimed, 1);",
+        "assert_eq!(outcome.manifests_stored, 0);",
+        '''assert_eq!(terminal.state, ProviderIngestDeliveryStateV1::DeadLetter {
+            attempts: 2,
+            reason: ProviderIngestDeadLetterReasonV1::StorageRejected,
+            last_failure_class: ProviderIngestFailureClassV1::StorageRejected,
+            observed_finalized_cursor: cursor,
+        });''',
+        '''assert_eq!(reopened.finalized_provider_ingest_status_page(None, 1)
+            .expect("reopened status page").rows[0].state, terminal.state);''',
+        '''assert_eq!(reopened.read_payload_range(&manifest_id, 0, payload.len())
+            .expect("read quarantined manifest"), payload);''',
+        '''assert_eq!(reopened.read_payload_range(&shared_manifest_id, 0, payload.len())
+            .expect("read shared manifest"), payload);''',
+        '''assert!(matches!(reopened.ingest_manifest(&manifest, &plan, &mut replay_reader),
+            Err(NodeStorageError::Storage(StorageError::ManifestExists {
+                manifest_id: existing,
+            })) if existing == manifest_id));''',
+    )
+    assertions = []
+    for match in re.finditer(r"\bassert(?:_eq|_ne)?!\s*\(", masked):
+        opening = match.end() - 1
+        closing = matching_delimiter(masked, opening, "(", ")")
+        assertions.append(body[match.start() : closing + 1] + ";")
+    # Rust permits a trailing macro-argument comma; it has no assertion semantics.
+    canonical_assertion = lambda value: re.sub(r",(?=[)}])", "", _code(value))
+    assert [canonical_assertion(value) for value in assertions] == [
+        canonical_assertion(value) for value in expected_assertions
+    ]
+    phases = (
+        "ProviderIngestOutbox::open_with_checkpoint_authority(",
+        ".enqueue(authorization.clone())",
+        ".claim_source(authorization.job_id(),",
+        "let (manifest_id, shared_manifest_id) = {",
+        "let node = NodeHandle::try_new(plain_config)",
+        ".ingest_manifest(&shared_manifest, &plan, &mut shared_reader)",
+        ".ingest_manifest(&manifest, &plan, &mut primary_reader)",
+        ".provider_ingest_outbox_policy(Some(outbox_policy))",
+        ".provider_ingest_checkpoint_provider(Some(CrashRestartCheckpointRuntimeV1::binding()))",
+        "NodeRuntimeDeps::default().with_provider_ingest_checkpoint_runtime(checkpoint.clone())",
+        "let node = NodeHandle::try_new_with_runtime_deps(configured.clone(), runtime_deps())",
+        ".build_provider_ingest_runtime(",
+        "Arc::clone(&fetch), storage, Arc::new(NeverBuildCompletionV1), "
+        "Arc::new(NeverResolveSignerV1), Arc::new(NeverIngressV1),",
+        ".checked_add(outbox_policy.source_lease_ttl_ms).and_then(|now| now.checked_add(1))",
+        "let outcome = runtime.tick().await",
+        "let terminal = node.finalized_provider_ingest_status_page(None, 1)",
+        "drop(runtime); drop(node);",
+        "let reopened = NodeHandle::try_new_with_runtime_deps(configured, runtime_deps())",
+    )
+    code = _code(body)
+    offset = 0
+    for phase in phases:
+        expected = _code(phase)
+        start = code.find(expected, offset)
+        assert start >= 0, f"missing or reordered restart phase: {phase}"
+        offset = start + len(expected)
+
+
+def test_quarantine_restart_proof_is_connected_and_preserves_recovery_invariants() -> None:
+    _assert_quarantine_restart_contract(
+        _read(QUARANTINE_RESTART_TEST), _read(DAEMON_RUNTIME_TESTS)
+    )
+
+
+@pytest.mark.parametrize(
+    "original,replacement",
+    (
+        ("#[tokio::test]", "#[tokio::test]\n#[ignore]"),
+        ("#[tokio::test]", "#[tokio::test]\n#[cfg(any())]"),
+        ("    let temp =", "    return;\n    let temp ="),
+        ("assert_eq!(fetch.calls.load(Ordering::SeqCst), 0);", ""),
+        ("assert_eq!(outcome.source_jobs_claimed, 1);", "assert_eq!(outcome.source_jobs_claimed, 0);"),
+        ("assert_eq!(outcome.manifests_stored, 0);", "assert_eq!(outcome.manifests_stored, 1);"),
+        ("reason: ProviderIngestDeadLetterReasonV1::StorageRejected,", "reason: changed_reason,"),
+        ("drop(runtime);\n    drop(node);", ""),
+        (".read_payload_range(&shared_manifest_id, 0, payload.len())", ".read_payload_range(&manifest_id, 0, payload.len())"),
+        ("if existing == manifest_id", "if existing != manifest_id"),
+        ("let outcome = runtime.tick().await", "let outcome = unrelated_runtime.tick().await"),
+        (".checked_add(outbox_policy.source_lease_ttl_ms)", ".checked_add(0)"),
+        (".provider_ingest_checkpoint_provider(Some(CrashRestartCheckpointRuntimeV1::binding()))", ""),
+    ),
+)
+def test_quarantine_contract_rejects_weakened_or_disconnected_proof(
+    original: str, replacement: str
+) -> None:
+    source = _read(QUARANTINE_RESTART_TEST)
+    assert original in source
+    with pytest.raises(AssertionError):
+        _assert_quarantine_restart_contract(
+            source.replace(original, replacement, 1), _read(DAEMON_RUNTIME_TESTS)
+        )
+
+
+def test_quarantine_contract_ignores_layout_but_rejects_comment_and_module_substitutes() -> None:
+    source = _read(QUARANTINE_RESTART_TEST)
+    parent = _read(DAEMON_RUNTIME_TESTS)
+    _assert_quarantine_restart_contract(source.replace("    ", "  "), parent)
+    assertion = "assert_eq!(fetch.calls.load(Ordering::SeqCst), 0);"
+    for replacement in (f"/* {assertion} */", f'let decoy = r#"{assertion}"#;'):
+        with pytest.raises(AssertionError):
+            _assert_quarantine_restart_contract(source.replace(assertion, replacement), parent)
+    for replacement in ("// mod quarantine_restart;", "#[cfg(any())]\nmod quarantine_restart;"):
+        with pytest.raises(AssertionError):
+            _assert_quarantine_restart_contract(
+                source, parent.replace("mod quarantine_restart;", replacement)
+            )
 
 
 def test_authenticated_source_pool_is_bounded_canonical_and_rechecked() -> None:
@@ -102,7 +252,76 @@ def test_authenticated_source_pool_is_bounded_canonical_and_rechecked() -> None:
 
     assert source.count("self.validate_source(source)") == 2
     assert source.count("source.source.check_readiness()") == 1
-    assert "never copied into pool metadata or durable state" in source
+    _assert_public_source_pool_metadata(source, _read(NODE_OUTBOX))
+
+
+def _assert_public_source_pool_metadata(source: str, outbox: str) -> None:
+    """Keep credential owners opaque and out of pool metadata and checkpoints."""
+
+    for name, fields in (
+        ("ProviderIngestAuthenticatedSourceBindingV1", '''
+            pub provider_id: [u8; 32], pub runtime_handle: String,
+            pub revision: u64, pub policy_digest: [u8; 32],
+        '''),
+        ("ProviderIngestAuthenticatedSourceRegistrationV1", '''
+            binding: ProviderIngestAuthenticatedSourceBindingV1,
+            source: Arc<dyn ProviderIngestAuthenticatedProviderSourceV1<Fetched = Fetched>>,
+        '''),
+        ("PinnedProviderIngestSourceV1", '''
+            binding: ProviderIngestAuthenticatedSourceBindingV1,
+            source: Arc<dyn ProviderIngestAuthenticatedProviderSourceV1<Fetched = Fetched>>,
+        '''),
+        ("ProviderIngestAuthenticatedSourcePoolV1", '''
+            runtime_handle: String,
+            qualification: ProviderIngestRuntimeProviderQualificationV1,
+            max_sources_per_fetch: usize, provider_ids: Vec<[u8; 32]>,
+            sources: BTreeMap<[u8; 32], PinnedProviderIngestSourceV1<Fetched>>,
+        '''),
+    ):
+        assert _code(_body(source, rf"\bstruct\s+{name}\b")) == _code(fields)
+    for name, fields in (
+        ("ProviderIngestAuthenticatedSourceRegistrationV1", ("binding",)),
+        ("ProviderIngestAuthenticatedSourcePoolV1", (
+            "runtime_handle", "qualification", "max_sources_per_fetch", "provider_ids"
+        )),
+    ):
+        debug = _body(source, rf"\bimpl<[^{{}}]*fmt::Debug\s+for\s+{name}<Fetched>")
+        expected = 'fn fmt(&self, formatter: &mut fmt::Formatter<\'_>) -> fmt::Result {'
+        expected += 'formatter.debug_struct("public type")'
+        expected += ''.join(f'.field("public field", &self.{field})' for field in fields)
+        expected += '.finish_non_exhaustive() }'
+        assert _code(debug) == _code(expected)
+    # The durable owner never holds or serializes the runtime credential adapters.
+    assert "ProviderIngestAuthenticatedSource" not in mask_rust(outbox)
+    assert "PinnedProviderIngestSourceV1" not in mask_rust(outbox)
+
+
+@pytest.mark.parametrize("mutation", ("binding_secret", "pool_secret", "debug_source", "durable_source"))
+def test_source_pool_metadata_contract_rejects_secret_or_adapter_leakage(mutation: str) -> None:
+    source = _read(NODE_RUNTIME)
+    outbox = _read(NODE_OUTBOX)
+    if mutation == "binding_secret":
+        source = source.replace(
+            "pub struct ProviderIngestAuthenticatedSourceBindingV1 {",
+            "pub struct ProviderIngestAuthenticatedSourceBindingV1 { pub credential: String,",
+        )
+    elif mutation == "pool_secret":
+        source = source.replace(
+            "pub struct ProviderIngestAuthenticatedSourcePoolV1<Fetched: Send + 'static> {",
+            "pub struct ProviderIngestAuthenticatedSourcePoolV1<Fetched: Send + 'static> { private_key: Vec<u8>,",
+        )
+    elif mutation == "debug_source":
+        source = source.replace(
+            '.field("provider_ids", &self.provider_ids)',
+            '.field("provider_ids", &self.provider_ids).field("source", &self.sources)',
+        )
+    else:
+        outbox = outbox.replace(
+            "struct ProviderIngestOutboxCheckpointV1 {",
+            "struct ProviderIngestOutboxCheckpointV1 { source: ProviderIngestAuthenticatedSourceBindingV1,",
+        )
+    with pytest.raises(AssertionError):
+        _assert_public_source_pool_metadata(source, outbox)
 
 
 def test_standard_daemon_pins_multi_provider_inventory_across_startup_and_ticks() -> None:

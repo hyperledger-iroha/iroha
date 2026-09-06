@@ -232,6 +232,14 @@ same decision. Unknown fields then use the same strict iterative subtree
 grammar, so an individually valid subtree cannot exceed the global limit by
 hiding beneath a typed outer object or array.
 
+JSON field dispatch uses one key hash implementation for compile-time constants,
+the scalar parser, and the tape parser. With `crc-key-hash`, the portable
+Castagnoli byte update and runtime-detected ARM CRC or x86 SSE4.2 update use
+the same accumulator convention and final mixing. Without that feature they
+all use FNV-1a. These hashes select JSON fields internally; they do not alter
+the serialized JSON or binary schema hashes. Key comparisons still guard
+against hash collisions.
+
 Typed JSON floating-point values must be finite. Norito rejects literals whose
 decimal exponent overflows `f64`; finite values are rendered with Ryu's
 locale-independent shortest-roundtrip representation, preserving their exact
@@ -336,6 +344,24 @@ and contract-call gas consume that shared limit, and fee settlement happens
 once for the transaction rather than once per item. Trigger actions may store
 the same `Batch` form. One trigger invocation executes the items atomically and
 shares its deterministic trigger gas budget across the complete sequence.
+
+## Merge-ledger historical authority catalog
+
+The current first-release merge-ledger entry layout is version 3. It contains
+an explicit `MergeLaneAuthorityCatalogV1` next to the complete `active_lanes`
+vector. The catalog encodes deduplicated ordered rosters (hash version, roster
+hash, validators) and one `u16` roster index for each active lane. Canonical
+first-use order, complete reference coverage, exact `3f+1` geometry with at
+least four BLS-normal validators in increasing canonical `PeerId` order,
+roster hashes, unique validators/rosters, and index bounds are validated before
+admission. The entry hash uses `iroha:merge:ledger-entry:v3\0`; the QC payload
+includes the entry version and complete catalog under `iroha:merge:qc:v3\0`.
+Previous development entry layouts are rejected without compatibility decoding.
+Prospective lane geometry reserves a full 12-MiB execution batch, a 1-MiB QC,
+and conservative canonical catalog/framing bytes within the 16-MiB full entry.
+Admission does not assume shared rosters; exact encoded-size checks still apply.
+See [`specs/merge_ledger.md`](specs/merge_ledger.md) for finalized carrier binding
+and the distinction between historical read authority and live write authority.
 
 ## Sumeragi v2 Consensus Evidence Layout
 
@@ -521,6 +547,23 @@ must expose deterministic charge points before each denominator-classification
 division, scale construction, quotient/remainder, and normalization division;
 an out-of-gas decision occurs at that charge point before the arithmetic work
 begins.
+
+## Native STARK field carriers
+
+Native STARK digest payloads contain exactly six canonical little-endian
+Goldilocks words (48 bytes). The ZK-ACE identity-commitment and replay-nullifier
+wrappers delegate to that payload codec without adding a struct-field prefix.
+Native STARK and FASTPQ Fp4 payloads contain exactly four canonical little-endian
+Goldilocks coefficients (32 bytes), in coefficient order. A coefficient greater
+than or equal to `2^64 - 2^32 + 1` is rejected rather than reduced at the wire
+boundary. Struct-framed field coefficients are not an alternate encoding.
+
+These are value payloads: the containing Norito archive still has its mandatory
+schema-bound header and normal enclosing field framing. Bounded slice decoders
+consume exactly 48 or 32 bytes; complete archive decoders additionally reject
+trailing bytes. These fixed carriers do not depend on ambient layout flags.
+FASTPQ ordering commitments and Fiat--Shamir initialization explicitly select
+the canonical V1 layout when encoding their structured metadata.
 
 ## Kotodama V1 Schema-Bound Aggregates
 

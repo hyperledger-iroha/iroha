@@ -1081,7 +1081,7 @@ fn evidence_capability_is_opaque_move_only_bounded_and_facaded() {
     assert!(shape.contains("payload_offset: u64"));
     assert!(shape.contains("payload_bytes: u64"));
     assert!(shape.contains("payload_blake3: [u8; 32]"));
-    assert!(production.contains("It does not certify cross-set source-output algebraic equality"));
+    assert!(production.contains("not certify cross-set source-output algebraic equality"));
     let gateway = production
         .split("pub fn verify_zk_ams_mkhe_evaluated_key_evidence_set_v1")
         .nth(1)

@@ -1027,7 +1027,7 @@ mod tests {
             size_of::<ZkAmsMkheStreamingCollectiveAutomorphismOutputV1>(),
             8_776
         );
-        assert_eq!(size_of::<StreamingAutomorphismHybridBatchV1>(), 656);
+        assert_eq!(size_of::<StreamingAutomorphismHybridBatchV1>(), 1_072);
         assert_eq!(size_of::<StreamingAutomorphismInputScratchV1>(), 72);
         assert_eq!(size_of::<KeySwitchLimbWorkspaceV1>(), 48);
         assert_eq!(
@@ -1035,7 +1035,7 @@ mod tests {
             65
         );
         assert_eq!(size_of::<ZkAmsMkheStreamingCollectiveCiphertextV1>(), 656);
-        assert_eq!(size_of::<ZkAmsMkheValidatedCollectiveEvaluatedKeyV1>(), 528);
+        assert_eq!(size_of::<ZkAmsMkheValidatedCollectiveEvaluatedKeyV1>(), 592);
         assert_eq!(
             size_of::<ZkAmsMkheCollectiveEvaluatedKeyRuntimeV1>()
                 - size_of::<super::super::super::PlaintextModulus>(),
@@ -1053,12 +1053,12 @@ mod tests {
         assert_eq!(accounting.input_transaction_bytes, 80_256);
         assert_eq!(accounting.evaluated_key_provider_read_state_bytes, 10_112);
         assert_eq!(accounting.output_publication_heap_bytes, 59_584);
-        assert_eq!(accounting.fixed_control_bytes, 9_705);
-        assert_eq!(accounting.kernel_managed_peak_bytes, 87_503_065);
+        assert_eq!(accounting.fixed_control_bytes, 10_121);
+        assert_eq!(accounting.kernel_managed_peak_bytes, 87_503_481);
         assert_eq!(accounting.caller_input_manifest_bytes, 104_016);
-        assert_eq!(accounting.caller_validated_key_bytes, 71_664);
+        assert_eq!(accounting.caller_validated_key_bytes, 71_728);
         assert_eq!(accounting.caller_runtime_bytes, 4_896);
-        assert_eq!(accounting.whole_operation_managed_peak_bytes, 87_683_641);
+        assert_eq!(accounting.whole_operation_managed_peak_bytes, 87_684_121);
         assert!(!accounting.opaque_provider_residency_included);
         assert!(accounting.whole_operation_managed_peak_bytes < 84 * 1024 * 1024);
     }

@@ -8,9 +8,6 @@ use crate::{
     settlement::{PendingNexusFeeReceipt, PendingSettlement, VolatilityBucket},
     smartcontracts::{
         Execute as _, code,
-        isi::offline::{
-            signed_kagemusha_taira_canary_wire_identity_v1, signed_lifecycle_entrypoint_context,
-        },
         ivm::cache::{ExecutableProgramSummary, IvmCache, ProgramSummary},
     },
     state::{
@@ -324,6 +321,8 @@ fn native_singular_query_access(query: &SingularQueryBox) -> NativeQueryAccess {
         | SingularQueryBox::FindLaneRelayEnvelopeByRef(_)
         | SingularQueryBox::FindFxCorridorPolicyRegistry(_)
         | SingularQueryBox::FindFxCorridorPolicyById(_)
+        | SingularQueryBox::FindSorafsCitizenBondBySerialCommitment(_)
+        | SingularQueryBox::FindSorafsCitizenBondSnapshot(_)
         | SingularQueryBox::FindNftById(_) => NativeQueryAccess::AllLedger,
     }
 }
@@ -1029,6 +1028,14 @@ pub(crate) fn execute_instruction_detached(
         return Ok(());
     }
     // Registration and removal depend on live ownership and permission state.
+    if any
+        .downcast_ref::<iroha_data_model::isi::register::RegisterCommitteePeerWithPop>()
+        .is_some()
+    {
+        return Err(ValidationFail::InternalError(
+            "detached: registration requires sequential authorization".to_owned(),
+        ));
+    }
     if let Some(rb) = any.downcast_ref::<RegisterBox>() {
         match rb {
             RegisterBox::Peer(_) => {}
@@ -2702,6 +2709,26 @@ impl ContractEntrypointAuthorizationSnapshot {
         self.validate_chain_structure(world)?;
         self.validate_live(world)
     }
+    /// Revalidate the snapshot and require every captured invocation to be executable now.
+    pub(crate) fn validate_at_height(
+        &self,
+        world: &impl WorldReadOnly,
+        execution_height: u64,
+    ) -> Result<(), ValidationFail> {
+        self.validate(world)?;
+        self.validate_execution_allowed(world, execution_height)
+    }
+    fn validate_execution_allowed(
+        &self,
+        world: &impl WorldReadOnly,
+        execution_height: u64,
+    ) -> Result<(), ValidationFail> {
+        if let Some(parent) = self.parent.as_deref() {
+            parent.validate_execution_allowed(world, execution_height)?;
+        }
+        code::ensure_contract_execution_allowed(world, &self.contract_address, execution_height)
+            .map_err(ValidationFail::NotPermitted)
+    }
     fn validate_live(&self, world: &impl WorldReadOnly) -> Result<(), ValidationFail> {
         if let Some(parent) = self.parent.as_deref() {
             parent.validate_live(world)?;
@@ -2778,6 +2805,20 @@ impl ContractEntrypointAuthorizationSnapshot {
         }
         self.validate(world)
     }
+    /// Validate the apply-time caller and require the captured invocation chain to be executable.
+    pub(crate) fn validate_for_authority_at_height(
+        &self,
+        world: &impl WorldReadOnly,
+        authority: &AccountId,
+        execution_height: u64,
+    ) -> Result<(), ValidationFail> {
+        if authority != &self.authority {
+            return Err(ValidationFail::NotPermitted(
+                "prepared contract authorization caller changed before apply".to_owned(),
+            ));
+        }
+        self.validate_at_height(world, execution_height)
+    }
 }
 /// Reject binding mutations emitted from a lifecycle hook before executor dispatch.
 ///
@@ -2847,6 +2888,11 @@ pub(crate) struct ContractInvocationOutcome {
     pub(crate) executed_instructions: Vec<InstructionBox>,
     /// Trigger-local NFT sequence after successful guest execution.
     pub(crate) next_nft_sequence: Option<u64>,
+}
+#[derive(Clone, Copy, Debug)]
+enum LiveGasAccounting {
+    Initialize,
+    RetainAccumulated,
 }
 impl ContractCallExecutionContext {
     pub(crate) fn runtime_context(&self) -> Option<ContractRuntimeExecutionContext> {
@@ -3266,6 +3312,96 @@ pub(crate) fn ensure_contract_invocation_code_hash(
             "contract instance `{}` is bound to code `{actual_code_hash}`, not signed expected code `{}`",
             invocation.contract_address, invocation.expected_code_hash
         )));
+    }
+    Ok(())
+}
+/// Bind a top-level by-reference contract invocation to the exact human-reviewable
+/// transaction metadata carried by the same signed payload.
+///
+/// Wallets can validate canonical JSON metadata without embedding a Kotodama ABI
+/// encoder. Consensus therefore reconstructs the schema-bound argument record
+/// from that metadata and refuses any executable whose opaque argument bytes
+/// encode a different payload.
+fn ensure_contract_invocation_metadata_binding(
+    invocation: &ContractInvocation,
+    metadata: &Metadata,
+    contract: &ivm::PreparedContract,
+) -> Result<(), ValidationFail> {
+    let carries_reviewable_binding = [
+        "contract_address",
+        "contract_code_hash",
+        "contract_entrypoint",
+        "contract_payload",
+    ]
+    .iter()
+    .any(|key| metadata.get(*key).is_some());
+    if !carries_reviewable_binding {
+        return Ok(());
+    }
+    let metadata_address = requested_contract_address(metadata)?.ok_or_else(|| {
+        ValidationFail::NotPermitted(
+            "top-level ContractCall requires contract_address metadata".to_owned(),
+        )
+    })?;
+    if metadata_address != invocation.contract_address {
+        return Err(ValidationFail::NotPermitted(
+            "top-level ContractCall address differs from contract_address metadata".to_owned(),
+        ));
+    }
+    let code_hash_literal = metadata
+        .get("contract_code_hash")
+        .ok_or_else(|| {
+            ValidationFail::NotPermitted(
+                "top-level ContractCall requires contract_code_hash metadata".to_owned(),
+            )
+        })?
+        .try_into_any_norito::<String>()
+        .map_err(|error| {
+            ValidationFail::NotPermitted(format!("invalid contract_code_hash metadata: {error}"))
+        })?;
+    if code_hash_literal.trim() != code_hash_literal {
+        return Err(ValidationFail::NotPermitted(
+            "contract_code_hash metadata must use canonical spelling".to_owned(),
+        ));
+    }
+    let metadata_code_hash = code_hash_literal
+        .parse::<iroha_crypto::Hash>()
+        .map_err(|error| {
+            ValidationFail::NotPermitted(format!(
+                "invalid contract_code_hash metadata literal `{code_hash_literal}`: {error}"
+            ))
+        })?;
+    if metadata_code_hash != invocation.expected_code_hash {
+        return Err(ValidationFail::NotPermitted(
+            "top-level ContractCall code hash differs from contract_code_hash metadata".to_owned(),
+        ));
+    }
+    let metadata_entrypoint = requested_contract_entrypoint(metadata)?.ok_or_else(|| {
+        ValidationFail::NotPermitted(
+            "top-level ContractCall requires contract_entrypoint metadata".to_owned(),
+        )
+    })?;
+    if metadata_entrypoint != invocation.entrypoint {
+        return Err(ValidationFail::NotPermitted(
+            "top-level ContractCall entrypoint differs from contract_entrypoint metadata"
+                .to_owned(),
+        ));
+    }
+    let descriptor = contract
+        .entrypoint_descriptor(&metadata_entrypoint)
+        .ok_or_else(|| {
+            ValidationFail::NotPermitted(format!(
+                "unknown contract entrypoint `{metadata_entrypoint}`"
+            ))
+        })?;
+    let payload = metadata.get("contract_payload");
+    let canonical_arguments =
+        encode_contract_argument_record(descriptor.argument_schema.as_ref(), payload)?;
+    if canonical_arguments.as_deref() != invocation.arguments.as_deref() {
+        return Err(ValidationFail::NotPermitted(
+            "top-level ContractCall arguments differ from the canonical contract_payload metadata"
+                .to_owned(),
+        ));
     }
     Ok(())
 }
@@ -4264,70 +4400,11 @@ pub(crate) fn validate_transaction_fee_admission(
     .map_err(nexus_fee_admission_error_to_validation_fail)?;
     Ok(())
 }
-/// Charge gas and Nexus fees for a transaction that was applied via overlay execution paths.
-///
-/// Overlay execution bypasses `Executor::execute_transaction`, so this helper mirrors the
-/// fee-accounting behavior that `execute_transaction` performs for each committed transaction.
-pub(crate) fn charge_fees_for_applied_overlay(
-    state_transaction: &mut StateTransaction<'_, '_>,
-    authority: &AccountId,
+fn applied_overlay_base_gas(
     transaction: &SignedTransaction,
     overlay: &crate::pipeline::overlay::TxOverlay,
-) -> Result<(), ValidationFail> {
-    // Genesis transactions are bootstrap operations and must remain fee-free.
-    if is_initial_genesis_context(state_transaction) {
-        return Ok(());
-    }
-    let tx_bytes_len = to_bytes(transaction.payload())
-        .map(|bytes| bytes.len())
-        .map_err(|err| {
-            ValidationFail::InternalError(format!(
-                "failed to encode transaction payload for fee metering: {err}"
-            ))
-        })?;
-    let fee_sponsor = transaction
-        .fee_payment_intent()
-        .sponsor_program()
-        .map(|(program_id, _)| program_id.clone());
-    let skip_nexus_fee = fee_exempt_transaction(
-        &state_transaction.world,
-        &state_transaction.nexus,
-        transaction,
-        state_transaction.block_unix_timestamp_ms(),
-    );
-    // Admission captured the governed gas policy before business effects were applied.
-    // Keep that immutable snapshot for settlement so this transaction cannot alter its
-    // own fee asset, rate, or destination account through the overlay.
-    let gas_asset_opt = transaction
-        .fee_payment_intent()
-        .charge_limits()
-        .iter()
-        .find(|limit| limit.kind == FeeChargeKind::PipelineGas)
-        .map(|limit| limit.asset_definition_id.canonical_address());
-    let gas_limit_md = transaction_gas_limit(transaction);
-    let pipeline_gas = &state_transaction.pipeline.gas;
-    let pipeline_gas_bound = fee_bound_for_admission(transaction)
-        .map_err(nexus_fee_admission_error_to_validation_fail)?
-        .2;
-    if !skip_nexus_fee
-        && pipeline_gas_component_enabled(&state_transaction.nexus, &state_transaction.pipeline)
-        && pipeline_gas_bound > 0
-    {
-        let Some(ref gas_asset_id_str) = gas_asset_opt else {
-            return Err(ValidationFail::NotPermitted(
-                "missing pipeline gas charge limit in fee payment intent".to_owned(),
-            ));
-        };
-        if !pipeline_gas
-            .accepted_assets
-            .iter()
-            .any(|a| a == gas_asset_id_str)
-        {
-            return Err(ValidationFail::NotPermitted(format!(
-                "gas asset `{gas_asset_id_str}` is not accepted by node policy"
-            )));
-        }
-    }
+) -> Result<(u64, usize), ValidationFail> {
+    let gas_limit = transaction_gas_limit(transaction);
     let (gas_used, instruction_count, require_gas_limit) = match transaction.instructions() {
         Executable::ContractCall(_) | Executable::Ivm(_) => (
             overlay.ivm_gas_used().ok_or_else(|| {
@@ -4359,25 +4436,142 @@ pub(crate) fn charge_fees_for_applied_overlay(
             ));
         }
     };
-    if require_gas_limit && gas_limit_md.is_none() {
+    if require_gas_limit && gas_limit.is_none() {
         return Err(ValidationFail::NotPermitted(
             "missing gas limit in fee payment intent".to_owned(),
         ));
     }
-    if let Some(limit) = gas_limit_md
+    if let Some(limit) = gas_limit
         && gas_used > limit
     {
         return Err(ValidationFail::NotPermitted(format!(
             "out of gas: used {gas_used} > limit {limit}"
         )));
     }
-    let confidential_delta =
-        crate::gas::sum_confidential_gas_costs(overlay.instruction_slice().iter());
-    if confidential_delta > 0 {
-        state_transaction.record_confidential_gas_delta(confidential_delta);
+    Ok((gas_used, instruction_count))
+}
+
+/// Reserve an overlay transaction's deterministic base gas before applying its effects.
+///
+/// Trigger work executed by an overlay is metered relative to this reservation, so neither a
+/// nested callback nor a later transaction can execute past the shared block limit.
+pub(crate) fn precharge_gas_for_applied_overlay(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    transaction: &SignedTransaction,
+    overlay: &crate::pipeline::overlay::TxOverlay,
+) -> Result<(), ValidationFail> {
+    if is_initial_genesis_context(state_transaction) {
+        return Ok(());
     }
-    state_transaction.last_tx_gas_used = gas_used;
+    if state_transaction.last_tx_gas_used != 0 {
+        return Err(ValidationFail::InternalError(
+            "overlay base gas must be reserved before transaction effects".to_owned(),
+        ));
+    }
+    let (gas_used, _) = applied_overlay_base_gas(transaction, overlay)?;
     Executor::enforce_transaction_gas_fits_block(state_transaction, gas_used)?;
+    state_transaction.last_tx_gas_used = gas_used;
+    Ok(())
+}
+
+/// Charge gas and Nexus fees for a transaction that was applied via overlay execution paths.
+///
+/// Overlay execution bypasses `Executor::execute_transaction`, so this helper mirrors the
+/// fee-accounting behavior that `execute_transaction` performs for each committed transaction.
+pub(crate) fn charge_fees_for_applied_overlay(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    authority: &AccountId,
+    transaction: &SignedTransaction,
+    overlay: &crate::pipeline::overlay::TxOverlay,
+) -> Result<(), ValidationFail> {
+    charge_fees_for_applied_overlay_inner(state_transaction, authority, transaction, overlay, false)
+}
+
+/// Settle an overlay whose base gas was reserved before its effects were applied.
+pub(crate) fn charge_fees_for_precharged_overlay(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    authority: &AccountId,
+    transaction: &SignedTransaction,
+    overlay: &crate::pipeline::overlay::TxOverlay,
+) -> Result<(), ValidationFail> {
+    charge_fees_for_applied_overlay_inner(state_transaction, authority, transaction, overlay, true)
+}
+
+fn charge_fees_for_applied_overlay_inner(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    authority: &AccountId,
+    transaction: &SignedTransaction,
+    overlay: &crate::pipeline::overlay::TxOverlay,
+    gas_was_precharged: bool,
+) -> Result<(), ValidationFail> {
+    // Genesis transactions are bootstrap operations and must remain fee-free.
+    if is_initial_genesis_context(state_transaction) {
+        return Ok(());
+    }
+    let tx_bytes_len = to_bytes(transaction.payload())
+        .map(|bytes| bytes.len())
+        .map_err(|err| {
+            ValidationFail::InternalError(format!(
+                "failed to encode transaction payload for fee metering: {err}"
+            ))
+        })?;
+    let fee_sponsor = transaction
+        .fee_payment_intent()
+        .sponsor_program()
+        .map(|(program_id, _)| program_id.clone());
+    let skip_nexus_fee = fee_exempt_transaction(
+        &state_transaction.world,
+        &state_transaction.nexus,
+        transaction,
+        state_transaction.block_unix_timestamp_ms(),
+    );
+    // Admission captured the governed gas policy before business effects were applied.
+    // Keep that immutable snapshot for settlement so this transaction cannot alter its
+    // own fee asset, rate, or destination account through the overlay.
+    let gas_asset_opt = transaction
+        .fee_payment_intent()
+        .charge_limits()
+        .iter()
+        .find(|limit| limit.kind == FeeChargeKind::PipelineGas)
+        .map(|limit| limit.asset_definition_id.canonical_address());
+    let pipeline_gas = &state_transaction.pipeline.gas;
+    let pipeline_gas_bound = fee_bound_for_admission(transaction)
+        .map_err(nexus_fee_admission_error_to_validation_fail)?
+        .2;
+    if !skip_nexus_fee
+        && pipeline_gas_component_enabled(&state_transaction.nexus, &state_transaction.pipeline)
+        && pipeline_gas_bound > 0
+    {
+        let Some(ref gas_asset_id_str) = gas_asset_opt else {
+            return Err(ValidationFail::NotPermitted(
+                "missing pipeline gas charge limit in fee payment intent".to_owned(),
+            ));
+        };
+        if !pipeline_gas
+            .accepted_assets
+            .iter()
+            .any(|a| a == gas_asset_id_str)
+        {
+            return Err(ValidationFail::NotPermitted(format!(
+                "gas asset `{gas_asset_id_str}` is not accepted by node policy"
+            )));
+        }
+    }
+    let (gas_used, instruction_count) = applied_overlay_base_gas(transaction, overlay)?;
+    if gas_was_precharged {
+        if state_transaction.last_tx_gas_used < gas_used {
+            return Err(ValidationFail::InternalError(
+                "overlay fee settlement lost its reserved base gas".to_owned(),
+            ));
+        }
+    } else {
+        state_transaction.last_tx_gas_used =
+            state_transaction.last_tx_gas_used.saturating_add(gas_used);
+    }
+    Executor::enforce_transaction_gas_fits_block(
+        state_transaction,
+        state_transaction.last_tx_gas_used,
+    )?;
     let tx_hash = transaction.hash();
     let settlement_source_id = {
         let mut bytes = [0u8; iroha_crypto::Hash::LENGTH];
@@ -4415,11 +4609,12 @@ pub(crate) fn charge_fees_for_applied_overlay(
     }
     Ok(())
 }
-/// Charge fees for a rejected mixed batch after its staged business effects were discarded.
+/// Charge fees for rejected live execution after its staged business effects were discarded.
 ///
-/// Mixed batches execute directly against a live [`StateTransaction`] instead of producing a
-/// [`crate::pipeline::overlay::TxOverlay`]. The caller must therefore pass the gas captured before
-/// dropping that failed transaction and invoke this helper on a fresh fee-only transaction.
+/// Mixed batches and exact standalone governance ballots execute directly against a live
+/// [`StateTransaction`] instead of producing a [`crate::pipeline::overlay::TxOverlay`]. The caller
+/// must therefore pass the gas captured before dropping that failed transaction and invoke this
+/// helper on a fresh fee-only transaction.
 pub(crate) fn charge_fees_for_rejected_live_batch(
     state_transaction: &mut StateTransaction<'_, '_>,
     authority: &AccountId,
@@ -4430,13 +4625,23 @@ pub(crate) fn charge_fees_for_rejected_live_batch(
         return Ok(());
     }
     let instruction_count = match transaction.instructions() {
+        Executable::Instructions(items)
+            if matches!(
+                crate::state::standalone_governance_ballot_instruction_v1(
+                    transaction.instructions()
+                ),
+                Ok(Some(_))
+            ) =>
+        {
+            items.len()
+        }
         Executable::Batch(items) => items
             .iter()
             .filter(|item| matches!(item, ExecutableBatchItem::Instruction(_)))
             .count(),
         _ => {
             return Err(ValidationFail::InternalError(
-                "non-batch transaction reached rejected live-batch fee settlement".to_owned(),
+                "non-live transaction reached rejected live-execution fee settlement".to_owned(),
             ));
         }
     };
@@ -4481,12 +4686,24 @@ pub(crate) fn charge_fees_for_rejected_live_batch(
         gas_asset_opt,
         fee_sponsor,
         skip_nexus_fee,
+        LiveGasAccounting::Initialize,
     )
 }
 fn live_batch_overlay_byte_size(instructions: &[InstructionBox]) -> u64 {
     instructions.iter().fold(0_u64, |total, instruction| {
         total.saturating_add(u64::try_from(instruction.encode().len()).unwrap_or(u64::MAX))
     })
+}
+fn live_batch_contract_execution_limit(
+    signed_gas_limit: Option<u64>,
+    direct_gas_used: u64,
+    block_remaining_at_start: u64,
+    accountable_gas_used: u64,
+) -> u64 {
+    signed_gas_limit
+        .unwrap_or(u64::MAX)
+        .saturating_sub(direct_gas_used)
+        .min(block_remaining_at_start.saturating_sub(accountable_gas_used))
 }
 fn enforce_live_batch_overlay_limits(
     max_instructions: usize,
@@ -4505,6 +4722,16 @@ fn enforce_live_batch_overlay_limits(
         )));
     }
     Ok(())
+}
+/// Return whether live execution rejected only because its retained overlay crossed a configured
+/// preparation limit.
+pub(crate) fn is_live_batch_overlay_limit_rejection(error: &ValidationFail) -> bool {
+    matches!(
+        error,
+        ValidationFail::NotPermitted(message)
+            if message.starts_with("overlay exceeds max instructions: ")
+                || message.starts_with("overlay exceeds max bytes: ")
+    )
 }
 fn is_reserved_multisig_role_id(role_id: &RoleId) -> bool {
     const MULTISIG_SIGNATORY_NAMESPACE: &str = "MULTISIG_SIGNATORY";
@@ -4544,16 +4771,12 @@ impl Executor {
         state_transaction: &StateTransaction<'_, '_>,
         gas_used: u64,
     ) -> Result<(), ValidationFail> {
-        if gas_used == 0 || state_transaction.gas_limit_per_block == 0 {
-            return Ok(());
-        }
-        let total = state_transaction
-            .gas_used_in_block_so_far
-            .saturating_add(gas_used);
-        if total > state_transaction.gas_limit_per_block {
+        let limit = state_transaction.gas_limit_per_block;
+        let used_in_block = state_transaction.gas_used_in_block_so_far;
+        if !crate::gas::gas_components_fit_block_limit(limit, [used_in_block, gas_used]) {
+            let total = u128::from(used_in_block) + u128::from(gas_used);
             return Err(ValidationFail::NotPermitted(format!(
-                "block gas limit exceeded: {total} > {}",
-                state_transaction.gas_limit_per_block
+                "block gas limit exceeded: {total} > {limit}"
             )));
         }
         Ok(())
@@ -5358,6 +5581,14 @@ impl Executor {
             )));
         }
         Self::enforce_transaction_gas_fits_block(state_transaction, used)?;
+        // Preserve deterministic work accounting even if an instruction later
+        // rejects. The block corridor decides whether the rejected live
+        // transaction is fee-eligible and carries these counters forward.
+        state_transaction.last_tx_gas_used = used;
+        let confidential_delta = crate::gas::sum_confidential_gas_costs(instructions.iter());
+        if confidential_delta > 0 {
+            state_transaction.record_confidential_gas_delta(confidential_delta);
+        }
         match (contract_runtime_context, entrypoint_authorization) {
             (Some(context), Some(authorization)) => {
                 if !authorization.is_root() {
@@ -5417,7 +5648,6 @@ impl Executor {
             )?;
         }
         let instruction_count = instructions.len();
-        let confidential_delta = crate::gas::sum_confidential_gas_costs(instructions.iter());
         // 3) Execute ISIs in order.
         let prior_sccp_ivm_proved_execution_binding =
             state_transaction.sccp_ivm_proved_execution_binding.clone();
@@ -5575,13 +5805,7 @@ impl Executor {
         state_transaction.sccp_ivm_proved_execution_binding =
             prior_sccp_ivm_proved_execution_binding;
         execution_result?;
-        // Track confidential gas after successful execution.
-        if confidential_delta > 0 {
-            state_transaction.record_confidential_gas_delta(confidential_delta);
-        }
-        // 4) Record gas used for block-level budget enforcement.
-        state_transaction.last_tx_gas_used = used;
-        // 5) Charge gas fees when configured and the transaction specified a gas asset.
+        // 4) Charge gas fees when configured and the transaction specified a gas asset.
         if should_charge_pipeline_gas_asset(
             skip_nexus_fee,
             &state_transaction.nexus.fees,
@@ -5623,6 +5847,12 @@ impl Executor {
         call: &ContractInvocation,
         ivm_cache: &mut IvmCache,
     ) -> Result<ResolvedContractInvocation, ValidationFail> {
+        code::ensure_contract_execution_allowed(
+            &state_transaction.world,
+            &call.contract_address,
+            state_transaction.block_height(),
+        )
+        .map_err(ValidationFail::NotPermitted)?;
         let identity =
             code::fetch_bound_contract_identity(state_transaction, &call.contract_address)
                 .ok_or_else(|| {
@@ -5896,15 +6126,34 @@ impl Executor {
         transaction: &SignedTransaction,
         tx_hash: iroha_crypto::HashOf<SignedTransaction>,
         settlement_source_id: [u8; iroha_crypto::Hash::LENGTH],
-        gas_used: u64,
+        direct_gas_used: u64,
         instruction_count: usize,
         tx_bytes_len: usize,
         gas_asset_opt: Option<String>,
         fee_sponsor: Option<FeeSponsorProgramId>,
         skip_nexus_fee: bool,
+        gas_accounting: LiveGasAccounting,
     ) -> Result<(), ValidationFail> {
-        state_transaction.last_tx_gas_used = gas_used;
-        Self::enforce_transaction_gas_fits_block(state_transaction, gas_used)?;
+        let accountable_gas_used = match gas_accounting {
+            LiveGasAccounting::Initialize => {
+                if state_transaction.last_tx_gas_used != 0 {
+                    return Err(ValidationFail::InternalError(
+                        "fresh live fee settlement started with accumulated gas".to_owned(),
+                    ));
+                }
+                state_transaction.last_tx_gas_used = direct_gas_used;
+                direct_gas_used
+            }
+            LiveGasAccounting::RetainAccumulated => {
+                if state_transaction.last_tx_gas_used < direct_gas_used {
+                    return Err(ValidationFail::InternalError(
+                        "live fee settlement lost staged direct gas".to_owned(),
+                    ));
+                }
+                state_transaction.last_tx_gas_used
+            }
+        };
+        Self::enforce_transaction_gas_fits_block(state_transaction, accountable_gas_used)?;
         if should_charge_pipeline_gas_asset(
             skip_nexus_fee,
             &state_transaction.nexus.fees,
@@ -5918,7 +6167,7 @@ impl Executor {
                 tx_hash.clone(),
                 settlement_source_id,
                 &gas_asset_id_str,
-                gas_used,
+                direct_gas_used,
                 fee_sponsor.as_ref(),
             )?;
         }
@@ -5931,7 +6180,7 @@ impl Executor {
                 fee_sponsor,
                 tx_bytes_len,
                 instruction_count,
-                gas_used,
+                direct_gas_used,
             )?;
         }
         Ok(())
@@ -5949,8 +6198,7 @@ impl Executor {
     ) -> Result<(), ValidationFail> {
         state_transaction.bind_privacy_transaction_intent_v1(None);
         state_transaction.bind_private_settlement_carrier_v1(None);
-        state_transaction.kagemusha_taira_canary_wire_identity = None;
-        state_transaction.kagemusha_release_lifecycle_entrypoint = None;
+        state_transaction.bind_governance_ballot_entrypoint_v1(None);
         if transaction.authority() != authority {
             return Err(ValidationFail::InternalError(
                 "signed authority mismatch".into(),
@@ -5965,12 +6213,10 @@ impl Executor {
                 &transaction,
             )?;
         state_transaction.bind_private_settlement_carrier_v1(private_settlement_carrier_binding);
-        if state_transaction.kagemusha_taira_canary_external_entrypoint {
-            state_transaction.kagemusha_taira_canary_wire_identity =
-                signed_kagemusha_taira_canary_wire_identity_v1(&transaction)?;
-            state_transaction.kagemusha_release_lifecycle_entrypoint =
-                signed_lifecycle_entrypoint_context(&transaction)?;
-        }
+        let governance_ballot_binding =
+            crate::state::standalone_governance_ballot_instruction_v1(transaction.instructions())
+                .map_err(|message| ValidationFail::NotPermitted(message.to_owned()))?;
+        state_transaction.bind_governance_ballot_entrypoint_v1(governance_ballot_binding);
         let call_hash = transaction.hash_as_entrypoint();
         state_transaction.tx_call_hash = Some(iroha_crypto::Hash::from(call_hash));
         let tx_hash = transaction.hash();
@@ -6028,16 +6274,9 @@ impl Executor {
                                         .is_some()
                                 })
                     );
-                    let exact_kagemusha_release_lifecycle = state_transaction
-                        .kagemusha_release_lifecycle_entrypoint
-                        .is_some()
-                        && transaction.multisig_signatures().is_some();
-                    if only_custom_instruction_envelopes || exact_kagemusha_release_lifecycle {
+                    if only_custom_instruction_envelopes {
                         // Allowed: custom instruction envelopes are validated by their respective
                         // runtime handlers (including multisig propose/approve/register paths).
-                        // Kagemusha's narrow direct lifecycle corridor is separately bound to one
-                        // native External instruction and a verified multisignature bundle so its
-                        // independent finality receipts can authenticate that exact transaction.
                     } else {
                         #[cfg(feature = "telemetry")]
                         crate::telemetry::record_social_rejection(
@@ -6045,7 +6284,7 @@ impl Executor {
                             "multisig_direct_sign",
                         );
                         return Err(ValidationFail::NotPermitted(
-                            "direct signing with multisig accounts is forbidden outside the exact Kagemusha release lifecycle; use multisig propose/approve"
+                            "direct signing with multisig accounts is forbidden; use multisig propose/approve"
                                 .to_owned(),
                         ));
                     }
@@ -6089,6 +6328,7 @@ impl Executor {
             authority,
             &transaction,
             ivm_cache,
+            state_transaction.block_height(),
         )?;
         #[cfg(feature = "zk-preverify")]
         {
@@ -6430,6 +6670,7 @@ impl Executor {
                     gas_asset_opt,
                     fee_sponsor,
                     skip_nexus_fee,
+                    LiveGasAccounting::RetainAccumulated,
                 )
             }
             (Self::Initial | Self::UserProvided(_), Executable::Batch(items)) => {
@@ -6482,7 +6723,6 @@ impl Executor {
                         state_transaction.gas_limit_per_block
                     )));
                 }
-                let available_total = gas_limit.unwrap_or(u64::MAX).min(block_remaining);
                 let mut gas_used = explicit_gas;
                 let max_overlay_instructions = state_transaction.pipeline.overlay_max_instructions;
                 let max_overlay_bytes = state_transaction.pipeline.overlay_max_bytes;
@@ -6497,6 +6737,11 @@ impl Executor {
                 // Native ISIs are metered as one authored set, matching the existing
                 // `Executable::Instructions` rejected-business fee behavior.
                 state_transaction.last_tx_gas_used = explicit_gas;
+                let confidential_delta =
+                    crate::gas::sum_confidential_gas_costs(explicit_instructions.iter());
+                if confidential_delta > 0 {
+                    state_transaction.record_confidential_gas_delta(confidential_delta);
+                }
                 for item in items {
                     match item {
                         ExecutableBatchItem::Instruction(instruction) => {
@@ -6505,7 +6750,12 @@ impl Executor {
                             self.execute_instruction(state_transaction, authority, instruction)?;
                         }
                         ExecutableBatchItem::ContractCall(call) => {
-                            let remaining = available_total.saturating_sub(gas_used);
+                            let remaining = live_batch_contract_execution_limit(
+                                gas_limit,
+                                gas_used,
+                                block_remaining,
+                                state_transaction.last_tx_gas_used,
+                            );
                             let outcome = self.execute_contract_invocation(
                                 state_transaction,
                                 authority,
@@ -6527,19 +6777,10 @@ impl Executor {
                                 overlay_instruction_count,
                                 overlay_byte_size,
                             ) {
-                                // Overlay caps are preparation limits for ordinary executables.
-                                // Preserve that no-fee rejection behavior even though live batches
-                                // discover contract-emitted instructions during execution.
-                                state_transaction.last_tx_gas_used = 0;
                                 return Err(error);
                             }
                         }
                     }
-                }
-                let confidential_delta =
-                    crate::gas::sum_confidential_gas_costs(explicit_instructions.iter());
-                if confidential_delta > 0 {
-                    state_transaction.record_confidential_gas_delta(confidential_delta);
                 }
                 Self::settle_live_transaction_fees(
                     state_transaction,
@@ -6553,6 +6794,7 @@ impl Executor {
                     gas_asset_opt,
                     fee_sponsor,
                     skip_nexus_fee,
+                    LiveGasAccounting::RetainAccumulated,
                 )
             }
             (Self::Initial | Self::UserProvided(_), Executable::Ivm(bytes)) => {
@@ -6724,6 +6966,12 @@ impl Executor {
                     summary.code_hash,
                     &md,
                 )?;
+                code::ensure_contract_execution_allowed(
+                    &state_transaction.world,
+                    &runtime_identity.contract_address,
+                    state_transaction.block_height(),
+                )
+                .map_err(ValidationFail::NotPermitted)?;
                 let entrypoint_authorization = authorize_prepared_raw_contract_selector(
                     &state_transaction.world,
                     authority,
@@ -7258,9 +7506,9 @@ impl Executor {
             .id()
             .starts_with(core::any::type_name::<Register<Trigger>>());
         let reg_trg = if is_reg_trigger {
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            crate::panic_hook::catch_unwind_suppressed(|| {
                 Register::<Trigger>::decode(&mut &instruction.dyn_encode()[..])
-            }))
+            })
             .ok()
             .and_then(Result::ok)
         } else {
@@ -7975,9 +8223,11 @@ fn extract_mint_asset(instruction: &InstructionBox) -> Option<Mint<Quantity, Ass
         return None;
     }
     let bytes = instruction.dyn_encode();
-    std::panic::catch_unwind(|| Mint::<Quantity, Asset>::decode(&mut bytes.as_slice()).ok())
-        .ok()
-        .flatten()
+    crate::panic_hook::catch_unwind_suppressed(|| {
+        Mint::<Quantity, Asset>::decode(&mut bytes.as_slice()).ok()
+    })
+    .ok()
+    .flatten()
 }
 fn extract_transfer_asset(
     instruction: &InstructionBox,
@@ -7996,7 +8246,7 @@ fn extract_transfer_asset(
         return None;
     }
     let bytes = instruction.dyn_encode();
-    std::panic::catch_unwind(|| {
+    crate::panic_hook::catch_unwind_suppressed(|| {
         let mut slice = &bytes[..];
         Transfer::<Asset, Quantity, Account>::decode(&mut slice).ok()
     })
@@ -8020,7 +8270,7 @@ fn extract_transfer_domain(
         return None;
     }
     let bytes = instruction.dyn_encode();
-    std::panic::catch_unwind(|| {
+    crate::panic_hook::catch_unwind_suppressed(|| {
         let mut slice = &bytes[..];
         Transfer::<Account, DomainId, Account>::decode(&mut slice).ok()
     })
@@ -8047,7 +8297,7 @@ fn extract_transfer_asset_definition(
         return None;
     }
     let bytes = instruction.dyn_encode();
-    std::panic::catch_unwind(|| {
+    crate::panic_hook::catch_unwind_suppressed(|| {
         let mut slice = &bytes[..];
         Transfer::<Account, AssetDefinitionId, Account>::decode(&mut slice).ok()
     })
@@ -8075,7 +8325,7 @@ fn extract_transfer_nft(
         return None;
     }
     let bytes = instruction.dyn_encode();
-    std::panic::catch_unwind(|| {
+    crate::panic_hook::catch_unwind_suppressed(|| {
         let mut slice = &bytes[..];
         Transfer::<Account, iroha_data_model::NftId, Account>::decode(&mut slice).ok()
     })
@@ -8134,9 +8384,7 @@ const INITIAL_GENESIS_ONLY_PERMISSION_NAMES: &[&str] = &[
     "CanReadAllLedgerData",
     "CanReadRestrictedDataspace",
     "CanManageFxCorridors",
-    "CanManageOfflineEscrow",
-    "CanActivateKagemushaRecursiveReleaseV4",
-    "CanManageOfflineDeviceAttestationPolicy",
+    "CanManageKagemushaReserve",
 ];
 fn initial_permission_is_genesis_only(permission: &Permission) -> bool {
     INITIAL_GENESIS_ONLY_PERMISSION_NAMES.contains(&permission.name().as_ref())
@@ -8707,10 +8955,6 @@ fn initial_permission_capability_root_authority(
             let _ = decode!(executor_permission::governance::CanSubmitGovernanceBallot);
             false
         }
-        "CanRecordCitizenService" => {
-            let _ = decode!(executor_permission::governance::CanRecordCitizenService);
-            false
-        }
         "CanSlashGovernanceLock" => {
             let _ = decode!(executor_permission::governance::CanSlashGovernanceLock);
             false
@@ -9265,6 +9509,7 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
         UnregisterBox,
         iroha_data_model::isi::Upgrade,
         iroha_data_model::isi::register::RegisterPeerWithPop,
+        iroha_data_model::isi::register::RegisterCommitteePeerWithPop,
     ) {
         return true;
     }
@@ -9322,6 +9567,10 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
         iroha_data_model::isi::smart_contract_code::RegisterSmartContractCode,
         iroha_data_model::isi::smart_contract_code::DeactivateContractInstance,
         iroha_data_model::isi::smart_contract_code::ActivateContractInstance,
+        iroha_data_model::isi::smart_contract_code::SetContractParliamentDelegation,
+        iroha_data_model::isi::smart_contract_code::OfferContractOwnership,
+        iroha_data_model::isi::smart_contract_code::AcceptContractOwnership,
+        iroha_data_model::isi::smart_contract_code::CancelContractOwnershipOffer,
         iroha_data_model::isi::smart_contract_code::CommitContractDeployment,
         iroha_data_model::isi::smart_contract_code::RegisterSmartContractBytes,
         iroha_data_model::isi::smart_contract_code::UploadSmartContractCodeChunk,
@@ -9342,18 +9591,10 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
     ) {
         return true;
     }
-    // Offline/Kagemusha execution is guarded by exact native checks in Core.
+    // Kagemusha V1 execution is guarded by exact native checks in Core.
     if is_any!(
-        iroha_data_model::isi::offline::TopUpKagemushaRecursiveV4,
-        iroha_data_model::isi::offline::RedeemKagemushaRecursiveV4,
-        iroha_data_model::isi::offline::ActivateKagemushaRecursiveReleaseV4,
-        iroha_data_model::isi::offline::EnableKagemushaRecursiveIssuanceV4,
-        iroha_data_model::isi::offline::CancelKagemushaRecursiveReleaseV4,
-        iroha_data_model::isi::offline::DeactivateKagemushaRecursiveIssuanceV4,
-        iroha_data_model::isi::offline::RecordKagemushaTairaCanaryV4,
-        iroha_data_model::isi::offline::AuthorizeKagemushaTairaCanaryV4,
-        iroha_data_model::isi::offline::RegisterOfflineDeviceAttestation,
-        iroha_data_model::isi::offline::SetOfflineDeviceAttestationPolicy,
+        iroha_data_model::isi::kagemusha_v1::TopUpKagemushaV1,
+        iroha_data_model::isi::kagemusha_v1::RedeemKagemushaV1,
     ) {
         return true;
     }
@@ -9391,6 +9632,7 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
     if is_any!(
         iroha_data_model::isi::settlement::SettlementInstructionBox,
         iroha_data_model::isi::private_settlement::ActivatePrivateSettlementPoolV1,
+        iroha_data_model::isi::private_settlement::RegisterAtomicPrivateSettlementPrepareV1,
         iroha_data_model::isi::private_settlement::AbortAtomicPrivateSettlementV1,
         iroha_data_model::isi::private_settlement::FinalizeAtomicPrivateSettlementV1,
         iroha_data_model::isi::bridge::SubmitBridgeProof,
@@ -9399,6 +9641,9 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
         iroha_data_model::isi::bridge::RecordSccpMessage,
         iroha_data_model::isi::bridge::SubmitSccpTonBreakerObservationV1,
         iroha_data_model::isi::governance::ProposeDeployContract,
+        iroha_data_model::isi::governance::ProposeContractLifecycleGovernance,
+        iroha_data_model::isi::governance::ProposeContractEmergencyHold,
+        iroha_data_model::isi::governance::ProposeGlobalDataTriggerPermissionGovernance,
         iroha_data_model::isi::governance::ProposeRuntimeUpgradeProposal,
         iroha_data_model::isi::governance::ProposeSccpRouteGovernance,
         iroha_data_model::isi::governance::ProposeValidationFeePayoutLifecycle,
@@ -9409,7 +9654,6 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
         iroha_data_model::isi::governance::CastPlainBallot,
         iroha_data_model::isi::governance::SlashGovernanceLock,
         iroha_data_model::isi::governance::RestituteGovernanceLock,
-        iroha_data_model::isi::governance::RecordCitizenServiceOutcome,
         iroha_data_model::isi::ministry::SubmitAgendaProposal,
         iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay,
         iroha_data_model::isi::nexus::RegisterVerifiedFeeSponsorVaultAllocation,
@@ -9430,12 +9674,29 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
     ) {
         return true;
     }
-    // Public-validator mutations have the explicit CanManagePeers gate above.
+    // Public-validator administration has the explicit CanManagePeers gate above.
     if is_any!(
         iroha_data_model::isi::staking::RegisterPublicLaneValidator,
         iroha_data_model::isi::staking::ActivatePublicLaneValidator,
         iroha_data_model::isi::staking::ExitPublicLaneValidator,
     ) {
+        return true;
+    }
+    // User-owned staking and reward actions bind the signed authority to the
+    // validator, staker, or reward recipient inside Core. They must reach those
+    // exact stateful checks while the fail-safe Initial executor is installed.
+    if is_any!(
+        iroha_data_model::isi::staking::RebindPublicLaneValidatorPeer,
+        iroha_data_model::isi::staking::BondPublicLaneStake,
+        iroha_data_model::isi::staking::SchedulePublicLaneUnbond,
+        iroha_data_model::isi::staking::FinalizePublicLaneUnbond,
+        iroha_data_model::isi::staking::ClaimPublicLaneRewards,
+    ) {
+        return true;
+    }
+    // Pending evidence cancellation is separately gated by CanManagePeers in
+    // the Initial executor authority check below.
+    if is_any!(iroha_data_model::isi::staking::CancelConsensusEvidencePenalty) {
         return true;
     }
     // The Initial executor is a deliberately narrow CBDC bootstrap profile.
@@ -9472,7 +9733,6 @@ fn initial_genesis_instruction_is_explicitly_admitted(instruction: &InstructionB
         iroha_data_model::isi::zk::ScheduleConfidentialPolicyTransition,
         iroha_data_model::isi::zk::CancelConfidentialPolicyTransition,
         iroha_data_model::isi::staking::SlashPublicLaneValidator,
-        iroha_data_model::isi::staking::CancelConsensusEvidencePenalty,
         iroha_data_model::isi::staking::RecordPublicLaneRewards,
     )
 }
@@ -9609,8 +9869,23 @@ fn validate_initial_native_instruction_authority(
         return deny("public validator lifecycle requires CanManagePeers");
     }
     if any
+        .downcast_ref::<iroha_data_model::isi::staking::CancelConsensusEvidencePenalty>()
+        .is_some()
+        && !is_genesis
+        && !initial_authority_has_exact_permission(
+            state_transaction,
+            authority,
+            executor_permission::peer::CanManagePeers.into(),
+        )?
+    {
+        return deny("consensus evidence penalty cancellation requires CanManagePeers");
+    }
+    if (any
         .downcast_ref::<iroha_data_model::isi::register::RegisterPeerWithPop>()
         .is_some()
+        || any
+            .downcast_ref::<iroha_data_model::isi::register::RegisterCommitteePeerWithPop>()
+            .is_some())
         && !is_genesis
         && !initial_authority_has_exact_permission(
             state_transaction,
@@ -9639,16 +9914,42 @@ fn validate_initial_native_instruction_authority(
                 authority,
                 register.object().id().domain(),
             )?,
-            RegisterBox::Account(_)
-            | RegisterBox::AssetDefinition(_)
-            | RegisterBox::Role(_)
-            | RegisterBox::Trigger(_) => true,
+            RegisterBox::Account(register) => {
+                if [
+                    iroha_data_model::asset::ASSET_TRANSFER_CONTROL_METADATA_KEY,
+                    iroha_data_model::smart_contract::CONTRACT_DEPLOY_NONCE_METADATA_KEY,
+                ]
+                .into_iter()
+                .any(|key| register.object().metadata.get(key).is_some())
+                {
+                    return deny("account registration cannot seed reserved native metadata");
+                }
+                true
+            }
+            RegisterBox::AssetDefinition(_) | RegisterBox::Role(_) | RegisterBox::Trigger(_) => {
+                true
+            }
         };
         if !allowed {
             return deny("authority cannot register this resource");
         }
     }
     if let Some(unregister) = any.downcast_ref::<UnregisterBox>() {
+        if let UnregisterBox::Account(unregister) = unregister
+            && state_transaction
+                .world
+                .account(unregister.object())
+                .is_ok_and(|account| {
+                    account
+                        .metadata()
+                        .get(iroha_data_model::asset::ASSET_TRANSFER_CONTROL_METADATA_KEY)
+                        .is_some()
+                })
+        {
+            return deny(
+                "account with native asset transfer-control state must clear it through dedicated instructions before removal",
+            );
+        }
         let allowed = match unregister {
             UnregisterBox::Peer(_) => {
                 is_genesis
@@ -10084,6 +10385,7 @@ fn enforce_transaction_contract_permission_before_proof_verification<R>(
     authority: &AccountId,
     transaction: &SignedTransaction,
     ivm_cache: &mut IvmCache,
+    execution_height: u64,
 ) -> Result<(), ValidationFail>
 where
     R: StateReadOnly,
@@ -10094,6 +10396,12 @@ where
         // validating every call against the pre-batch world would break atomic state visibility.
         Executable::Instructions(_) | Executable::Batch(_) => Ok(()),
         Executable::ContractCall(call) => {
+            code::ensure_contract_execution_allowed(
+                state.world(),
+                &call.contract_address,
+                execution_height,
+            )
+            .map_err(ValidationFail::NotPermitted)?;
             let identity = code::fetch_bound_contract_identity(state, &call.contract_address)
                 .ok_or_else(|| {
                     ValidationFail::NotPermitted(format!(
@@ -10136,6 +10444,11 @@ where
                 &identity,
             )
             .map(drop)?;
+            ensure_contract_invocation_metadata_binding(
+                call,
+                transaction.metadata(),
+                summary.prepared_contract(),
+            )?;
             validate_prepared_ivm_execution_policy(state, &summary.metadata)?;
             let manifest = state
                 .world()
@@ -10181,6 +10494,12 @@ where
                 summary.code_hash,
                 transaction.metadata(),
             )?;
+            code::ensure_contract_execution_allowed(
+                state.world(),
+                &identity.contract_address,
+                execution_height,
+            )
+            .map_err(ValidationFail::NotPermitted)?;
             authorize_prepared_raw_contract_selector(
                 state.world(),
                 authority,
@@ -10445,9 +10764,7 @@ const INITIAL_EXECUTOR_PERMISSION_NAMES: &[&str] = &[
     "CanManageConfidentialParams",
     "CanManageSccpGovernance",
     "CanProposeSccpRouteGovernance",
-    "CanManageOfflineEscrow",
-    "CanActivateKagemushaRecursiveReleaseV4",
-    "CanManageOfflineDeviceAttestationPolicy",
+    "CanManageKagemushaReserve",
     "CanManageRoles",
     "CanUpgradeExecutor",
     "CanRegisterSmartContractCode",
@@ -10465,7 +10782,6 @@ const INITIAL_EXECUTOR_PERMISSION_NAMES: &[&str] = &[
     "CanSubmitGovernanceBallot",
     "CanEnactGovernance",
     "CanManageParliament",
-    "CanRecordCitizenService",
     "CanSlashGovernanceLock",
     "CanRestituteGovernanceLock",
     "CanBindSorafsAlias",
@@ -10519,7 +10835,7 @@ pub(crate) fn extract_register_asset_definition(
         return None;
     }
     let bytes = instruction.dyn_encode();
-    std::panic::catch_unwind(|| {
+    crate::panic_hook::catch_unwind_suppressed(|| {
         let mut slice = &bytes[..];
         Register::<AssetDefinition>::decode(&mut slice).ok()
     })
@@ -10874,7 +11190,6 @@ impl LoadedExecutor {
 /// and provide a materialization path that loads a `LoadedExecutor` when required.
 pub mod executor_norito {
     use super::*;
-    use std::panic::{AssertUnwindSafe, catch_unwind};
     /// Local DTO used for Norito encoding of `Executor`.
     #[derive(Encode, Decode)]
     enum ExecutorDto {
@@ -10904,8 +11219,9 @@ pub mod executor_norito {
     /// # Errors
     /// Returns an error if the byte slice does not represent a valid executor value.
     pub fn from_bytes(bytes: &[u8]) -> Result<Executor, String> {
-        let decoded = catch_unwind(AssertUnwindSafe(|| norito::decode_from_bytes(bytes)))
-            .map_err(|_| "executor decode failed: panic during Norito decode".to_owned())?;
+        let decoded =
+            crate::panic_hook::catch_unwind_suppressed(|| norito::decode_from_bytes(bytes))
+                .map_err(|_| "executor decode failed: panic during Norito decode".to_owned())?;
         let dto: ExecutorDto = decoded.map_err(|e| format!("executor decode failed: {e}"))?;
         match dto {
             ExecutorDto::Initial => Ok(Executor::Initial),
@@ -10953,7 +11269,10 @@ mod tests {
     use iroha_config::parameters::actual::{GasLiquidity, GasVolatility};
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use iroha_data_model::{
-        asset::{AssetTransferAvailability, AssetTransferControlWindow},
+        asset::{
+            ASSET_TRANSFER_CONTROL_METADATA_KEY, AssetTransferAvailability,
+            AssetTransferControlRecord, AssetTransferControlStoreV1, AssetTransferControlWindow,
+        },
         events::data::prelude::{AssetBatchTransferLegStatus, AssetBatchTransferRejectionCode},
         executor::{self as data_model_executor, ExecutorDataModel},
         isi::{
@@ -10964,7 +11283,7 @@ mod tests {
         parameter::{CustomParameter, CustomParameterId},
         prelude::*,
         query::{QueryRequest, SingularQueryBox, prelude::FindParameters},
-        smart_contract::ContractAddress,
+        smart_contract::{ContractAddress, ContractEmergencyHoldV1},
         transaction::executable::IvmBytecode,
     };
     use iroha_executor_data_model::isi::multisig::{
@@ -11047,6 +11366,163 @@ mod tests {
             .commit_empty_block_for_testing()
             .expect("commit bootstrap block");
         state
+    }
+    #[test]
+    fn rejected_standalone_ballot_records_equal_gas_for_instruction_and_batch_carriers() {
+        let ballot = InstructionBox::from(iroha_data_model::isi::governance::CastZkBallot {
+            election_id: "gas.parity.v1".to_owned(),
+            proof_b64: "AA==".to_owned(),
+            public_inputs_json: "{}".to_owned(),
+        });
+        let expected_gas = isi_gas::meter_instructions(core::slice::from_ref(&ballot));
+        assert!(expected_gas > 0);
+        let execute_rejected = |executable: Executable| {
+            let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+            let state = state_for_testing(World::with([], [account], []));
+            let signed = TransactionBuilder::new(
+                *state.network_id_ref(),
+                ALICE_ID.clone(),
+                FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_executable(executable)
+            .sign(ALICE_KEYPAIR.private_key());
+            let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+            let mut transaction = block.transaction();
+            let mut cache = IvmCache::new();
+            crate::executor::Executor::Initial
+                .execute_transaction(&mut transaction, &ALICE_ID, signed, &mut cache)
+                .expect_err("an unpermitted ballot must reject");
+            transaction.last_tx_gas_used
+        };
+        let instructions_gas =
+            execute_rejected(Executable::Instructions(vec![ballot.clone()].into()));
+        let batch_gas = execute_rejected(Executable::Batch(
+            vec![ExecutableBatchItem::Instruction(ballot)].into(),
+        ));
+        assert_eq!(instructions_gas, expected_gas);
+        assert_eq!(batch_gas, expected_gas);
+    }
+    #[test]
+    fn successful_live_batch_settlement_retains_nested_execute_trigger_ivm_gas() {
+        let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let state = state_after_genesis(World::with([], [account], []));
+        let trigger_id: TriggerId = "live_batch_ivm_gas".parse().expect("trigger id");
+        let mut program = ivm::ProgramMetadata {
+            max_cycles: 100,
+            ..ivm::ProgramMetadata::default()
+        }
+        .encode();
+        program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+        let trigger = Trigger::new(
+            trigger_id.clone(),
+            Action::new(
+                Executable::Ivm(IvmBytecode::from_compiled(program)),
+                Repeats::Indefinitely,
+                ALICE_ID.clone(),
+                ExecuteTriggerEventFilter::new()
+                    .for_trigger(trigger_id.clone())
+                    .under_authority(ALICE_ID.clone()),
+            )
+            .expect("valid generic IVM trigger action"),
+        );
+        let mut setup_block =
+            state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+        {
+            let mut setup_tx = setup_block.transaction();
+            Register::trigger(trigger)
+                .execute(&ALICE_ID, &mut setup_tx)
+                .expect("register generic IVM trigger");
+            setup_tx.apply();
+        }
+        setup_block
+            .commit_world_overlay_for_testing()
+            .expect("commit trigger fixture");
+
+        let mut block = state.block(BlockHeader::new(nonzero!(3_u64), None, None, None, 0, 0));
+        let nested_ivm_gas = {
+            let mut baseline_tx = block.transaction();
+            baseline_tx
+                .execute_called_trigger(
+                    &trigger_id,
+                    &ExecuteTriggerEvent {
+                        trigger_id: trigger_id.clone(),
+                        authority: ALICE_ID.clone(),
+                        args: Json::default(),
+                    },
+                )
+                .expect("baseline generic IVM trigger execution");
+            baseline_tx.last_tx_gas_used
+        };
+        assert!(nested_ivm_gas > 0, "generic IVM trigger must consume gas");
+        let execute_trigger = InstructionBox::from(ExecuteTrigger::new(trigger_id.clone()));
+        let direct_gas = isi_gas::meter_instructions(core::slice::from_ref(&execute_trigger));
+        let transaction = TransactionBuilder::new(
+            *state.network_id_ref(),
+            ALICE_ID.clone(),
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_executable(Executable::Batch(
+            vec![ExecutableBatchItem::Instruction(execute_trigger)].into(),
+        ))
+        .sign(ALICE_KEYPAIR.private_key());
+        let mut state_tx = block.transaction();
+        super::Executor::Initial
+            .execute_transaction(&mut state_tx, &ALICE_ID, transaction, &mut IvmCache::new())
+            .expect("live batch executes its generic IVM trigger");
+        assert_eq!(
+            state_tx.last_tx_gas_used,
+            direct_gas.saturating_add(nested_ivm_gas),
+            "fee settlement must retain nested trigger VM gas"
+        );
+    }
+    #[test]
+    fn rejected_live_batch_retains_nested_execute_trigger_gas() {
+        let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let state = state_after_genesis(World::with([], [account], []));
+        let trigger_id: TriggerId = "rejected_live_batch_gas".parse().expect("trigger id");
+        let trigger_body = vec![
+            InstructionBox::from(Log::new(Level::INFO, "meter rejected trigger".to_owned())),
+            InstructionBox::from(Unregister::domain(
+                DomainId::try_new("missing", "universal").expect("missing domain id"),
+            )),
+        ];
+        let trigger = Trigger::new(
+            trigger_id.clone(),
+            Action::new(
+                trigger_body.clone(),
+                Repeats::Indefinitely,
+                ALICE_ID.clone(),
+                ExecuteTriggerEventFilter::new()
+                    .for_trigger(trigger_id.clone())
+                    .under_authority(ALICE_ID.clone()),
+            )
+            .expect("valid failing trigger action"),
+        );
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+        let mut state_tx = block.transaction();
+        Register::trigger(trigger)
+            .execute(&ALICE_ID, &mut state_tx)
+            .expect("register failing trigger");
+        let execute_trigger = InstructionBox::from(ExecuteTrigger::new(trigger_id));
+        let direct_gas = isi_gas::meter_instructions(core::slice::from_ref(&execute_trigger));
+        let nested_gas = isi_gas::meter_instructions(&trigger_body);
+        let transaction = TransactionBuilder::new(
+            *state.network_id_ref(),
+            ALICE_ID.clone(),
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_executable(Executable::Batch(
+            vec![ExecutableBatchItem::Instruction(execute_trigger)].into(),
+        ))
+        .sign(ALICE_KEYPAIR.private_key());
+        super::Executor::Initial
+            .execute_transaction(&mut state_tx, &ALICE_ID, transaction, &mut IvmCache::new())
+            .expect_err("failing trigger rejects its enclosing live batch");
+        assert_eq!(
+            state_tx.last_tx_gas_used,
+            direct_gas.saturating_add(nested_gas),
+            "rejected live execution must retain authored and nested trigger gas"
+        );
     }
     fn seed_test_asset_supply(world: &mut World, asset_definition_id: &AssetDefinitionId) {
         let total = world
@@ -11140,6 +11616,23 @@ mod tests {
     }
     fn checked_account_id() -> AccountId {
         AccountId::new(checked_keypair().public_key().clone())
+    }
+    #[test]
+    fn native_sorafs_citizen_bond_queries_require_all_ledger_access() {
+        use iroha_data_model::query::sorafs::prelude::{
+            FindSorafsCitizenBondBySerialCommitment, FindSorafsCitizenBondSnapshot,
+        };
+
+        let queries: [SingularQueryBox; 2] = [
+            FindSorafsCitizenBondBySerialCommitment::new([0x11; 32]).into(),
+            FindSorafsCitizenBondSnapshot.into(),
+        ];
+        for query in &queries {
+            assert_eq!(
+                native_singular_query_access(query),
+                NativeQueryAccess::AllLedger
+            );
+        }
     }
     #[test]
     fn native_escrow_query_authorization_uses_query_specific_tags() {
@@ -11402,7 +11895,6 @@ mod tests {
         ));
     }
     include!("executor_account_lineage_tests.rs");
-    include!("executor_kagemusha_canary_allowlist_tests.rs");
     macro_rules! concrete_instruction_box {
         ($instruction_ty:ty, $instruction:expr) => {{
             const TEST_WIRE_ID: &str = "iroha.test.concrete_instruction.v1";
@@ -11734,7 +12226,7 @@ mod tests {
         };
 
         let profile =
-            compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0)
+            compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1)
                 .expect("load compiled Jindo profile");
         let activation = profile.activation_record(PrivacyProtocolLifecycleV1::Proposed(
             PrivacyProposedLifecycleV1 {
@@ -11742,7 +12234,7 @@ mod tests {
                 activate_at_height: 2 + crate::privacy::PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1,
             },
         ));
-        let statement = PrivacyStatementV1::IrohaJindoPolynomialCommitmentV0(
+        let statement = PrivacyStatementV1::IrohaJindoPolynomialCommitmentV1(
             IrohaJindoPolynomialCommitmentStatementV1 {
                 context: PrivacyStatementContextV1 {
                     network_id: executor_test_network_id(b"initial-privacy-corridor"),
@@ -11761,6 +12253,8 @@ mod tests {
         );
         let statement_digest = statement.digest().expect("hash Jindo statement fixture");
         let envelope = PrivacyProofEnvelopeV1 {
+            wire_magic: Default::default(),
+            catalog_commitment: Default::default(),
             protocol_id: profile.protocol_id,
             proof_system_id: profile.proof_system_id,
             engine_id: profile.engine_id,
@@ -11771,7 +12265,7 @@ mod tests {
             engine_manifest_digest: profile.engine_manifest_digest,
             statement_digest,
             statement,
-            proof: PrivacyProofV1::IrohaJindoPolynomialCommitmentV0(PrivacyProofBytesV1::new(
+            proof: PrivacyProofV1::IrohaJindoPolynomialCommitmentV1(PrivacyProofBytesV1::new(
                 vec![0x55],
             )),
         };
@@ -11831,6 +12325,108 @@ mod tests {
         );
     }
     #[test]
+    fn initial_executor_cannot_bypass_native_asset_transfer_control_metadata() {
+        let authority = checked_account_id();
+        let world = World::with([], [Account::new(authority.clone()).build(&authority)], []);
+        let state = state_after_genesis(world);
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 1, 0));
+        let mut state_transaction = block.transaction();
+        let key: Name = iroha_data_model::asset::ASSET_TRANSFER_CONTROL_METADATA_KEY
+            .parse()
+            .expect("asset transfer control metadata key");
+        let instructions: [InstructionBox; 2] = [
+            SetKeyValue::account(
+                authority.clone(),
+                key.clone(),
+                Json::new("generic replacement"),
+            )
+            .into(),
+            RemoveKeyValue::account(authority.clone(), key).into(),
+        ];
+
+        for instruction in instructions {
+            let error = super::Executor::Initial
+                .execute_instruction(&mut state_transaction, &authority, instruction)
+                .expect_err("Initial executor must preserve Core's reserved metadata guard");
+            assert!(
+                error
+                    .to_string()
+                    .contains("reserved for native asset transfer controls"),
+                "unexpected Initial-executor rejection: {error}"
+            );
+        }
+    }
+    #[test]
+    fn initial_executor_rejects_reserved_native_metadata_during_account_registration() {
+        let authority = checked_account_id();
+        let world = World::with([], [Account::new(authority.clone()).build(&authority)], []);
+        let state = state_after_genesis(world);
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 1, 0));
+        let mut state_transaction = block.transaction();
+        for key in [
+            ASSET_TRANSFER_CONTROL_METADATA_KEY,
+            iroha_data_model::smart_contract::CONTRACT_DEPLOY_NONCE_METADATA_KEY,
+        ] {
+            let target = checked_account_id();
+            let mut metadata = Metadata::default();
+            metadata.insert(
+                key.parse().expect("reserved metadata key"),
+                Json::new(7_u64),
+            );
+            let instruction: InstructionBox =
+                Register::account(NewAccount::new(target.clone()).with_metadata(metadata)).into();
+            let error = super::Executor::Initial
+                .execute_instruction(&mut state_transaction, &authority, instruction)
+                .expect_err("Initial executor must reject native metadata seeding");
+            assert!(
+                error.to_string().contains("reserved native metadata"),
+                "unexpected Initial-executor rejection: {error}"
+            );
+            assert!(state_transaction.world.account(&target).is_err());
+        }
+    }
+    #[test]
+    fn initial_executor_rejects_account_removal_with_transfer_control_state() {
+        let target = checked_account_id();
+        let asset_definition = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("transfer", "controls").expect("domain id"),
+            "rose".parse().expect("asset name"),
+        );
+        let mut record = AssetTransferControlRecord::new(asset_definition);
+        record.blacklisted = true;
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            ASSET_TRANSFER_CONTROL_METADATA_KEY
+                .parse()
+                .expect("transfer-control metadata key"),
+            Json::new(AssetTransferControlStoreV1 {
+                controls: vec![record],
+            }),
+        );
+        let world = World::with(
+            [],
+            [Account::new(target.clone())
+                .with_metadata(metadata)
+                .build(&target)],
+            [],
+        );
+        let state = state_after_genesis(world);
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 1, 0));
+        let mut state_transaction = block.transaction();
+        let error = super::Executor::Initial
+            .execute_instruction(
+                &mut state_transaction,
+                &target,
+                Unregister::account(target.clone()).into(),
+            )
+            .expect_err("Initial executor must preserve native transfer-control history");
+        assert!(
+            error.to_string().contains("dedicated instructions"),
+            "unexpected Initial-executor rejection: {error}"
+        );
+        assert!(state_transaction.world.account(&target).is_ok());
+    }
+    #[test]
     fn initial_executor_keeps_the_complete_vpn_lifecycle_allowlisted() {
         let source = include_str!("executor.rs");
         let start = source
@@ -11853,13 +12449,290 @@ mod tests {
         }
     }
     #[test]
+    fn initial_executor_routes_self_authorized_public_lane_user_actions_to_core() {
+        use iroha_data_model::isi::staking::{
+            BondPublicLaneStake, ClaimPublicLaneRewards, FinalizePublicLaneUnbond,
+            RebindPublicLaneValidatorPeer, SchedulePublicLaneUnbond,
+        };
+
+        let validator = checked_account_id();
+        let staker = checked_account_id();
+        let peer = iroha_data_model::peer::PeerId::new(checked_keypair().public_key().clone());
+        let request_id = Hash::prehashed([0xA5; Hash::LENGTH]);
+        let instructions: [InstructionBox; 5] = [
+            RebindPublicLaneValidatorPeer::new(
+                iroha_data_model::nexus::LaneId::SINGLE,
+                validator.clone(),
+                peer,
+            )
+            .into(),
+            BondPublicLaneStake {
+                lane_id: iroha_data_model::nexus::LaneId::SINGLE,
+                validator: validator.clone(),
+                staker: staker.clone(),
+                amount: Quantity::from(1_u32),
+                metadata: Metadata::default(),
+            }
+            .into(),
+            SchedulePublicLaneUnbond {
+                lane_id: iroha_data_model::nexus::LaneId::SINGLE,
+                validator: validator.clone(),
+                staker: staker.clone(),
+                request_id,
+                amount: Quantity::from(1_u32),
+                release_at_ms: 1,
+            }
+            .into(),
+            FinalizePublicLaneUnbond {
+                lane_id: iroha_data_model::nexus::LaneId::SINGLE,
+                validator,
+                staker: staker.clone(),
+                request_id,
+            }
+            .into(),
+            ClaimPublicLaneRewards {
+                lane_id: iroha_data_model::nexus::LaneId::SINGLE,
+                account: staker,
+                upto_epoch: None,
+            }
+            .into(),
+        ];
+        for instruction in &instructions {
+            assert!(
+                initial_native_instruction_is_explicitly_admitted(instruction),
+                "{} must reach its exact self-authority and state checks in Core",
+                instruction.id()
+            );
+            assert!(
+                !initial_genesis_instruction_is_explicitly_admitted(instruction),
+                "{} is an ordinary signed user action, not a genesis-only administrative path",
+                instruction.id()
+            );
+        }
+    }
+    fn initial_executor_consensus_evidence_fixture() -> iroha_data_model::block::consensus::Evidence
+    {
+        use iroha_data_model::block::{
+            consensus::{Evidence, SumeragiV2EquivocationEvidence},
+            consensus_v2::{
+                ConsensusMode, ConsensusRound, DataAvailabilityLayout, DualQuorum, HeightContext,
+                PROTOCOL_VERSION, PayloadEncoding, SumeragiV2Equivocation, TimeoutVote,
+                ValidatorPower,
+            },
+        };
+
+        let peer = |seed: u8| {
+            let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+                .expect("derive checked Initial-executor evidence peer keypair");
+            iroha_data_model::peer::PeerId::new(key_pair.public_key().clone())
+        };
+        let mut peers = (0xE1_u8..=0xE4).map(peer).collect::<Vec<_>>();
+        peers.sort();
+        let roster = peers
+            .into_iter()
+            .map(|validator| ValidatorPower {
+                validator,
+                power: 1,
+            })
+            .collect::<Vec<_>>();
+        let network_id = NetworkId::from_genesis_hash(
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA1; 32])),
+        );
+        let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
+            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(network_id, 0, &roster);
+        let context = HeightContext {
+            network_id,
+            protocol_version: PROTOCOL_VERSION,
+            height: 1,
+            epoch: 0,
+            epoch_end_height: 1,
+            next_epoch_snapshot: None,
+            mode: ConsensusMode::Permissioned,
+            parent_commit_qc: None,
+            snapshot_bootstrap: None,
+            quorum: DualQuorum::from_roster(&roster).expect("fixture quorum"),
+            roster,
+            kagemusha_mint_finality_epoch_id,
+            kagemusha_mint_finality_epoch_roster,
+            nexus_amx_context_hash: Hash::new(b"Initial executor evidence nexus context"),
+            execution_policy_hash: Hash::new(b"Initial executor evidence execution policy"),
+            da_layout: DataAvailabilityLayout {
+                encoding: PayloadEncoding::ReedSolomon16,
+                chunk_size_bytes: 4,
+                data_shards: 1,
+                parity_shards: 1,
+                max_payload_size_bytes: 1024,
+                max_chunk_count: 512,
+            },
+            leader_seed: [0xA5; 32],
+        };
+        let round = ConsensusRound {
+            context_id: context.id(),
+            height: context.height,
+            view: 0,
+        };
+        Evidence {
+            equivocation: SumeragiV2EquivocationEvidence {
+                context,
+                proofs_of_possession: vec![vec![0xC1; 96]; 4],
+                conflict: SumeragiV2Equivocation::TimeoutVote {
+                    first: TimeoutVote {
+                        round,
+                        highest_prepare_qc: None,
+                        signer: 0,
+                        signature: vec![0xD1; 96],
+                    },
+                    second: TimeoutVote {
+                        round,
+                        highest_prepare_qc: None,
+                        signer: 0,
+                        signature: vec![0xD2; 96],
+                    },
+                },
+            },
+        }
+    }
+    fn initial_executor_seed_pending_consensus_evidence(
+        world: &mut World,
+        evidence: &iroha_data_model::block::consensus::Evidence,
+    ) -> Hash {
+        use iroha_data_model::block::consensus::{EvidencePenaltyStatus, EvidenceRecord};
+
+        let key = crate::sumeragi::evidence::evidence_key(evidence);
+        world.consensus_evidence.insert(
+            key.clone(),
+            EvidenceRecord {
+                evidence: evidence.clone(),
+                recorded_at_height: 1,
+                recorded_at_view: 0,
+                recorded_at_ms: 0,
+                penalty_status: EvidencePenaltyStatus::Pending,
+            },
+        );
+        key
+    }
+    #[test]
+    fn initial_executor_denies_evidence_penalty_cancel_without_can_manage_peers() {
+        use iroha_data_model::{
+            block::consensus::EvidencePenaltyStatus, isi::staking::CancelConsensusEvidencePenalty,
+        };
+
+        let authority = checked_account_id();
+        let evidence = initial_executor_consensus_evidence_fixture();
+        let mut world = World::with([], [Account::new(authority.clone()).build(&authority)], []);
+        let evidence_key = initial_executor_seed_pending_consensus_evidence(&mut world, &evidence);
+        let state = state_after_genesis(world);
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 1, 0));
+        let mut state_transaction = block.transaction();
+
+        let error = super::Executor::Initial
+            .execute_instruction(
+                &mut state_transaction,
+                &authority,
+                CancelConsensusEvidencePenalty { evidence }.into(),
+            )
+            .expect_err("post-genesis cancellation must require CanManagePeers");
+        assert!(matches!(
+            error,
+            ValidationFail::NotPermitted(ref message)
+                if message == "consensus evidence penalty cancellation requires CanManagePeers"
+        ));
+        assert_eq!(
+            state_transaction
+                .world
+                .consensus_evidence
+                .get(&evidence_key)
+                .expect("pending evidence record")
+                .penalty_status,
+            EvidencePenaltyStatus::Pending,
+            "denied cancellation must not mutate the penalty record"
+        );
+    }
+    #[test]
+    fn initial_executor_routes_evidence_penalty_cancel_with_direct_can_manage_peers() {
+        use iroha_data_model::{
+            block::consensus::EvidencePenaltyStatus, isi::staking::CancelConsensusEvidencePenalty,
+        };
+
+        let authority = checked_account_id();
+        let evidence = initial_executor_consensus_evidence_fixture();
+        let mut world = World::with([], [Account::new(authority.clone()).build(&authority)], []);
+        let evidence_key = initial_executor_seed_pending_consensus_evidence(&mut world, &evidence);
+        world.account_permissions.insert(
+            authority.clone(),
+            BTreeSet::from([Permission::from(executor_permission::peer::CanManagePeers)]),
+        );
+        let state = state_after_genesis(world);
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 1, 0));
+        let mut state_transaction = block.transaction();
+
+        super::Executor::Initial
+            .execute_instruction(
+                &mut state_transaction,
+                &authority,
+                CancelConsensusEvidencePenalty { evidence }.into(),
+            )
+            .expect("exact direct CanManagePeers must route cancellation through Core");
+        assert_eq!(
+            state_transaction
+                .world
+                .consensus_evidence
+                .get(&evidence_key)
+                .expect("cancelled evidence record")
+                .penalty_status,
+            EvidencePenaltyStatus::Cancelled { height: 2 }
+        );
+    }
+    #[test]
+    fn initial_executor_routes_evidence_penalty_cancel_with_role_can_manage_peers() {
+        use iroha_data_model::{
+            block::consensus::EvidencePenaltyStatus, isi::staking::CancelConsensusEvidencePenalty,
+        };
+
+        let authority = checked_account_id();
+        let evidence = initial_executor_consensus_evidence_fixture();
+        let mut world = World::with([], [Account::new(authority.clone()).build(&authority)], []);
+        let evidence_key = initial_executor_seed_pending_consensus_evidence(&mut world, &evidence);
+        let role_id: RoleId = "consensus_evidence_penalty_manager"
+            .parse()
+            .expect("role id");
+        let role = Role::new(role_id.clone(), authority.clone())
+            .add_permission(Permission::from(executor_permission::peer::CanManagePeers))
+            .build(&authority);
+        world.roles.insert(role_id.clone(), role);
+        world.account_roles.insert(
+            crate::role::RoleIdWithOwner::new(authority.clone(), role_id),
+            (),
+        );
+        let state = state_after_genesis(world);
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 1, 0));
+        let mut state_transaction = block.transaction();
+
+        super::Executor::Initial
+            .execute_instruction(
+                &mut state_transaction,
+                &authority,
+                CancelConsensusEvidencePenalty { evidence }.into(),
+            )
+            .expect("role-held exact CanManagePeers must route cancellation through Core");
+        assert_eq!(
+            state_transaction
+                .world
+                .consensus_evidence
+                .get(&evidence_key)
+                .expect("cancelled evidence record")
+                .penalty_status,
+            EvidencePenaltyStatus::Cancelled { height: 2 }
+        );
+    }
+    #[test]
     #[allow(clippy::too_many_lines)]
     fn initial_executor_routes_exact_scoped_governance_isis_through_core_authorization() {
         use iroha_data_model::governance::types::{AbiVersion, ContractAbiHash, ContractCodeHash};
         use iroha_data_model::isi::governance as gov;
         use iroha_executor_data_model::permission::governance::{
-            CanProposeContractDeployment, CanProposeRuntimeUpgrade, CanRecordCitizenService,
-            CanRestituteGovernanceLock, CanSlashGovernanceLock, CanSubmitGovernanceBallot,
+            CanProposeContractDeployment, CanProposeRuntimeUpgrade, CanRestituteGovernanceLock,
+            CanSlashGovernanceLock, CanSubmitGovernanceBallot,
         };
         let authority = checked_account_id();
         let citizen_target = checked_account_id();
@@ -11938,17 +12811,6 @@ mod tests {
                 "CanRestituteGovernanceLock",
                 "restitution amount must be > 0",
             ),
-            (
-                gov::RecordCitizenServiceOutcome {
-                    owner: citizen_target.clone(),
-                    epoch: 1,
-                    role: "observer".to_owned(),
-                    event: gov::CitizenServiceEvent::Decline,
-                }
-                .into(),
-                "CanRecordCitizenService",
-                "citizen not found for service record",
-            ),
         ];
         for (instruction, _, _) in &probes {
             assert!(
@@ -11977,9 +12839,6 @@ mod tests {
                 }),
                 Permission::from(CanRestituteGovernanceLock {
                     referendum_id: "other-governance-scope".to_owned(),
-                }),
-                Permission::from(CanRecordCitizenService {
-                    owner: authority.clone(),
                 }),
             ]),
         );
@@ -12054,9 +12913,6 @@ mod tests {
                     referendum_id: referendum_id.clone(),
                 }),
                 Permission::from(CanRestituteGovernanceLock { referendum_id }),
-                Permission::from(CanRecordCitizenService {
-                    owner: citizen_target,
-                }),
             ]),
         );
         for (instruction, permission_name, downstream_error) in probes {
@@ -12335,11 +13191,6 @@ mod tests {
                 referendum_id: "grant-policy-referendum".to_owned(),
             }
             .into();
-        let record_service_permission: Permission =
-            executor_permission::governance::CanRecordCitizenService {
-                owner: adjacent_owner.clone(),
-            }
-            .into();
         let slash_permission: Permission =
             executor_permission::governance::CanSlashGovernanceLock {
                 referendum_id: "grant-policy-referendum".to_owned(),
@@ -12380,7 +13231,6 @@ mod tests {
                 contract_proposal_permission.clone(),
                 runtime_proposal_permission.clone(),
                 ballot_permission.clone(),
-                record_service_permission.clone(),
                 slash_permission.clone(),
                 restitute_permission.clone(),
             ]),
@@ -12764,11 +13614,10 @@ mod tests {
                 false,
             ),
             ("CanSubmitGovernanceBallot", ballot_permission, false),
-            ("CanRecordCitizenService", record_service_permission, false),
             ("CanSlashGovernanceLock", slash_permission, false),
             ("CanRestituteGovernanceLock", restitute_permission, false),
         ];
-        assert_eq!(cases.len(), 48, "update this table for every scoped arm");
+        assert_eq!(cases.len(), 47, "update this table for every scoped arm");
         assert_eq!(
             cases
                 .iter()
@@ -12782,7 +13631,6 @@ mod tests {
             "CanProposeContractDeployment",
             "CanProposeRuntimeUpgrade",
             "CanSubmitGovernanceBallot",
-            "CanRecordCitizenService",
             "CanSlashGovernanceLock",
             "CanRestituteGovernanceLock",
         ] {
@@ -13508,12 +14356,12 @@ mod tests {
         let administrator_account = Account::new(administrator.clone()).build(&administrator);
         let ordinary_permission: Permission =
             executor_permission::parameter::CanSetParameters.into();
-        let offline_permission: Permission =
-            executor_permission::offline::CanManageOfflineEscrow.into();
+        let kagemusha_permission: Permission =
+            executor_permission::kagemusha::CanManageKagemushaReserve.into();
         let mut world = World::with([], [attacker_account, administrator_account], []);
         world.account_permissions.insert(
             administrator.clone(),
-            BTreeSet::from([ordinary_permission.clone(), offline_permission.clone()]),
+            BTreeSet::from([ordinary_permission.clone(), kagemusha_permission.clone()]),
         );
         let state = state_for_testing(world);
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
@@ -13525,10 +14373,10 @@ mod tests {
         )
         .execute(&administrator, &mut state_transaction)
         .expect("seed ordinary role fixture");
-        let offline_role: RoleId = "initial_executor_offline_role".parse().expect("role id");
+        let kagemusha_role: RoleId = "initial_executor_kagemusha_role".parse().expect("role id");
         Register::role(
-            Role::new(offline_role.clone(), administrator.clone())
-                .add_permission(offline_permission.clone()),
+            Role::new(kagemusha_role.clone(), administrator.clone())
+                .add_permission(kagemusha_permission.clone()),
         )
         .execute(&administrator, &mut state_transaction)
         .expect("seed governed role fixture");
@@ -13573,8 +14421,8 @@ mod tests {
                 .any(|permission| permission == &ordinary_permission)
         );
         for instruction in [
-            Grant::account_permission(offline_permission.clone(), attacker.clone()).into(),
-            Grant::account_role(offline_role.clone(), attacker.clone()).into(),
+            Grant::account_permission(kagemusha_permission.clone(), attacker.clone()).into(),
+            Grant::account_role(kagemusha_role.clone(), attacker.clone()).into(),
         ] {
             super::Executor::Initial
                 .execute_instruction(&mut state_transaction, &administrator, instruction)
@@ -13587,12 +14435,12 @@ mod tests {
                 .world
                 .account_permissions_iter(&attacker)
                 .expect("attacker permissions")
-                .any(|permission| permission == &offline_permission)
+                .any(|permission| permission == &kagemusha_permission)
         );
         assert!(!authority_has_role(
             &state_transaction.world,
             &attacker,
-            &offline_role
+            &kagemusha_role
         ));
     }
     #[test]
@@ -13748,12 +14596,14 @@ mod tests {
             InstructionBox::from(
                 iroha_data_model::isi::smart_contract_code::ActivateContractInstance {
                     contract_address: contract_address.clone(),
+                    expected_revision: 1,
                     code_hash: Hash::new(b"executor-lifecycle-activation"),
                 },
             ),
             InstructionBox::from(
                 iroha_data_model::isi::smart_contract_code::DeactivateContractInstance {
                     contract_address: contract_address.clone(),
+                    expected_revision: 1,
                     reason: Some("executor lifecycle guard".to_owned()),
                 },
             ),
@@ -14797,8 +15647,11 @@ mod tests {
                 Json::new(()),
             )]),
         );
-        let subject_binding =
-            crate::smartcontracts::code::ContractSubjectBinding::new(&contract_address);
+        let subject_binding = crate::smartcontracts::code::ContractSubjectBinding::new_direct(
+            &contract_address,
+            authority.clone(),
+        )
+        .with_active_code_hash(code_hash);
         state_transaction
             .world
             .contract_subject_addresses
@@ -16333,6 +17186,16 @@ mod tests {
         assert!(matches!(err, ValidationFail::InternalError(msg) if msg.contains("registration")));
     }
     #[test]
+    fn detached_register_committee_peer_forces_sequential_path() {
+        let peer_id = make_peer_id();
+        let isi =
+            iroha_data_model::isi::register::RegisterCommitteePeerWithPop::new(peer_id, Vec::new());
+        let mut delta = crate::state::DetachedStateTransactionDelta::default();
+        let err = execute_instruction_detached(&alice(), &InstructionBox::from(isi), &mut delta)
+            .expect_err("committee peer registration must be unsupported in detached mode");
+        assert!(matches!(err, ValidationFail::InternalError(msg) if msg.contains("registration")));
+    }
+    #[test]
     fn detached_unregister_peer_forces_sequential_path() {
         let peer_id = make_peer_id();
         let isi = iroha_data_model::isi::Unregister::peer(peer_id);
@@ -17702,12 +18565,17 @@ mod tests {
                     [],
                 );
                 seed_test_asset_supply(&mut world, &asset_definition);
+                let contract_code_hash = Hash::new(b"contract-batch-code");
                 world
                     .contract_instances
-                    .insert(contract_address.clone(), Hash::new(b"contract-batch-code"));
+                    .insert(contract_address.clone(), contract_code_hash);
                 world.contract_subject_bindings.insert(
                     contract_address.clone(),
-                    crate::smartcontracts::code::ContractSubjectBinding::new(&contract_address),
+                    crate::smartcontracts::code::ContractSubjectBinding::new_direct(
+                        &contract_address,
+                        deployer.clone(),
+                    )
+                    .with_active_code_hash(contract_code_hash),
                 );
                 world
                     .contract_subject_addresses
@@ -17829,7 +18697,11 @@ mod tests {
             .insert(contract_address.clone(), code_hash);
         world.contract_subject_bindings.insert(
             contract_address.clone(),
-            crate::smartcontracts::code::ContractSubjectBinding::new(&contract_address),
+            crate::smartcontracts::code::ContractSubjectBinding::new_direct(
+                &contract_address,
+                deployer.clone(),
+            )
+            .with_active_code_hash(code_hash),
         );
         world
             .contract_subject_addresses
@@ -19091,7 +19963,7 @@ seiyaku TriggerArguments {
             .expect("prepare parameterized trigger callback")
     }
     #[test]
-    fn protected_contract_call_is_denied_before_argument_record_decode() {
+    fn contract_call_enforces_entrypoint_and_hold_before_argument_decode() {
         const REQUIRED_PERMISSION: &str = "CanInvokeContractEntrypoint";
         let (program, manifest) = ivm::KotodamaCompiler::new()
             .compile_source_with_manifest(
@@ -19148,13 +20020,24 @@ seiyaku GuardedValue {
         let metadata_marker: Name = "guarded_value"
             .parse()
             .expect("valid direct-call metadata marker");
-        world.contract_code.insert(code_hash, program);
+        world.contract_code.insert(code_hash, program.clone());
         world
             .contract_manifests
             .insert(code_hash, manifest.signed(&ALICE_KEYPAIR));
         world
             .contract_instances
             .insert(contract_address.clone(), code_hash);
+        world
+            .contract_subject_addresses
+            .insert(contract_address.subject_id(), contract_address.clone());
+        world.contract_subject_bindings.insert(
+            contract_address.clone(),
+            crate::smartcontracts::code::ContractSubjectBinding::new_direct(
+                &contract_address,
+                authority.clone(),
+            )
+            .with_active_code_hash(code_hash),
+        );
         let state = State::new_with_chain(
             world,
             Kura::blank_kura_for_testing(),
@@ -19175,6 +20058,36 @@ seiyaku GuardedValue {
             entrypoint: "write".to_owned(),
             arguments: Some(arguments),
         }))
+        .sign(ALICE_KEYPAIR.private_key());
+        let mut raw_metadata = Metadata::default();
+        raw_metadata.insert(
+            "contract_address"
+                .parse()
+                .expect("static contract address key"),
+            Json::new(contract_address.to_string()),
+        );
+        raw_metadata.insert(
+            "contract_entrypoint"
+                .parse()
+                .expect("static contract entrypoint key"),
+            Json::new("write"),
+        );
+        raw_metadata.insert(
+            "contract_payload"
+                .parse()
+                .expect("static contract payload key"),
+            Json::from(norito::json!({ "value": "7" })),
+        );
+        let raw_transaction = TransactionBuilder::new(
+            state.network_id,
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(
+                Vec::new(),
+                core::num::NonZeroU64::new(50_000_000),
+            ),
+        )
+        .with_metadata(raw_metadata)
+        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program)))
         .sign(ALICE_KEYPAIR.private_key());
         let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
         let mut state_tx = block.transaction();
@@ -19238,6 +20151,118 @@ seiyaku GuardedValue {
             .get(&metadata_marker)
             .cloned()
             .expect("authorized direct call writes its metadata marker");
+        {
+            let binding = state_tx
+                .world
+                .contract_subject_bindings
+                .get_mut(&contract_address)
+                .expect("active contract retains its lifecycle binding");
+            binding.lifecycle.emergency_hold = Some(ContractEmergencyHoldV1 {
+                incident_digest: [0xA1; 32],
+                proposal_content_id: [0xA2; 32],
+                governance_attempt_id: [0xA3; 32],
+                reason: "contain direct contract execution".to_owned(),
+                imposed_at_height: 1,
+                expires_at_height: 2,
+            });
+            binding.lifecycle.revision = binding
+                .lifecycle
+                .revision
+                .checked_add(1)
+                .expect("test lifecycle revision advances");
+        }
+        let preproof_held = enforce_transaction_contract_permission_before_proof_verification(
+            &state_tx,
+            &authority,
+            &raw_transaction,
+            &mut ivm_cache,
+            state_tx.block_height(),
+        )
+        .expect_err("raw-IVM pre-proof admission must observe the execution block height");
+        assert!(
+            matches!(preproof_held, ValidationFail::NotPermitted(ref message)
+                if message.contains("held by Parliament")),
+            "unexpected raw-IVM pre-proof emergency-hold error: {preproof_held}"
+        );
+        enforce_transaction_contract_permission_before_proof_verification(
+            &state_tx,
+            &authority,
+            &raw_transaction,
+            &mut ivm_cache,
+            2,
+        )
+        .expect("the half-open hold must not deny raw-IVM admission at its expiry height");
+        ivm::reset_argument_record_decode_count();
+        let held = super::Executor::Initial
+            .execute_transaction(
+                &mut state_tx,
+                &authority,
+                transaction.clone(),
+                &mut ivm_cache,
+            )
+            .expect_err("an active Parliament hold must suspend the direct contract call");
+        assert!(
+            matches!(held, ValidationFail::NotPermitted(ref message)
+                if message.contains("held by Parliament")),
+            "unexpected emergency-hold error: {held}"
+        );
+        assert_eq!(
+            ivm::argument_record_decode_count(),
+            0,
+            "a held direct call must fail before decoding its arguments"
+        );
+        assert_eq!(
+            state_tx
+                .world
+                .account(&authority)
+                .expect("authority account")
+                .metadata()
+                .get(&metadata_marker),
+            Some(&authorized_marker),
+            "a held direct call must apply no queued effect"
+        );
+        ivm::reset_argument_record_decode_count();
+        let held_raw = super::Executor::Initial
+            .execute_transaction(
+                &mut state_tx,
+                &authority,
+                raw_transaction.clone(),
+                &mut ivm_cache,
+            )
+            .expect_err("an active Parliament hold must suspend raw-IVM contract dispatch");
+        assert!(
+            matches!(held_raw, ValidationFail::NotPermitted(ref message)
+                if message.contains("held by Parliament")),
+            "unexpected raw-IVM emergency-hold error: {held_raw}"
+        );
+        assert_eq!(
+            ivm::argument_record_decode_count(),
+            0,
+            "held raw-IVM dispatch must fail before decoding its argument record"
+        );
+        assert_eq!(
+            state_tx
+                .world
+                .account(&authority)
+                .expect("authority account")
+                .metadata()
+                .get(&metadata_marker),
+            Some(&authorized_marker),
+            "held raw-IVM dispatch must apply no queued effect"
+        );
+        {
+            let binding = state_tx
+                .world
+                .contract_subject_bindings
+                .get_mut(&contract_address)
+                .expect("held contract retains its lifecycle binding");
+            binding.lifecycle.emergency_hold = None;
+            binding.lifecycle.revision = binding
+                .lifecycle
+                .revision
+                .checked_add(1)
+                .expect("test lifecycle revision advances");
+        }
         let live_code = state_tx
             .world
             .contract_code
@@ -19428,6 +20453,24 @@ seiyaku GuardedValueRebound {
         );
     }
     #[test]
+    fn mixed_batch_next_contract_reserves_accountable_nested_block_gas() {
+        assert_eq!(
+            super::live_batch_contract_execution_limit(Some(100), 20, 80, 70),
+            10,
+            "nested trigger/host work must reduce the next contract's block allowance"
+        );
+        assert_eq!(
+            super::live_batch_contract_execution_limit(Some(30), 20, 80, 25),
+            10,
+            "the signature-bound direct-gas allowance remains independently enforced"
+        );
+        assert_eq!(
+            super::live_batch_contract_execution_limit(None, 20, u64::MAX, 25),
+            u64::MAX - 25,
+            "an unlimited block still accounts already-retained work"
+        );
+    }
+    #[test]
     fn mixed_batch_observes_ordered_permission_state_and_rolls_back_on_failure() {
         let (program, manifest) = ivm::KotodamaCompiler::new()
             .compile_source_with_manifest(
@@ -19588,6 +20631,11 @@ seiyaku OrderedBatchGuard {
             matches!(instruction_cap_error, ValidationFail::NotPermitted(ref message)
                 if message == "overlay exceeds max instructions: 2 > 1"),
             "unexpected mixed-batch instruction-cap error: {instruction_cap_error}"
+        );
+        assert!(
+            instruction_capped_state_tx.last_tx_gas_used
+                > isi_gas::meter_instructions(&explicit_instructions[..1]),
+            "overlay-cap rejection must retain the completed contract attempt"
         );
         drop(instruction_capped_state_tx);
         let explicit_overlay_bytes =
@@ -19907,6 +20955,84 @@ seiyaku IdentityRequired {
                 if message.contains(&signed_hash.to_string())
                     && message.contains(&live_hash.to_string())),
             "unexpected binding error: {error}"
+        );
+    }
+    #[test]
+    fn reviewable_contract_metadata_binds_exact_invocation_arguments() {
+        let (program, _) = ivm::KotodamaCompiler::new()
+            .compile_source_with_manifest(
+                r#"
+seiyaku ReviewedValue {
+  kotoage fn write(int value) authorize("CanInvokeContractEntrypoint") {}
+}
+"#,
+            )
+            .expect("compile reviewed contract");
+        let prepared = ivm::prepare_contract(Arc::<[u8]>::from(program.clone()))
+            .expect("prepare reviewed contract");
+        let schema = prepared
+            .entrypoint_descriptor("write")
+            .and_then(|entrypoint| entrypoint.argument_schema.as_ref())
+            .expect("reviewed argument schema");
+        let reviewed_payload = Json::from(norito::json!({ "value": "7" }));
+        let reviewed_arguments = ivm::encode_argument_record_from_json(schema, &reviewed_payload)
+            .expect("encode reviewed arguments");
+        let swapped_arguments = ivm::encode_argument_record_from_json(
+            schema,
+            &Json::from(norito::json!({ "value": "8" })),
+        )
+        .expect("encode swapped arguments");
+        let contract_address = ContractAddress::derive(
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
+            &ALICE_ID,
+            78,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive contract address");
+        let code_hash = ivm::contract_code_hash(&program);
+        let mut metadata = Metadata::default();
+        for (key, value) in [
+            ("contract_address", Json::new(contract_address.to_string())),
+            ("contract_code_hash", Json::new(code_hash.to_string())),
+            ("contract_entrypoint", Json::new("write".to_owned())),
+        ] {
+            metadata.insert(key.parse().expect("static contract metadata key"), value);
+        }
+        metadata.insert(
+            "contract_payload"
+                .parse()
+                .expect("static contract payload metadata key"),
+            reviewed_payload,
+        );
+        let invocation = |arguments: Vec<u8>| ContractInvocation {
+            contract_address: contract_address.clone(),
+            expected_code_hash: code_hash,
+            entrypoint: "write".to_owned(),
+            arguments: Some(
+                iroha_data_model::transaction::executable::ContractArgumentRecord::try_new(
+                    arguments,
+                )
+                .expect("bounded reviewed arguments"),
+            ),
+        };
+        super::ensure_contract_invocation_metadata_binding(
+            &invocation(reviewed_arguments),
+            &metadata,
+            &prepared,
+        )
+        .expect("matching reviewed metadata and arguments");
+        let error = super::ensure_contract_invocation_metadata_binding(
+            &invocation(swapped_arguments),
+            &metadata,
+            &prepared,
+        )
+        .expect_err("swapped argument bytes must be rejected");
+        assert!(
+            matches!(error, ValidationFail::NotPermitted(ref message)
+                if message.contains("arguments differ from the canonical contract_payload")),
+            "unexpected swapped-arguments error: {error}"
         );
     }
     #[test]

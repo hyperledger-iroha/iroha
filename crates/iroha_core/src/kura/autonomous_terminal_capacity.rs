@@ -247,7 +247,7 @@ impl Kura {
             conceptual_bytes,
         })
     }
-    /// Return `(missing_terminal_count, incomplete_lifecycle_count)` across
+    /// Return `(missing_terminal_count, incomplete_terminal_count)` across
     /// every active route while geometry and sidecar locks are held.
     ///
     /// The shared hard cardinality is also the startup recovery bound. This
@@ -292,13 +292,18 @@ impl Kura {
                 .checked_add(
                     inventory
                         .lifecycle_identities
-                        .difference(&inventory.complete_terminal_outcome_identities)
+                        .union(&inventory.terminal_outcome_identities)
+                        .filter(|identity| {
+                            !inventory
+                                .complete_terminal_outcome_identities
+                                .contains(identity)
+                        })
                         .count(),
                 )
                 .ok_or_else(|| {
                     Self::invalid_lane_artifact_error(
                         self.store_root.clone(),
-                        "global autonomous incomplete lifecycle count overflowed",
+                        "global autonomous incomplete terminal count overflowed",
                     )
                 })?;
             if missing > MAX_AUTONOMOUS_LANE_ATTEMPT_NAMESPACE_FILES
@@ -363,6 +368,57 @@ impl Kura {
         path: &Path,
         allowed_view_temp: Option<&Path>,
     ) -> Result<()> {
+        let additional_identities = usize::from(creates_lifecycle_identity);
+        self.validate_configured_autonomous_mutation_disk_peak_with_reservation_deltas_locked(
+            pending_canonical_bytes,
+            additional_physical_peak_bytes,
+            0,
+            additional_identities,
+            additional_identities,
+            consumes_terminal_cas_transient,
+            path,
+            allowed_view_temp,
+        )
+    }
+
+    /// Preflight a batch that creates terminal-only replica identities.
+    ///
+    /// Unlike an owned lifecycle, a replica outcome has no prior missing-file
+    /// reservation. Its stable bytes and its contribution to the shared CAS
+    /// transient therefore have to be admitted explicitly for the whole batch
+    /// before the first Pending file is written.
+    fn validate_configured_autonomous_terminal_batch_disk_peak_locked(
+        &self,
+        pending_canonical_bytes: u64,
+        additional_unreserved_stable_bytes: u64,
+        maximum_atomic_bytes: u64,
+        additional_incomplete_terminal_identities: usize,
+        path: &Path,
+    ) -> Result<()> {
+        self.validate_configured_autonomous_mutation_disk_peak_with_reservation_deltas_locked(
+            pending_canonical_bytes,
+            maximum_atomic_bytes,
+            additional_unreserved_stable_bytes,
+            0,
+            additional_incomplete_terminal_identities,
+            true,
+            path,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn validate_configured_autonomous_mutation_disk_peak_with_reservation_deltas_locked(
+        &self,
+        pending_canonical_bytes: u64,
+        additional_physical_peak_bytes: u64,
+        additional_unreserved_stable_bytes: u64,
+        additional_missing_terminal_identities: usize,
+        additional_incomplete_terminal_identities: usize,
+        consumes_terminal_cas_transient: bool,
+        path: &Path,
+        allowed_view_temp: Option<&Path>,
+    ) -> Result<()> {
         if self.max_disk_usage_bytes == 0 || self.store_root.as_os_str().is_empty() {
             return Ok(());
         }
@@ -372,7 +428,7 @@ impl Kura {
             )?;
         let terminal_max = u64::try_from(AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_MAX_BYTES)?;
         let resulting_missing = missing
-            .checked_add(usize::from(creates_lifecycle_identity))
+            .checked_add(additional_missing_terminal_identities)
             .ok_or_else(|| {
                 Self::invalid_lane_artifact_error(
                     path.to_path_buf(),
@@ -380,7 +436,7 @@ impl Kura {
                 )
             })?;
         let resulting_incomplete = incomplete
-            .checked_add(usize::from(creates_lifecycle_identity))
+            .checked_add(additional_incomplete_terminal_identities)
             .ok_or_else(|| {
                 Self::invalid_lane_artifact_error(
                     path.to_path_buf(),
@@ -434,6 +490,7 @@ impl Kura {
         let required = self
             .kura_disk_usage_bytes()?
             .checked_add(pending_canonical_bytes)
+            .and_then(|bytes| bytes.checked_add(additional_unreserved_stable_bytes))
             .and_then(|bytes| bytes.checked_add(physical_and_transient))
             .and_then(|bytes| bytes.checked_add(stable_terminal_reservations))
             .and_then(|bytes| bytes.checked_add(post_wsv_reservations))

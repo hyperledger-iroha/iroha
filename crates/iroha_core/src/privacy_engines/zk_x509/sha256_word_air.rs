@@ -1403,7 +1403,7 @@ mod tests {
     }
     fn io_challenges() -> ZkX509IoChallengesV1 {
         let mut transcript = TransparentTranscriptV1::new(
-            super::stark::ZK_X509_DIGEST_CONTEXT_V1,
+            super::super::stark::ZK_X509_DIGEST_CONTEXT_V1,
             b"zk-x509-sha-io-test",
             &test_digest_v1(0x61),
             &test_digest_v1(0x62),
@@ -1615,7 +1615,7 @@ mod tests {
         let main_root = test_digest_v1(0x33).to_le_bytes();
         let sorted_root = test_digest_v1(0x44).to_le_bytes();
         let mut transcript = TransparentTranscriptV1::new(
-            super::stark::ZK_X509_DIGEST_CONTEXT_V1,
+            super::super::stark::ZK_X509_DIGEST_CONTEXT_V1,
             b"zk-x509-test-suite",
             &profile,
             &public,
@@ -1633,7 +1633,7 @@ mod tests {
         let mut changed_root = main_root;
         changed_root[0] ^= 1;
         let mut changed = TransparentTranscriptV1::new(
-            super::stark::ZK_X509_DIGEST_CONTEXT_V1,
+            super::super::stark::ZK_X509_DIGEST_CONTEXT_V1,
             b"zk-x509-test-suite",
             &profile,
             &public,

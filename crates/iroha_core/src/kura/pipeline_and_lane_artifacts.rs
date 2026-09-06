@@ -2029,6 +2029,41 @@ impl AutonomousLifecycleTerminalOutcomeSourceV1 {
         }
     }
 }
+/// Durable evidence basis for one terminal source outcome.
+///
+/// `OwnedLifecycle` retains the original attempt plus signed-cursor custody
+/// rules. A canonical noncommittee replica is a separate, merge-only basis: it
+/// binds the exact revalidated replica bytes and must never be interpreted as
+/// local lifecycle ownership or retirement authority.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
+#[norito(deny_unknown_fields)]
+pub(crate) enum AutonomousLifecycleTerminalOutcomeBasisV1 {
+    /// The local validator owns the exact payload attempt and signed cursor.
+    #[codec(index = 0)]
+    OwnedLifecycle,
+    /// A noncommittee node holds only the exact canonical merge replica.
+    #[codec(index = 1)]
+    CanonicalReplica { replica_hash: Hash },
+}
+impl AutonomousLifecycleTerminalOutcomeBasisV1 {
+    fn validate_for_source(
+        self,
+        source: AutonomousLifecycleTerminalOutcomeSourceV1,
+    ) -> Result<(), &'static str> {
+        match self {
+            Self::OwnedLifecycle => Ok(()),
+            Self::CanonicalReplica { replica_hash }
+                if replica_hash.as_ref().iter().all(|byte| *byte == 0) =>
+            {
+                Err("canonical replica terminal basis has a zero replica hash")
+            }
+            Self::CanonicalReplica { .. } if !source.is_canonical_carrier() => {
+                Err("canonical replica terminal basis requires a canonical carrier source")
+            }
+            Self::CanonicalReplica { .. } => Ok(()),
+        }
+    }
+}
 /// Crash-safe publication stage for one exact terminal outcome.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
@@ -2051,6 +2086,7 @@ pub(crate) enum AutonomousLifecycleTerminalOutcomeStageV1 {
 struct AutonomousLifecycleTerminalOutcomeBodyV1 {
     version: u16,
     binding: AutonomousLifecycleAttemptBindingV1,
+    basis: AutonomousLifecycleTerminalOutcomeBasisV1,
     source: AutonomousLifecycleTerminalOutcomeSourceV1,
     stage: AutonomousLifecycleTerminalOutcomeStageV1,
 }
@@ -2072,11 +2108,13 @@ impl AutonomousLifecycleTerminalOutcomeV1 {
     const VERSION: u16 = 1;
     fn pending(
         binding: AutonomousLifecycleAttemptBindingV1,
+        basis: AutonomousLifecycleTerminalOutcomeBasisV1,
         source: AutonomousLifecycleTerminalOutcomeSourceV1,
     ) -> Result<Self, &'static str> {
         let body = AutonomousLifecycleTerminalOutcomeBodyV1 {
             version: Self::VERSION,
             binding,
+            basis,
             source,
             stage: AutonomousLifecycleTerminalOutcomeStageV1::Pending {
                 reserved_terminal:
@@ -2090,36 +2128,51 @@ impl AutonomousLifecycleTerminalOutcomeV1 {
         terminal: ProductionInFlightFirstReleaseStateProjection,
     ) -> Result<Self, &'static str> {
         if !matches!(
-            self.body.stage,
+            self.stage(),
             AutonomousLifecycleTerminalOutcomeStageV1::Pending { .. }
         ) {
             return Err("autonomous lifecycle terminal outcome is not pending");
         }
-        let body = AutonomousLifecycleTerminalOutcomeBodyV1 {
+        Self::from_body(AutonomousLifecycleTerminalOutcomeBodyV1 {
             version: Self::VERSION,
             binding: self.body.binding.clone(),
-            source: self.body.source.clone(),
+            basis: self.body.basis,
+            source: self.body.source,
             stage: AutonomousLifecycleTerminalOutcomeStageV1::Complete {
                 terminal: AutonomousLifecycleStableStateV1::from_production(terminal),
             },
-        };
-        Self::from_body(body)
+        })
     }
     fn from_body(body: AutonomousLifecycleTerminalOutcomeBodyV1) -> Result<Self, &'static str> {
-        Self::validate_body(&body)?;
+        if body.version != Self::VERSION {
+            return Err("unsupported autonomous lifecycle terminal outcome version");
+        }
+        Self::validate_body_parts(&body.binding, body.basis, body.source, body.stage)?;
         let encoded = norito::encode_canonical(&body)
             .map_err(|_| "autonomous lifecycle terminal outcome body failed encoding")?;
         let outcome_hash =
             Hash::new_from_chunks(&[AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_HASH_DOMAIN, &encoded]);
         Ok(Self { body, outcome_hash })
     }
-    fn validate_body(body: &AutonomousLifecycleTerminalOutcomeBodyV1) -> Result<(), &'static str> {
-        if body.version != Self::VERSION {
-            return Err("unsupported autonomous lifecycle terminal outcome version");
+    fn validate_body_parts(
+        binding: &AutonomousLifecycleAttemptBindingV1,
+        basis: AutonomousLifecycleTerminalOutcomeBasisV1,
+        source: AutonomousLifecycleTerminalOutcomeSourceV1,
+        stage: AutonomousLifecycleTerminalOutcomeStageV1,
+    ) -> Result<(), &'static str> {
+        binding.validate_structure()?;
+        source.validate_structure()?;
+        basis.validate_for_source(source)?;
+        if matches!(
+            basis,
+            AutonomousLifecycleTerminalOutcomeBasisV1::CanonicalReplica { .. }
+        ) && binding.local_actor() != binding.producer_actor()
+        {
+            return Err(
+                "canonical replica terminal binding must use the producer as its logical witness",
+            );
         }
-        body.binding.validate_structure()?;
-        body.source.validate_structure()?;
-        match body.stage {
+        match stage {
             AutonomousLifecycleTerminalOutcomeStageV1::Pending { reserved_terminal } => {
                 if !reserved_terminal.is_terminal_outcome_pending_reservation() {
                     return Err(
@@ -2128,13 +2181,13 @@ impl AutonomousLifecycleTerminalOutcomeV1 {
                 }
             }
             AutonomousLifecycleTerminalOutcomeStageV1::Complete { terminal } => {
-                body.binding.validate_state(terminal)?;
+                binding.validate_state(terminal)?;
                 let projection = terminal
                     .to_production()
                     .ok_or("unsupported autonomous lifecycle terminal outcome state version")?;
                 let owner = production_in_flight_first_release_terminal_owner(projection)
                     .ok_or("autonomous lifecycle terminal outcome has no terminal owner")?;
-                if body.source.is_canonical_carrier()
+                if source.is_canonical_carrier()
                     && (!owner.canonical_wsv_owner
                         || owner.ordinary_fifo_owner
                         || !owner.commit_terminal
@@ -2144,7 +2197,7 @@ impl AutonomousLifecycleTerminalOutcomeV1 {
                         "canonical autonomous lifecycle outcome has the wrong terminal owner",
                     );
                 }
-                if body.source.is_retired_release()
+                if source.is_retired_release()
                     && (!owner.ordinary_fifo_owner
                         || owner.canonical_wsv_owner
                         || owner.commit_terminal
@@ -2154,7 +2207,7 @@ impl AutonomousLifecycleTerminalOutcomeV1 {
                         "release autonomous lifecycle outcome has the wrong terminal owner",
                     );
                 }
-                if let Some(disposition) = body.source.replica_queue_disposition() {
+                if let Some(disposition) = source.replica_queue_disposition() {
                     let exact_fifo = disposition
                         == AutonomousLifecycleReplicaQueueDispositionV1::ExactOrdinaryFifo;
                     let expected_reservation_state = if exact_fifo {
@@ -2162,8 +2215,8 @@ impl AutonomousLifecycleTerminalOutcomeV1 {
                     } else {
                         IN_FLIGHT_FIRST_RELEASE_RESERVATION_REPLICA_QUEUE_ABSENT
                     };
-                    let (_, local_actor) = body.binding.local_validator_identity();
-                    if local_actor == body.binding.producer_actor_projection()
+                    let (_, local_actor) = binding.local_validator_identity();
+                    if local_actor == binding.producer_actor_projection()
                         || projection.decision.release_owner != local_actor
                         || owner.ordinary_fifo_owner != exact_fifo
                         || owner.canonical_wsv_owner
@@ -2182,7 +2235,15 @@ impl AutonomousLifecycleTerminalOutcomeV1 {
         Ok(())
     }
     fn validate_structure(&self) -> Result<(), &'static str> {
-        Self::validate_body(&self.body)?;
+        if self.body.version != Self::VERSION {
+            return Err("unsupported autonomous lifecycle terminal outcome version");
+        }
+        Self::validate_body_parts(
+            &self.body.binding,
+            self.body.basis,
+            self.body.source,
+            self.body.stage,
+        )?;
         let encoded = norito::encode_canonical(&self.body)
             .map_err(|_| "autonomous lifecycle terminal outcome body failed encoding")?;
         let expected =
@@ -2194,7 +2255,18 @@ impl AutonomousLifecycleTerminalOutcomeV1 {
     }
     fn validate_for_payload(&self, payload: &LaneExecutablePayloadV1) -> Result<(), &'static str> {
         self.validate_structure()?;
-        self.body.binding.validate_for_payload(payload)
+        self.binding().validate_for_payload(payload)
+    }
+    fn decode_framed_unvalidated(bytes: &[u8]) -> Result<Self, norito::Error> {
+        norito::decode_canonical(bytes)
+    }
+    /// Decode and validate the canonical basis-bearing V1 frame.
+    pub(crate) fn decode_framed(bytes: &[u8]) -> Result<Self, norito::Error> {
+        let outcome = Self::decode_framed_unvalidated(bytes)?;
+        outcome
+            .validate_structure()
+            .map_err(|message| norito::Error::Message(message.to_owned()))?;
+        Ok(outcome)
     }
     fn encode_framed(&self) -> Result<Vec<u8>, norito::Error> {
         let bytes = norito::encode_canonical(self)?;
@@ -2205,26 +2277,46 @@ impl AutonomousLifecycleTerminalOutcomeV1 {
         }
         Ok(bytes)
     }
-    const fn binding(&self) -> &AutonomousLifecycleAttemptBindingV1 {
+    fn binding(&self) -> &AutonomousLifecycleAttemptBindingV1 {
         &self.body.binding
     }
+    fn basis(&self) -> AutonomousLifecycleTerminalOutcomeBasisV1 {
+        self.body.basis
+    }
     fn source(&self) -> AutonomousLifecycleTerminalOutcomeSourceV1 {
-        self.body.source.clone()
+        self.body.source
     }
     #[cfg(test)]
-    const fn stage(&self) -> AutonomousLifecycleTerminalOutcomeStageV1 {
+    fn body_parts_mut_for_test(
+        &mut self,
+    ) -> (
+        &mut AutonomousLifecycleAttemptBindingV1,
+        &mut AutonomousLifecycleTerminalOutcomeSourceV1,
+        &mut AutonomousLifecycleTerminalOutcomeStageV1,
+    ) {
+        (
+            &mut self.body.binding,
+            &mut self.body.source,
+            &mut self.body.stage,
+        )
+    }
+    #[cfg(test)]
+    fn rehash_for_test(self) -> Result<Self, &'static str> {
+        Self::from_body(self.body)
+    }
+    fn stage(&self) -> AutonomousLifecycleTerminalOutcomeStageV1 {
         self.body.stage
     }
     fn is_complete(&self) -> bool {
         matches!(
-            self.body.stage,
+            self.stage(),
             AutonomousLifecycleTerminalOutcomeStageV1::Complete { .. }
         )
     }
     fn terminal_projection(
         &self,
     ) -> Result<Option<ProductionInFlightFirstReleaseStateProjection>, &'static str> {
-        match self.body.stage {
+        match self.stage() {
             AutonomousLifecycleTerminalOutcomeStageV1::Pending { .. } => Ok(None),
             AutonomousLifecycleTerminalOutcomeStageV1::Complete { terminal } => terminal
                 .to_production()
@@ -3482,7 +3574,7 @@ struct SidecarIndexLayout {
     aligned_len: u64,
 }
 #[derive(Debug, Clone, Copy)]
-enum IndexedSidecarRewrite {
+enum IndexedSidecarRewrite<'a> {
     RetainNewest {
         retention: NonZeroUsize,
         pinned_height: Option<u64>,
@@ -3499,6 +3591,9 @@ enum IndexedSidecarRewrite {
     RetainAfterTerminalFrontier {
         terminal_height: u64,
         retention: NonZeroUsize,
+        /// Exact evidence heights that remain live even below the ordinary
+        /// diagnostic window.
+        required_heights: &'a BTreeSet<u64>,
     },
 }
 #[derive(Debug, Clone, Copy)]

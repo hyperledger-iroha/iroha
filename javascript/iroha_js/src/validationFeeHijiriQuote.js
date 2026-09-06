@@ -1,6 +1,9 @@
 import { Buffer } from "node:buffer";
 
-import { getNativeBinding } from "./native.js";
+import {
+  defaultNativeRuntime,
+  resolveNativeRuntimeBinding,
+} from "./nativeRuntime.js";
 import { parseStrictLosslessIntegerJson } from "./strictLosslessJson.js";
 
 export const VALIDATION_FEE_HIJIRI_QUOTE_PATH =
@@ -88,8 +91,8 @@ function requireBoundedBytes(value, maximum, label) {
   }
 }
 
-function nativeBinding() {
-  const native = globalThis.__IROHA_NATIVE_BINDING__ ?? getNativeBinding();
+function nativeBinding(nativeRuntime) {
+  const native = resolveNativeRuntimeBinding(nativeRuntime);
   if (
     typeof native?.connectNoritoBridgeAbiVersion !== "function" ||
     native.connectNoritoBridgeAbiVersion() !==
@@ -105,7 +108,8 @@ function nativeBinding() {
 }
 
 /** Encode one exact V1 native-Norito Hijiri quote request. */
-export function encodeValidationFeeHijiriQuoteRequestV1(
+function encodeValidationFeeHijiriQuoteRequestV1WithRuntime(
+  nativeRuntime,
   accountId,
   qualifyingTransferCount,
 ) {
@@ -121,7 +125,8 @@ export function encodeValidationFeeHijiriQuoteRequestV1(
       `qualifyingTransferCount must be in 1..${VALIDATION_FEE_HIJIRI_QUOTE_MAX_TRANSFERS}`,
     );
   }
-  const encoded = nativeBinding().validationFeeHijiriQuoteRequestV1(
+  const native = nativeBinding(nativeRuntime);
+  const encoded = native.validationFeeHijiriQuoteRequestV1(
     accountId,
     count,
   );
@@ -139,7 +144,8 @@ export function encodeValidationFeeHijiriQuoteRequestV1(
  * Canonically decode, validate, and bind one native-Norito response to the
  * exact request archive. All structural and arithmetic checks run natively.
  */
-export function verifyValidationFeeHijiriQuoteResponseV1(
+function verifyValidationFeeHijiriQuoteResponseV1WithRuntime(
+  nativeRuntime,
   responseNorito,
   requestNorito,
 ) {
@@ -155,7 +161,8 @@ export function verifyValidationFeeHijiriQuoteResponseV1(
   );
   const response = Buffer.from(responseNorito);
   const request = Buffer.from(requestNorito);
-  const json = nativeBinding().validationFeeVerifyHijiriQuoteResponseV1(
+  const native = nativeBinding(nativeRuntime);
+  const json = native.validationFeeVerifyHijiriQuoteResponseV1(
     response,
     request,
   );
@@ -253,4 +260,58 @@ export function verifyValidationFeeHijiriQuoteResponseV1(
   }
   requireU32(projection.feeScale, "feeScale");
   return Object.freeze({ ...projection });
+}
+
+/** @internal Create Hijiri validation-fee codecs for one immutable runtime. */
+export function createValidationFeeHijiriQuoteApi(nativeRuntime) {
+  return Object.freeze({
+    encodeValidationFeeHijiriQuoteRequestV1: (
+      accountId,
+      qualifyingTransferCount,
+    ) =>
+      encodeValidationFeeHijiriQuoteRequestV1WithRuntime(
+        nativeRuntime,
+        accountId,
+        qualifyingTransferCount,
+      ),
+    verifyValidationFeeHijiriQuoteResponseV1: (
+      responseNorito,
+      requestNorito,
+    ) =>
+      verifyValidationFeeHijiriQuoteResponseV1WithRuntime(
+        nativeRuntime,
+        responseNorito,
+        requestNorito,
+      ),
+  });
+}
+
+const DEFAULT_VALIDATION_FEE_HIJIRI_QUOTE_API =
+  createValidationFeeHijiriQuoteApi(defaultNativeRuntime);
+
+/** Encode one exact V1 native-Norito Hijiri quote request. */
+export function encodeValidationFeeHijiriQuoteRequestV1(
+  accountId,
+  qualifyingTransferCount,
+) {
+  return DEFAULT_VALIDATION_FEE_HIJIRI_QUOTE_API
+    .encodeValidationFeeHijiriQuoteRequestV1(
+      accountId,
+      qualifyingTransferCount,
+    );
+}
+
+/**
+ * Canonically decode, validate, and bind one native-Norito response to the
+ * exact request archive. All structural and arithmetic checks run natively.
+ */
+export function verifyValidationFeeHijiriQuoteResponseV1(
+  responseNorito,
+  requestNorito,
+) {
+  return DEFAULT_VALIDATION_FEE_HIJIRI_QUOTE_API
+    .verifyValidationFeeHijiriQuoteResponseV1(
+      responseNorito,
+      requestNorito,
+    );
 }

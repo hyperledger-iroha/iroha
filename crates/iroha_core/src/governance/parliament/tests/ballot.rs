@@ -85,6 +85,18 @@ fn public_finding_requires_authority_bound_two_thirds_endorsement() {
             .public_finding_deadline_height(),
         Some(32)
     );
+    let mut public_vote = state.clone();
+    public_vote
+        .bodies
+        .get_mut(&body_id)
+        .expect("public body")
+        .instance
+        .status = BodyInstanceStatusV1::Deliberating(DeliberationPhaseV1::Vote);
+    assert_eq!(
+        public_vote.validate(),
+        Err(ParliamentReducerErrorV1::DecisionModeMismatch),
+        "a public-finding body has no private Vote phase"
+    );
 
     let mut expired = state.clone();
     assert_eq!(
@@ -378,18 +390,22 @@ fn casting_context_authorization_replays_all_prefix_phases_and_rejects_tampering
     }
 
     let mut malformed_schedule = state.clone();
-    malformed_schedule
-        .ballots
-        .get_mut(&ballot_attempt_id)
-        .expect("casting-context ballot")
-        .registration_close_height = 27;
-    let malformed_schedule_state = casting_state_at_height(
-        malformed_schedule,
+    let mut malformed_schedule_state = casting_state_at_height(
+        malformed_schedule.clone(),
         lifecycle.clone(),
         Some(&tle_key),
         Some(tle_key_session_id),
         30,
     );
+    malformed_schedule
+        .ballots
+        .get_mut(&ballot_attempt_id)
+        .expect("casting-context ballot")
+        .registration_close_height = 27;
+    malformed_schedule_state
+        .world
+        .parliament_attempts
+        .insert(governance_attempt_id, malformed_schedule);
     assert_eq!(
         authorize_parliament_timed_ovn_casting_context_v1(
             &malformed_schedule_state.query_view(),
@@ -683,6 +699,47 @@ fn timed_ovn_checkpoint_prechecks_reject_phase_and_height_before_replay() {
 }
 
 #[test]
+fn restore_rejects_body_and_active_ballot_lifecycle_divergence() {
+    let fixture = opened_policy_ballot(3, 3);
+    fixture
+        .state
+        .validate()
+        .expect("opened ballot fixture is canonical");
+
+    let mut nonballoting_body = fixture.state.clone();
+    nonballoting_body
+        .bodies
+        .get_mut(&fixture.body_id)
+        .expect("fixture body")
+        .instance
+        .status = BodyInstanceStatusV1::RosterSealed;
+    assert!(matches!(
+        nonballoting_body.validate(),
+        Err(ParliamentReducerErrorV1::InvalidLifecycleTransition(
+            ParliamentReducerEntityV1::BodyInstance
+        ))
+    ));
+
+    let mut finalized = fixture;
+    assert_eq!(
+        finalize_policy(&mut finalized, 2, 1, 0),
+        ParliamentAggregateOutcomeV1::Approved
+    );
+    finalized
+        .state
+        .bodies
+        .get_mut(&finalized.body_id)
+        .expect("fixture body")
+        .instance
+        .status = BodyInstanceStatusV1::Rejected;
+    assert_eq!(
+        finalized.state.validate(),
+        Err(ParliamentReducerErrorV1::CertificateBindingMismatch),
+        "the body terminal status must agree with the finalized aggregate outcome"
+    );
+}
+
+#[test]
 fn ballot_transition_table_freezes_corpus_and_retries_without_fallback() {
     let BodyFixture {
         mut state, body_id, ..
@@ -728,42 +785,33 @@ fn ballot_transition_table_freezes_corpus_and_retries_without_fallback() {
             ParliamentReducerEntityV1::BallotAttempt
         ))
     );
-    state
-        .freeze_ballot_survivors(id, ballot, root(21), root(29), 2, root(22), 34)
-        .expect("freeze nonempty survivor roster");
     assert_eq!(
-        state.freeze_timed_ovn_corpus(id, ballot, root(20), root(28), 2, root(25), 36),
-        Err(ParliamentReducerErrorV1::AcceptedCorpusMutation)
+        state.freeze_ballot_survivors(id, ballot, root(21), root(29), 2, root(22), 34),
+        Err(ParliamentReducerErrorV1::InvalidBallotCount),
+        "the two-survivor exact-tally disclosure must fail before ballot acceptance"
     );
-    state
-        .freeze_timed_ovn_corpus(id, ballot, root(20), root(29), 2, root(25), 36)
-        .expect("freeze complete intrinsic timed OVN corpus");
+    let privacy_failed = state.ballot(&ballot).expect("active ballot");
     assert_eq!(
-        state.finalize_opened_ballot(
-            id,
-            ballot,
-            root(20),
-            root(22),
-            first_tle_session_id,
-            root(26),
-            2,
-            ParliamentAggregateTallyV1 {
-                original_seats: 3,
-                accepted_ballots: 2,
-                aye: 1,
-                nay: 1,
-                abstain: 0,
-            },
-            2,
-            41,
-        ),
-        Err(ParliamentReducerErrorV1::InvalidLifecycleTransition(
-            ParliamentReducerEntityV1::BallotAttempt
-        ))
+        privacy_failed.attempt.status,
+        BallotAttemptStatusV1::SurvivorFreeze
     );
+    assert!(privacy_failed.survivors.is_none());
+    assert!(privacy_failed.accepted_ballots.is_none());
+    assert!(privacy_failed.corpus_root.is_none());
+    assert!(privacy_failed.opening_root.is_none());
+    assert!(privacy_failed.tally.is_none());
     state
-        .fail_ballot_no_result(id, ballot, false, 41)
-        .expect("pulse/TLE failure is NoResult");
+        .fail_ballot_no_result(id, ballot, false, 35)
+        .expect("sub-floor survivor freeze reaches deterministic deadline NoResult");
+    let no_result = state.ballot(&ballot).expect("failed ballot");
+    assert_eq!(no_result.attempt.status, BallotAttemptStatusV1::NoResult);
+    assert_eq!(
+        no_result.failure_kind,
+        Some(ParliamentBallotFailureKindV1::SurvivorDeadlineExpired)
+    );
+    assert!(no_result.accepted_ballots.is_none());
+    assert!(no_result.opening_root.is_none());
+    assert!(no_result.tally.is_none());
     let retry = BallotAttemptId::derive_v1(body_id, 1);
     assert_eq!(
         state.register_ballot_attempt(
@@ -871,8 +919,10 @@ fn tle_key_session_retention_attempt_fixture_with_retry_schedule_v1(
         )
         .expect("register first ballot");
     assert_eq!(
-        state.tle_key_session_retention_deadline(key_session_id),
-        Some(42)
+        state
+            .tle_key_session_retention_contributions_v1()
+            .get(&key_session_id),
+        Some(&42)
     );
 
     state
@@ -908,13 +958,12 @@ fn tle_key_session_retention_attempt_fixture_with_retry_schedule_v1(
 fn tle_custody_retention_uses_maximum_deadline_across_ballot_retries() {
     let key_session_id = tle_key_session(86);
     let state = tle_key_session_retention_attempt_fixture_v1(key_session_id);
+    let contributions = state.tle_key_session_retention_contributions_v1();
+    assert_eq!(contributions.get(&key_session_id), Some(&62));
     assert_eq!(
-        state.tle_key_session_retention_deadline(key_session_id),
-        Some(62)
-    );
-    assert_eq!(
-        state.tle_key_session_retention_deadline(tle_key_session(89)),
-        None
+        contributions.get(&tle_key_session(89)),
+        None,
+        "unreferenced sessions must not contribute to the retention index"
     );
 }
 
@@ -989,6 +1038,218 @@ fn final_private_ballot_retry_failure_rejects_the_governance_attempt() {
     state
         .validate()
         .expect("exhausted private-ballot retry rejection persists canonically");
+}
+
+#[test]
+fn proposal_wide_redraw_budget_composes_sortition_and_timed_ovn_retries() {
+    let mut state = policy_only_state();
+    state.randomness_redraws_before_attempt = MAX_PARLIAMENT_RANDOMNESS_REDRAWS_V1 - 2;
+    let governance_attempt_id = state.attempt.id;
+    state
+        .complete_qualification(governance_attempt_id)
+        .expect("enter Policy Jury stage");
+
+    let (initial_request, initial_candidates) = sortition_request(
+        governance_attempt_id,
+        0,
+        ParliamentBody::PolicyJury,
+        180,
+        3,
+        3,
+        10,
+        20,
+        beacon_session(181),
+        None,
+    );
+    let initial_election_id = initial_request.body_election_attempt_id;
+    state
+        .register_sortition_request(
+            governance_attempt_id,
+            0,
+            initial_request,
+            initial_candidates,
+        )
+        .expect("the proposal's baseline draw remains free");
+    state
+        .fail_body_election_no_roster(governance_attempt_id, initial_election_id, false, 21)
+        .expect("record an objectively missing initial pulse");
+
+    let (retry_request, retry_candidates) = sortition_request(
+        governance_attempt_id,
+        1,
+        ParliamentBody::PolicyJury,
+        182,
+        3,
+        3,
+        21,
+        31,
+        beacon_session(183),
+        None,
+    );
+    let retry_election_id = retry_request.body_election_attempt_id;
+    let retry_request_id = retry_request.id;
+    state
+        .register_sortition_request(governance_attempt_id, 1, retry_request, retry_candidates)
+        .expect("one fresh sortition generation consumes the penultimate unit");
+    assert_eq!(
+        state
+            .randomness_redraws_used_v1()
+            .expect("bounded redraw count"),
+        MAX_PARLIAMENT_RANDOMNESS_REDRAWS_V1 - 1
+    );
+    consume_sortition(
+        &mut state,
+        governance_attempt_id,
+        vec![retry_request_id],
+        beacon_session(183),
+        31,
+        pulse_id(184),
+    )
+    .expect("consume the retry pulse");
+    state
+        .begin_invitation_acceptance(governance_attempt_id, retry_election_id, 31, 1)
+        .expect("open retry invitations");
+    let selected = state
+        .election(&retry_election_id)
+        .expect("drawn retry election")
+        .primary_assignments()
+        .iter()
+        .map(|assignment| assignment.member.clone())
+        .collect::<Vec<_>>();
+    for member in selected {
+        state
+            .record_invitation_response(governance_attempt_id, retry_election_id, &member, true, 31)
+            .expect("accept retry assignment");
+    }
+    let body_id = state
+        .seal_body_roster(governance_attempt_id, retry_election_id, 32)
+        .expect("seal the retained retry roster");
+    for phase in [
+        DeliberationPhaseV1::Orientation,
+        DeliberationPhaseV1::Evidence,
+        DeliberationPhaseV1::Questions,
+        DeliberationPhaseV1::Responses,
+        DeliberationPhaseV1::Deliberation,
+        DeliberationPhaseV1::Reflection,
+        DeliberationPhaseV1::Vote,
+    ] {
+        state
+            .advance_body_phase(governance_attempt_id, body_id, phase, 33, 10)
+            .expect("advance retained roster to its hidden ballot");
+    }
+
+    let policy = timed_ovn_policy();
+    let initial_ballot_id = BallotAttemptId::derive_v1(body_id, 0);
+    let initial_key_session_id = tle_key_session(185);
+    let initial_release_session_id = beacon_session(186);
+    let initial_release_height = 53;
+    let initial_tle_session_id = TleSessionId::derive_v1(
+        initial_ballot_id,
+        initial_key_session_id,
+        initial_release_session_id,
+        initial_release_height,
+    );
+    state
+        .register_ballot_attempt(
+            governance_attempt_id,
+            body_id,
+            initial_ballot_id,
+            0,
+            initial_tle_session_id,
+            initial_key_session_id,
+            initial_release_session_id,
+            40,
+            policy,
+            initial_release_height,
+        )
+        .expect("register the roster's initial timed-OVN session");
+
+    let retained_transport_snapshot = state.clone();
+    assert!(matches!(
+        state.register_ballot_attempt(
+            governance_attempt_id,
+            body_id,
+            initial_ballot_id,
+            0,
+            initial_tle_session_id,
+            initial_key_session_id,
+            initial_release_session_id,
+            40,
+            policy,
+            initial_release_height,
+        ),
+        Err(ParliamentReducerErrorV1::DuplicateOrZeroIdentifier(
+            ParliamentReducerEntityV1::BallotAttempt
+        ))
+    ));
+    assert_eq!(
+        state, retained_transport_snapshot,
+        "an exact transport retry over the retained roster/session must be state-idempotent"
+    );
+    assert_eq!(
+        state
+            .randomness_redraws_used_v1()
+            .expect("bounded redraw count"),
+        MAX_PARLIAMENT_RANDOMNESS_REDRAWS_V1 - 1,
+        "an exact transport retry must not spend a redraw unit"
+    );
+
+    state
+        .fail_ballot_no_result(governance_attempt_id, initial_ballot_id, false, 45)
+        .expect("objectively expire initial registration");
+    let retry_ballot_id = BallotAttemptId::derive_v1(body_id, 1);
+    let retry_key_session_id = tle_key_session(187);
+    let retry_release_session_id = beacon_session(188);
+    let retry_release_height = 58;
+    let retry_tle_session_id = TleSessionId::derive_v1(
+        retry_ballot_id,
+        retry_key_session_id,
+        retry_release_session_id,
+        retry_release_height,
+    );
+    state
+        .register_ballot_attempt(
+            governance_attempt_id,
+            body_id,
+            retry_ballot_id,
+            1,
+            retry_tle_session_id,
+            retry_key_session_id,
+            retry_release_session_id,
+            45,
+            policy,
+            retry_release_height,
+        )
+        .expect("the final proposal-wide unit admits one fresh timed-OVN session");
+    assert_eq!(
+        state
+            .randomness_redraws_used_v1()
+            .expect("bounded redraw count"),
+        MAX_PARLIAMENT_RANDOMNESS_REDRAWS_V1
+    );
+    state
+        .fail_ballot_no_result(governance_attempt_id, retry_ballot_id, false, 50)
+        .expect("failure at the cumulative ceiling rejects the attempt");
+    assert_eq!(state.attempt.status, GovernanceAttemptStatusV1::Rejected);
+    state
+        .validate()
+        .expect("nested redraw exhaustion is canonical persisted state");
+
+    let encoded = norito::to_bytes(&state).expect("encode redraw-bounded attempt");
+    let decoded = norito::decode_from_bytes::<ParliamentAttemptStateV1>(&encoded)
+        .expect("decode redraw-bounded attempt");
+    assert_eq!(decoded, state);
+    decoded
+        .validate()
+        .expect("decoded redraw prefix and derived usage remain canonical");
+
+    let mut mutated_prefix = decoded;
+    mutated_prefix.randomness_redraws_before_attempt -= 1;
+    assert_eq!(
+        mutated_prefix.validate(),
+        Err(ParliamentReducerErrorV1::RetrySequenceMismatch),
+        "a lowered persisted prefix must not justify terminal exhaustion"
+    );
 }
 
 #[test]
@@ -1107,6 +1368,14 @@ fn ballot_failure_reason_is_derived_from_the_frozen_phase() {
             .expect("failed ballot")
             .failure_kind,
         Some(ParliamentBallotFailureKindV1::ReleasePulseUnavailable)
+    );
+    assert_eq!(
+        release_expired.unavailable_beacon_pulse_slots_v1(),
+        BTreeSet::from([(release_beacon_session_id, release_height)])
+    );
+    assert!(
+        release_expired
+            .classifies_beacon_pulse_unavailable_at(release_beacon_session_id, release_height)
     );
 
     let mut finalized_pulse_before_deadline = state.clone();

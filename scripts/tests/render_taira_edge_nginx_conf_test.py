@@ -269,18 +269,28 @@ def test_render_edge_nginx_conf_includes_all_public_routes() -> None:
     explorer_server = rendered.split("server_name taira-explorer.sora.org;", 1)[1].split(
         "server_name taira-validator-1.sora.org;", 1
     )[0]
-    for server in (public_server, explorer_server):
-        for marker in (
-            "location = /v1/connect/session",
-            "location ^~ /v1/connect/session/",
-            "location = /v1/connect/status",
-            "location = /v1/connect/status/aggregate",
-            "location = /v1/connect/ws",
-            "location = /v1/mcp",
-        ):
-            block = _location_block(server, marker)
-            assert "proxy_pass http://taira_validator_1_upstream;" in block
-            assert "proxy_next_upstream" not in block
+    for marker in (
+        "location = /v1/connect/session",
+        "location ^~ /v1/connect/session/",
+        "location = /v1/connect/status",
+        "location = /v1/connect/status/aggregate",
+        "location = /v1/connect/ws",
+        "location = /v1/mcp",
+    ):
+        block = _location_block(public_server, marker)
+        assert "proxy_pass http://taira_validator_1_upstream;" in block
+        assert "proxy_next_upstream" not in block
+        assert marker not in explorer_server
+    assert "root /Users/administrator/dev/iroha2-block-explorer-web/dist;" in explorer_server
+    assert "location / {" in explorer_server
+    assert "try_files $uri $uri/ /index.html;" in explorer_server
+    assert "proxy_pass" not in explorer_server
+    assert [
+        line.strip()
+        for line in explorer_server.splitlines()
+        if line.lstrip().startswith("include ")
+    ] == ["include /etc/letsencrypt/options-ssl-nginx.conf;"]
+    assert "client_max_body_size" not in explorer_server
     assert "location = /v1/mcp" in rendered
     assert "location ^~ /v1/app-api/" in rendered
     assert "client_max_body_size 1g;" in rendered
@@ -295,6 +305,33 @@ def test_public_torii_cors_matches_runtime_policy_and_browser_sdk_headers() -> N
     assert MODULE.PUBLIC_TORII_CORS_EXPOSED_HEADERS == ", ".join(
         cors["exposed_headers"]
     )
+    assert set(cors["allowed_origins"]) == {
+        "http://127.0.0.1:3000",
+        "http://localhost:3000",
+        "https://taira-explorer.sora.org",
+        "https://test.soraswap.org",
+        "https://dweb.link",
+        "https://ipfs.io",
+        "https://cloudflare-ipfs.com",
+        "https://w3s.link",
+        "https://nftstorage.link",
+        "https://bokolo.soramitsu.io",
+        "https://cbsi-banking.soramitsu.io",
+        "https://cbsi-core.soramitsu.io",
+        "https://bokolo-pob.soramitsu.io",
+        "https://bokolo-bred.soramitsu.io",
+        "https://bokolo-anz.soramitsu.io",
+        "https://bokolo-bsp.soramitsu.io",
+        "https://bokolo-m-selen.soramitsu.io",
+        "https://bokolo-ezipei.soramitsu.io",
+        "https://bpng.soramitsu.io",
+        "https://mibank.soramitsu.io",
+        "https://explorer-bpng.soramitsu.io",
+        "https://bokolo-explorer.soramitsu.io",
+    }
+    assert len(cors["allowed_origins"]) == len(set(cors["allowed_origins"]))
+    assert set(cors["allowed_methods"]) == {"GET", "POST", "DELETE", "OPTIONS"}
+    assert not cors.get("allow_credentials", False)
 
     validators = [
         MODULE.EdgeValidator(
@@ -310,29 +347,88 @@ def test_public_torii_cors_matches_runtime_policy_and_browser_sdk_headers() -> N
         "server_name mon.taira.sora.net;", 1
     )[0]
 
-    for origin in cors["allowed_origins"]:
-        assert f'  "{origin}" $http_origin;' in rendered
+    origin_map = rendered.split(
+        "map $http_origin $taira_public_torii_cors_origin {\n", 1
+    )[1].split("\n}", 1)[0]
+    # Check the whole map: only exact allowlisted origins may echo. Every other
+    # origin must use the empty default, never a wildcard, regex, or default echo.
+    assert origin_map.splitlines() == [
+        '  default "";',
+        *[f'  "{origin}" $http_origin;' for origin in cors["allowed_origins"]],
+    ]
+    for rejected_origin in (
+        "https://not-allowed.example",
+        "https://mibank.soramitsu.io.attacker.example",
+        "https://explorer-bpng.soramitsu.io.attacker.example",
+        "http://mibank.soramitsu.io",
+        "http://explorer-bpng.soramitsu.io",
+        "null",
+        "*",
+    ):
+        assert rejected_origin not in cors["allowed_origins"]
+        assert f'  "{rejected_origin}" $http_origin;' not in origin_map
+    assert (
+        "add_header Access-Control-Allow-Origin $taira_public_torii_cors_origin always;"
+        in public_server
+    )
+    assert "Access-Control-Allow-Credentials" not in public_server
+    assert "if ($request_method = OPTIONS) {\n    return 204;\n  }" in public_server
     assert (
         f'add_header Access-Control-Allow-Headers "{MODULE.PUBLIC_TORII_CORS_HEADERS}" always;'
         in public_server
     )
+    allowed_headers = {
+        header.strip().lower() for header in MODULE.PUBLIC_TORII_CORS_HEADERS.split(",")
+    }
+    assert allowed_headers == set(cors["allowed_headers"])
+    assert "*" not in allowed_headers
     assert (
-        "idempotency-key" in MODULE.PUBLIC_TORII_CORS_HEADERS
-    ), "browser Kagemusha top-up and redemption require Idempotency-Key"
+        "idempotency-key" in allowed_headers
+    ), "browser KAGEMUSHA V1 top-up and redemption require Idempotency-Key"
     for header in (
+        "accept",
+        "content-type",
+        "x-client-app",
+        "x-request-id",
+        "x-account-id",
+        "x-correlation-id",
+        "x-api-token",
+        "mcp-method",
+        "mcp-name",
+        "mcp-protocol-version",
         "x-iroha-account",
         "x-iroha-signature",
         "x-iroha-timestamp-ms",
         "x-iroha-nonce",
         "x-iroha-witness",
     ):
-        assert header in MODULE.PUBLIC_TORII_CORS_HEADERS
+        assert header in allowed_headers
     assert (
         f'add_header Access-Control-Expose-Headers "{MODULE.PUBLIC_TORII_CORS_EXPOSED_HEADERS}" always;'
         in public_server
     )
     assert "location" in MODULE.PUBLIC_TORII_CORS_EXPOSED_HEADERS
     assert "retry-after" in MODULE.PUBLIC_TORII_CORS_EXPOSED_HEADERS
+
+
+def test_public_edge_is_the_only_trusted_torii_forwarding_hop() -> None:
+    torii = MODULE._load_toml(TAIRA_CONFIG_PATH)["torii"]
+
+    assert torii["transport"]["trusted_proxy_cidrs"] == ["127.0.0.1/32"]
+    assert "127.0.0.1/32" in torii["preauth_allow_cidrs"]
+
+    validators = [
+        MODULE.EdgeValidator(
+            slug=f"taira-validator-{index}",
+            upstream_name=f"taira_validator_{index}",
+            validator_host=f"taira-validator-{index}.sora.org",
+            upstream_address=f"127.0.0.1:{18079 + index}",
+        )
+        for index in range(1, 5)
+    ]
+    rendered = MODULE.render_edge_nginx_conf(validators)
+    assert "proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;" in rendered
+    assert "proxy_set_header X-Real-IP $remote_addr;" in rendered
 
 
 def test_render_edge_nginx_conf_uses_explicit_canonical_public_validator() -> None:

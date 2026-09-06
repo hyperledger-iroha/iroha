@@ -5,6 +5,9 @@ The default check reads Cargo manifests directly.  This keeps the pull-request
 ratchet host-independent and makes it useful even before dependencies are
 fetched.  ``--resolved`` retains a diagnostic view of Cargo's resolved graph;
 tests can provide a captured response with ``--metadata-json``.
+``--check-boundaries`` enforces layer ownership using a separately selected,
+feature-resolved Cargo tree for each shipping configuration. Both normal and
+build dependencies count; development dependencies do not.
 
 Prerequisites are Python 3.11+ or the repository's pinned ``tomli`` backport.
 No environment variables are required. The default is read-only; only the
@@ -148,6 +151,16 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             "Replace every configured limit with the current observation and "
             "refresh its manifest fingerprint. Review the diff before commit."
         ),
+    )
+    parser.add_argument(
+        "--check-boundaries",
+        action="store_true",
+        help="Enforce configured shipping layer boundaries with locked Cargo trees.",
+    )
+    parser.add_argument(
+        "--offline",
+        action="store_true",
+        help="Resolve boundary checks using only already available Cargo dependencies.",
     )
 
     resolved = parser.add_argument_group("resolved Cargo metadata diagnostics")
@@ -976,8 +989,191 @@ def run_source_mode(args: argparse.Namespace) -> int:
     return 1 if violations else 0
 
 
+def validate_boundary_policy(config: Mapping[str, Any]) -> Mapping[str, Any]:
+    """Validate explicit package ownership and shipping feature selections."""
+
+    policy = config.get("architecture")
+    if not isinstance(policy, dict) or policy.get("schema_version") != 1:
+        raise ValueError("architecture.schema_version must be 1")
+    layers = policy.get("layers")
+    if not isinstance(layers, dict) or not layers:
+        raise ValueError("architecture.layers must identify package ownership")
+    owners: dict[str, str] = {}
+    for layer, packages in layers.items():
+        if not isinstance(layer, str) or not layer or not isinstance(packages, list):
+            raise ValueError("each architecture layer must contain a package list")
+        for package in packages:
+            if not isinstance(package, str) or not package:
+                raise ValueError("layer package names must be non-empty strings")
+            if package in owners:
+                raise ValueError(f"package `{package}` has multiple layer owners")
+            owners[package] = layer
+    configurations = policy.get("configurations")
+    if not isinstance(configurations, dict) or not configurations:
+        raise ValueError("architecture.configurations must select shipping roots")
+    for name, selection in configurations.items():
+        if not isinstance(selection, dict):
+            raise ValueError(f"boundary `{name}` must be an object")
+        root = selection.get("package")
+        if not isinstance(root, str) or root not in owners:
+            raise ValueError(f"boundary `{name}` root must have a layer owner")
+        if not isinstance(selection.get("default_features"), bool):
+            raise ValueError(f"boundary `{name}` must explicitly select default_features")
+        for field in ("features", "forbidden_layers"):
+            rows = selection.get(field)
+            if not isinstance(rows, list) or not all(
+                isinstance(row, str) and row for row in rows
+            ) or len(rows) != len(set(rows)):
+                raise ValueError(f"boundary `{name}` {field} must be unique strings")
+        for layer in selection["forbidden_layers"]:
+            if layer not in layers:
+                raise ValueError(f"boundary `{name}` names unknown layer `{layer}`")
+            if layer == owners[root]:
+                raise ValueError(f"boundary `{name}` forbids its own layer")
+        target = selection.get("target")
+        if not isinstance(target, str) or not target:
+            raise ValueError(f"boundary `{name}` must select a target or `all`")
+        forbidden_features = selection.get("forbidden_features")
+        if not isinstance(forbidden_features, dict):
+            raise ValueError(f"boundary `{name}` forbidden_features must be an object")
+        for package, features in forbidden_features.items():
+            if package not in owners or not isinstance(features, list) or not features:
+                raise ValueError(f"boundary `{name}` has invalid forbidden feature ownership")
+            if not all(isinstance(feature, str) and feature for feature in features):
+                raise ValueError(f"boundary `{name}` forbidden features must be strings")
+    return policy
+
+
+def boundary_tree_command(
+    manifest: Path, selection: Mapping[str, Any], *, offline: bool
+) -> list[str]:
+    """Select one shipping root without workspace-wide feature unification."""
+
+    command = [
+        "cargo", "tree", "--manifest-path", str(manifest), "--locked",
+        "--package", selection["package"], "--edges", "normal,build",
+        "--target", selection["target"], "--prefix", "depth",
+        "--format", "|{p}|{f}", "--charset", "ascii", "--color", "never",
+    ]
+    if not selection["default_features"]:
+        command.append("--no-default-features")
+    if selection["features"]:
+        command.extend(["--features", ",".join(selection["features"])])
+    if offline:
+        command.append("--offline")
+    return command
+
+
+def parse_boundary_tree(tree: str, root: str) -> list[dict[str, Any]]:
+    """Read package paths and enabled features, rejecting incomplete tree output."""
+
+    rows: list[dict[str, Any]] = []
+    stack: list[str] = []
+    for line in tree.splitlines():
+        if not line.strip():
+            continue
+        parts = line.split("|", 2)
+        if len(parts) != 3 or not parts[0].isascii() or not parts[0].isdigit():
+            raise ValueError(f"invalid Cargo boundary tree row: {line}")
+        depth = int(parts[0])
+        package_fields = parts[1].split()
+        if len(package_fields) < 2 or not package_fields[1].startswith("v"):
+            raise ValueError(f"Cargo boundary tree row has no package version: {line}")
+        package = package_fields[0]
+        if depth > len(stack) or (depth == 0 and rows):
+            raise ValueError("Cargo boundary tree is not a single complete rooted tree")
+        if not rows and (depth != 0 or package != root):
+            raise ValueError(f"Cargo boundary tree does not start at `{root}`")
+        stack[depth:] = [package]
+        features = parts[2].removesuffix(" (*)").strip()
+        rows.append({
+            "package": package,
+            "version": package_fields[1][1:],
+            "features": sorted(filter(None, features.split(","))),
+            "path": list(stack),
+        })
+    if not rows:
+        raise ValueError(f"Cargo boundary tree for `{root}` is empty")
+    return rows
+
+
+def evaluate_boundary_tree(
+    policy: Mapping[str, Any], selection: Mapping[str, Any], tree: str
+) -> dict[str, Any]:
+    """Return deterministic transitive paths violating a selected layer boundary."""
+
+    rows = parse_boundary_tree(tree, selection["package"])
+    denied = {
+        package: layer
+        for layer in selection["forbidden_layers"]
+        for package in policy["layers"][layer]
+    }
+    violations: dict[tuple[str, str], dict[str, Any]] = {}
+    for row in sorted(rows, key=lambda row: (len(row["path"]), row["path"])):
+        package = row["package"]
+        if package in denied:
+            violations.setdefault((package, "layer"), {
+                "package": package, "forbidden_layer": denied[package],
+                "path": row["path"],
+            })
+        forbidden = selection["forbidden_features"].get(package, [])
+        for feature in sorted(set(forbidden).intersection(row["features"])):
+            violations.setdefault((package, feature), {
+                "package": package, "forbidden_feature": feature,
+                "path": row["path"],
+            })
+    return {
+        "selection": dict(selection),
+        "packages": sorted({row["package"] for row in rows}),
+        "resolved_tree_sha256": hashlib.sha256(tree.encode()).hexdigest(),
+        "violations": [violations[key] for key in sorted(violations)],
+        "within_boundary": not violations,
+    }
+
+
+def run_boundary_mode(args: argparse.Namespace) -> int:
+    """Resolve and enforce every shipping selection; resolver failures never pass."""
+
+    if args.write_baseline or resolved_mode_requested(args):
+        print("ERROR: boundary checks cannot rewrite budgets or use diagnostic metadata", file=sys.stderr)
+        return 2
+    try:
+        config = load_budget_config(args.config)
+        policy = validate_boundary_policy(config)
+        reports = {}
+        for name, selection in sorted(policy["configurations"].items()):
+            command = boundary_tree_command(args.manifest_path, selection, offline=args.offline)
+            completed = subprocess.run(command, capture_output=True, text=True, check=False)
+            if completed.returncode:
+                raise ValueError(f"Cargo boundary resolution failed for {name}: {completed.stderr.strip()}")
+            reports[name] = evaluate_boundary_tree(policy, selection, completed.stdout)
+        report = {
+            "schema_version": 1,
+            "measurement_kind": "cargo-feature-resolved-normal-build-boundaries-v1",
+            "configurations": reports,
+            "within_boundary": all(row["within_boundary"] for row in reports.values()),
+        }
+        stream = sys.stderr if args.json_out == Path("-") else sys.stdout
+        for name, result in reports.items():
+            print(f"boundary={name} within_boundary={str(result['within_boundary']).lower()}", file=stream)
+            for violation in result["violations"]:
+                reason = violation.get("forbidden_layer") or f"feature {violation['forbidden_feature']}"
+                print(f"ERROR: {name}: {' -> '.join(violation['path'])} ({reason})", file=sys.stderr)
+        if args.json_out is not None:
+            write_json(report, args.json_out)
+        return 0 if report["within_boundary"] else 1
+    except (OSError, ValueError, KeyError, json.JSONDecodeError) as error:
+        print(f"ERROR: failed to enforce dependency boundaries: {error}", file=sys.stderr)
+        return 2
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
+    if args.check_boundaries:
+        return run_boundary_mode(args)
+    if args.offline:
+        print("ERROR: --offline requires --check-boundaries", file=sys.stderr)
+        return 2
     if args.max_registry_packages is not None and args.max_registry_packages < 0:
         print("ERROR: --max-registry-packages must be non-negative", file=sys.stderr)
         return 2

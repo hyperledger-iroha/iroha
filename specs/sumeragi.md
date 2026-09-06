@@ -88,7 +88,7 @@ contains only:
   queue scanning;
 - `queues`, bounding serialized reducer/body/chunk/ready-body ingress;
 - `limits`, bounding lane, merge, historical-recovery, and Native AMX services;
-- `keys`, defining consensus key rotation, algorithms, and HSM policy.
+- `keys`, defining consensus key rotation and allowed algorithms.
 
 The canonical shared projection fingerprints signed mode/cadence with these
 finite limits and key policy. Validators must agree on the fingerprint before
@@ -102,12 +102,17 @@ read from local node config. The first-release defaults are:
 
 - `SumeragiNposParameters.reconfig.evidence_horizon_blocks = 7200`;
 - `SumeragiNposParameters.reconfig.activation_lag_blocks = 1`;
-- `SumeragiNposParameters.reconfig.slashing_delay_blocks = 259200`.
+- `SumeragiNposParameters.reconfig.slashing_delay_blocks = 3600`.
+
+The evidence horizon, slashing delay, and epoch length are immutable after the
+initial signed installation. The horizon plus delay may span at most three
+epochs, matching the fixed four-roster committed-evidence capacity. Other
+admitted fields may be governed through the on-chain parameter path; validators
+and executor upgrades must never replace consensus-owned values with local
+TOML or executor defaults.
 
 A staged mode transition preserves the joint-consensus rule that the outgoing
 set authenticates the boundary: `mode_activation_height requires next_mode to be set in the same block`.
-Governance may update the on-chain record through the admitted parameter path;
-validators must never replace it with local TOML.
 
 ## Deadlines and view change
 
@@ -130,6 +135,7 @@ availability path.
 
 Safety tests inject authenticated revision-4 messages at the runner boundary.
 Availability and liveness tests use signed genesis/current configuration plus
-real process/network outages and recovery. A test must not lower quorum,
+either real process/network outages or the feature-isolated authenticated
+message controller at that same runner boundary. A test must not lower quorum,
 disable mandatory DA, select a local protocol version, or synthesize consensus
 messages through node-local debug configuration.

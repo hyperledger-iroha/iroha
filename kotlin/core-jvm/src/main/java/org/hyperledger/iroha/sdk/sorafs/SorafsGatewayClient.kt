@@ -9,7 +9,7 @@ import java.util.concurrent.CompletionException
 import org.hyperledger.iroha.sdk.client.ClientObserver
 import org.hyperledger.iroha.sdk.client.ClientResponse
 import org.hyperledger.iroha.sdk.client.HttpTransportExecutor
-import org.hyperledger.iroha.sdk.client.PlatformHttpTransportExecutor
+import org.hyperledger.iroha.sdk.client.transport.HttpTransportScope
 import org.hyperledger.iroha.sdk.client.transport.TransportRequest
 import org.hyperledger.iroha.sdk.client.transport.TransportResponse
 import org.hyperledger.iroha.sdk.client.transport.StreamingTransportExecutor
@@ -33,12 +33,16 @@ private const val MAX_GATEWAY_RESPONSE_BYTES = 16 * 1024 * 1024
  */
 class SorafsGatewayClient(
     baseUri: URI,
-    val executor: HttpTransportExecutor = PlatformHttpTransportExecutor.createDefault(),
+    executor: HttpTransportExecutor? = null,
     timeout: Duration? = Duration.ofSeconds(15),
     defaultHeaders: Map<String, String> = emptyMap(),
     observers: List<ClientObserver> = emptyList(),
     fetchPath: String = DEFAULT_PATH,
-) {
+) : AutoCloseable {
+    /** This client's isolated call scope; injected executors remain borrowed. */
+    val executor: HttpTransportExecutor = HttpTransportScope.create(executor)
+    override fun close() { executor.close() }
+
     /** Canonical public HTTPS origin used for every gateway request. */
     val baseUri: URI =
         SorafsInputValidator.requireCanonicalGatewayBaseUri(baseUri, "baseUri")

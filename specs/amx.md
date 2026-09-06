@@ -11,6 +11,11 @@ confidentiality for private DS fragments. This reference records the
 implemented timing controls, AXT proof and handle formats, error handling, and
 operator evidence requirements alongside the Nexus design (`nexus.md`).
 
+This guide describes transparent Native AMX/AXT. The governed, default-off
+`AtomicPrivateSettlementV1` protocol is a separate path with fixed-shape private
+notes, auditor-only capsule decryption, exact four-validator committees, and a
+dedicated release-evidence contract; see `private_settlement.md`.
+
 Key guarantees:
 
 - Every AMX submission receives deterministic prepare/commit budgets; overruns abort with documented codes rather than hanging lanes.
@@ -70,7 +75,7 @@ Each DS fragment must finish its 30 ms prepare window before the lane assemble
 | Metric / Trace | Source | SLO / Alert | Notes |
 |----------------|--------|-------------|-------|
 | `iroha_slot_duration_ms` (histogram) / `iroha_slot_duration_ms_latest` (gauge) | `iroha_telemetry` | p95 ≤ 1000 ms | Capture with the AXT acceptance evidence. |
-| `iroha_da_quorum_ratio` | `iroha_telemetry` (commit hook) | ≥0.95 per 30 min window | Derived from missing-availability telemetry so every block updates the gauge (`crates/iroha_core/src/telemetry.rs:3524`,`crates/iroha_core/src/telemetry.rs:4558`). |
+| `iroha_da_quorum_ratio` | `iroha_telemetry` (commit hook) | ≥0.95 per 30 min window | Updated for every committed block after mandatory signed-RS16 admission. |
 | `iroha_amx_prepare_ms` | IVM host | p95 ≤ 30 ms per DS scope | Drives `AMX_TIMEOUT` aborts. |
 | `iroha_amx_commit_ms` | IVM host | p95 ≤ 40 ms per DS scope | Covers delta merge + trigger execution. |
 | `iroha_ivm_exec_ms` | IVM host | Alert if >250 ms per lane | Mirrors the IVM overlay chunk execution window. |
@@ -80,7 +85,6 @@ Each DS fragment must finish its 30 ms prepare window before the lane assemble
 | `iroha_axt_policy_snapshot_cache_events_total{event}` | IVM host | Expect cache_miss only on startup/manifest change | Sustained misses indicate stale policy hydration. |
 | `iroha_axt_proof_cache_events_total{event}` | IVM host | Expect mostly `hit`/`miss` | `reject`/`expired` spikes usually indicate manifest drift or stale proofs. |
 | `iroha_axt_proof_cache_state{dsid,status,manifest_root_hex,verified_slot}` | IVM host | Inspect cached proofs | Gauge value is expiry_slot (with skew applied) for the cached proof. |
-| Missing availability evidence (`sumeragi_da_gate_block_total{reason="missing_local_data"}`) | Lane telemetry | Alert if >5% of tx per DS | Means attesters or proofs are lagging. |
 
 `/v1/debug/axt/cache` mirrors the `iroha_axt_proof_cache_state` gauge with a per-dataspace snapshot (status, manifest root, verified/expiry slots) for operators.
 
@@ -147,7 +151,7 @@ Norito fixtures for the descriptor, signed handle, policy snapshot, two-dimensio
 | Source | What to capture | Command / Path | Evidence expectations |
 |--------|-----------------|----------------|-----------------------|
 | Prometheus (`iroha_telemetry`) | Slot and AMX SLOs: `iroha_slot_duration_ms`, `iroha_amx_prepare_ms`, `iroha_amx_commit_ms`, `iroha_da_quorum_ratio`, `iroha_amx_abort_total{stage}` | Scrape `https://$TORII/metrics` or export from the dashboards described in `telemetry.md`. | Attach histogram snapshots and alert history to the run bundle so auditors can see p95/p99 values and alert states. |
-| Sumeragi status and transport metrics | Authenticated revision-4 reducer state plus node-local signed-DA counters such as `sumeragi_da_gate_block_total{reason="missing_local_data"}` and `sumeragi_da_manifest_guard_total`. | Capture `GET /v1/sumeragi/status` with an operator signature and scrape `/metrics`. | Store the signed height context, durable commit, queue state, and timestamped metrics with the incident bundle. Node-local metrics are operational observations, not consensus evidence. |
+| Sumeragi status and transport metrics | Authenticated revision-4 reducer state plus node-local transport pressure metrics such as `sumeragi_bg_post_queue_depth`, `sumeragi_dropped_block_messages_total`, and `p2p_queue_dropped_total`. | Capture `GET /v1/sumeragi/status` with an operator signature and scrape `/metrics`. | Store the signed height context, durable commit, queue state, and timestamped metrics with the incident bundle. Node-local metrics are operational observations, not consensus evidence. |
 | AXT proof cache | `iroha_axt_proof_cache_events_total{event}` and `iroha_axt_proof_cache_state{dsid,status,manifest_root_hex,verified_slot}` | Scrape the Torii metrics endpoint and inspect `GET /v1/debug/axt/cache` when the telemetry/developer gate is enabled. | Capture the policy snapshot version, cache state, and last rejection without retaining proof payloads. |
 
 ### Troubleshooting playbook
@@ -155,7 +159,7 @@ Norito fixtures for the descriptor, signed handle, policy snapshot, two-dimensio
 | Symptom | Inspect first | Recommended remediation |
 |---------|---------------|--------------------------|
 | `iroha_slot_duration_ms` p95 creeps above 1 000 ms | Prometheus export from `/metrics`, authenticated Sumeragi status, consensus logs, and the preceding accepted run. | Lower AMX batch sizes or correct the diagnosed transport/capacity bottleneck, then repeat the acceptance workload and capture fresh status and metrics. |
-| Missing availability spike | DA gate/reschedule and ingress/drop metrics, authenticated Sumeragi status, consensus logs, and attester health dashboards. | Repair the unhealthy validator or transport path and attach updated status and metrics once availability recovers. |
+| Missing availability spike | Transport ingress/drop metrics, authenticated Sumeragi status, consensus logs, and attester health dashboards. | Repair the unhealthy validator or transport path and attach updated status and metrics once availability recovers. |
 | Frequent `PVO_MISSING_OR_EXPIRED` in receipts | AXT proof-cache state, policy snapshot version, and the issuer’s proof/handle generation logs. | Regenerate the expired proof or handle and ensure the client refreshes it before `expiry_slot`. |
 | Repeated `AMX_LOCK_CONFLICT` or `AMX_TIMEOUT` | `iroha_amx_lock_conflicts_total`, `iroha_amx_prepare_ms`, and the affected transaction manifests. | Re-run the Norito static analyzer, correct the read/write selectors (or split the batch), and publish the updated manifest fixtures so the conflict counter returns to baseline. |
 | `SETTLEMENT_ROUTER_UNAVAILABLE` alerts | Settlement router logs (`../docs/settlement-router.md`), treasury buffer dashboards, and the affected receipts. | Top up XOR buffers or flip the lane to XOR-only mode, document the treasury action, and rerun the slot acceptance test to prove settlement resumed. |

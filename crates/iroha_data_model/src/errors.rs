@@ -12,6 +12,8 @@ use norito::codec::{Decode, Encode};
 /// Canonical error envelope containing the stable reason code and structured context.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::errors::CanonicalError")]
 pub struct CanonicalError {
     /// Stable reason code associated with [`detail`].
     pub reason_code: u16,
@@ -36,6 +38,8 @@ impl CanonicalError {
     derive(DeriveJsonSerialize, DeriveJsonDeserialize),
     norito(tag = "code", content = "context")
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::errors::CanonicalErrorKind")]
 pub enum CanonicalErrorKind {
     /// Fewer than `required_receipts` DA attestations arrived before `deadline_ms`.
     DaDeadlineExceeded(DaDeadlineExceeded),
@@ -61,6 +65,8 @@ pub enum CanonicalErrorKind {
 /// Context for `DA_DEADLINE_EXCEEDED`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::errors::DaDeadlineExceeded")]
 pub struct DaDeadlineExceeded {
     /// Dataspace associated with the DA sample.
     pub dataspace: DataSpaceId,
@@ -74,6 +80,8 @@ pub struct DaDeadlineExceeded {
 /// Context for `ORACLE_STALE`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::errors::OracleStale")]
 pub struct OracleStale {
     /// Dataspace affected by stale inputs.
     pub dataspace: DataSpaceId,
@@ -85,6 +93,8 @@ pub struct OracleStale {
 /// Context for `CIRCUIT_BREAKER_ACTIVE`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::errors::CircuitBreakerActive")]
 pub struct CircuitBreakerActive {
     /// Dataspace affected by the breaker.
     pub dataspace: DataSpaceId,
@@ -94,6 +104,8 @@ pub struct CircuitBreakerActive {
 /// Context for `BUFFER_DEPLETED_XOR_ONLY`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::errors::BufferDepletedXorOnly")]
 pub struct BufferDepletedXorOnly {
     /// Dataspace whose buffer was depleted.
     pub dataspace: DataSpaceId,
@@ -105,6 +117,8 @@ pub struct BufferDepletedXorOnly {
 /// Context for `RWSET_UNBOUNDED`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::errors::RwsetUnbounded")]
 pub struct RwsetUnbounded {
     /// Hash of the offending program or descriptor.
     pub program_hash: Hash,
@@ -112,6 +126,8 @@ pub struct RwsetUnbounded {
 /// Context for `AMX_TIMEOUT`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::errors::AmxTimeout")]
 pub struct AmxTimeout {
     /// Dataspace whose slice exceeded the budget.
     pub dataspace: DataSpaceId,
@@ -125,6 +141,8 @@ pub struct AmxTimeout {
 /// Context for `AMX_LOCK_CONFLICT`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::errors::AmxLockConflict")]
 pub struct AmxLockConflict {
     /// Dataspace where the conflict was detected.
     pub dataspace: DataSpaceId,
@@ -134,6 +152,8 @@ pub struct AmxLockConflict {
 /// Context for `PVO_MISSING_OR_EXPIRED`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::errors::PvoMissingOrExpired")]
 pub struct PvoMissingOrExpired {
     /// PVO handle digest or identifier.
     pub handle: Hash,
@@ -145,6 +165,8 @@ pub struct PvoMissingOrExpired {
 /// Context for `HEAVY_INSTRUCTION_DISALLOWED`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::errors::HeavyInstructionDisallowed")]
 pub struct HeavyInstructionDisallowed {
     /// Opcode identifier of the disallowed instruction.
     pub opcode: u16,
@@ -152,6 +174,8 @@ pub struct HeavyInstructionDisallowed {
 /// Context for `SETTLEMENT_ROUTER_UNAVAILABLE`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::errors::SettlementRouterUnavailable")]
 pub struct SettlementRouterUnavailable {
     /// Dataspace whose conversion failed.
     pub dataspace: DataSpaceId,
@@ -200,6 +224,8 @@ impl CanonicalErrorKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "stage", content = "value"))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::errors::AmxStage")]
 pub enum AmxStage {
     /// Overlay preparation and lock acquisition.
     Prepare,
@@ -212,6 +238,8 @@ pub enum AmxStage {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "kind", content = "value"))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::errors::CircuitBreakerKind")]
 pub enum CircuitBreakerKind {
     /// Volatility or liquidity guard.
     Liquidity,
@@ -226,6 +254,8 @@ pub enum CircuitBreakerKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "kind", content = "value"))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::errors::SettlementRouterOutage")]
 pub enum SettlementRouterOutage {
     /// No valid route in the path registry.
     PathMissing,
@@ -280,3 +310,6 @@ mod tests {
         assert_eq!(decoded.detail, detail);
     }
 }
+
+#[cfg(test)]
+mod captured_errors_schema_tests;

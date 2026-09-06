@@ -47,6 +47,22 @@ off-chain token format. The command and bundle are not shipped yet. The
 disposable four-validator devnet is qualification tooling, not a way to join
 the public testnet.
 
+### Local SoraFS artifacts
+
+Local SoraFS compilation and packaging run without client configuration:
+
+```sh
+iroha app sorafs toolkit compile --source contract.ko \
+  --bytecode-out artifacts/contract.to --json-out artifacts/contract.json
+iroha app sorafs toolkit pack artifacts/contract.to \
+  --car-out artifacts/contract.car --manifest-out artifacts/contract.manifest.to
+```
+
+Compilation accepts `--source -` for stdin and publishes the compiler manifest
+and authenticated build sidecars with the artifact. Its JSON summary includes
+the exact byte length, BLAKE3 digest, ABI version, and source origin. Both toolkit
+operations also support machine output without a populated `client.toml`.
+
 ### Client configuration
 
 Select a public network with `[account].profile`. The supported `taira` and
@@ -89,6 +105,70 @@ an unsigned payload unless every signature-bound field matches it.
 
 Run `iroha tools markdown-help` for the complete reference generated from the
 installed CLI.
+
+### Atomic private-settlement online auditor
+
+The governed online-auditor flow uses one purpose-specific approval key from
+the global `--operator-private-key-file` option and a distinct hybrid capsule
+decryption key from an owner-only runtime file. It pins the four ordered Torii
+endpoints to a separately governed committee-authority record, verifies each
+responder's purpose-separated BLS attestation and proof of possession, requires
+one exact three-of-four view, evaluates the decrypted capsule at the middle
+ordered node-authoritative height so one outlier cannot choose it, then requires
+an exact three-of-four, roster-authenticated approval acknowledgement. Neither
+the capsule plaintext nor either secret is
+printed. The signing key must be listed in the active local audit policy and
+must not be a committee consensus key.
+
+```bash
+iroha --operator-private-key-file /run/secrets/aps-auditor-signing.key \
+  nexus private-settlement audit-online \
+  --committee-endpoint https://validator-1.example/ \
+  --committee-endpoint https://validator-2.example/ \
+  --committee-endpoint https://validator-3.example/ \
+  --committee-endpoint https://validator-4.example/ \
+  --committee-authority /etc/iroha/aps-committee-authority.json \
+  --payload-digest <LEG_PAYLOAD_DIGEST> \
+  --pool-governance /run/secrets/aps-pool-governance.json \
+  --auditor-decryption-key-file /run/secrets/aps-auditor-hybrid.json \
+  --business-policy /run/secrets/aps-business-policy.json \
+  --decision approve
+```
+
+The committee-authority file must come from the participant dataspace's
+governed configuration; endpoint order must match its ordered validator roster
+exactly. Because it is the local trust anchor, it and the three restricted
+input files must be absolute, owner-owned, singly linked regular files with
+exact mode `0600`; on Linux they must be xattr-free, while macOS permits only
+the exact `com.apple.provenance` metadata attribute. Extended ACL entries and
+all other xattrs are rejected, and final path components cannot be symlinks. Files are opened
+nonblocking and without following the final component, then rechecked through
+the retained descriptor before and after the bounded read. The
+restricted files must reside on a qualified local filesystem whose
+descriptor-bound ACL and xattr APIs expose every effective access grant; NFS
+and SMB custody is not qualified by POSIX mode bits alone. The
+decryption-key file's strict Norito JSON shape is:
+
+```json
+{
+  "version": 1,
+  "x25519_secret_hex": "<64 lowercase hexadecimal characters>",
+  "ml_kem_768_secret_hex": "<canonical lowercase hexadecimal ML-KEM-768 secret>"
+}
+```
+
+The business-policy file is also strict Norito JSON. It binds one exact
+network, route, opaque pool, audit-policy lineage/revision/key epoch, canonical
+non-empty allowlists for payer, recipient, sponsor, and asset, inclusive amount
+and reimbursement ceilings, a memo-size ceiling, canonical allowed/required
+policy-reference lists, and a maximum remaining-height window. Unknown fields,
+wildcard identity/asset lists, unordered or duplicate values, a zero window, or
+a required reference absent from the allowed list fail closed. There is no
+environment-variable fallback. `--decision approve` is necessary but not
+sufficient: the decrypted leg must also match every business-policy constraint.
+Omitting the decision or using `--decision reject` cannot create or submit an
+approval. Decryption-key and pool-governance files are limited to 16 KiB; the
+bounded business-policy file is limited to 256 KiB.
 
 Refer to [Iroha Special Instructions](https://docs.iroha.tech/blockchain/instructions.html) for more information about Iroha instructions such as register, mint, grant, and so on.
 
@@ -242,21 +322,23 @@ expose client finalization or proposal-enactment drafts.
 ```bash
 iroha app gov proposal get --id 0123...ABCD
 iroha app gov locks get --referendum-id r1
-iroha app gov council
 iroha app gov referendum get --referendum-id r1
 iroha app gov tally get --referendum-id r1
 
 Governance events (subscribe via `iroha ledger events`)
-- ProposalSubmitted, ProposalApproved, ProposalRejected, ProposalEnacted
-- ReferendumOpened, ReferendumClosed
+- ProposalSubmitted, ProposalRejected, ProposalEnacted
+- ParliamentAttemptCreated, ParliamentLifecycleTransitionApplied
+- ReferendumOpened, ReferendumClosed, ReferendumDecided
 - BallotAccepted { mode, weight }, BallotRejected { reason }
-- LockCreated { owner, amount, expiry }, LockExtended { ... }, LockUnlocked { ... }
+- LockCreated { owner, amount, expiry }, LockExtended { ... }, LockUnlocked { ... },
+  LockSlashed { ... }, LockRestituted { ... }
+- CitizenRegistered, CitizenRevoked, ThresholdKeyLifecycleApplied
 ```
 
 - Stream governance events:
 
 ```bash
-iroha ledger events governance [--proposal-id 0123...ABCD] [--referendum-id r1]
+iroha ledger events governance [--proposal-id 0123...ABCD | --referendum-id r1]
 ```
 
 
@@ -269,7 +351,7 @@ authorities and private keys are not accepted in these files.
 Register a verifying key (provide either `vk_bytes` as base64 or `commitment_hex`):
 
 The optional `namespace` field defaults to `core` when omitted or `null`. Set it
-to `offline_kagemusha` for Kagemusha verifier records. Explicit namespace values
+to `kagemusha_v1` for KAGEMUSHA V1 verifier records. Explicit namespace values
 must be non-empty and must not contain leading or trailing whitespace.
 
 ```bash
@@ -343,10 +425,10 @@ iroha app zk attachments cleanup --content-type application/json --before-ms 172
 
 ### Confidential asset ingress
 
-The first-release CLI intentionally has no generic `zk shield` command. Public-to-confidential
-movement is admitted only by the proof-bound Kagemusha V4 top-up flow. In asset policy
-configuration, the presence of `vk_shield` enables only that authenticated top-up circuit;
-it does not enable an opaque caller-supplied commitment.
+The first-release CLI intentionally has no generic `zk shield` command. KAGEMUSHA V1
+top-ups use the payer-signed, proof-bound `/v1/kagemusha/top-up` operation and its pooled
+reserve; peer payments never mutate that reserve. The generic confidential-asset verifier
+settings do not authorize callers to inject opaque KAGEMUSHA commitments.
 
 Encrypted memo envelopes remain available as a local wallet utility:
 
@@ -359,14 +441,13 @@ iroha app zk envelope --ephemeral-pubkey 0101... --nonce-hex 0202... \
 
 ```bash
 iroha app zk register-asset --asset <base58-asset-definition-id> \
-  --vk-unshield halo2/ipa:vk_unshield \
-  --vk-shield <canonical-kagemusha-top-up-vk>
+  --vk-unshield halo2/ipa:vk_unshield
 ```
 
 Register and inspect the referenced verifying keys with `iroha app zk vk register`,
-`iroha app zk vk update`, and `iroha app zk vk get`. The node rejects a `vk_shield`
-record that is not the canonical Kagemusha top-up circuit and schema. In the first-release
-surface, `vk_unshield` is the Kagemusha redemption verifier; no asset-bound private-transfer
+`iroha app zk vk update`, and `iroha app zk vk get`. The first-release confidential-asset
+model rejects `vk_shield`; KAGEMUSHA V1 top-up and redemption instead use the authenticated
+release artifact set and the generic KAGEMUSHA routes. No asset-bound private-transfer
 verifier or generic transfer/withdrawal ISI exists.
 
 ### ZK verify batch

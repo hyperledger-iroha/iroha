@@ -1465,6 +1465,58 @@ pub fn decode_packed_offsets_slice(
     }
     Ok((offsets, bytes_needed, data_len, 0))
 }
+/// Decode a packed-struct offset table relative to an active payload context.
+///
+/// The zero-field behavior intentionally matches the historical derive output,
+/// which consumes no table in this internal path.
+#[doc(hidden)]
+#[inline(never)]
+pub fn decode_context_packed_offsets(
+    ptr: *const u8,
+    count: usize,
+) -> Result<(Vec<usize>, usize, usize, usize), Error> {
+    if count == 0 {
+        return Ok((vec![0], 0, 0, 0));
+    }
+    let payload = payload_slice_from_ptr(ptr)?;
+    decode_packed_offsets_slice(payload, count)
+}
+/// Decode and validate a packed-struct field bitset and its dynamic sizes.
+#[doc(hidden)]
+#[inline(never)]
+pub fn decode_context_packed_header(
+    ptr: *const u8,
+    field_count: usize,
+    expected_bitset: &[u8],
+) -> Result<(&'static [u8], Vec<usize>, usize), Error> {
+    let bitset_len = field_count.div_ceil(8);
+    if expected_bitset.len() != bitset_len {
+        return Err(Error::LengthMismatch);
+    }
+    let bitset = payload_range_from_ptr(ptr, bitset_len)?;
+    if bitset != expected_bitset {
+        return Err(Error::NonCanonicalEncoding);
+    }
+
+    let mut offset = bitset_len;
+    let mut sizes = Vec::new();
+    for field_index in 0..field_count {
+        let needs_size = bitset
+            .get(field_index / 8)
+            .is_some_and(|byte| ((byte >> (field_index % 8)) & 1) != 0);
+        if !needs_size {
+            continue;
+        }
+        let payload = payload_slice_from_ptr(ptr)?;
+        let size_bytes = payload.get(offset..).ok_or(Error::LengthMismatch)?;
+        let (size, header_len) = read_len_dyn_slice(size_bytes)?;
+        offset = offset
+            .checked_add(header_len)
+            .ok_or(Error::LengthMismatch)?;
+        sizes.push(size);
+    }
+    Ok((bitset, sizes, offset))
+}
 /// Byte range for a planned binary sequence element.
 #[doc(hidden)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2536,6 +2588,42 @@ mod encode_seq_payloads_tests {
 /// back to a fixed 8-byte little-endian `u64` header.
 pub fn write_len_header<W: Write>(writer: &mut W, value: u64) -> std::io::Result<()> {
     write_len(writer, value)
+}
+/// Write selected packed-struct field lengths after its bitset.
+#[doc(hidden)]
+#[inline(never)]
+pub fn write_packed_size_headers(
+    writer: &mut Encoder<'_>,
+    field_lengths: &[usize],
+    sized_field_indices: &[usize],
+) -> Result<(), Error> {
+    for &index in sized_field_indices {
+        let length = *field_lengths.get(index).ok_or(Error::LengthMismatch)?;
+        write_len_header(
+            writer,
+            u64::try_from(length).map_err(|_| Error::LengthMismatch)?,
+        )?;
+    }
+    Ok(())
+}
+/// Write the canonical zero-based cumulative offset table for a packed struct.
+#[doc(hidden)]
+#[inline(never)]
+pub fn write_packed_offset_table(
+    writer: &mut Encoder<'_>,
+    field_lengths: &[usize],
+) -> Result<(), Error> {
+    let mut accumulated = 0usize;
+    writer.write_u64::<LittleEndian>(0)?;
+    for &field_length in field_lengths {
+        accumulated = accumulated
+            .checked_add(field_length)
+            .ok_or(Error::LengthMismatch)?;
+        writer.write_u64::<LittleEndian>(
+            u64::try_from(accumulated).map_err(|_| Error::LengthMismatch)?,
+        )?;
+    }
+    Ok(())
 }
 /// Append a length prefix honoring the `COMPACT_LEN` layout flag.
 ///
@@ -4511,6 +4599,79 @@ pub fn archived_from_slice<'a, T>(bytes: &'a [u8]) -> Result<ArchivedRef<'a, T>,
             _marker: PhantomData,
         })
     }
+}
+
+/// Prepared backing storage for derive-generated slice decoders.
+///
+/// This centralizes short-payload padding and alignment handling so derive
+/// expansions only contain their type-specific field reconstruction.
+#[doc(hidden)]
+pub struct PreparedDecodeSlice<'a> {
+    archive: ArchiveSlice,
+    _padded: Option<Vec<u8>>,
+    logical_len: usize,
+    _borrow: PhantomData<&'a [u8]>,
+}
+
+impl PreparedDecodeSlice<'_> {
+    /// Return the logical length of the caller-provided payload.
+    #[doc(hidden)]
+    #[inline]
+    pub fn logical_len(&self) -> usize {
+        self.logical_len
+    }
+
+    /// Return the aligned, possibly zero-padded payload bytes.
+    #[doc(hidden)]
+    #[inline]
+    pub fn bytes(&self) -> &[u8] {
+        self.archive.as_slice()
+    }
+
+    /// Return an archived marker at the start of the prepared payload.
+    #[doc(hidden)]
+    #[inline]
+    #[allow(unsafe_code)]
+    pub fn archived<T>(&self) -> &Archived<T> {
+        if self.archive.as_slice().is_empty() {
+            return empty_archived_marker();
+        }
+        // SAFETY: `archive` owns or borrows live aligned storage for the
+        // lifetime of `self`; `Archived<T>` is an opaque zero-sized marker.
+        unsafe { &*self.archive.as_slice().as_ptr().cast::<Archived<T>>() }
+    }
+}
+
+/// Prepare one derive-generated archived payload without specializing the
+/// padding and alignment machinery for every decoded type.
+#[doc(hidden)]
+#[inline(never)]
+pub fn prepare_decode_from_slice(
+    bytes: &[u8],
+    minimum_size: usize,
+    alignment: usize,
+) -> Result<PreparedDecodeSlice<'_>, Error> {
+    let logical_len = bytes.len();
+    if minimum_size > 0 && logical_len == 0 {
+        return Err(Error::LengthMismatch);
+    }
+
+    let padded = if minimum_size > 0 && logical_len < minimum_size {
+        let mut padded = Vec::with_capacity(minimum_size);
+        padded.extend_from_slice(bytes);
+        padded.resize(minimum_size, 0);
+        Some(padded)
+    } else {
+        None
+    };
+    let decode_bytes = padded.as_deref().unwrap_or(bytes);
+    let archive = ArchiveSlice::new(decode_bytes, alignment)?;
+    Ok(PreparedDecodeSlice {
+        archive,
+        _padded: padded,
+        logical_len,
+        _borrow: PhantomData,
+    })
 }
 impl NoritoSerialize for u8 {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {

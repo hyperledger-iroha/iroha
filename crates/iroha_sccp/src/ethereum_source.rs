@@ -969,8 +969,8 @@ pub fn ethereum_native_trusted_anchor_hash_v1(
     anchor: &EthereumNativeTrustedAnchorV1,
 ) -> Result<H256, EthereumNativeSourceErrorV1> {
     validate_trusted_anchor(anchor)?;
-    let encoded =
-        norito::to_bytes(anchor).map_err(|_| EthereumNativeSourceErrorV1::InvalidNoritoEncoding)?;
+    let encoded = norito::encode_canonical(anchor)
+        .map_err(|_| EthereumNativeSourceErrorV1::InvalidNoritoEncoding)?;
     Ok(prefixed_blake2b(ETHEREUM_NATIVE_ANCHOR_PREFIX_V1, &encoded))
 }
 /// Decode a size-bounded, canonical Norito native Ethereum source proof.
@@ -1009,7 +1009,8 @@ pub fn decode_ethereum_native_source_proof_v1(
     }
     let proof: EthereumNativeSourceProofV1 = norito::decode_from_bytes(bytes)
         .map_err(|_| EthereumNativeSourceErrorV1::InvalidNoritoEncoding)?;
-    if norito::to_bytes(&proof).map_err(|_| EthereumNativeSourceErrorV1::InvalidNoritoEncoding)?
+    if norito::encode_canonical(&proof)
+        .map_err(|_| EthereumNativeSourceErrorV1::InvalidNoritoEncoding)?
         != bytes
     {
         return Err(EthereumNativeSourceErrorV1::InvalidNoritoEncoding);
@@ -1697,7 +1698,7 @@ fn authenticate_ethereum_native_finality_v1(
         ));
     }
     let mut state = validate_trusted_anchor(&proof.trusted_anchor)?;
-    let encoded_anchor = norito::to_bytes(&proof.trusted_anchor)
+    let encoded_anchor = norito::encode_canonical(&proof.trusted_anchor)
         .map_err(|_| EthereumNativeSourceErrorV1::InvalidNoritoEncoding)?;
     let trusted_anchor_hash = prefixed_blake2b(ETHEREUM_NATIVE_ANCHOR_PREFIX_V1, &encoded_anchor);
     if expected_trusted_anchor_hash.iter().all(|byte| *byte == 0)
@@ -2221,7 +2222,7 @@ mod tests {
     fn native_source_proof_roundtrips_and_authenticates_state_and_receipt_tries() {
         let (identity, identity_hash, anchor_hash, _, _, proof) =
             ethereum_native_positive_test_fixture_for_statement(test_message_id(), test_payload());
-        let bytes = norito::to_bytes(&proof).unwrap();
+        let bytes = norito::encode_canonical(&proof).unwrap();
         let decoded = decode_ethereum_native_source_proof_v1(&bytes).unwrap();
         assert_eq!(decoded, proof);
         let json = norito::json::to_json(&proof).unwrap();
@@ -2240,6 +2241,41 @@ mod tests {
         assert_eq!(validated.execution_block_hash, [7; 32]);
         assert_eq!(validated.execution_block_number, 17_000_000);
         assert_eq!(validated.transaction_index, 0);
+    }
+    #[test]
+    fn native_source_canonical_bytes_and_anchor_hash_ignore_ambient_layout() {
+        let (identity, identity_hash, anchor_hash, proof) =
+            source_fixture_for_statement(test_message_id(), test_payload());
+        let canonical = norito::encode_canonical(&proof).expect("canonical source proof");
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+        let alternate = norito::to_bytes(&proof).expect("alternate-layout source proof");
+        assert_ne!(alternate, canonical);
+        assert_eq!(
+            ethereum_native_trusted_anchor_hash_v1(&proof.trusted_anchor),
+            Ok(anchor_hash)
+        );
+        assert_eq!(
+            decode_ethereum_native_source_proof_v1(&canonical),
+            Ok(proof.clone())
+        );
+        assert_eq!(
+            decode_ethereum_native_source_proof_v1(&alternate),
+            Err(EthereumNativeSourceErrorV1::InvalidNoritoEncoding)
+        );
+        assert!(
+            verify_ethereum_native_source_proof_v1(
+                &identity,
+                identity_hash,
+                anchor_hash,
+                proof.message_id,
+                proof.payload_hash,
+                test_payload(),
+                &proof,
+            )
+            .is_ok()
+        );
     }
     #[test]
     fn identity_lane_anchor_statement_and_final_state_are_role_bound() {
@@ -2747,13 +2783,13 @@ mod tests {
             ))
         );
         let (_, _, _, proof) = source_fixture_for_statement(test_message_id(), test_payload());
-        let mut compressed_alias = norito::to_bytes(&proof).unwrap();
+        let mut compressed_alias = norito::encode_canonical(&proof).unwrap();
         compressed_alias[NORITO_COMPRESSION_OFFSET] = 1;
         assert_eq!(
             decode_ethereum_native_source_proof_v1(&compressed_alias),
             Err(EthereumNativeSourceErrorV1::InvalidNoritoEncoding)
         );
-        let mut declared_bomb = norito::to_bytes(&proof).unwrap();
+        let mut declared_bomb = norito::encode_canonical(&proof).unwrap();
         declared_bomb[NORITO_LENGTH_OFFSET..NORITO_LENGTH_OFFSET + 8]
             .copy_from_slice(&(MAX_ENCODED_SOURCE_PROOF_BYTES_U64 + 1).to_le_bytes());
         assert_eq!(

@@ -26,8 +26,6 @@ mod blockheader_roundtrip;
 mod confidential_memo_envelope_v1;
 #[path = "../consensus_roundtrip.rs"]
 mod consensus_roundtrip;
-#[path = "../consensus_state_roundtrip.rs"]
-mod consensus_state_roundtrip;
 #[path = "../da_ingest_roundtrip.rs"]
 mod da_ingest_roundtrip;
 #[path = "../data_model.rs"]
@@ -52,8 +50,6 @@ mod instruction_registry_reset;
 mod join_kaigi_commitment_roundtrip;
 #[path = "../join_kaigi_decode.rs"]
 mod join_kaigi_decode;
-#[path = "../kagemusha_value_contract.rs"]
-mod kagemusha_value_contract;
 #[path = "../kaigi_events_roundtrip.rs"]
 mod kaigi_events_roundtrip;
 #[path = "../lane_relay_roundtrip.rs"]

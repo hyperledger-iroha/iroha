@@ -21,7 +21,9 @@ use crate::{
     },
     transaction::FeePaymentIntent,
 };
-use iroha_crypto::{Hash, HashOf, HybridPublicKey, PublicKey, SignatureOf};
+use iroha_crypto::{
+    Hash, HashOf, HybridPublicKey, PublicKey, SignatureOf, zeroize_value_for_confidential_discard,
+};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use sha2::{Digest as _, Sha256};
@@ -63,12 +65,58 @@ pub const PRIVATE_SETTLEMENT_ML_KEM_768_CIPHERTEXT_BYTES_V1: usize = 1_088;
 pub const PRIVATE_SETTLEMENT_XCHACHA_NONCE_BYTES_V1: usize = 24;
 /// A wrapped 32-byte DEK plus its Poly1305 authentication tag.
 pub const PRIVATE_SETTLEMENT_WRAPPED_DEK_BYTES_V1: usize = 48;
+/// Conservative canonical framing budget for the capsule header, AAD, nonce, and vectors.
+pub const PRIVATE_SETTLEMENT_CAPSULE_ENVELOPE_BOUND_BYTES_V1: u64 = 8 * 1024;
+/// Conservative canonical framing budget for one governed auditor's complete wrapped-DEK row.
+///
+/// The budget includes the account identifier, algorithm-tagged public key,
+/// ML-KEM ciphertext, X25519 component, nonce, wrapped key, and Norito framing.
+pub const PRIVATE_SETTLEMENT_WRAPPED_DEK_ROW_BOUND_BYTES_V1: u64 = 8 * 1024;
 /// Upper bound for the canonical public carrier receipt.
 pub const PRIVATE_SETTLEMENT_MAX_RECEIPT_BYTES_V1: usize = 4 * 1024 * 1024;
 /// Compressed BLS-normal proof/signature width used by Native AMX.
 pub const PRIVATE_SETTLEMENT_BLS_BYTES_V1: usize = 96;
+/// Attested lifecycle code for a sidecar collecting auditor approvals.
+pub const PRIVATE_SETTLEMENT_LIFECYCLE_COLLECTING_V1: u8 = 0;
+/// Attested lifecycle code for a sidecar with its auditor threshold satisfied.
+pub const PRIVATE_SETTLEMENT_LIFECYCLE_AUDITED_V1: u8 = 1;
+/// Attested lifecycle code for a durably prepared sidecar.
+pub const PRIVATE_SETTLEMENT_LIFECYCLE_PREPARED_V1: u8 = 2;
+/// Attested lifecycle code for a sidecar carrying a durable Commit QC.
+pub const PRIVATE_SETTLEMENT_LIFECYCLE_COMMIT_CERTIFIED_V1: u8 = 3;
+/// Attested lifecycle code for an atomically finalized sidecar.
+pub const PRIVATE_SETTLEMENT_LIFECYCLE_FINALIZED_V1: u8 = 4;
+/// Attested lifecycle code for an authoritatively aborted sidecar.
+pub const PRIVATE_SETTLEMENT_LIFECYCLE_ABORTED_V1: u8 = 5;
+/// Attested lifecycle code for an expired sidecar.
+pub const PRIVATE_SETTLEMENT_LIFECYCLE_EXPIRED_V1: u8 = 6;
+/// Exact number of ordinary fee-bearing carriers in a successful V1 settlement.
+///
+/// Prepare registration is the first carrier and atomic financial finalization
+/// is the second. The designated private reimbursement terms bind this count so
+/// they cannot be interpreted as covering only the final carrier.
+pub const PRIVATE_SETTLEMENT_SUCCESS_FEE_BEARING_CARRIERS_V1: u8 = 2;
 /// Exact audited settlement-local proof profile descriptor.
-pub const PRIVATE_SETTLEMENT_PROOF_PROFILE_DESCRIPTOR_V1: &[u8] = b"iroha-atomic-private-settlement-stark-v1:native-rust:first-release:inputs=2-fixed:payer-authorization=purpose-separated-controller-signatures:outputs=3-fixed:roles=recipient+change+sponsor-reimbursement:selectors=canonical-active-or-domain-dummy:values=u128-checked-balanced:asset=salted-hidden-binding:tree=sha256-depth32:successor=validator-derived-only:public-intent=canonical-proof-binding-excluding-post-proof-artifacts:business-plaintext=auditor-capsule-sha256-commitment:wallet=x25519+xchacha20poly1305:proof=stark-fri-sha256-goldilocks";
+pub const PRIVATE_SETTLEMENT_PROOF_PROFILE_DESCRIPTOR_V1: &[u8] = b"iroha-atomic-private-settlement-stark-v1:native-rust:first-release:inputs=2-fixed:payer-authorization=purpose-separated-controller-signatures:outputs=3-fixed:roles=recipient+change+sponsor-reimbursement:activity=positive-value-membership-or-zero-virtual-domain-dummy:input-openings=air-sha256-raw256-exact-ordered-values-authorities-rhos-blindings-memos:values=u128-checked-balanced:asset=salted-hidden-binding:tree=sha256-depth32:successor=proof-statement-bound-root+epoch:successor-correctness=validator-derived-frontier:public-intent=canonical-proof-binding-excluding-post-proof-artifacts:reimbursement-success-fee-carriers=2:business-plaintext=auditor-capsule-sha256-commitment:wallet=x25519+xchacha20poly1305:proof=stark-fri-sha256-goldilocks";
+
+/// Return a deterministic safe upper bound for one canonical V1 audit capsule.
+///
+/// `padded_plaintext_bytes` excludes the 16-byte payload authentication tag.
+/// The bound is intentionally conservative so configuration validation can
+/// prove that at least the governed minimum auditor roster is usable without
+/// constructing identities or cryptographic material.
+#[must_use]
+pub const fn private_settlement_capsule_canonical_upper_bound_v1(
+    padded_plaintext_bytes: u64,
+    auditor_count: u64,
+) -> u64 {
+    padded_plaintext_bytes
+        .saturating_add(16)
+        .saturating_add(PRIVATE_SETTLEMENT_CAPSULE_ENVELOPE_BOUND_BYTES_V1)
+        .saturating_add(
+            auditor_count.saturating_mul(PRIVATE_SETTLEMENT_WRAPPED_DEK_ROW_BOUND_BYTES_V1),
+        )
+}
 
 const BUNDLE_ID_DOMAIN_V1: &[u8] = b"iroha:nexus:private-settlement:bundle-id:v1\0";
 const PROOF_BINDING_DIGEST_DOMAIN_V1: &[u8] = b"iroha:nexus:private-settlement:proof-binding:v1\0";
@@ -80,6 +128,15 @@ const CAPSULE_DIGEST_DOMAIN_V1: &[u8] = b"iroha:nexus:private-settlement:audit-c
 const SIDECAR_DIGEST_DOMAIN_V1: &[u8] = b"iroha:nexus:private-settlement:sidecar:v1\0";
 const SIDECAR_AVAILABILITY_SIGNATURE_DOMAIN_V1: &[u8] =
     b"iroha:nexus:private-settlement:availability-signature:v1\0";
+const AUDITOR_VIEW_DIGEST_DOMAIN_V1: &[u8] = b"iroha:nexus:private-settlement:auditor-view:v1\0";
+const AUDITOR_VIEW_ATTESTATION_SIGNATURE_DOMAIN_V1: &[u8] =
+    b"iroha:nexus:private-settlement:auditor-view-attestation:v1\0";
+const AUDIT_APPROVAL_DIGEST_DOMAIN_V1: &[u8] =
+    b"iroha:nexus:private-settlement:audit-approval:v1\0";
+const AUDIT_APPROVAL_ACKNOWLEDGEMENT_DIGEST_DOMAIN_V1: &[u8] =
+    b"iroha:nexus:private-settlement:audit-approval-acknowledgement:v1\0";
+const AUDIT_APPROVAL_ACKNOWLEDGEMENT_ATTESTATION_SIGNATURE_DOMAIN_V1: &[u8] =
+    b"iroha:nexus:private-settlement:audit-approval-acknowledgement-attestation:v1\0";
 const PHASE_SIGNATURE_DOMAIN_V1: &[u8] =
     b"iroha:nexus:private-settlement:participant-phase-signature:v1\0";
 const PREPARED_BUNDLE_DIGEST_DOMAIN_V1: &[u8] =
@@ -101,8 +158,131 @@ const FEE_INTENT_DIGEST_DOMAIN_V1: &[u8] = b"iroha:nexus:private-settlement:fee-
 const REIMBURSEMENT_TERMS_COMMITMENT_DOMAIN_V1: &[u8] =
     b"iroha:nexus:private-settlement:reimbursement-terms:v1\0";
 
+struct ConfidentialBytes {
+    bytes: Vec<u8>,
+    expected_len: usize,
+}
+
+impl ConfidentialBytes {
+    fn with_capacity(expected_len: usize) -> Result<Self, norito::Error> {
+        let mut bytes = Vec::new();
+        bytes.try_reserve_exact(expected_len).map_err(|_| {
+            norito::Error::Io(std::io::Error::other(
+                "confidential byte buffer allocation failed",
+            ))
+        })?;
+        Ok(Self {
+            bytes,
+            expected_len,
+        })
+    }
+
+    fn len(&self) -> usize {
+        self.bytes.len()
+    }
+
+    fn as_slice(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    fn extend_from_slice(&mut self, bytes: &[u8]) -> Result<(), norito::Error> {
+        std::io::Write::write_all(self, bytes).map_err(norito::Error::Io)
+    }
+
+    fn into_vec(mut self) -> Vec<u8> {
+        debug_assert_eq!(self.bytes.len(), self.expected_len);
+        std::mem::take(&mut self.bytes)
+    }
+
+    fn zeroize_for_confidential_discard(&mut self) {
+        zeroize_value_for_confidential_discard(&mut self.bytes);
+        self.expected_len = 0;
+    }
+}
+
+impl std::io::Write for ConfidentialBytes {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        let next_len = self
+            .bytes
+            .len()
+            .checked_add(bytes.len())
+            .ok_or_else(|| std::io::Error::other("confidential byte buffer is too large"))?;
+        if next_len > self.expected_len {
+            return Err(std::io::Error::other(
+                "confidential byte buffer length changed during encoding",
+            ));
+        }
+        self.bytes.extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl Drop for ConfidentialBytes {
+    fn drop(&mut self) {
+        #[cfg(test)]
+        let had_nonzero_bytes = self.bytes.iter().any(|byte| *byte != 0);
+        self.zeroize_for_confidential_discard();
+        #[cfg(test)]
+        if had_nonzero_bytes && self.bytes.is_empty() {
+            CONFIDENTIAL_NONZERO_BUFFER_ZEROIZED_DROPS
+                .with(|drops| drops.set(drops.get().saturating_add(1)));
+        }
+    }
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static CONFIDENTIAL_NONZERO_BUFFER_ZEROIZED_DROPS: std::cell::Cell<usize> = const {
+        std::cell::Cell::new(0)
+    };
+}
+
+fn zeroize_confidential_vec_spare_capacity<T>(values: &mut Vec<T>) {
+    zeroize_value_for_confidential_discard(values.spare_capacity_mut());
+}
+
+fn encode_confidential_canonical<T: Encode>(value: &T) -> Result<ConfidentialBytes, norito::Error> {
+    // Consensus-facing `Encode` implementations must be deterministic. The
+    // sizing pass exists only to reserve one hard-capped allocation; Norito's
+    // canonical streaming pass then rejects length, checksum, or layout drift
+    // between its own validation and output passes.
+    let _canonical_flags =
+        norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+    let encoded_len = norito::core::encoded_frame_len(value)?;
+    let mut encoded = ConfidentialBytes::with_capacity(encoded_len)?;
+    norito::core::write_canonical_to_writer(value, &mut encoded)?;
+    if encoded.len() != encoded_len {
+        return Err(norito::Error::LengthMismatch);
+    }
+    Ok(encoded)
+}
+
+fn private_settlement_signature_preimage<T: Encode>(
+    domain: &[u8],
+    body: &T,
+    too_large_error: &'static str,
+) -> Result<Vec<u8>, norito::Error> {
+    let body = encode_confidential_canonical(body)?;
+    let body_len = u64::try_from(body.len())
+        .map_err(|_| norito::Error::Io(std::io::Error::other(too_large_error)))?;
+    let preimage_len = domain
+        .len()
+        .checked_add(std::mem::size_of::<u64>())
+        .and_then(|prefix_len| prefix_len.checked_add(body.len()))
+        .ok_or_else(|| norito::Error::Io(std::io::Error::other(too_large_error)))?;
+    let mut preimage = ConfidentialBytes::with_capacity(preimage_len)?;
+    preimage.extend_from_slice(domain)?;
+    preimage.extend_from_slice(&body_len.to_le_bytes())?;
+    preimage.extend_from_slice(body.as_slice())?;
+    Ok(preimage.into_vec())
+}
+
 fn canonical_hash<T: Encode>(domain: &[u8], value: &T) -> Result<Hash, norito::Error> {
-    let encoded = norito::encode_canonical(value)?;
+    let encoded = encode_confidential_canonical(value)?;
     let encoded_len = u64::try_from(encoded.len())
         .map_err(|_| norito::Error::Io(std::io::Error::other("canonical payload is too large")))?;
     Ok(Hash::new_from_chunks(&[
@@ -156,12 +336,25 @@ pub struct PrivateSettlementRouteV1 {
     pub lane_incarnation: Hash,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+#[derive(Debug, PartialEq, Eq, Decode, Encode)]
 struct PrivateSettlementAssetBindingMaterialV1 {
     route: PrivateSettlementRouteV1,
     pool_id: PrivacyPoolIdV1,
     asset_definition_id: AssetDefinitionId,
     asset_binding_salt: [u8; 32],
+}
+
+impl PrivateSettlementAssetBindingMaterialV1 {
+    fn zeroize_for_confidential_discard(&mut self) {
+        zeroize_value_for_confidential_discard(&mut self.asset_definition_id.aid_bytes);
+        zeroize_value_for_confidential_discard(&mut self.asset_binding_salt);
+    }
+}
+
+impl Drop for PrivateSettlementAssetBindingMaterialV1 {
+    fn drop(&mut self) {
+        self.zeroize_for_confidential_discard();
+    }
 }
 
 /// Recompute the salted commitment opening one restricted pool-to-asset mapping.
@@ -186,13 +379,13 @@ pub fn private_settlement_asset_binding_commitment_v1(
         asset_definition_id: asset_definition_id.clone(),
         asset_binding_salt,
     };
-    let encoded = norito::encode_canonical(&material)?;
+    let encoded = encode_confidential_canonical(&material)?;
     let encoded_len = u64::try_from(encoded.len())
         .map_err(|_| norito::Error::Io(std::io::Error::other("asset binding is too large")))?;
     let mut hasher = Sha256::new();
     hasher.update(ASSET_BINDING_COMMITMENT_DOMAIN_V1);
     hasher.update(encoded_len.to_le_bytes());
-    hasher.update(encoded);
+    hasher.update(encoded.as_slice());
     Ok(Hash::prehashed(hasher.finalize().into()))
 }
 
@@ -520,8 +713,12 @@ pub struct PrivateSettlementProofStatementV1 {
     pub asset_binding_commitment: Hash,
     /// Current private state root.
     pub old_root: PrivacyRootV1,
+    /// Successor root bound into the proof statement and independently derived by validators.
+    pub new_root: PrivacyRootV1,
     /// Epoch of `old_root`.
     pub old_epoch: u64,
+    /// Epoch of `new_root`; exactly one greater than `old_epoch`.
+    pub new_epoch: u64,
     /// Two fixed nullifier slots, including any domain-separated dummy slot.
     pub nullifiers: Vec<PrivacyNullifierV1>,
     /// Three fixed commitment slots: recipient, change/dummy, and sponsor reimbursement.
@@ -530,6 +727,13 @@ pub struct PrivateSettlementProofStatementV1 {
     pub encrypted_outputs: Vec<PrivacyEncryptedOutputV1>,
     /// SHA-256 commitment to the exact auditor-only business plaintext.
     pub audit_plaintext_commitment: Hash,
+    /// Exact raw SHA-256 commitment to the two private input openings proved by the AIR.
+    ///
+    /// Includes each value, authority, nonce, blinding and memo. Activity is
+    /// canonical: a positive value is live and zero is a virtual dummy. All
+    /// 256 digest bits are retained; Iroha entity-hash marker semantics do not apply.
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    pub audit_input_commitment: [u8; 32],
     /// Digest of the encrypted audit capsule.
     pub audit_capsule_digest: Hash,
     /// Digest of the governed auditor policy.
@@ -573,7 +777,9 @@ impl PrivateSettlementProofStatementV1 {
             || self.pool_id.is_zero()
             || hash_is_zero(&self.asset_binding_commitment)
             || self.old_root.is_zero()
+            || self.new_root.is_zero()
             || hash_is_zero(&self.audit_plaintext_commitment)
+            || self.audit_input_commitment == [0; 32]
             || hash_is_zero(&self.audit_capsule_digest)
             || hash_is_zero(&self.audit_policy_digest)
             || hash_is_zero(&self.fee_intent_digest)
@@ -581,8 +787,10 @@ impl PrivateSettlementProofStatementV1 {
         {
             return Err(PrivateSettlementValidationError::ZeroCommitment);
         }
-        if self.authority_context_height == 0
+        if self.old_root == self.new_root
+            || self.authority_context_height == 0
             || self.old_epoch == 0
+            || self.old_epoch.checked_add(1) != Some(self.new_epoch)
             || self.audit_key_epoch == 0
             || self.expiry_height <= self.authority_context_height
         {
@@ -613,6 +821,16 @@ impl PrivateSettlementProofStatementV1 {
                 .collect::<BTreeSet<_>>()
                 .len()
                 != PRIVATE_SETTLEMENT_OUTPUT_SLOTS_V1
+        {
+            return Err(PrivateSettlementValidationError::DuplicateStateItem);
+        }
+        if self
+            .encrypted_outputs
+            .iter()
+            .map(|output| output.recipient)
+            .collect::<BTreeSet<_>>()
+            .len()
+            != PRIVATE_SETTLEMENT_OUTPUT_SLOTS_V1
         {
             return Err(PrivateSettlementValidationError::DuplicateStateItem);
         }
@@ -763,6 +981,16 @@ impl PrivateSettlementDeltaV1 {
         {
             return Err(PrivateSettlementValidationError::DuplicateStateItem);
         }
+        if self
+            .encrypted_outputs
+            .iter()
+            .map(|output| output.recipient)
+            .collect::<BTreeSet<_>>()
+            .len()
+            != PRIVATE_SETTLEMENT_OUTPUT_SLOTS_V1
+        {
+            return Err(PrivateSettlementValidationError::DuplicateStateItem);
+        }
         for (index, output) in self.encrypted_outputs.iter().enumerate() {
             if output.recipient.is_zero()
                 || output.ephemeral_public_key.is_zero()
@@ -803,7 +1031,9 @@ impl PrivateSettlementDeltaV1 {
             || self.pool_id != statement.pool_id
             || self.asset_binding_commitment != statement.asset_binding_commitment
             || self.old_root != statement.old_root
+            || self.new_root != statement.new_root
             || self.old_epoch != statement.old_epoch
+            || self.new_epoch != statement.new_epoch
             || self.nullifiers != statement.nullifiers
             || self.output_commitments != statement.output_commitments
             || self.encrypted_outputs != statement.encrypted_outputs
@@ -890,7 +1120,7 @@ pub enum PrivateSettlementAuditOutputRoleV1 {
 ///
 /// The slot carries only public note identifiers and a digest of the note
 /// spending authority. It never contains the corresponding spending secret.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -916,6 +1146,24 @@ pub struct PrivateSettlementAuditPayerInputV1 {
 impl fmt::Debug for PrivateSettlementAuditPayerInputV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("PrivateSettlementAuditPayerInputV1(<redacted>)")
+    }
+}
+
+impl PrivateSettlementAuditPayerInputV1 {
+    /// Wipe the restricted input-authority metadata before discard.
+    ///
+    /// Public commitment and nullifier bindings remain intact. The value
+    /// intentionally becomes invalid and must not be used after this call.
+    pub fn zeroize_for_confidential_discard(&mut self) {
+        zeroize_value_for_confidential_discard(&mut self.active);
+        zeroize_value_for_confidential_discard(&mut self.note_spending_authority);
+        zeroize_value_for_confidential_discard(&mut self.dummy_domain);
+    }
+}
+
+impl Drop for PrivateSettlementAuditPayerInputV1 {
+    fn drop(&mut self) {
+        self.zeroize_for_confidential_discard();
     }
 }
 
@@ -958,6 +1206,18 @@ impl fmt::Debug for PrivateSettlementAuditPayerAuthorizationBodyV1 {
 }
 
 impl PrivateSettlementAuditPayerAuthorizationBodyV1 {
+    /// Wipe restricted payer identity and input-authority metadata before discard.
+    ///
+    /// Public replay and proof bindings remain intact. The body intentionally
+    /// becomes invalid and must not be used after this call.
+    pub fn zeroize_for_confidential_discard(&mut self) {
+        self.payer.zeroize_for_confidential_discard();
+        for input in &mut self.inputs {
+            input.zeroize_for_confidential_discard();
+        }
+        zeroize_confidential_vec_spare_capacity(&mut self.inputs);
+    }
+
     fn validate_shape(&self) -> Result<(), PrivateSettlementValidationError> {
         if self.version != ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1
             || self.purpose != Hash::new(PAYER_INPUT_AUTHORIZATION_DOMAIN_V1)
@@ -988,6 +1248,12 @@ impl PrivateSettlementAuditPayerAuthorizationBodyV1 {
     }
 }
 
+impl Drop for PrivateSettlementAuditPayerAuthorizationBodyV1 {
+    fn drop(&mut self) {
+        self.zeroize_for_confidential_discard();
+    }
+}
+
 /// One controller-member signature authorizing both fixed payer inputs.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -1009,6 +1275,14 @@ impl fmt::Debug for PrivateSettlementAuditPayerSignatureV1 {
 }
 
 impl PrivateSettlementAuditPayerSignatureV1 {
+    /// Wipe confidential signer and signature metadata before discard.
+    ///
+    /// The entry intentionally becomes invalid and must not be used after this call.
+    pub fn zeroize_for_confidential_discard(&mut self) {
+        self.signer.zeroize_for_confidential_discard();
+        self.signature.zeroize_for_confidential_discard();
+    }
+
     /// Construct one typed controller signature entry.
     #[must_use]
     pub fn new(
@@ -1016,6 +1290,12 @@ impl PrivateSettlementAuditPayerSignatureV1 {
         signature: SignatureOf<PrivateSettlementAuditPayerAuthorizationBodyV1>,
     ) -> Self {
         Self { signer, signature }
+    }
+}
+
+impl Drop for PrivateSettlementAuditPayerSignatureV1 {
+    fn drop(&mut self) {
+        self.zeroize_for_confidential_discard();
     }
 }
 
@@ -1040,6 +1320,18 @@ impl fmt::Debug for PrivateSettlementAuditPayerAuthorizationV1 {
 }
 
 impl PrivateSettlementAuditPayerAuthorizationV1 {
+    /// Wipe every restricted field in this payer authorization before discard.
+    ///
+    /// Public binding context remains intact. The authorization intentionally
+    /// becomes invalid and must not be used after this call.
+    pub fn zeroize_for_confidential_discard(&mut self) {
+        self.body.zeroize_for_confidential_discard();
+        for signature in &mut self.signatures {
+            signature.zeroize_for_confidential_discard();
+        }
+        zeroize_confidential_vec_spare_capacity(&mut self.signatures);
+    }
+
     /// Construct an authorization with canonical signer ordering.
     #[must_use]
     pub fn new(
@@ -1061,6 +1353,12 @@ impl PrivateSettlementAuditPayerAuthorizationV1 {
             return Err(PrivateSettlementValidationError::InvalidAuditPlaintext);
         }
         Ok(())
+    }
+}
+
+impl Drop for PrivateSettlementAuditPayerAuthorizationV1 {
+    fn drop(&mut self) {
+        self.zeroize_for_confidential_discard();
     }
 }
 
@@ -1112,6 +1410,25 @@ impl fmt::Debug for PrivateSettlementAuditViewKeyAuthorizationBodyV1 {
     }
 }
 
+impl PrivateSettlementAuditViewKeyAuthorizationBodyV1 {
+    /// Wipe restricted account and one-time output-key metadata before discard.
+    ///
+    /// Public replay and route bindings remain intact. The body intentionally
+    /// becomes invalid and must not be used after this call.
+    pub fn zeroize_for_confidential_discard(&mut self) {
+        self.authorized_account.zeroize_for_confidential_discard();
+        zeroize_value_for_confidential_discard(&mut self.recipient_view_key);
+        zeroize_value_for_confidential_discard(&mut self.output_active);
+        zeroize_value_for_confidential_discard(&mut self.note_spending_authority);
+    }
+}
+
+impl Drop for PrivateSettlementAuditViewKeyAuthorizationBodyV1 {
+    fn drop(&mut self) {
+        self.zeroize_for_confidential_discard();
+    }
+}
+
 /// One controller-member signature authorizing an output view key.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -1133,6 +1450,14 @@ impl fmt::Debug for PrivateSettlementAuditViewKeySignatureV1 {
 }
 
 impl PrivateSettlementAuditViewKeySignatureV1 {
+    /// Wipe confidential signer and signature metadata before discard.
+    ///
+    /// The entry intentionally becomes invalid and must not be used after this call.
+    pub fn zeroize_for_confidential_discard(&mut self) {
+        self.signer.zeroize_for_confidential_discard();
+        self.signature.zeroize_for_confidential_discard();
+    }
+
     /// Construct one typed controller signature entry.
     #[must_use]
     pub fn new(
@@ -1140,6 +1465,12 @@ impl PrivateSettlementAuditViewKeySignatureV1 {
         signature: SignatureOf<PrivateSettlementAuditViewKeyAuthorizationBodyV1>,
     ) -> Self {
         Self { signer, signature }
+    }
+}
+
+impl Drop for PrivateSettlementAuditViewKeySignatureV1 {
+    fn drop(&mut self) {
+        self.zeroize_for_confidential_discard();
     }
 }
 
@@ -1164,6 +1495,18 @@ impl fmt::Debug for PrivateSettlementAuditViewKeyAuthorizationV1 {
 }
 
 impl PrivateSettlementAuditViewKeyAuthorizationV1 {
+    /// Wipe every restricted field in this view-key authorization before discard.
+    ///
+    /// Public binding context remains intact. The authorization intentionally
+    /// becomes invalid and must not be used after this call.
+    pub fn zeroize_for_confidential_discard(&mut self) {
+        self.body.zeroize_for_confidential_discard();
+        for signature in &mut self.signatures {
+            signature.zeroize_for_confidential_discard();
+        }
+        zeroize_confidential_vec_spare_capacity(&mut self.signatures);
+    }
+
     /// Construct an authorization with canonical signer ordering.
     #[must_use]
     pub fn new(
@@ -1191,12 +1534,18 @@ impl PrivateSettlementAuditViewKeyAuthorizationV1 {
     }
 }
 
+impl Drop for PrivateSettlementAuditViewKeyAuthorizationV1 {
+    fn drop(&mut self) {
+        self.zeroize_for_confidential_discard();
+    }
+}
+
 /// Capsule-only opening of the ephemeral X25519 output-encryption public key.
 ///
 /// This is encryption randomness, not a note spending secret. An auditor uses
 /// it with the public one-time view key to authenticate and open the published
 /// ciphertext deterministically; it must never leave the restricted capsule.
-#[derive(Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[derive(Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -1214,12 +1563,27 @@ impl fmt::Debug for PrivateSettlementAuditEncryptionOpeningV1 {
     }
 }
 
+impl PrivateSettlementAuditEncryptionOpeningV1 {
+    /// Wipe the ephemeral encryption secret before discard.
+    ///
+    /// The opening intentionally becomes invalid and must not be used after this call.
+    pub fn zeroize_for_confidential_discard(&mut self) {
+        zeroize_value_for_confidential_discard(&mut self.ephemeral_secret);
+    }
+}
+
+impl Drop for PrivateSettlementAuditEncryptionOpeningV1 {
+    fn drop(&mut self) {
+        self.zeroize_for_confidential_discard();
+    }
+}
+
 /// Auditor-visible opening of one fixed private-note slot.
 ///
 /// The opening deliberately excludes every spending secret.  Active slots
 /// carry the values needed to recompute their commitments; inactive slots
 /// carry only a domain-separated dummy identifier.
-#[derive(Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[derive(Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -1256,7 +1620,21 @@ impl fmt::Debug for PrivateSettlementAuditNoteOpeningV1 {
 }
 
 impl PrivateSettlementAuditNoteOpeningV1 {
-    fn validate(self) -> Result<(), PrivateSettlementValidationError> {
+    /// Wipe every private note-opening field before discard.
+    ///
+    /// The public commitment remains intact. The opening intentionally becomes
+    /// invalid and must not be used after this call.
+    pub fn zeroize_for_confidential_discard(&mut self) {
+        zeroize_value_for_confidential_discard(&mut self.active);
+        zeroize_value_for_confidential_discard(&mut self.value);
+        zeroize_value_for_confidential_discard(&mut self.spending_authority);
+        zeroize_value_for_confidential_discard(&mut self.rho);
+        zeroize_value_for_confidential_discard(&mut self.blinding);
+        zeroize_value_for_confidential_discard(&mut self.memo_digest);
+        zeroize_value_for_confidential_discard(&mut self.dummy_domain);
+    }
+
+    fn validate(&self) -> Result<(), PrivateSettlementValidationError> {
         if self.commitment.is_zero() {
             return Err(PrivateSettlementValidationError::InvalidAuditPlaintext);
         }
@@ -1270,11 +1648,17 @@ impl PrivateSettlementAuditNoteOpeningV1 {
             }
         } else if self.value != 0
             || has_zero_private_field
-            || self.dummy_domain.is_none_or(|domain| hash_is_zero(&domain))
+            || self.dummy_domain.as_ref().is_none_or(hash_is_zero)
         {
             return Err(PrivateSettlementValidationError::InvalidAuditPlaintext);
         }
         Ok(())
+    }
+}
+
+impl Drop for PrivateSettlementAuditNoteOpeningV1 {
+    fn drop(&mut self) {
+        self.zeroize_for_confidential_discard();
     }
 }
 
@@ -1302,6 +1686,26 @@ pub struct PrivateSettlementAuditOutputV1 {
 impl fmt::Debug for PrivateSettlementAuditOutputV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("PrivateSettlementAuditOutputV1(<redacted>)")
+    }
+}
+
+impl PrivateSettlementAuditOutputV1 {
+    /// Wipe every restricted key, authorization, and opening before discard.
+    ///
+    /// Public role context remains intact. The output intentionally becomes
+    /// invalid and must not be used after this call.
+    pub fn zeroize_for_confidential_discard(&mut self) {
+        zeroize_value_for_confidential_discard(&mut self.recipient_view_key);
+        self.view_key_authorization
+            .zeroize_for_confidential_discard();
+        self.encryption_opening.zeroize_for_confidential_discard();
+        self.note.zeroize_for_confidential_discard();
+    }
+}
+
+impl Drop for PrivateSettlementAuditOutputV1 {
+    fn drop(&mut self) {
+        self.zeroize_for_confidential_discard();
     }
 }
 
@@ -1364,7 +1768,7 @@ pub struct PrivateSettlementAuditPlaintextV1 {
     pub outputs: Vec<PrivateSettlementAuditOutputV1>,
 }
 
-#[derive(Clone, Encode)]
+#[derive(Encode)]
 struct PrivateSettlementAuditOutputCommitmentMaterialV1 {
     role: PrivateSettlementAuditOutputRoleV1,
     recipient_view_key: [u8; 32],
@@ -1378,7 +1782,7 @@ struct PrivateSettlementAuditOutputCommitmentMaterialV1 {
     dummy_domain: Option<Hash>,
 }
 
-#[derive(Clone, Encode)]
+#[derive(Encode)]
 struct PrivateSettlementAuditCommitmentMaterialV1 {
     version: u8,
     network_id: NetworkId,
@@ -1403,13 +1807,127 @@ struct PrivateSettlementAuditCommitmentMaterialV1 {
     outputs: Vec<PrivateSettlementAuditOutputCommitmentMaterialV1>,
 }
 
+#[derive(Encode)]
+struct PrivateSettlementReimbursementTermsMaterialV1 {
+    network_id: NetworkId,
+    leg_ordinal: u8,
+    route: PrivateSettlementRouteV1,
+    sponsor: AccountId,
+    asset_definition_id: AssetDefinitionId,
+    sponsor_reimbursement_amount: u128,
+    fee_intent_digest: Hash,
+    success_fee_bearing_carriers: u8,
+    settlement_expiry_height: u64,
+    reimbursement_terms_salt: [u8; 32],
+}
+
+impl PrivateSettlementAuditOutputCommitmentMaterialV1 {
+    fn zeroize_for_confidential_discard(&mut self) {
+        zeroize_value_for_confidential_discard(&mut self.recipient_view_key);
+        self.view_key_authorization
+            .zeroize_for_confidential_discard();
+        self.encryption_opening.zeroize_for_confidential_discard();
+        zeroize_value_for_confidential_discard(&mut self.active);
+        zeroize_value_for_confidential_discard(&mut self.value);
+        zeroize_value_for_confidential_discard(&mut self.spending_authority);
+        zeroize_value_for_confidential_discard(&mut self.rho);
+        zeroize_value_for_confidential_discard(&mut self.blinding);
+        zeroize_value_for_confidential_discard(&mut self.dummy_domain);
+    }
+}
+
+impl Drop for PrivateSettlementAuditOutputCommitmentMaterialV1 {
+    fn drop(&mut self) {
+        self.zeroize_for_confidential_discard();
+    }
+}
+
+impl PrivateSettlementAuditCommitmentMaterialV1 {
+    fn zeroize_for_confidential_discard(&mut self) {
+        self.payer.zeroize_for_confidential_discard();
+        self.payer_authorization.zeroize_for_confidential_discard();
+        self.recipient.zeroize_for_confidential_discard();
+        self.sponsor.zeroize_for_confidential_discard();
+        zeroize_value_for_confidential_discard(&mut self.asset_definition_id.aid_bytes);
+        zeroize_value_for_confidential_discard(&mut self.asset_binding_salt);
+        zeroize_value_for_confidential_discard(&mut self.amount);
+        zeroize_value_for_confidential_discard(&mut self.sponsor_reimbursement_amount);
+        zeroize_value_for_confidential_discard(&mut self.reimbursement_terms_salt);
+        zeroize_value_for_confidential_discard(&mut self.memo);
+        zeroize_value_for_confidential_discard(&mut self.policy_references);
+        for input in &mut self.inputs {
+            input.zeroize_for_confidential_discard();
+        }
+        zeroize_confidential_vec_spare_capacity(&mut self.inputs);
+        for output in &mut self.outputs {
+            output.zeroize_for_confidential_discard();
+        }
+        zeroize_confidential_vec_spare_capacity(&mut self.outputs);
+    }
+}
+
+impl Drop for PrivateSettlementAuditCommitmentMaterialV1 {
+    fn drop(&mut self) {
+        self.zeroize_for_confidential_discard();
+    }
+}
+
+impl PrivateSettlementReimbursementTermsMaterialV1 {
+    fn zeroize_for_confidential_discard(&mut self) {
+        self.sponsor.zeroize_for_confidential_discard();
+        zeroize_value_for_confidential_discard(&mut self.asset_definition_id.aid_bytes);
+        zeroize_value_for_confidential_discard(&mut self.sponsor_reimbursement_amount);
+        zeroize_value_for_confidential_discard(&mut self.reimbursement_terms_salt);
+    }
+}
+
+impl Drop for PrivateSettlementReimbursementTermsMaterialV1 {
+    fn drop(&mut self) {
+        self.zeroize_for_confidential_discard();
+    }
+}
+
 impl fmt::Debug for PrivateSettlementAuditPlaintextV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("PrivateSettlementAuditPlaintextV1(<redacted>)")
     }
 }
 
+impl Drop for PrivateSettlementAuditPlaintextV1 {
+    fn drop(&mut self) {
+        self.zeroize_for_confidential_discard();
+    }
+}
+
 impl PrivateSettlementAuditPlaintextV1 {
+    /// Wipe every secret-bearing field before discarding this plaintext.
+    ///
+    /// Public binding context remains intact, but the plaintext intentionally
+    /// becomes invalid and must not be used after this call. Calling this
+    /// method more than once is safe.
+    pub fn zeroize_for_confidential_discard(&mut self) {
+        self.payer.zeroize_for_confidential_discard();
+        self.recipient.zeroize_for_confidential_discard();
+        self.sponsor.zeroize_for_confidential_discard();
+        zeroize_value_for_confidential_discard(&mut self.asset_definition_id.aid_bytes);
+        zeroize_value_for_confidential_discard(&mut self.asset_binding_salt);
+        zeroize_value_for_confidential_discard(&mut self.amount);
+        zeroize_value_for_confidential_discard(&mut self.sponsor_reimbursement_amount);
+        zeroize_value_for_confidential_discard(&mut self.reimbursement_terms_salt);
+        zeroize_value_for_confidential_discard(&mut self.memo);
+        zeroize_value_for_confidential_discard(&mut self.policy_references);
+
+        self.payer_authorization.zeroize_for_confidential_discard();
+        for input in &mut self.inputs {
+            input.zeroize_for_confidential_discard();
+        }
+        zeroize_confidential_vec_spare_capacity(&mut self.inputs);
+        for output in &mut self.outputs {
+            output.zeroize_for_confidential_discard();
+        }
+        zeroize_confidential_vec_spare_capacity(&mut self.outputs);
+    }
+
     /// Derive the exact purpose-separated authorization body for both inputs.
     ///
     /// Public nullifiers are supplied by the proof statement; every remaining
@@ -1544,7 +2062,7 @@ impl PrivateSettlementAuditPlaintextV1 {
                     role: output.role,
                     recipient_view_key: output.recipient_view_key,
                     view_key_authorization: output.view_key_authorization.clone(),
-                    encryption_opening: output.encryption_opening,
+                    encryption_opening: output.encryption_opening.clone(),
                     active: output.note.active,
                     value: output.note.value,
                     spending_authority: output.note.spending_authority,
@@ -1568,7 +2086,8 @@ impl PrivateSettlementAuditPlaintextV1 {
     ///
     /// Returns a Norito error when canonical encoding fails.
     pub fn commitment(&self) -> Result<Hash, norito::Error> {
-        let encoded = norito::encode_canonical(&self.commitment_material())?;
+        let material = self.commitment_material();
+        let encoded = encode_confidential_canonical(&material)?;
         let encoded_len = u64::try_from(encoded.len()).map_err(|_| {
             norito::Error::Io(std::io::Error::other(
                 "audit commitment material is too large",
@@ -1577,7 +2096,7 @@ impl PrivateSettlementAuditPlaintextV1 {
         let mut hasher = Sha256::new();
         hasher.update(AUDIT_PLAINTEXT_COMMITMENT_DOMAIN_V1);
         hasher.update(encoded_len.to_le_bytes());
-        hasher.update(encoded);
+        hasher.update(encoded.as_slice());
         Ok(Hash::prehashed(hasher.finalize().into()))
     }
 
@@ -1607,18 +2126,26 @@ impl PrivateSettlementAuditPlaintextV1 {
     pub fn reimbursement_terms_commitment(&self) -> Result<Hash, norito::Error> {
         canonical_hash(
             REIMBURSEMENT_TERMS_COMMITMENT_DOMAIN_V1,
-            &(
-                self.network_id,
-                self.leg_ordinal,
-                self.route,
-                self.sponsor.clone(),
-                self.asset_definition_id.clone(),
-                self.sponsor_reimbursement_amount,
-                self.fee_intent_digest,
-                self.settlement_expiry_height,
-                self.reimbursement_terms_salt,
-            ),
+            &self.reimbursement_terms_material(PRIVATE_SETTLEMENT_SUCCESS_FEE_BEARING_CARRIERS_V1),
         )
+    }
+
+    fn reimbursement_terms_material(
+        &self,
+        success_fee_bearing_carriers: u8,
+    ) -> PrivateSettlementReimbursementTermsMaterialV1 {
+        PrivateSettlementReimbursementTermsMaterialV1 {
+            network_id: self.network_id,
+            leg_ordinal: self.leg_ordinal,
+            route: self.route,
+            sponsor: self.sponsor.clone(),
+            asset_definition_id: self.asset_definition_id.clone(),
+            sponsor_reimbursement_amount: self.sponsor_reimbursement_amount,
+            fee_intent_digest: self.fee_intent_digest,
+            success_fee_bearing_carriers,
+            settlement_expiry_height: self.settlement_expiry_height,
+            reimbursement_terms_salt: self.reimbursement_terms_salt,
+        }
     }
 
     /// Validate the restricted plaintext's fixed slot shape and value balance.
@@ -1790,6 +2317,10 @@ pub struct PrivateSettlementAuditAadV1 {
     pub leg_ordinal: u8,
     /// Exact route and incarnation.
     pub route: PrivateSettlementRouteV1,
+    /// Digest of the exact four-validator committee roster and proofs of possession.
+    pub authority_digest: Hash,
+    /// Global/catalog height at which the exact committee authority is resolved.
+    pub authority_context_height: u64,
     /// Digest of the governed policy.
     pub audit_policy_digest: Hash,
     /// Exact auditor key epoch.
@@ -1848,7 +2379,7 @@ impl PrivateSettlementHybridPublicKeyV1 {
 }
 
 /// One auditor authorized by a dataspace-local policy.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -1863,8 +2394,14 @@ pub struct PrivateSettlementAuditorV1 {
     pub encryption_key: PrivateSettlementHybridPublicKeyV1,
 }
 
+impl fmt::Debug for PrivateSettlementAuditorV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("PrivateSettlementAuditorV1(<restricted>)")
+    }
+}
+
 /// Self-authenticating body of one governed local auditor policy.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -1892,6 +2429,12 @@ pub struct PrivateSettlementAuditPolicyBodyV1 {
     pub auditors: Vec<PrivateSettlementAuditorV1>,
 }
 
+impl fmt::Debug for PrivateSettlementAuditPolicyBodyV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("PrivateSettlementAuditPolicyBodyV1(<restricted>)")
+    }
+}
+
 impl PrivateSettlementAuditPolicyBodyV1 {
     /// Recompute the domain-separated digest of this exact policy body.
     ///
@@ -1904,7 +2447,7 @@ impl PrivateSettlementAuditPolicyBodyV1 {
 }
 
 /// Governed auditor policy with a domain-separated self-digest.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -1915,6 +2458,12 @@ pub struct PrivateSettlementAuditPolicyV1 {
     pub body: PrivateSettlementAuditPolicyBodyV1,
     /// Domain-separated canonical body digest.
     pub policy_digest: Hash,
+}
+
+impl fmt::Debug for PrivateSettlementAuditPolicyV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("PrivateSettlementAuditPolicyV1(<restricted>)")
+    }
 }
 
 impl PrivateSettlementAuditPolicyV1 {
@@ -2035,7 +2584,7 @@ pub struct PrivateSettlementPoolGovernanceLifecycleV1 {
 }
 
 impl PrivateSettlementPoolGovernanceLifecycleV1 {
-    fn validate(self) -> Result<(), PrivateSettlementValidationError> {
+    fn validate(&self) -> Result<(), PrivateSettlementValidationError> {
         if self.governance_revision == 0
             || self.activation_height == 0
             || self
@@ -2098,6 +2647,16 @@ impl fmt::Debug for PrivateSettlementPoolGovernanceBodyV1 {
 }
 
 impl PrivateSettlementPoolGovernanceBodyV1 {
+    /// Wipe the literal asset identifier and random commitment opening before discard.
+    ///
+    /// Public route, pool, commitment, policy, and lifecycle bindings remain
+    /// intact. The body intentionally becomes invalid and must not be used after
+    /// this call.
+    pub fn zeroize_for_confidential_discard(&mut self) {
+        zeroize_value_for_confidential_discard(&mut self.asset_definition_id.aid_bytes);
+        zeroize_value_for_confidential_discard(&mut self.asset_binding_salt);
+    }
+
     /// Construct a restricted mapping while deriving its asset and policy commitments.
     ///
     /// # Errors
@@ -2184,6 +2743,12 @@ impl PrivateSettlementPoolGovernanceBodyV1 {
     }
 }
 
+impl Drop for PrivateSettlementPoolGovernanceBodyV1 {
+    fn drop(&mut self) {
+        self.zeroize_for_confidential_discard();
+    }
+}
+
 /// Self-authenticating restricted governance record for one confidential pool.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -2205,6 +2770,14 @@ impl fmt::Debug for PrivateSettlementPoolGovernanceV1 {
 }
 
 impl PrivateSettlementPoolGovernanceV1 {
+    /// Wipe the restricted pool-to-asset opening before discard.
+    ///
+    /// The public governance digest remains intact. The record intentionally
+    /// becomes invalid and must not be used after this call.
+    pub fn zeroize_for_confidential_discard(&mut self) {
+        self.body.zeroize_for_confidential_discard();
+    }
+
     /// Construct a self-authenticating restricted governance record.
     ///
     /// # Errors
@@ -2359,8 +2932,14 @@ impl PrivateSettlementPoolGovernanceV1 {
     }
 }
 
+impl Drop for PrivateSettlementPoolGovernanceV1 {
+    fn drop(&mut self) {
+        self.zeroize_for_confidential_discard();
+    }
+}
+
 /// One hybrid KEM-wrapped data-encryption key addressed to an auditor.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -2383,8 +2962,14 @@ pub struct PrivateSettlementWrappedDekV1 {
     pub wrapped_dek: Vec<u8>,
 }
 
+impl fmt::Debug for PrivateSettlementWrappedDekV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("PrivateSettlementWrappedDekV1(<redacted>)")
+    }
+}
+
 /// Padded encrypted auditor capsule and independently wrapped DEKs.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -2405,6 +2990,12 @@ pub struct PrivateSettlementAuditCapsuleV1 {
     pub ciphertext: Vec<u8>,
     /// Strictly ordered independently wrapped DEKs.
     pub wrapped_deks: Vec<PrivateSettlementWrappedDekV1>,
+}
+
+impl fmt::Debug for PrivateSettlementAuditCapsuleV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("PrivateSettlementAuditCapsuleV1(<redacted>)")
+    }
 }
 
 impl PrivateSettlementAuditCapsuleV1 {
@@ -2438,6 +3029,8 @@ impl PrivateSettlementAuditCapsuleV1 {
             || self.aad.network_id.as_bytes().iter().all(|byte| *byte == 0)
             || hash_is_zero(&self.aad.bundle_id)
             || hash_is_zero(&self.aad.route.lane_incarnation)
+            || hash_is_zero(&self.aad.authority_digest)
+            || self.aad.authority_context_height == 0
             || hash_is_zero(&self.aad.plaintext_commitment)
         {
             return Err(PrivateSettlementValidationError::AuditCapsuleBindingMismatch);
@@ -2505,21 +3098,11 @@ impl PrivateSettlementSidecarAvailabilityBodyV1 {
     ///
     /// Returns a Norito error if the body cannot be canonically encoded.
     pub fn signature_preimage(&self) -> Result<Vec<u8>, norito::Error> {
-        let body = norito::encode_canonical(self)?;
-        let body_len = u64::try_from(body.len()).map_err(|_| {
-            norito::Error::Io(std::io::Error::other(
-                "availability certificate body is too large",
-            ))
-        })?;
-        let mut preimage = Vec::with_capacity(
-            SIDECAR_AVAILABILITY_SIGNATURE_DOMAIN_V1.len()
-                + std::mem::size_of::<u64>()
-                + body.len(),
-        );
-        preimage.extend_from_slice(SIDECAR_AVAILABILITY_SIGNATURE_DOMAIN_V1);
-        preimage.extend_from_slice(&body_len.to_le_bytes());
-        preimage.extend_from_slice(&body);
-        Ok(preimage)
+        private_settlement_signature_preimage(
+            SIDECAR_AVAILABILITY_SIGNATURE_DOMAIN_V1,
+            self,
+            "availability certificate body is too large",
+        )
     }
 
     /// Validate the immutable availability statement before any signature work.
@@ -2642,8 +3225,314 @@ impl PrivateSettlementSidecarAvailabilityV1 {
     }
 }
 
-/// Complete restricted sidecar verified by one participant committee.
+/// Exact restricted auditor view committed by a node response attestation.
+///
+/// This material is not a second HTTP shape. It is the canonical, typed input
+/// to [`Self::digest`], so implementations cannot silently omit a response
+/// field when authenticating an auditor view.
+#[derive(Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+pub struct PrivateSettlementAuditorViewDigestMaterialV1 {
+    /// Digest-material wire version.
+    pub version: u8,
+    /// Node-authoritative height used for access and policy evaluation.
+    pub authoritative_height: u64,
+    /// Exact public bundle manifest.
+    pub manifest: AtomicPrivateSettlementV1,
+    /// Exact historical governed policy bound by the encrypted sidecar.
+    pub audit_policy: PrivateSettlementAuditPolicyV1,
+    /// Exact current policy used to authorize restricted access.
+    ///
+    /// This can equal `audit_policy` or be a later policy in the same governed
+    /// lineage when retained historical capsule material is read after key
+    /// rotation.
+    pub access_audit_policy: PrivateSettlementAuditPolicyV1,
+    /// Exact four-validator participant authority.
+    pub committee_authority: PrivateSettlementCommitteeAuthorityV1,
+    /// Restricted proof statement; proof bytes remain absent.
+    pub statement: PrivateSettlementProofStatementV1,
+    /// Opaque fixed-shape private-state transition.
+    pub delta: PrivateSettlementDeltaV1,
+    /// Padded hybrid-encrypted auditor capsule.
+    pub audit_capsule: PrivateSettlementAuditCapsuleV1,
+    /// Durable restricted-DA certificate.
+    pub availability: PrivateSettlementSidecarAvailabilityV1,
+    /// Explicit stable code for the durable lifecycle projected by Torii.
+    pub lifecycle_code: u8,
+}
+
+impl fmt::Debug for PrivateSettlementAuditorViewDigestMaterialV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PrivateSettlementAuditorViewDigestMaterialV1")
+            .field("bundle_id", &self.manifest.bundle_id)
+            .field("leg_ordinal", &self.statement.leg_ordinal)
+            .field("route", &self.statement.route)
+            .field("authoritative_height", &self.authoritative_height)
+            .field("lifecycle_code", &self.lifecycle_code)
+            .finish_non_exhaustive()
+    }
+}
+
+impl PrivateSettlementAuditorViewDigestMaterialV1 {
+    /// Compute the purpose-separated digest of the complete restricted view.
+    ///
+    /// # Errors
+    ///
+    /// Returns a Norito error if the exact typed view cannot be encoded.
+    pub fn digest(&self) -> Result<Hash, norito::Error> {
+        canonical_hash(AUDITOR_VIEW_DIGEST_DOMAIN_V1, self)
+    }
+}
+
+/// Exact node-authenticated statement over one restricted auditor view.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+pub struct PrivateSettlementAuditorViewAttestationBodyV1 {
+    /// Attestation wire version.
+    pub version: u8,
+    /// Genesis-derived network identity.
+    pub network_id: NetworkId,
+    /// Content address of the exact encrypted participant leg.
+    pub payload_digest: Hash,
+    /// Digest of every unsigned auditor-response field.
+    pub view_digest: Hash,
+    /// Digest of the exact four-validator authority.
+    pub authority_digest: Hash,
+    /// Stable code for the exact lifecycle included in the view digest.
+    pub lifecycle_code: u8,
+    /// Exact height included in the view digest.
+    pub authoritative_height: u64,
+    /// Committee validator that served and authenticated the view.
+    pub responder: PeerId,
+}
+
+impl PrivateSettlementAuditorViewAttestationBodyV1 {
+    /// Canonical purpose-separated bytes signed by the responding validator.
+    ///
+    /// # Errors
+    ///
+    /// Returns a Norito error if the body cannot be canonically encoded.
+    pub fn signature_preimage(&self) -> Result<Vec<u8>, norito::Error> {
+        private_settlement_signature_preimage(
+            AUDITOR_VIEW_ATTESTATION_SIGNATURE_DOMAIN_V1,
+            self,
+            "auditor view attestation body is too large",
+        )
+    }
+
+    /// Validate fixed attestation fields before authority and signature work.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed error for reserved values or an unknown lifecycle code.
+    pub fn validate_shape(&self) -> Result<(), PrivateSettlementValidationError> {
+        if self.version != ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1 {
+            return Err(PrivateSettlementValidationError::UnsupportedVersion {
+                actual: self.version,
+            });
+        }
+        if self.network_id.as_bytes().iter().all(|byte| *byte == 0)
+            || hash_is_zero(&self.payload_digest)
+            || hash_is_zero(&self.view_digest)
+            || hash_is_zero(&self.authority_digest)
+            || self.authoritative_height == 0
+            || self.lifecycle_code > PRIVATE_SETTLEMENT_LIFECYCLE_EXPIRED_V1
+        {
+            return Err(PrivateSettlementValidationError::InvalidAuditorViewAttestation);
+        }
+        Ok(())
+    }
+}
+
+/// One committee validator's BLS authentication of an auditor capsule view.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+pub struct PrivateSettlementAuditorViewAttestationV1 {
+    /// Exact purpose-separated body signed by the responder.
+    pub body: PrivateSettlementAuditorViewAttestationBodyV1,
+    /// Compressed BLS-normal signature over [`Self::body`].
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
+    pub signature: Vec<u8>,
+}
+
+impl PrivateSettlementAuditorViewAttestationV1 {
+    /// Validate fixed wire shape before roster and cryptographic verification.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed error for malformed body or signature bytes.
+    pub fn validate_shape(&self) -> Result<(), PrivateSettlementValidationError> {
+        self.body.validate_shape()?;
+        if self.signature.len() != PRIVATE_SETTLEMENT_BLS_BYTES_V1 {
+            return Err(PrivateSettlementValidationError::InvalidAuditorViewAttestation);
+        }
+        Ok(())
+    }
+}
+
+/// Exact approval-acknowledgement view committed by a node attestation.
+#[derive(Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+pub struct PrivateSettlementAuditApprovalAcknowledgementDigestMaterialV1 {
+    /// Digest-material wire version.
+    pub version: u8,
+    /// Node-authoritative height at which the approval became durable.
+    pub authoritative_height: u64,
+    /// Public bundle identifier.
+    pub bundle_id: Hash,
+    /// Content address of the encrypted leg.
+    pub payload_digest: Hash,
+    /// Canonical leg ordinal.
+    pub leg_ordinal: u8,
+    /// Exact four-validator participant authority returned by the node.
+    pub committee_authority: PrivateSettlementCommitteeAuthorityV1,
+    /// Number of distinct governed approvals now durable.
+    pub collected: u8,
+    /// Governed approval threshold.
+    pub required: u8,
+    /// Whether this request inserted new durable approval material.
+    pub newly_recorded: bool,
+    /// Stable code for the exact durable lifecycle returned by the node.
+    pub lifecycle_code: u8,
+}
+
+impl fmt::Debug for PrivateSettlementAuditApprovalAcknowledgementDigestMaterialV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PrivateSettlementAuditApprovalAcknowledgementDigestMaterialV1")
+            .field("bundle_id", &self.bundle_id)
+            .field("payload_digest", &self.payload_digest)
+            .field("leg_ordinal", &self.leg_ordinal)
+            .field("authoritative_height", &self.authoritative_height)
+            .field("collected", &self.collected)
+            .field("required", &self.required)
+            .field("newly_recorded", &self.newly_recorded)
+            .field("lifecycle_code", &self.lifecycle_code)
+            .finish_non_exhaustive()
+    }
+}
+
+impl PrivateSettlementAuditApprovalAcknowledgementDigestMaterialV1 {
+    /// Compute the purpose-separated digest of the complete acknowledgement.
+    ///
+    /// # Errors
+    ///
+    /// Returns a Norito error if the exact typed view cannot be encoded.
+    pub fn digest(&self) -> Result<Hash, norito::Error> {
+        canonical_hash(AUDIT_APPROVAL_ACKNOWLEDGEMENT_DIGEST_DOMAIN_V1, self)
+    }
+}
+
+/// Exact node-authenticated statement over one durable approval acknowledgement.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+pub struct PrivateSettlementAuditApprovalAcknowledgementAttestationBodyV1 {
+    /// Attestation wire version.
+    pub version: u8,
+    /// Genesis-derived network identity.
+    pub network_id: NetworkId,
+    /// Content address of the exact encrypted participant leg.
+    pub payload_digest: Hash,
+    /// Digest of the exact signed auditor approval request.
+    pub approval_digest: Hash,
+    /// Digest of every unsigned acknowledgement-response field.
+    pub acknowledgement_digest: Hash,
+    /// Digest of the exact four-validator authority.
+    pub authority_digest: Hash,
+    /// Stable code for the exact lifecycle included in the acknowledgement.
+    pub lifecycle_code: u8,
+    /// Exact height included in the acknowledgement.
+    pub authoritative_height: u64,
+    /// Committee validator that persisted and authenticated the approval.
+    pub responder: PeerId,
+}
+
+impl PrivateSettlementAuditApprovalAcknowledgementAttestationBodyV1 {
+    /// Canonical purpose-separated bytes signed by the responding validator.
+    ///
+    /// # Errors
+    ///
+    /// Returns a Norito error if the body cannot be canonically encoded.
+    pub fn signature_preimage(&self) -> Result<Vec<u8>, norito::Error> {
+        private_settlement_signature_preimage(
+            AUDIT_APPROVAL_ACKNOWLEDGEMENT_ATTESTATION_SIGNATURE_DOMAIN_V1,
+            self,
+            "audit approval acknowledgement attestation body is too large",
+        )
+    }
+
+    /// Validate fixed fields before authority and signature verification.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed error for reserved values or an invalid lifecycle.
+    pub fn validate_shape(&self) -> Result<(), PrivateSettlementValidationError> {
+        if self.version != ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1 {
+            return Err(PrivateSettlementValidationError::UnsupportedVersion {
+                actual: self.version,
+            });
+        }
+        if self.network_id.as_bytes().iter().all(|byte| *byte == 0)
+            || hash_is_zero(&self.payload_digest)
+            || hash_is_zero(&self.approval_digest)
+            || hash_is_zero(&self.acknowledgement_digest)
+            || hash_is_zero(&self.authority_digest)
+            || self.authoritative_height == 0
+            || self.lifecycle_code > PRIVATE_SETTLEMENT_LIFECYCLE_AUDITED_V1
+        {
+            return Err(
+                PrivateSettlementValidationError::InvalidAuditApprovalAcknowledgementAttestation,
+            );
+        }
+        Ok(())
+    }
+}
+
+/// One committee validator's BLS authentication of an approval acknowledgement.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+pub struct PrivateSettlementAuditApprovalAcknowledgementAttestationV1 {
+    /// Exact purpose-separated body signed by the responder.
+    pub body: PrivateSettlementAuditApprovalAcknowledgementAttestationBodyV1,
+    /// Compressed BLS-normal signature over [`Self::body`].
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
+    pub signature: Vec<u8>,
+}
+
+impl PrivateSettlementAuditApprovalAcknowledgementAttestationV1 {
+    /// Validate fixed wire shape before roster and cryptographic verification.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed error for malformed body or signature bytes.
+    pub fn validate_shape(&self) -> Result<(), PrivateSettlementValidationError> {
+        self.body.validate_shape()?;
+        if self.signature.len() != PRIVATE_SETTLEMENT_BLS_BYTES_V1 {
+            return Err(
+                PrivateSettlementValidationError::InvalidAuditApprovalAcknowledgementAttestation,
+            );
+        }
+        Ok(())
+    }
+}
+
+/// Complete restricted sidecar verified by one participant committee.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -2661,6 +3550,17 @@ pub struct PrivateSettlementLegPayloadV1 {
     pub audit_capsule: PrivateSettlementAuditCapsuleV1,
     /// Restricted-DA availability metadata.
     pub availability: PrivateSettlementSidecarAvailabilityV1,
+}
+
+impl fmt::Debug for PrivateSettlementLegPayloadV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PrivateSettlementLegPayloadV1")
+            .field("bundle_id", &self.statement.bundle_id)
+            .field("leg_ordinal", &self.statement.leg_ordinal)
+            .field("route", &self.statement.route)
+            .finish_non_exhaustive()
+    }
 }
 
 impl PrivateSettlementLegPayloadV1 {
@@ -2744,6 +3644,7 @@ impl PrivateSettlementLegPayloadV1 {
             || availability.bundle_id != manifest.bundle_id
             || availability.leg_ordinal != self.statement.leg_ordinal
             || availability.route != self.statement.route
+            || availability.authority_digest != self.audit_capsule.aad.authority_digest
             || availability.authority_context_height != manifest.authority_context_height
             || availability.payload_digest != payload_digest
             || usize::try_from(availability.payload_bytes).ok() != Some(canonical_payload_bytes)
@@ -2767,9 +3668,7 @@ impl PrivateSettlementLegPayloadV1 {
         }
         policy.validate()?;
         if self.proof.is_empty() || self.proof.len() > PRIVATE_SETTLEMENT_MAX_PROOF_BYTES_V1 {
-            return Err(PrivateSettlementValidationError::InvalidProofSize {
-                bytes: self.proof.len(),
-            });
+            return Err(PrivateSettlementValidationError::InvalidProofSize);
         }
         self.statement.validate()?;
         let leg = manifest
@@ -2804,6 +3703,8 @@ impl PrivateSettlementLegPayloadV1 {
             || self.audit_capsule.aad.bundle_id != self.statement.bundle_id
             || self.audit_capsule.aad.leg_ordinal != self.statement.leg_ordinal
             || self.audit_capsule.aad.route != self.statement.route
+            || self.audit_capsule.aad.authority_context_height
+                != self.statement.authority_context_height
             || self.audit_capsule.aad.plaintext_commitment
                 != self.statement.audit_plaintext_commitment
         {
@@ -2959,6 +3860,9 @@ impl PrivateSettlementProvisionalLegMaterialV1 {
             || self.availability_body.leg_ordinal != self.statement.leg_ordinal
             || self.availability_body.route != self.statement.route
             || self.availability_body.authority_digest != authority_digest
+            || self.audit_capsule.aad.authority_digest != authority_digest
+            || self.audit_capsule.aad.authority_context_height
+                != self.availability_body.authority_context_height
             || self.availability_body.authority_context_height
                 != self.manifest.authority_context_height
             || self.availability_body.payload_digest != payload_digest
@@ -2987,7 +3891,7 @@ pub fn private_settlement_proof_digest_v1(proof: &[u8]) -> Hash {
 }
 
 /// Exact purpose-separated body signed by a local auditor.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -3024,8 +3928,14 @@ pub struct PrivateSettlementAuditApprovalBodyV1 {
     pub expiry_height: u64,
 }
 
+impl fmt::Debug for PrivateSettlementAuditApprovalBodyV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("PrivateSettlementAuditApprovalBodyV1(<restricted>)")
+    }
+}
+
 /// Signed local-auditor approval required before participant Prepare.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -3038,7 +3948,22 @@ pub struct PrivateSettlementAuditApprovalV1 {
     pub signature: SignatureOf<PrivateSettlementAuditApprovalBodyV1>,
 }
 
+impl fmt::Debug for PrivateSettlementAuditApprovalV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("PrivateSettlementAuditApprovalV1(<restricted>)")
+    }
+}
+
 impl PrivateSettlementAuditApprovalV1 {
+    /// Compute the purpose-separated digest of the complete signed approval.
+    ///
+    /// # Errors
+    ///
+    /// Returns a Norito error if the approval cannot be canonically encoded.
+    pub fn digest(&self) -> Result<Hash, norito::Error> {
+        canonical_hash(AUDIT_APPROVAL_DIGEST_DOMAIN_V1, self)
+    }
+
     /// Verify membership, signature, policy/key epoch, and height validity.
     ///
     /// # Errors
@@ -3170,7 +4095,59 @@ pub enum PrivateSettlementPhaseV1 {
     Commit,
 }
 
-/// Deduplicated committee authority record referenced by both phase certificates.
+/// Route-free four-validator committee roster stored once in an authority catalog.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+pub struct PrivateSettlementCommitteeRosterV1 {
+    /// Canonical hash of `validators`.
+    pub validator_set_hash: HashOf<Vec<PeerId>>,
+    /// Exactly four ordered validator identities.
+    pub validators: Vec<PeerId>,
+    /// BLS proofs of possession aligned one-for-one with `validators`.
+    pub validator_pops: Vec<Vec<u8>>,
+}
+
+impl PrivateSettlementCommitteeRosterV1 {
+    /// Validate exact four-validator committee shape and proofs of possession.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed structural error.
+    pub fn validate(&self) -> Result<(), PrivateSettlementValidationError> {
+        if self.validators.len() != PRIVATE_SETTLEMENT_COMMITTEE_VALIDATORS_V1
+            || self.validator_pops.len() != self.validators.len()
+            || self.validators.iter().collect::<BTreeSet<_>>().len() != self.validators.len()
+            || self
+                .validator_pops
+                .iter()
+                .any(|pop| pop.len() != PRIVATE_SETTLEMENT_BLS_BYTES_V1)
+            || self.validator_set_hash != HashOf::new(&self.validators)
+        {
+            return Err(PrivateSettlementValidationError::InvalidCommitteeAuthority);
+        }
+        Ok(())
+    }
+
+    /// Reconstruct the route-bound authority committed by a phase body.
+    #[must_use]
+    pub fn with_route(
+        &self,
+        route: PrivateSettlementRouteV1,
+    ) -> PrivateSettlementCommitteeAuthorityV1 {
+        PrivateSettlementCommitteeAuthorityV1 {
+            route,
+            validator_set_hash: self.validator_set_hash,
+            validators: self.validators.clone(),
+            validator_pops: self.validator_pops.clone(),
+        }
+    }
+}
+
+/// Route-bound committee authority used by sidecars and phase signatures.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -3189,6 +4166,16 @@ pub struct PrivateSettlementCommitteeAuthorityV1 {
 }
 
 impl PrivateSettlementCommitteeAuthorityV1 {
+    /// Return the route-free roster material stored in compact public catalogs.
+    #[must_use]
+    pub fn roster(&self) -> PrivateSettlementCommitteeRosterV1 {
+        PrivateSettlementCommitteeRosterV1 {
+            validator_set_hash: self.validator_set_hash,
+            validators: self.validators.clone(),
+            validator_pops: self.validator_pops.clone(),
+        }
+    }
+
     /// Compute the compact authority-record digest signed into phase bodies.
     ///
     /// # Errors
@@ -3204,19 +4191,148 @@ impl PrivateSettlementCommitteeAuthorityV1 {
     ///
     /// Returns a typed structural error.
     pub fn validate(&self) -> Result<(), PrivateSettlementValidationError> {
-        if self.validators.len() != PRIVATE_SETTLEMENT_COMMITTEE_VALIDATORS_V1
-            || self.validator_pops.len() != self.validators.len()
-            || self.validators.iter().collect::<BTreeSet<_>>().len() != self.validators.len()
-            || self
-                .validator_pops
-                .iter()
-                .any(|pop| pop.len() != PRIVATE_SETTLEMENT_BLS_BYTES_V1)
-            || self.validator_set_hash != HashOf::new(&self.validators)
-            || hash_is_zero(&self.route.lane_incarnation)
-        {
+        if hash_is_zero(&self.route.lane_incarnation) || self.roster().validate().is_err() {
             return Err(PrivateSettlementValidationError::InvalidCommitteeAuthority);
         }
         Ok(())
+    }
+}
+
+/// Compact two-level committee catalog shared by every public bundle object.
+///
+/// Phase certificates keep indexing the logical leg slot. The corresponding
+/// entry in `leg_roster_indices` selects a route-free roster, which is combined
+/// with the manifest leg route before authority-digest or QC verification.
+#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+pub struct PrivateSettlementAuthorityCatalogV1 {
+    /// Unique committee rosters in canonical first-use order.
+    pub rosters: Vec<PrivateSettlementCommitteeRosterV1>,
+    /// Roster index for every canonical manifest leg.
+    pub leg_roster_indices: Vec<u8>,
+}
+
+impl PrivateSettlementAuthorityCatalogV1 {
+    /// Build the canonical compact catalog from route-bound per-leg authorities.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed error if a route is missing, a roster is malformed, or
+    /// the same validator-set hash is supplied with different roster material.
+    pub fn from_leg_authorities(
+        manifest: &AtomicPrivateSettlementV1,
+        authorities: &[PrivateSettlementCommitteeAuthorityV1],
+    ) -> Result<Self, PrivateSettlementValidationError> {
+        manifest.validate()?;
+        if authorities.len() != manifest.legs.len() {
+            return Err(PrivateSettlementValidationError::InvalidAuthorityCatalog);
+        }
+        let mut catalog = Self::default();
+        for (leg, authority) in manifest.legs.iter().zip(authorities) {
+            authority.validate()?;
+            if authority.route != leg.route {
+                return Err(PrivateSettlementValidationError::InvalidAuthorityCatalog);
+            }
+            let roster = authority.roster();
+            let roster_index = if let Some(index) = catalog
+                .rosters
+                .iter()
+                .position(|candidate| candidate.validator_set_hash == roster.validator_set_hash)
+            {
+                if catalog.rosters[index] != roster {
+                    return Err(PrivateSettlementValidationError::InvalidAuthorityCatalog);
+                }
+                index
+            } else {
+                let index = catalog.rosters.len();
+                catalog.rosters.push(roster);
+                index
+            };
+            catalog.leg_roster_indices.push(
+                u8::try_from(roster_index)
+                    .map_err(|_| PrivateSettlementValidationError::InvalidAuthorityCatalog)?,
+            );
+        }
+        catalog.validate_for_manifest(manifest)?;
+        Ok(catalog)
+    }
+
+    /// Validate bounds, uniqueness, references, and canonical first-use order.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed error for any malformed or non-canonical catalog.
+    pub fn validate_for_manifest(
+        &self,
+        manifest: &AtomicPrivateSettlementV1,
+    ) -> Result<(), PrivateSettlementValidationError> {
+        manifest.validate()?;
+        if self.leg_roster_indices.len() != manifest.legs.len()
+            || self.rosters.is_empty()
+            || self.rosters.len() > manifest.legs.len()
+            || self.rosters.len() > usize::from(u8::MAX)
+        {
+            return Err(PrivateSettlementValidationError::InvalidAuthorityCatalog);
+        }
+        let mut roster_hashes = BTreeSet::new();
+        for roster in &self.rosters {
+            roster.validate()?;
+            if !roster_hashes.insert(roster.validator_set_hash) {
+                return Err(PrivateSettlementValidationError::InvalidAuthorityCatalog);
+            }
+        }
+        let mut seen = vec![false; self.rosters.len()];
+        let mut next_first_use = 0_usize;
+        for &roster_index in &self.leg_roster_indices {
+            let roster_index = usize::from(roster_index);
+            let Some(was_seen) = seen.get_mut(roster_index) else {
+                return Err(PrivateSettlementValidationError::InvalidAuthorityCatalog);
+            };
+            if !*was_seen {
+                if roster_index != next_first_use {
+                    return Err(PrivateSettlementValidationError::InvalidAuthorityCatalog);
+                }
+                *was_seen = true;
+                next_first_use += 1;
+            }
+        }
+        if next_first_use != self.rosters.len() {
+            return Err(PrivateSettlementValidationError::InvalidAuthorityCatalog);
+        }
+        Ok(())
+    }
+
+    /// Resolve one logical leg slot to its exact route-bound authority.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed error if the manifest ordinal or catalog reference is invalid.
+    pub fn authority_for_leg(
+        &self,
+        manifest: &AtomicPrivateSettlementV1,
+        leg_index: usize,
+    ) -> Result<PrivateSettlementCommitteeAuthorityV1, PrivateSettlementValidationError> {
+        let leg = manifest
+            .legs
+            .get(leg_index)
+            .ok_or(PrivateSettlementValidationError::InvalidAuthorityCatalog)?;
+        if usize::from(leg.ordinal) != leg_index {
+            return Err(PrivateSettlementValidationError::InvalidAuthorityCatalog);
+        }
+        let roster_index = self
+            .leg_roster_indices
+            .get(leg_index)
+            .copied()
+            .map(usize::from)
+            .ok_or(PrivateSettlementValidationError::InvalidAuthorityCatalog)?;
+        self.rosters
+            .get(roster_index)
+            .map(|roster| roster.with_route(leg.route))
+            .ok_or(PrivateSettlementValidationError::InvalidAuthorityCatalog)
     }
 }
 
@@ -3240,7 +4356,7 @@ pub struct PrivateSettlementPhaseBodyV1 {
     pub route: PrivateSettlementRouteV1,
     /// Digest of the fixed-shape state delta.
     pub delta_digest: Hash,
-    /// Digest of the deduplicated authority record.
+    /// Digest of the reconstructed route-bound authority record.
     pub authority_digest: Hash,
     /// Digest of the exact all-leg Prepare barrier.
     ///
@@ -3263,16 +4379,11 @@ impl PrivateSettlementPhaseBodyV1 {
     ///
     /// Returns a Norito error if the body cannot be canonically encoded.
     pub fn signature_preimage(&self) -> Result<Vec<u8>, norito::Error> {
-        let body = norito::encode_canonical(self)?;
-        let body_len = u64::try_from(body.len())
-            .map_err(|_| norito::Error::Io(std::io::Error::other("phase body is too large")))?;
-        let mut preimage = Vec::with_capacity(
-            PHASE_SIGNATURE_DOMAIN_V1.len() + std::mem::size_of::<u64>() + body.len(),
-        );
-        preimage.extend_from_slice(PHASE_SIGNATURE_DOMAIN_V1);
-        preimage.extend_from_slice(&body_len.to_le_bytes());
-        preimage.extend_from_slice(&body);
-        Ok(preimage)
+        private_settlement_signature_preimage(
+            PHASE_SIGNATURE_DOMAIN_V1,
+            self,
+            "phase body is too large",
+        )
     }
 }
 
@@ -3325,7 +4436,7 @@ impl PrivateSettlementPhaseVoteV1 {
     }
 }
 
-/// Compact phase certificate referencing a receipt-level authority catalog entry.
+/// Compact phase certificate referencing a receipt-level logical leg slot.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -3335,7 +4446,7 @@ impl PrivateSettlementPhaseVoteV1 {
 pub struct PrivateSettlementPhaseCertificateV1 {
     /// Exact signed phase body.
     pub body: PrivateSettlementPhaseBodyV1,
-    /// Index into [`PrivateSettlementReceiptV1::authority_catalog`].
+    /// Logical leg-slot index resolved through the catalog's `leg_roster_indices` map.
     pub authority_catalog_index: u8,
     /// Four-bit LSB-first signer bitmap.
     pub signers_bitmap: u8,
@@ -3373,12 +4484,15 @@ impl PrivateSettlementPhaseCertificateV1 {
     }
 }
 
-/// Exact complete all-Prepare barrier that every Commit vote must bind.
+/// Complete all-Prepare barrier that every Commit vote must bind.
 ///
 /// The vectors are aligned by canonical leg ordinal. Core independently
 /// verifies every authority, delta, and Prepare QC before recomputing
 /// `prepared_bundle_digest`; carrying this material prevents a coordinator
-/// from substituting one leg or QC for another at Commit time.
+/// from substituting one leg or certified statement for another at Commit
+/// time. The digest normalizes quorum-equivalent certificate encodings: two
+/// exact three-of-four signer subsets over the same signed body certify the
+/// same logical barrier and therefore cannot fork coordinator recovery.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -3390,30 +4504,67 @@ pub struct PrivateSettlementPrepareBarrierV1 {
     pub version: u8,
     /// Exact finalized public manifest.
     pub manifest: AtomicPrivateSettlementV1,
-    /// Canonically ordered, deduplicated participant authorities.
-    pub authority_catalog: Vec<PrivateSettlementCommitteeAuthorityV1>,
+    /// Compact participant authority catalog with one logical slot per leg.
+    pub authority_catalog: PrivateSettlementAuthorityCatalogV1,
     /// Every fixed-shape delta in canonical leg order.
     pub deltas: Vec<PrivateSettlementDeltaV1>,
-    /// Every exact Prepare QC in canonical leg order.
+    /// Every cryptographically valid Prepare QC in canonical leg order.
     pub prepare_certificates: Vec<PrivateSettlementPhaseCertificateV1>,
     /// Canonical digest of all preceding fields except `version`.
     pub prepared_bundle_digest: Hash,
 }
 
 impl PrivateSettlementPrepareBarrierV1 {
-    /// Recompute the canonical exact complete-bundle digest.
+    /// Recompute the canonical complete-bundle digest.
+    ///
+    /// Aggregate signatures and signer bitmaps are deliberately excluded from
+    /// the digest. They are independently verified against the authority
+    /// catalog, while the signed body and authority-catalog index are included.
+    /// This makes every valid exact three-of-four certificate for one statement
+    /// quorum-equivalent and preserves restart liveness with one unavailable
+    /// validator.
     ///
     /// # Errors
     ///
     /// Returns a Norito error if the complete barrier material cannot be encoded.
     pub fn computed_prepared_bundle_digest(&self) -> Result<Hash, norito::Error> {
+        let certified_statements = self
+            .prepare_certificates
+            .iter()
+            .map(|certificate| (certificate.authority_catalog_index, certificate.body))
+            .collect::<Vec<_>>();
         let material = (
             self.manifest.clone(),
             self.authority_catalog.clone(),
             self.deltas.clone(),
-            self.prepare_certificates.clone(),
+            certified_statements,
         );
         canonical_hash(PREPARED_BUNDLE_DIGEST_DOMAIN_V1, &material)
+    }
+
+    /// Return whether two barriers carry the same certified statements.
+    ///
+    /// Signer bitmaps and aggregate signatures may differ because any valid
+    /// three-of-four subset certifies the same Prepare body. This comparison
+    /// deliberately remains structural: callers must independently validate
+    /// both barriers and their aggregate signatures before treating them as
+    /// quorum-equivalent.
+    #[must_use]
+    pub fn quorum_equivalent_to(&self, other: &Self) -> bool {
+        self.version == other.version
+            && self.manifest == other.manifest
+            && self.authority_catalog == other.authority_catalog
+            && self.deltas == other.deltas
+            && self.prepared_bundle_digest == other.prepared_bundle_digest
+            && self.prepare_certificates.len() == other.prepare_certificates.len()
+            && self
+                .prepare_certificates
+                .iter()
+                .zip(&other.prepare_certificates)
+                .all(|(left, right)| {
+                    left.body == right.body
+                        && left.authority_catalog_index == right.authority_catalog_index
+                })
     }
 
     /// Validate bounded canonical vector alignment before cryptographic checks.
@@ -3429,18 +4580,20 @@ impl PrivateSettlementPrepareBarrierV1 {
         }
         self.manifest.validate()?;
         let leg_count = self.manifest.legs.len();
-        if self.authority_catalog.len() != leg_count
-            || self.deltas.len() != leg_count
+        if self.deltas.len() != leg_count
             || self.prepare_certificates.len() != leg_count
             || hash_is_zero(&self.prepared_bundle_digest)
         {
             return Err(PrivateSettlementValidationError::InvalidPrepareBarrier);
         }
-        for (index, (((manifest_leg, authority), delta), certificate)) in self
+        self.authority_catalog
+            .validate_for_manifest(&self.manifest)
+            .map_err(|_| PrivateSettlementValidationError::InvalidPrepareBarrier)?;
+        let mut output_recipients = BTreeSet::new();
+        for (index, ((manifest_leg, delta), certificate)) in self
             .manifest
             .legs
             .iter()
-            .zip(&self.authority_catalog)
             .zip(&self.deltas)
             .zip(&self.prepare_certificates)
             .enumerate()
@@ -3448,9 +4601,13 @@ impl PrivateSettlementPrepareBarrierV1 {
             let ordinal =
                 u8::try_from(index).expect("private settlement has at most 255 participant legs");
             if manifest_leg.ordinal != ordinal
-                || authority.route != manifest_leg.route
                 || delta.leg_ordinal != ordinal
                 || delta.route != manifest_leg.route
+                || delta.validate_public_shape().is_err()
+                || delta
+                    .encrypted_outputs
+                    .iter()
+                    .any(|output| !output_recipients.insert(output.recipient))
                 || certificate.authority_catalog_index != ordinal
                 || certificate.body.phase != PrivateSettlementPhaseV1::Prepare
                 || certificate.body.leg_ordinal != ordinal
@@ -3496,13 +4653,30 @@ pub struct PrivateSettlementCommitBundleV1 {
     pub version: u8,
     /// Exact public manifest.
     pub manifest: AtomicPrivateSettlementV1,
-    /// One authority record per canonical participant leg.
-    pub authority_catalog: Vec<PrivateSettlementCommitteeAuthorityV1>,
+    /// Compact participant authority catalog with one logical slot per leg.
+    pub authority_catalog: PrivateSettlementAuthorityCatalogV1,
     /// One Prepare/Commit-certified row per canonical participant leg.
     pub legs: Vec<PrivateSettlementLegReceiptV1>,
 }
 
 impl PrivateSettlementCommitBundleV1 {
+    /// Return the canonical direct-instruction byte length used for carrier preflight.
+    ///
+    /// This includes the registered [`crate::isi::InstructionBox`] framing for
+    /// [`crate::isi::private_settlement::FinalizeAtomicPrivateSettlementV1`].
+    /// Runtime admission additionally limits the complete sponsor-signed
+    /// transaction, including its authority, metadata, fee intent, and signature.
+    ///
+    /// # Errors
+    ///
+    /// Returns a Norito encoding error if the complete boxed instruction cannot be encoded.
+    pub fn canonical_carrier_bytes_len(&self) -> Result<usize, norito::Error> {
+        let instruction =
+            crate::isi::private_settlement::FinalizeAtomicPrivateSettlementV1::new(self.clone());
+        let boxed = crate::isi::InstructionBox::from(instruction);
+        norito::encode_canonical(&boxed).map(|encoded| encoded.len())
+    }
+
     /// Construct the terminal receipt at the deterministic inclusion height.
     #[must_use]
     pub fn into_receipt(self, finalized_height: u64) -> PrivateSettlementReceiptV1 {
@@ -3528,8 +4702,8 @@ pub struct PrivateSettlementReceiptV1 {
     pub version: u8,
     /// Exact public manifest.
     pub manifest: AtomicPrivateSettlementV1,
-    /// One authority record per canonical participant leg.
-    pub authority_catalog: Vec<PrivateSettlementCommitteeAuthorityV1>,
+    /// Compact participant authority catalog with one logical slot per leg.
+    pub authority_catalog: PrivateSettlementAuthorityCatalogV1,
     /// One finalized leg record per canonical participant leg.
     pub legs: Vec<PrivateSettlementLegReceiptV1>,
     /// Global height at which every delta became active atomically.
@@ -3537,6 +4711,26 @@ pub struct PrivateSettlementReceiptV1 {
 }
 
 impl PrivateSettlementReceiptV1 {
+    /// Return the canonical pre-finality direct-instruction length represented by this receipt.
+    ///
+    /// The consensus-assigned `finalized_height` is not part of the carrier.
+    /// This reconstructs the registered finalization instruction for deterministic
+    /// WSV preflight; signed-transaction admission separately measures the exact
+    /// complete sponsor-signed transaction.
+    ///
+    /// # Errors
+    ///
+    /// Returns a Norito encoding error if the represented commit bundle cannot be encoded.
+    pub fn canonical_carrier_bytes_len(&self) -> Result<usize, norito::Error> {
+        PrivateSettlementCommitBundleV1 {
+            version: self.version,
+            manifest: self.manifest.clone(),
+            authority_catalog: self.authority_catalog.clone(),
+            legs: self.legs.clone(),
+        }
+        .canonical_carrier_bytes_len()
+    }
+
     /// Validate the compact receipt's complete non-cryptographic shape and bindings.
     ///
     /// # Errors
@@ -3551,26 +4745,34 @@ impl PrivateSettlementReceiptV1 {
         self.manifest.validate()?;
         if self.finalized_height < self.manifest.authority_context_height
             || self.finalized_height > self.manifest.expiry_height
-            || self.authority_catalog.len() != self.manifest.legs.len()
             || self.legs.len() != self.manifest.legs.len()
         {
             return Err(PrivateSettlementValidationError::InvalidReceiptShape);
         }
+        self.authority_catalog
+            .validate_for_manifest(&self.manifest)
+            .map_err(|_| PrivateSettlementValidationError::InvalidReceiptShape)?;
         let manifest_digest = self
             .manifest
             .manifest_digest()
             .map_err(|_| PrivateSettlementValidationError::CanonicalEncoding)?;
         let mut prepared_bundle_digest = None;
-        for (index, ((manifest_leg, authority), leg)) in self
-            .manifest
-            .legs
-            .iter()
-            .zip(&self.authority_catalog)
-            .zip(&self.legs)
-            .enumerate()
-        {
+        let mut output_recipients = BTreeSet::new();
+        for (index, (manifest_leg, leg)) in self.manifest.legs.iter().zip(&self.legs).enumerate() {
+            let authority = self
+                .authority_catalog
+                .authority_for_leg(&self.manifest, index)
+                .map_err(|_| PrivateSettlementValidationError::InvalidReceiptShape)?;
             authority.validate()?;
             leg.delta.validate_public_shape()?;
+            if leg
+                .delta
+                .encrypted_outputs
+                .iter()
+                .any(|output| !output_recipients.insert(output.recipient))
+            {
+                return Err(PrivateSettlementValidationError::DuplicateStateItem);
+            }
             leg.prepare.validate_shape()?;
             leg.commit.validate_shape()?;
             let ordinal = u8::try_from(index).expect("receipt has at most 255 legs");
@@ -3779,6 +4981,12 @@ pub enum PrivateSettlementValidationError {
     /// One provisional availability share is malformed or unauthenticated.
     #[error("private settlement restricted-DA availability share is invalid")]
     InvalidAvailabilityShare,
+    /// A node auditor-view attestation has malformed or reserved fields.
+    #[error("private settlement auditor view attestation is invalid")]
+    InvalidAuditorViewAttestation,
+    /// A node approval-acknowledgement attestation is malformed or reserved.
+    #[error("private settlement audit approval acknowledgement attestation is invalid")]
+    InvalidAuditApprovalAcknowledgementAttestation,
     /// Auditor-only plaintext has an invalid fixed shape, value balance, or dummy slot.
     #[error("private settlement auditor plaintext is invalid")]
     InvalidAuditPlaintext,
@@ -3840,11 +5048,8 @@ pub enum PrivateSettlementValidationError {
     #[error("private settlement wrapped DEK is invalid")]
     InvalidWrappedDek,
     /// Proof bytes are empty or exceed the profile bound.
-    #[error("private settlement proof size {bytes} is invalid")]
-    InvalidProofSize {
-        /// Actual proof byte length.
-        bytes: usize,
-    },
+    #[error("private settlement proof size is invalid")]
+    InvalidProofSize,
     /// Proof statement ordinal does not identify a manifest leg.
     #[error("private settlement payload references an unknown leg")]
     UnknownLeg,
@@ -3886,6 +5091,9 @@ pub enum PrivateSettlementValidationError {
     /// Four-validator authority record is malformed.
     #[error("private settlement committee authority is invalid")]
     InvalidCommitteeAuthority,
+    /// Compact authority catalog is malformed or non-canonical.
+    #[error("private settlement authority catalog is invalid")]
+    InvalidAuthorityCatalog,
     /// Phase certificate bitmap or signature shape is malformed.
     #[error("private settlement phase certificate is invalid")]
     InvalidPhaseCertificate,
@@ -3931,9 +5139,12 @@ mod tests {
             private_settlement_proof_digest_v1(&suffixed)
         );
     }
-    use crate::block::BlockHeader;
     use crate::domain::DomainId;
     use crate::privacy::{PrivacyEncryptionKeyV1, PrivacyRecipientIdV1};
+    use crate::{
+        account::{AccountController, MultisigMember, MultisigPolicy},
+        block::BlockHeader,
+    };
     use iroha_crypto::{Algorithm, HashOf, HybridKeyPair, KeyPair};
 
     fn network(seed: u8) -> NetworkId {
@@ -3944,6 +5155,19 @@ mod tests {
 
     fn hash(seed: u8) -> Hash {
         Hash::new([seed])
+    }
+
+    fn legacy_signature_preimage<T: Encode>(domain: &[u8], body: &T) -> Vec<u8> {
+        let body = norito::encode_canonical(body).expect("legacy canonical body encoding");
+        let mut preimage = Vec::with_capacity(domain.len() + 8 + body.len());
+        preimage.extend_from_slice(domain);
+        preimage.extend_from_slice(
+            &u64::try_from(body.len())
+                .expect("fixture body length fits u64")
+                .to_le_bytes(),
+        );
+        preimage.extend_from_slice(&body);
+        preimage
     }
 
     #[test]
@@ -4162,6 +5386,9 @@ mod tests {
             .iter()
             .map(|leg| measured_authority(leg.route, &validators, &validator_pops))
             .collect::<Vec<_>>();
+        let authority_catalog =
+            PrivateSettlementAuthorityCatalogV1::from_leg_authorities(&manifest, &authorities)
+                .expect("fixture authority catalog compacts");
         let prepared_bundle_digest = hash(0xE1);
         let legs = deltas
             .into_iter()
@@ -4207,7 +5434,7 @@ mod tests {
         PrivateSettlementReceiptV1 {
             version: ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
             manifest,
-            authority_catalog: authorities,
+            authority_catalog,
             legs,
             finalized_height: 50,
         }
@@ -4532,6 +5759,19 @@ mod tests {
             .validate_against_manifest(&manifest)
             .expect("plaintext binds exact manifest leg");
         let commitment = plaintext.commitment().expect("plaintext commitment");
+        let reimbursement = plaintext
+            .reimbursement_terms_commitment()
+            .expect("reimbursement terms commitment");
+        let one_carrier_reimbursement = canonical_hash(
+            REIMBURSEMENT_TERMS_COMMITMENT_DOMAIN_V1,
+            &plaintext.reimbursement_terms_material(1),
+        )
+        .expect("one-carrier reimbursement terms commitment");
+        assert_eq!(PRIVATE_SETTLEMENT_SUCCESS_FEE_BEARING_CARRIERS_V1, 2);
+        assert_ne!(
+            reimbursement, one_carrier_reimbursement,
+            "reimbursement terms must bind both fee-bearing success carriers"
+        );
         let mut changed = plaintext.clone();
         changed.memo.push(b'!');
         assert_ne!(
@@ -4621,6 +5861,447 @@ mod tests {
             literal_asset_substitution.validate_against_manifest(&manifest),
             Err(PrivateSettlementValidationError::AuditPlaintextBindingMismatch)
         );
+    }
+
+    #[test]
+    fn confidential_canonical_staging_preserves_audit_commitment_bytes() {
+        let (_, plaintext) = audit_plaintext_fixture();
+        let material = plaintext.commitment_material();
+        let mut previous_encoding =
+            norito::encode_canonical(&material).expect("legacy canonical encoding succeeds");
+        let guarded_encoding =
+            encode_confidential_canonical(&material).expect("guarded canonical encoding succeeds");
+
+        assert_eq!(guarded_encoding.as_slice(), previous_encoding.as_slice());
+
+        let encoded_len =
+            u64::try_from(previous_encoding.len()).expect("fixture encoding length fits u64");
+        let mut hasher = Sha256::new();
+        hasher.update(AUDIT_PLAINTEXT_COMMITMENT_DOMAIN_V1);
+        hasher.update(encoded_len.to_le_bytes());
+        hasher.update(&previous_encoding);
+        assert_eq!(
+            plaintext.commitment().expect("guarded commitment succeeds"),
+            Hash::prehashed(hasher.finalize().into())
+        );
+
+        zeroize_value_for_confidential_discard(&mut previous_encoding);
+    }
+
+    #[test]
+    fn audit_commitment_material_confidential_discard_scrubs_secret_projection() {
+        fn account_is_scrubbed(account: &AccountId) -> bool {
+            match account.controller() {
+                AccountController::Single(key) => key
+                    .try_to_bytes()
+                    .map_or(true, |(_, payload)| payload.iter().all(|byte| *byte == 0)),
+                AccountController::Multisig(policy) => {
+                    policy.version() == 0 && policy.threshold() == 0 && policy.members().is_empty()
+                }
+            }
+        }
+
+        let (_, plaintext) = audit_plaintext_fixture();
+        let mut material = plaintext.commitment_material();
+        let mut reimbursement = plaintext
+            .reimbursement_terms_material(PRIVATE_SETTLEMENT_SUCCESS_FEE_BEARING_CARRIERS_V1);
+        let mut asset_binding = PrivateSettlementAssetBindingMaterialV1 {
+            route: plaintext.route,
+            pool_id: plaintext.pool_id,
+            asset_definition_id: plaintext.asset_definition_id.clone(),
+            asset_binding_salt: plaintext.asset_binding_salt,
+        };
+
+        material.zeroize_for_confidential_discard();
+        assert!(account_is_scrubbed(&material.payer));
+        assert!(account_is_scrubbed(&material.recipient));
+        assert!(account_is_scrubbed(&material.sponsor));
+        assert!(account_is_scrubbed(
+            &material.payer_authorization.body.payer
+        ));
+        assert_eq!(material.asset_definition_id.aid_bytes, [0; 16]);
+        assert_eq!(material.asset_binding_salt, [0; 32]);
+        assert_eq!(material.amount, 0);
+        assert_eq!(material.sponsor_reimbursement_amount, 0);
+        assert_eq!(material.reimbursement_terms_salt, [0; 32]);
+        assert!(material.memo.is_empty());
+        assert!(material.policy_references.is_empty());
+        assert!(material.inputs.iter().all(|opening| {
+            !opening.active
+                && opening.value == 0
+                && opening.spending_authority == [0; 32]
+                && opening.rho == [0; 32]
+                && opening.blinding == [0; 32]
+                && opening.memo_digest == [0; 32]
+                && opening.dummy_domain.is_none()
+        }));
+        assert!(material.outputs.iter().all(|output| {
+            output.recipient_view_key == [0; 32]
+                && output.view_key_authorization.body.recipient_view_key == [0; 32]
+                && output.view_key_authorization.body.note_spending_authority == [0; 32]
+                && !output.view_key_authorization.body.output_active
+                && account_is_scrubbed(&output.view_key_authorization.body.authorized_account)
+                && output
+                    .view_key_authorization
+                    .signatures
+                    .iter()
+                    .all(|signature| signature.signature.payload().is_empty())
+                && output.encryption_opening.ephemeral_secret == [0; 32]
+                && !output.active
+                && output.value == 0
+                && output.spending_authority == [0; 32]
+                && output.rho == [0; 32]
+                && output.blinding == [0; 32]
+                && output.dummy_domain.is_none()
+        }));
+
+        reimbursement.zeroize_for_confidential_discard();
+        assert!(account_is_scrubbed(&reimbursement.sponsor));
+        assert_eq!(reimbursement.asset_definition_id.aid_bytes, [0; 16]);
+        assert_eq!(reimbursement.sponsor_reimbursement_amount, 0);
+        assert_eq!(reimbursement.reimbursement_terms_salt, [0; 32]);
+
+        asset_binding.zeroize_for_confidential_discard();
+        assert_eq!(asset_binding.asset_definition_id.aid_bytes, [0; 16]);
+        assert_eq!(asset_binding.asset_binding_salt, [0; 32]);
+    }
+
+    #[test]
+    fn confidential_canonical_error_path_scrubs_staged_bytes() {
+        struct FailAfterLengthPass {
+            calls: std::cell::Cell<usize>,
+        }
+
+        impl norito::core::NoritoSerialize for FailAfterLengthPass {
+            fn serialize(
+                &self,
+                encoder: &mut norito::core::Encoder<'_>,
+            ) -> Result<(), norito::Error> {
+                let call = self.calls.get();
+                self.calls.set(call.saturating_add(1));
+                encoder.write_all(&[0xA5; 32])?;
+                if call == 2 {
+                    return Err(norito::Error::Message(
+                        "intentional confidential encoding failure".into(),
+                    ));
+                }
+                Ok(())
+            }
+        }
+
+        let material = FailAfterLengthPass {
+            calls: std::cell::Cell::new(0),
+        };
+        let drops_before = CONFIDENTIAL_NONZERO_BUFFER_ZEROIZED_DROPS.with(std::cell::Cell::get);
+        let error = match encode_confidential_canonical(&material) {
+            Ok(_) => panic!("the output pass must fail after staging confidential bytes"),
+            Err(error) => error,
+        };
+        assert!(matches!(error, norito::Error::Message(_)));
+        assert_eq!(material.calls.get(), 3);
+        let drops_after = CONFIDENTIAL_NONZERO_BUFFER_ZEROIZED_DROPS.with(std::cell::Cell::get);
+        assert_eq!(drops_after, drops_before + 1);
+    }
+
+    #[test]
+    fn auditor_plaintext_confidential_discard_scrubs_every_secret_field_idempotently() {
+        fn public_key_is_scrubbed(key: &PublicKey) -> bool {
+            key.try_to_bytes()
+                .map_or(true, |(_, payload)| payload.iter().all(|byte| *byte == 0))
+        }
+
+        fn account_is_scrubbed(account: &AccountId) -> bool {
+            match account.controller() {
+                AccountController::Single(key) => public_key_is_scrubbed(key),
+                AccountController::Multisig(policy) => {
+                    policy.version() == 0 && policy.threshold() == 0 && policy.members().is_empty()
+                }
+            }
+        }
+
+        fn note_opening_is_scrubbed(opening: &PrivateSettlementAuditNoteOpeningV1) -> bool {
+            !opening.active
+                && opening.value == 0
+                && opening.spending_authority == [0; 32]
+                && opening.rho == [0; 32]
+                && opening.blinding == [0; 32]
+                && opening.memo_digest == [0; 32]
+                && opening.dummy_domain.is_none()
+        }
+
+        fn assert_secret_fields_are_scrubbed(plaintext: &PrivateSettlementAuditPlaintextV1) {
+            assert!(account_is_scrubbed(&plaintext.payer));
+            assert!(account_is_scrubbed(&plaintext.recipient));
+            assert!(account_is_scrubbed(&plaintext.sponsor));
+            assert_eq!(plaintext.asset_definition_id.aid_bytes, [0; 16]);
+            assert_eq!(plaintext.asset_binding_salt, [0; 32]);
+            assert_eq!(plaintext.amount, 0);
+            assert_eq!(plaintext.sponsor_reimbursement_amount, 0);
+            assert_eq!(plaintext.reimbursement_terms_salt, [0; 32]);
+            assert!(plaintext.memo.is_empty());
+            assert!(plaintext.policy_references.is_empty());
+            assert!(account_is_scrubbed(
+                &plaintext.payer_authorization.body.payer
+            ));
+            assert!(
+                plaintext
+                    .payer_authorization
+                    .body
+                    .inputs
+                    .iter()
+                    .all(|input| {
+                        !input.active
+                            && input.note_spending_authority == [0; 32]
+                            && input.dummy_domain.is_none()
+                    })
+            );
+            assert!(
+                plaintext
+                    .payer_authorization
+                    .signatures
+                    .iter()
+                    .all(|entry| public_key_is_scrubbed(&entry.signer)
+                        && entry.signature.payload().is_empty())
+            );
+            assert!(plaintext.inputs.iter().all(note_opening_is_scrubbed));
+            assert!(plaintext.outputs.iter().all(|output| {
+                output.recipient_view_key == [0; 32]
+                    && output.view_key_authorization.body.recipient_view_key == [0; 32]
+                    && !output.view_key_authorization.body.output_active
+                    && output.view_key_authorization.body.note_spending_authority == [0; 32]
+                    && account_is_scrubbed(&output.view_key_authorization.body.authorized_account)
+                    && output
+                        .view_key_authorization
+                        .signatures
+                        .iter()
+                        .all(|entry| {
+                            public_key_is_scrubbed(&entry.signer)
+                                && entry.signature.payload().is_empty()
+                        })
+                    && output.encryption_opening.ephemeral_secret == [0; 32]
+                    && note_opening_is_scrubbed(&output.note)
+            }));
+        }
+
+        let (_, mut plaintext) = audit_plaintext_fixture();
+        let multisig_members = [0xB3, 0xB4]
+            .map(|seed| {
+                let keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+                MultisigMember::new(keypair.public_key().clone(), 1).expect("multisig member")
+            })
+            .to_vec();
+        plaintext.recipient = AccountId::new_multisig(
+            MultisigPolicy::new(2, multisig_members).expect("multisig recipient"),
+        );
+
+        assert!(!plaintext.memo.is_empty());
+        assert!(!plaintext.policy_references.is_empty());
+        assert!(
+            plaintext
+                .payer_authorization
+                .body
+                .inputs
+                .iter()
+                .any(|input| input.active && input.dummy_domain.is_none())
+        );
+        assert!(
+            plaintext
+                .payer_authorization
+                .body
+                .inputs
+                .iter()
+                .any(|input| !input.active && input.dummy_domain.is_some())
+        );
+        assert!(
+            plaintext
+                .inputs
+                .iter()
+                .any(|input| input.active && input.dummy_domain.is_none())
+        );
+        assert!(
+            plaintext
+                .inputs
+                .iter()
+                .any(|input| !input.active && input.dummy_domain.is_some())
+        );
+        assert!(plaintext.outputs.iter().any(|output| {
+            output.view_key_authorization.body.output_active
+                && output.note.active
+                && output.note.dummy_domain.is_none()
+        }));
+        assert!(plaintext.outputs.iter().any(|output| {
+            !output.view_key_authorization.body.output_active
+                && !output.note.active
+                && output.note.dummy_domain.is_some()
+        }));
+        assert!(matches!(
+            plaintext.recipient.controller(),
+            AccountController::Multisig(policy) if !policy.members().is_empty()
+        ));
+
+        plaintext.zeroize_for_confidential_discard();
+        assert_secret_fields_are_scrubbed(&plaintext);
+
+        plaintext.zeroize_for_confidential_discard();
+        assert_secret_fields_are_scrubbed(&plaintext);
+    }
+
+    #[test]
+    fn restricted_child_owners_scrub_standalone_copies_idempotently() {
+        fn public_key_is_scrubbed(key: &PublicKey) -> bool {
+            key.try_to_bytes()
+                .map_or(true, |(_, payload)| payload.iter().all(|byte| *byte == 0))
+        }
+
+        fn account_is_scrubbed(account: &AccountId) -> bool {
+            match account.controller() {
+                AccountController::Single(key) => public_key_is_scrubbed(key),
+                AccountController::Multisig(policy) => {
+                    policy.version() == 0 && policy.threshold() == 0 && policy.members().is_empty()
+                }
+            }
+        }
+
+        fn payer_input_is_scrubbed(input: &PrivateSettlementAuditPayerInputV1) -> bool {
+            !input.active
+                && input.note_spending_authority == [0; 32]
+                && input.dummy_domain.is_none()
+        }
+
+        fn note_opening_is_scrubbed(opening: &PrivateSettlementAuditNoteOpeningV1) -> bool {
+            !opening.active
+                && opening.value == 0
+                && opening.spending_authority == [0; 32]
+                && opening.rho == [0; 32]
+                && opening.blinding == [0; 32]
+                && opening.memo_digest == [0; 32]
+                && opening.dummy_domain.is_none()
+        }
+
+        assert!(core::mem::needs_drop::<PrivateSettlementAuditPayerInputV1>());
+        assert!(core::mem::needs_drop::<
+            PrivateSettlementAuditPayerAuthorizationBodyV1,
+        >());
+        assert!(core::mem::needs_drop::<
+            PrivateSettlementAuditPayerSignatureV1,
+        >());
+        assert!(core::mem::needs_drop::<
+            PrivateSettlementAuditPayerAuthorizationV1,
+        >());
+        assert!(core::mem::needs_drop::<
+            PrivateSettlementAuditViewKeyAuthorizationBodyV1,
+        >());
+        assert!(core::mem::needs_drop::<
+            PrivateSettlementAuditViewKeySignatureV1,
+        >());
+        assert!(core::mem::needs_drop::<
+            PrivateSettlementAuditViewKeyAuthorizationV1,
+        >());
+        assert!(core::mem::needs_drop::<
+            PrivateSettlementAuditEncryptionOpeningV1,
+        >());
+        assert!(core::mem::needs_drop::<PrivateSettlementAuditNoteOpeningV1>());
+        assert!(core::mem::needs_drop::<PrivateSettlementAuditOutputV1>());
+
+        let (_, plaintext) = audit_plaintext_fixture();
+
+        let mut payer_input = plaintext.payer_authorization.body.inputs[0].clone();
+        payer_input.zeroize_for_confidential_discard();
+        payer_input.zeroize_for_confidential_discard();
+        assert!(payer_input_is_scrubbed(&payer_input));
+
+        let mut payer_body = plaintext.payer_authorization.body.clone();
+        payer_body.zeroize_for_confidential_discard();
+        payer_body.zeroize_for_confidential_discard();
+        assert!(account_is_scrubbed(&payer_body.payer));
+        assert!(payer_body.inputs.iter().all(payer_input_is_scrubbed));
+
+        let mut payer_signature = plaintext.payer_authorization.signatures[0].clone();
+        payer_signature.zeroize_for_confidential_discard();
+        payer_signature.zeroize_for_confidential_discard();
+        assert!(public_key_is_scrubbed(&payer_signature.signer));
+        assert!(payer_signature.signature.payload().is_empty());
+
+        let mut payer_authorization = plaintext.payer_authorization.clone();
+        payer_authorization.zeroize_for_confidential_discard();
+        payer_authorization.zeroize_for_confidential_discard();
+        assert!(account_is_scrubbed(&payer_authorization.body.payer));
+        assert!(
+            payer_authorization
+                .body
+                .inputs
+                .iter()
+                .all(payer_input_is_scrubbed)
+        );
+        assert!(payer_authorization.signatures.iter().all(|entry| {
+            public_key_is_scrubbed(&entry.signer) && entry.signature.payload().is_empty()
+        }));
+
+        let output = &plaintext.outputs[0];
+        let mut view_body = output.view_key_authorization.body.clone();
+        view_body.zeroize_for_confidential_discard();
+        view_body.zeroize_for_confidential_discard();
+        assert!(account_is_scrubbed(&view_body.authorized_account));
+        assert_eq!(view_body.recipient_view_key, [0; 32]);
+        assert!(!view_body.output_active);
+        assert_eq!(view_body.note_spending_authority, [0; 32]);
+
+        let mut view_signature = output.view_key_authorization.signatures[0].clone();
+        view_signature.zeroize_for_confidential_discard();
+        view_signature.zeroize_for_confidential_discard();
+        assert!(public_key_is_scrubbed(&view_signature.signer));
+        assert!(view_signature.signature.payload().is_empty());
+
+        let mut view_authorization = output.view_key_authorization.clone();
+        view_authorization.zeroize_for_confidential_discard();
+        view_authorization.zeroize_for_confidential_discard();
+        assert!(account_is_scrubbed(
+            &view_authorization.body.authorized_account
+        ));
+        assert_eq!(view_authorization.body.recipient_view_key, [0; 32]);
+        assert_eq!(view_authorization.body.note_spending_authority, [0; 32]);
+        assert!(view_authorization.signatures.iter().all(|entry| {
+            public_key_is_scrubbed(&entry.signer) && entry.signature.payload().is_empty()
+        }));
+
+        let mut encryption_opening = output.encryption_opening.clone();
+        encryption_opening.zeroize_for_confidential_discard();
+        encryption_opening.zeroize_for_confidential_discard();
+        assert_eq!(encryption_opening.ephemeral_secret, [0; 32]);
+
+        let mut note_opening = output.note.clone();
+        note_opening.zeroize_for_confidential_discard();
+        note_opening.zeroize_for_confidential_discard();
+        assert!(note_opening_is_scrubbed(&note_opening));
+
+        let mut output = output.clone();
+        output.zeroize_for_confidential_discard();
+        output.zeroize_for_confidential_discard();
+        assert_eq!(output.recipient_view_key, [0; 32]);
+        assert!(account_is_scrubbed(
+            &output.view_key_authorization.body.authorized_account
+        ));
+        assert_eq!(output.encryption_opening.ephemeral_secret, [0; 32]);
+        assert!(note_opening_is_scrubbed(&output.note));
+    }
+
+    #[test]
+    fn restricted_pool_governance_owner_scrubs_opening_idempotently() {
+        assert!(core::mem::needs_drop::<PrivateSettlementPoolGovernanceBodyV1>());
+        assert!(core::mem::needs_drop::<PrivateSettlementPoolGovernanceV1>());
+
+        let (_, governance, _) = pool_governance_fixture();
+        let mut body = governance.body.clone();
+        body.zeroize_for_confidential_discard();
+        body.zeroize_for_confidential_discard();
+        assert_eq!(body.asset_definition_id.aid_bytes, [0; 16]);
+        assert_eq!(body.asset_binding_salt, [0; 32]);
+
+        let mut record = governance.clone();
+        record.zeroize_for_confidential_discard();
+        record.zeroize_for_confidential_discard();
+        assert_eq!(record.body.asset_definition_id.aid_bytes, [0; 16]);
+        assert_eq!(record.body.asset_binding_salt, [0; 32]);
     }
 
     #[test]
@@ -4735,9 +6416,26 @@ mod tests {
                 authority_catalog: receipt.authority_catalog.clone(),
                 legs: receipt.legs.clone(),
             };
-            let carrier_bytes = norito::encode_canonical(&carrier)
-                .expect("measured carrier encodes")
-                .len();
+            let carrier_bytes = carrier
+                .canonical_carrier_bytes_len()
+                .expect("measured carrier encodes");
+            assert_eq!(
+                receipt
+                    .canonical_carrier_bytes_len()
+                    .expect("receipt projects the measured carrier"),
+                carrier_bytes
+            );
+            let instruction =
+                crate::isi::private_settlement::FinalizeAtomicPrivateSettlementV1::new(
+                    carrier.clone(),
+                );
+            let boxed = crate::isi::InstructionBox::from(instruction);
+            assert_eq!(
+                norito::encode_canonical(&boxed)
+                    .expect("boxed carrier instruction encodes")
+                    .len(),
+                carrier_bytes
+            );
             eprintln!(
                 "atomic-private-settlement wire size: legs={count} receipt_bytes={receipt_bytes} carrier_bytes={carrier_bytes}"
             );
@@ -4941,21 +6639,21 @@ mod tests {
             Err(PrivateSettlementValidationError::InvalidPoolGovernanceLifecycle)
         );
 
-        let mut invalid_lifecycle = governance.clone().body;
+        let mut invalid_lifecycle = governance.body.clone();
         invalid_lifecycle.lifecycle.activation_height = 0;
         assert_eq!(
             PrivateSettlementPoolGovernanceV1::new(invalid_lifecycle),
             Err(PrivateSettlementValidationError::InvalidPoolGovernanceLifecycle)
         );
 
-        let mut invalid_revision = governance.clone().body;
+        let mut invalid_revision = governance.body.clone();
         invalid_revision.lifecycle.governance_revision = 0;
         assert_eq!(
             PrivateSettlementPoolGovernanceV1::new(invalid_revision),
             Err(PrivateSettlementValidationError::InvalidPoolGovernanceLifecycle)
         );
 
-        let mut invalid_interval = governance.clone().body;
+        let mut invalid_interval = governance.body.clone();
         invalid_interval.lifecycle.retirement_height =
             Some(invalid_interval.lifecycle.activation_height);
         assert_eq!(
@@ -4994,6 +6692,26 @@ mod tests {
             body,
         };
         approval.verify(&policy, 20).expect("approval verifies");
+        assert_eq!(
+            format!("{policy:?}"),
+            "PrivateSettlementAuditPolicyV1(<restricted>)"
+        );
+        assert_eq!(
+            format!("{:?}", policy.body),
+            "PrivateSettlementAuditPolicyBodyV1(<restricted>)"
+        );
+        assert_eq!(
+            format!("{auditor:?}"),
+            "PrivateSettlementAuditorV1(<restricted>)"
+        );
+        assert_eq!(
+            format!("{:?}", approval.body),
+            "PrivateSettlementAuditApprovalBodyV1(<restricted>)"
+        );
+        assert_eq!(
+            format!("{approval:?}"),
+            "PrivateSettlementAuditApprovalV1(<restricted>)"
+        );
 
         let mut substituted = approval.clone();
         substituted.body.proof_digest = hash(99);
@@ -5056,13 +6774,146 @@ mod tests {
     }
 
     #[test]
+    fn authority_catalog_deduplicates_rosters_and_reconstructs_route_bound_authorities() {
+        let manifest = manifest(3);
+        let (validators, validator_pops) = measured_validator_material();
+        let authorities = manifest
+            .legs
+            .iter()
+            .map(|leg| measured_authority(leg.route, &validators, &validator_pops))
+            .collect::<Vec<_>>();
+        let catalog =
+            PrivateSettlementAuthorityCatalogV1::from_leg_authorities(&manifest, &authorities)
+                .expect("shared roster compacts");
+
+        assert_eq!(catalog.rosters.len(), 1);
+        assert_eq!(catalog.leg_roster_indices, vec![0, 0, 0]);
+        catalog
+            .validate_for_manifest(&manifest)
+            .expect("canonical catalog validates");
+        for (index, expected) in authorities.iter().enumerate() {
+            assert_eq!(
+                catalog
+                    .authority_for_leg(&manifest, index)
+                    .expect("leg authority resolves"),
+                *expected
+            );
+        }
+
+        let encoded = norito::encode_canonical(&catalog).expect("catalog encodes");
+        let decoded = norito::decode_canonical::<PrivateSettlementAuthorityCatalogV1>(&encoded)
+            .expect("catalog decodes");
+        assert_eq!(decoded, catalog);
+    }
+
+    #[test]
+    fn authority_catalog_rejects_conflicts_and_noncanonical_references() {
+        let manifest = manifest(2);
+        let (validators, validator_pops) = measured_validator_material();
+        let authorities = manifest
+            .legs
+            .iter()
+            .map(|leg| measured_authority(leg.route, &validators, &validator_pops))
+            .collect::<Vec<_>>();
+        let catalog =
+            PrivateSettlementAuthorityCatalogV1::from_leg_authorities(&manifest, &authorities)
+                .expect("shared roster compacts");
+
+        let mut conflicting = authorities.clone();
+        conflicting[1].validator_pops[0][0] ^= 1;
+        assert_eq!(
+            PrivateSettlementAuthorityCatalogV1::from_leg_authorities(&manifest, &conflicting),
+            Err(PrivateSettlementValidationError::InvalidAuthorityCatalog)
+        );
+
+        let mut duplicate_roster = catalog.clone();
+        duplicate_roster.rosters.push(catalog.rosters[0].clone());
+        duplicate_roster.leg_roster_indices = vec![0, 1];
+        assert_eq!(
+            duplicate_roster.validate_for_manifest(&manifest),
+            Err(PrivateSettlementValidationError::InvalidAuthorityCatalog)
+        );
+
+        let mut noncanonical = catalog.clone();
+        noncanonical
+            .rosters
+            .push(PrivateSettlementCommitteeRosterV1 {
+                validator_set_hash: HashOf::new(&vec![
+                    PeerId::from(
+                        KeyPair::from_seed(vec![0xC1; 32], Algorithm::BlsNormal)
+                            .public_key()
+                            .clone(),
+                    ),
+                    PeerId::from(
+                        KeyPair::from_seed(vec![0xC2; 32], Algorithm::BlsNormal)
+                            .public_key()
+                            .clone(),
+                    ),
+                    PeerId::from(
+                        KeyPair::from_seed(vec![0xC3; 32], Algorithm::BlsNormal)
+                            .public_key()
+                            .clone(),
+                    ),
+                    PeerId::from(
+                        KeyPair::from_seed(vec![0xC4; 32], Algorithm::BlsNormal)
+                            .public_key()
+                            .clone(),
+                    ),
+                ]),
+                validators: vec![
+                    PeerId::from(
+                        KeyPair::from_seed(vec![0xC1; 32], Algorithm::BlsNormal)
+                            .public_key()
+                            .clone(),
+                    ),
+                    PeerId::from(
+                        KeyPair::from_seed(vec![0xC2; 32], Algorithm::BlsNormal)
+                            .public_key()
+                            .clone(),
+                    ),
+                    PeerId::from(
+                        KeyPair::from_seed(vec![0xC3; 32], Algorithm::BlsNormal)
+                            .public_key()
+                            .clone(),
+                    ),
+                    PeerId::from(
+                        KeyPair::from_seed(vec![0xC4; 32], Algorithm::BlsNormal)
+                            .public_key()
+                            .clone(),
+                    ),
+                ],
+                validator_pops: vec![vec![0xC1; PRIVATE_SETTLEMENT_BLS_BYTES_V1]; 4],
+            });
+        noncanonical.leg_roster_indices = vec![1, 0];
+        assert_eq!(
+            noncanonical.validate_for_manifest(&manifest),
+            Err(PrivateSettlementValidationError::InvalidAuthorityCatalog)
+        );
+
+        let mut out_of_range = catalog;
+        out_of_range.leg_roster_indices[1] = 1;
+        assert_eq!(
+            out_of_range.validate_for_manifest(&manifest),
+            Err(PrivateSettlementValidationError::InvalidAuthorityCatalog)
+        );
+    }
+
+    #[test]
     fn phase_vote_and_prepare_barrier_roundtrip_with_closed_shape() {
         let receipt = measured_receipt(2);
         let body = receipt.legs[0].prepare.body;
+        assert_eq!(
+            body.signature_preimage().expect("phase preimage encodes"),
+            legacy_signature_preimage(PHASE_SIGNATURE_DOMAIN_V1, &body),
+        );
+        let authority = receipt
+            .authority_catalog
+            .authority_for_leg(&receipt.manifest, 0)
+            .expect("fixture authority resolves");
         let vote = PrivateSettlementPhaseVoteV1 {
             version: ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
             body,
-            signer: receipt.authority_catalog[0].validators[0].clone(),
+            signer: authority.validators[0].clone(),
             signature: vec![0xA5; PRIVATE_SETTLEMENT_BLS_BYTES_V1],
         };
         vote.validate_shape().expect("phase vote shape");
@@ -5080,6 +6931,26 @@ mod tests {
             prepared_bundle_digest: hash(0xE5),
         };
         barrier.validate_shape().expect("barrier shape");
+        let digest = barrier
+            .computed_prepared_bundle_digest()
+            .expect("barrier digest");
+        let mut quorum_equivalent_encoding = barrier.clone();
+        quorum_equivalent_encoding.prepare_certificates[0].signers_bitmap = 0b1011;
+        quorum_equivalent_encoding.prepare_certificates[0].aggregate_signature =
+            vec![0x5A; PRIVATE_SETTLEMENT_BLS_BYTES_V1];
+        assert_eq!(
+            quorum_equivalent_encoding
+                .computed_prepared_bundle_digest()
+                .expect("normalized barrier digest"),
+            digest,
+            "the digest binds the certified body, not its quorum encoding"
+        );
+        assert!(barrier.quorum_equivalent_to(&quorum_equivalent_encoding));
+        let mut substituted_statement = quorum_equivalent_encoding.clone();
+        substituted_statement.prepare_certificates[0]
+            .body
+            .delta_digest = hash(0x44);
+        assert!(!barrier.quorum_equivalent_to(&substituted_statement));
         let json = norito::json::to_json(&barrier).expect("barrier JSON encodes");
         let decoded: PrivateSettlementPrepareBarrierV1 =
             norito::json::from_json(&json).expect("barrier JSON decodes");
@@ -5089,6 +6960,30 @@ mod tests {
         incomplete.prepare_certificates.pop();
         assert_eq!(
             incomplete.validate_shape(),
+            Err(PrivateSettlementValidationError::InvalidPrepareBarrier)
+        );
+    }
+
+    #[test]
+    fn prepare_and_receipt_shapes_reject_cross_leg_recipient_reuse() {
+        let mut receipt = measured_receipt(2);
+        let reused = receipt.legs[0].delta.encrypted_outputs[0].recipient;
+        receipt.legs[1].delta.encrypted_outputs[0].recipient = reused;
+        assert_eq!(
+            receipt.validate_shape(),
+            Err(PrivateSettlementValidationError::DuplicateStateItem)
+        );
+
+        let barrier = PrivateSettlementPrepareBarrierV1 {
+            version: ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
+            manifest: receipt.manifest,
+            authority_catalog: receipt.authority_catalog,
+            deltas: receipt.legs.iter().map(|leg| leg.delta.clone()).collect(),
+            prepare_certificates: receipt.legs.iter().map(|leg| leg.prepare.clone()).collect(),
+            prepared_bundle_digest: hash(0xE5),
+        };
+        assert_eq!(
+            barrier.validate_shape(),
             Err(PrivateSettlementValidationError::InvalidPrepareBarrier)
         );
     }
@@ -5150,6 +7045,124 @@ mod tests {
     }
 
     #[test]
+    fn auditor_view_attestation_is_purpose_height_lifecycle_and_responder_bound() {
+        let (validators, validator_pops) = measured_validator_material();
+        let authority = measured_authority(route(1), &validators, &validator_pops);
+        let body = PrivateSettlementAuditorViewAttestationBodyV1 {
+            version: ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
+            network_id: network(1),
+            payload_digest: hash(0xD3),
+            view_digest: hash(0xD4),
+            authority_digest: authority.digest().expect("authority digest"),
+            lifecycle_code: PRIVATE_SETTLEMENT_LIFECYCLE_COLLECTING_V1,
+            authoritative_height: 19,
+            responder: validators[0].clone(),
+        };
+        body.validate_shape().expect("attestation body shape");
+        let preimage = body.signature_preimage().expect("attestation preimage");
+        assert!(preimage.starts_with(AUDITOR_VIEW_ATTESTATION_SIGNATURE_DOMAIN_V1));
+        assert_eq!(
+            preimage,
+            legacy_signature_preimage(AUDITOR_VIEW_ATTESTATION_SIGNATURE_DOMAIN_V1, &body),
+        );
+
+        let mut substituted = body.clone();
+        substituted.authoritative_height += 1;
+        assert_ne!(
+            preimage,
+            substituted
+                .signature_preimage()
+                .expect("height-substituted preimage")
+        );
+        substituted = body.clone();
+        substituted.lifecycle_code = PRIVATE_SETTLEMENT_LIFECYCLE_AUDITED_V1;
+        assert_ne!(
+            preimage,
+            substituted
+                .signature_preimage()
+                .expect("lifecycle-substituted preimage")
+        );
+        substituted = body.clone();
+        substituted.responder = validators[1].clone();
+        assert_ne!(
+            preimage,
+            substituted
+                .signature_preimage()
+                .expect("responder-substituted preimage")
+        );
+
+        let mut invalid = body;
+        invalid.lifecycle_code = PRIVATE_SETTLEMENT_LIFECYCLE_EXPIRED_V1.saturating_add(1);
+        assert_eq!(
+            invalid.validate_shape(),
+            Err(PrivateSettlementValidationError::InvalidAuditorViewAttestation)
+        );
+    }
+
+    #[test]
+    fn audit_approval_acknowledgement_attestation_binds_request_view_and_responder() {
+        let (validators, validator_pops) = measured_validator_material();
+        let authority = measured_authority(route(1), &validators, &validator_pops);
+        let body = PrivateSettlementAuditApprovalAcknowledgementAttestationBodyV1 {
+            version: ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
+            network_id: network(1),
+            payload_digest: hash(0xE3),
+            approval_digest: hash(0xE4),
+            acknowledgement_digest: hash(0xE5),
+            authority_digest: authority.digest().expect("authority digest"),
+            lifecycle_code: PRIVATE_SETTLEMENT_LIFECYCLE_AUDITED_V1,
+            authoritative_height: 23,
+            responder: validators[0].clone(),
+        };
+        body.validate_shape().expect("acknowledgement body shape");
+        let preimage = body
+            .signature_preimage()
+            .expect("acknowledgement attestation preimage");
+        assert!(
+            preimage.starts_with(AUDIT_APPROVAL_ACKNOWLEDGEMENT_ATTESTATION_SIGNATURE_DOMAIN_V1)
+        );
+        assert_eq!(
+            preimage,
+            legacy_signature_preimage(
+                AUDIT_APPROVAL_ACKNOWLEDGEMENT_ATTESTATION_SIGNATURE_DOMAIN_V1,
+                &body,
+            ),
+        );
+
+        let mut substituted = body.clone();
+        substituted.approval_digest = hash(0xE6);
+        assert_ne!(
+            preimage,
+            substituted
+                .signature_preimage()
+                .expect("approval-substituted preimage")
+        );
+        substituted = body.clone();
+        substituted.acknowledgement_digest = hash(0xE7);
+        assert_ne!(
+            preimage,
+            substituted
+                .signature_preimage()
+                .expect("acknowledgement-substituted preimage")
+        );
+        substituted = body.clone();
+        substituted.responder = validators[1].clone();
+        assert_ne!(
+            preimage,
+            substituted
+                .signature_preimage()
+                .expect("responder-substituted preimage")
+        );
+
+        let mut invalid = body;
+        invalid.lifecycle_code = PRIVATE_SETTLEMENT_LIFECYCLE_PREPARED_V1;
+        assert_eq!(
+            invalid.validate_shape(),
+            Err(PrivateSettlementValidationError::InvalidAuditApprovalAcknowledgementAttestation)
+        );
+    }
+
+    #[test]
     fn fixed_output_codec_rejects_variable_or_unbound_ciphertext() {
         let profile = PrivateSettlementProofProfileV1::IvmPrivateNoteFixed2In3Out;
         let output_commitments = vec![
@@ -5181,7 +7194,9 @@ mod tests {
             pool_id: PrivacyPoolIdV1::new([3; 32]),
             asset_binding_commitment: hash(4),
             old_root: PrivacyRootV1::new([5; 32]),
+            new_root: PrivacyRootV1::new([6; 32]),
             old_epoch: 1,
+            new_epoch: 2,
             nullifiers: vec![
                 PrivacyNullifierV1::new([7; 32]),
                 PrivacyNullifierV1::new([8; 32]),
@@ -5189,6 +7204,7 @@ mod tests {
             output_commitments,
             encrypted_outputs: encrypted_outputs.clone(),
             audit_plaintext_commitment: hash(16),
+            audit_input_commitment: [17; 32],
             audit_capsule_digest: hash(12),
             audit_policy_digest: hash(13),
             audit_key_epoch: 1,
@@ -5197,6 +7213,83 @@ mod tests {
             reimbursement_leg_ordinal: 0,
             expiry_height: 100,
         };
+        statement.validate().expect("statement shape is valid");
+        let statement_bytes = norito::encode_canonical(&statement).expect("statement encodes");
+        let decoded_statement =
+            norito::decode_canonical::<PrivateSettlementProofStatementV1>(&statement_bytes)
+                .expect("statement decodes");
+        assert_eq!(decoded_statement, statement);
+        assert_eq!(decoded_statement.new_root, PrivacyRootV1::new([6; 32]));
+        assert_eq!(decoded_statement.new_epoch, 2);
+        assert_eq!(decoded_statement.audit_input_commitment, [17; 32]);
+        let json_statement = norito::json::to_value(&statement).expect("statement JSON encodes");
+        assert_eq!(
+            norito::json::from_value::<PrivateSettlementProofStatementV1>(json_statement.clone())
+                .expect("statement JSON decodes"),
+            statement
+        );
+        for digest in [[0x22; 32], [0x23; 32]] {
+            let mut raw_digest_statement = statement.clone();
+            raw_digest_statement.audit_input_commitment = digest;
+            raw_digest_statement
+                .validate()
+                .expect("either SHA-256 low-bit parity is canonical");
+            let bytes = norito::encode_canonical(&raw_digest_statement)
+                .expect("raw digest statement encodes");
+            let decoded = norito::decode_canonical::<PrivateSettlementProofStatementV1>(&bytes)
+                .expect("raw digest statement decodes");
+            assert_eq!(decoded.audit_input_commitment, digest);
+            assert_eq!(decoded, raw_digest_statement);
+            let json = norito::json::to_value(&raw_digest_statement)
+                .expect("raw digest statement JSON encodes");
+            let decoded = norito::json::from_value::<PrivateSettlementProofStatementV1>(json)
+                .expect("raw digest statement JSON decodes");
+            assert_eq!(decoded.audit_input_commitment, digest);
+            assert_eq!(decoded, raw_digest_statement);
+        }
+        let mut omitted_input_commitment = json_statement;
+        omitted_input_commitment
+            .as_object_mut()
+            .expect("statement JSON is an object")
+            .remove("audit_input_commitment");
+        assert!(
+            norito::json::from_value::<PrivateSettlementProofStatementV1>(omitted_input_commitment)
+                .is_err(),
+            "the first-release statement cannot omit its AIR input-opening binding"
+        );
+        let mut zero_input_commitment = statement.clone();
+        zero_input_commitment.audit_input_commitment = [0; 32];
+        assert_eq!(
+            zero_input_commitment.validate(),
+            Err(PrivateSettlementValidationError::ZeroCommitment)
+        );
+        let mut substituted_input_commitment = statement.clone();
+        substituted_input_commitment.audit_input_commitment = [18; 32];
+        assert_ne!(
+            statement.digest().expect("statement digest"),
+            substituted_input_commitment
+                .digest()
+                .expect("substituted statement digest"),
+            "the statement digest binds the exact input-opening commitment"
+        );
+        let mut zero_successor = statement.clone();
+        zero_successor.new_root = PrivacyRootV1::new([0; 32]);
+        assert_eq!(
+            zero_successor.validate(),
+            Err(PrivateSettlementValidationError::ZeroCommitment)
+        );
+        let mut unchanged_successor = statement.clone();
+        unchanged_successor.new_root = unchanged_successor.old_root;
+        assert_eq!(
+            unchanged_successor.validate(),
+            Err(PrivateSettlementValidationError::InvalidEpoch)
+        );
+        let mut skipped_epoch = statement.clone();
+        skipped_epoch.new_epoch = 3;
+        assert_eq!(
+            skipped_epoch.validate(),
+            Err(PrivateSettlementValidationError::InvalidEpoch)
+        );
         let mut delta = PrivateSettlementDeltaV1 {
             version: ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
             bundle_id: statement.bundle_id,
@@ -5205,9 +7298,9 @@ mod tests {
             pool_id: statement.pool_id,
             asset_binding_commitment: statement.asset_binding_commitment,
             old_root: statement.old_root,
-            new_root: PrivacyRootV1::new([6; 32]),
+            new_root: statement.new_root,
             old_epoch: statement.old_epoch,
-            new_epoch: statement.old_epoch + 1,
+            new_epoch: statement.new_epoch,
             nullifiers: statement.nullifiers.clone(),
             output_commitments: statement.output_commitments.clone(),
             encrypted_outputs: encrypted_outputs.clone(),
@@ -5218,10 +7311,41 @@ mod tests {
             audit_key_epoch: statement.audit_key_epoch,
         };
         delta.validate_against(&statement).expect("delta aligns");
+        assert_eq!(
+            delta.validate_against(&substituted_input_commitment),
+            Err(PrivateSettlementValidationError::DeltaStatementMismatch)
+        );
+        let mut reused_statement_recipient = statement.clone();
+        reused_statement_recipient.encrypted_outputs[1].recipient =
+            reused_statement_recipient.encrypted_outputs[0].recipient;
+        assert_eq!(
+            reused_statement_recipient.validate(),
+            Err(PrivateSettlementValidationError::DuplicateStateItem)
+        );
+        let mut reused_delta_recipient = delta.clone();
+        reused_delta_recipient.encrypted_outputs[1].recipient =
+            reused_delta_recipient.encrypted_outputs[0].recipient;
+        assert_eq!(
+            reused_delta_recipient.validate_public_shape(),
+            Err(PrivateSettlementValidationError::DuplicateStateItem)
+        );
+        let mut substituted_successor = delta.clone();
+        substituted_successor.new_root = PrivacyRootV1::new([17; 32]);
+        assert_eq!(
+            substituted_successor.validate_against(&statement),
+            Err(PrivateSettlementValidationError::DeltaStatementMismatch)
+        );
+        let mut substituted_epoch = delta.clone();
+        substituted_epoch.old_epoch = 2;
+        substituted_epoch.new_epoch = 3;
+        assert_eq!(
+            substituted_epoch.validate_against(&statement),
+            Err(PrivateSettlementValidationError::DeltaStatementMismatch)
+        );
         delta.encrypted_outputs[2].ciphertext.pop();
         assert_eq!(
             delta.validate_against(&statement),
-            Err(PrivateSettlementValidationError::DeltaStatementMismatch)
+            Err(PrivateSettlementValidationError::InvalidEncryptedOutput { index: 2 })
         );
         let mut malformed_statement = statement;
         malformed_statement.encrypted_outputs[2].ciphertext.pop();

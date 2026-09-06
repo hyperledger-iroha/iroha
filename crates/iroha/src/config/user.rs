@@ -8,15 +8,15 @@ use crate::{
     },
 };
 use error_stack::{Report, ResultExt};
-use iroha_config::parameters::{actual::SorafsRolloutPhase, defaults};
 use iroha_config_base::{
     ParameterOrigin, ReadConfig, WithOrigin,
     attach::ConfigValueAndOrigin,
     util::{DurationMs, Emitter, EmitterResultExt},
 };
+use iroha_service_model::soranet::AnonymityPolicy;
+use iroha_service_model::soranet::RolloutPhase;
 use iroha_torii_shared::{network_profile, network_profile_names};
 use sorafs_manifest::alias_cache::AliasCachePolicy;
-use sorafs_orchestrator::AnonymityPolicy;
 use std::{fmt, fs::File, io::Read as _, path::PathBuf, time::Duration};
 use url::Url;
 /// Minimal allowed transaction time-to-live.
@@ -556,19 +556,19 @@ impl Root {
         let Soracloud { http_witness_file } = soracloud;
         let alias_policy = alias_cache.into_policy();
         let rollout_phase_value =
-            SorafsRolloutPhase::parse(rollout_phase.as_str()).unwrap_or_else(|| {
+            RolloutPhase::parse(rollout_phase.as_str()).unwrap_or_else(|| {
                 emitter.emit(
                     Report::new(ParseError::InvalidSorafsRolloutPhase {
                         value: rollout_phase.clone(),
                     })
                     .attach("invalid `sorafs.rollout_phase`; expected exactly canary|ramp|default"),
                 );
-                SorafsRolloutPhase::default()
+                RolloutPhase::default()
             });
         let phase_default_policy = match rollout_phase_value {
-            SorafsRolloutPhase::Canary => AnonymityPolicy::GuardPq,
-            SorafsRolloutPhase::Ramp => AnonymityPolicy::MajorityPq,
-            SorafsRolloutPhase::Default => AnonymityPolicy::StrictPq,
+            RolloutPhase::Canary => AnonymityPolicy::GuardPq,
+            RolloutPhase::Ramp => AnonymityPolicy::MajorityPq,
+            RolloutPhase::Default => AnonymityPolicy::StrictPq,
         };
         let default_anonymity_policy = anonymity_policy
             .map_or(phase_default_policy, |label| {
@@ -632,7 +632,7 @@ pub struct Account {
     /// I105 chain discriminant used when parsing and rendering account literals.
     #[config(
         env = "ACCOUNT_CHAIN_DISCRIMINANT",
-        default = "defaults::common::chain_discriminant()"
+        default = "iroha_torii_shared::MINAMOTO_CHAIN_DISCRIMINANT"
     )]
     pub chain_discriminant: WithOrigin<u16>,
 }
@@ -797,7 +797,7 @@ pub struct Sorafs {
     /// Alias cache policy applied to gateway responses.
     pub alias_cache: AliasCache,
     /// Rollout phase label controlling default anonymity policy.
-    #[config(default = "defaults::sorafs::gateway::rollout_phase()")]
+    #[config(default = "RolloutPhase::default().label().to_owned()")]
     pub rollout_phase: String,
     /// Default `SoraNet` anonymity policy stage for gateway fetches.
     pub anonymity_policy: Option<String>,
@@ -806,8 +806,8 @@ impl Default for Sorafs {
     fn default() -> Self {
         Self {
             alias_cache: AliasCache::default(),
-            rollout_phase: defaults::sorafs::gateway::rollout_phase(),
-            anonymity_policy: defaults::sorafs::gateway::anonymity_policy(),
+            rollout_phase: RolloutPhase::default().label().to_owned(),
+            anonymity_policy: Some(AnonymityPolicy::default().label().to_owned()),
         }
     }
 }
@@ -815,41 +815,41 @@ impl Default for Sorafs {
 #[derive(Debug, Clone, Copy, ReadConfig)]
 pub struct AliasCache {
     /// Positive TTL in seconds applied to cached alias proofs.
-    #[config(default = "defaults::torii::SORAFS_ALIAS_POSITIVE_TTL_SECS")]
+    #[config(default = "iroha_service_model::sorafs::DEFAULT_ALIAS_POSITIVE_TTL_SECS")]
     pub positive_ttl: u64,
     /// Refresh window in seconds before the positive TTL elapses.
-    #[config(default = "defaults::torii::SORAFS_ALIAS_REFRESH_WINDOW_SECS")]
+    #[config(default = "iroha_service_model::sorafs::DEFAULT_ALIAS_REFRESH_WINDOW_SECS")]
     pub refresh_window: u64,
     /// Hard expiry in seconds after which stale proofs are rejected.
-    #[config(default = "defaults::torii::SORAFS_ALIAS_HARD_EXPIRY_SECS")]
+    #[config(default = "iroha_service_model::sorafs::DEFAULT_ALIAS_HARD_EXPIRY_SECS")]
     pub hard_expiry: u64,
     /// Negative cache TTL in seconds for missing aliases.
-    #[config(default = "defaults::torii::SORAFS_ALIAS_NEGATIVE_TTL_SECS")]
+    #[config(default = "iroha_service_model::sorafs::DEFAULT_ALIAS_NEGATIVE_TTL_SECS")]
     pub negative_ttl: u64,
     /// TTL in seconds for revoked aliases (`410 Gone` responses).
-    #[config(default = "defaults::torii::SORAFS_ALIAS_REVOCATION_TTL_SECS")]
+    #[config(default = "iroha_service_model::sorafs::DEFAULT_ALIAS_REVOCATION_TTL_SECS")]
     pub revocation_ttl: u64,
     /// Maximum age in seconds tolerated before alias proof bundles must rotate.
-    #[config(default = "defaults::torii::SORAFS_ALIAS_ROTATION_MAX_AGE_SECS")]
+    #[config(default = "iroha_service_model::sorafs::DEFAULT_ALIAS_ROTATION_MAX_AGE_SECS")]
     pub rotation_max_age: u64,
     /// Grace period in seconds applied after an approved successor manifest.
-    #[config(default = "defaults::torii::SORAFS_ALIAS_SUCCESSOR_GRACE_SECS")]
+    #[config(default = "iroha_service_model::sorafs::DEFAULT_ALIAS_SUCCESSOR_GRACE_SECS")]
     pub successor_grace: u64,
     /// Grace period in seconds applied to governance-driven alias rotations.
-    #[config(default = "defaults::torii::SORAFS_ALIAS_GOVERNANCE_GRACE_SECS")]
+    #[config(default = "iroha_service_model::sorafs::DEFAULT_ALIAS_GOVERNANCE_GRACE_SECS")]
     pub governance_grace: u64,
 }
 impl Default for AliasCache {
     fn default() -> Self {
         Self {
-            positive_ttl: defaults::torii::SORAFS_ALIAS_POSITIVE_TTL_SECS,
-            refresh_window: defaults::torii::SORAFS_ALIAS_REFRESH_WINDOW_SECS,
-            hard_expiry: defaults::torii::SORAFS_ALIAS_HARD_EXPIRY_SECS,
-            negative_ttl: defaults::torii::SORAFS_ALIAS_NEGATIVE_TTL_SECS,
-            revocation_ttl: defaults::torii::SORAFS_ALIAS_REVOCATION_TTL_SECS,
-            rotation_max_age: defaults::torii::SORAFS_ALIAS_ROTATION_MAX_AGE_SECS,
-            successor_grace: defaults::torii::SORAFS_ALIAS_SUCCESSOR_GRACE_SECS,
-            governance_grace: defaults::torii::SORAFS_ALIAS_GOVERNANCE_GRACE_SECS,
+            positive_ttl: iroha_service_model::sorafs::DEFAULT_ALIAS_POSITIVE_TTL_SECS,
+            refresh_window: iroha_service_model::sorafs::DEFAULT_ALIAS_REFRESH_WINDOW_SECS,
+            hard_expiry: iroha_service_model::sorafs::DEFAULT_ALIAS_HARD_EXPIRY_SECS,
+            negative_ttl: iroha_service_model::sorafs::DEFAULT_ALIAS_NEGATIVE_TTL_SECS,
+            revocation_ttl: iroha_service_model::sorafs::DEFAULT_ALIAS_REVOCATION_TTL_SECS,
+            rotation_max_age: iroha_service_model::sorafs::DEFAULT_ALIAS_ROTATION_MAX_AGE_SECS,
+            successor_grace: iroha_service_model::sorafs::DEFAULT_ALIAS_SUCCESSOR_GRACE_SECS,
+            governance_grace: iroha_service_model::sorafs::DEFAULT_ALIAS_GOVERNANCE_GRACE_SECS,
         }
     }
 }
@@ -898,7 +898,7 @@ mod tests {
                 private_key: Some(WithOrigin::inline(key_pair.private_key().clone())),
                 private_key_file: None,
                 chain_discriminant: WithOrigin::new(
-                    defaults::common::chain_discriminant(),
+                    iroha_torii_shared::MINAMOTO_CHAIN_DISCRIMINANT,
                     ParameterOrigin::default(iroha_config_base::ParameterId::from([
                         "account",
                         "chain_discriminant",
@@ -1064,7 +1064,7 @@ mod tests {
         let config = root.parse().expect("configuration should be valid");
         assert_eq!(
             config.account_chain_discriminant,
-            defaults::common::chain_discriminant()
+            iroha_torii_shared::MINAMOTO_CHAIN_DISCRIMINANT
         );
     }
     #[test]

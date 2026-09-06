@@ -68,15 +68,11 @@ public sealed partial class ToriiClientTests
                 codec,
                 TestContext.Current.CancellationToken));
 
-        using var unassured = new ToriiClient(
-            new Uri("https://torii.example"),
-            new HttpClient(handler),
-            HijiriQuoteOptions());
-        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            unassured.PostValidationFeeHijiriQuoteAsync(
-                new ValidationFeeHijiriQuoteRequestV1(CanonicalAccountId, 1),
-                codec,
-                TestContext.Current.CancellationToken));
+        var error = Assert.Throws<ArgumentException>(() => new ToriiClient(
+                new Uri("https://torii.example"),
+                new HttpClient(handler),
+                HijiriQuoteOptions()));
+        Assert.Equal("options", error.ParamName);
         Assert.Contains("one-shot", error.Message);
         Assert.Equal(0, codec.EncodeCalls);
     }
@@ -452,7 +448,7 @@ public sealed partial class ToriiClientTests
 
     private static ToriiClientOptions HijiriQuoteOptions() => new()
     {
-        LocalSigningContext = new ToriiLocalSigningContext(NetworkId.Parse(CanonicalNetworkId)),
+        NetworkId = NetworkId.Parse(CanonicalNetworkId),
         CanonicalRequestCredentials = new CanonicalRequestCredentials(
             CanonicalAccountId,
             CanonicalPrivateKeySeed),

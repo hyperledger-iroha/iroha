@@ -19,6 +19,8 @@ use thiserror::Error;
 )]
 #[repr(transparent)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::capacity::ProviderId")]
 pub struct ProviderId(pub [u8; 32]);
 impl ProviderId {
     /// Construct a new provider identifier.
@@ -40,6 +42,8 @@ impl fmt::Display for ProviderId {
 /// Stored capacity declaration along with metadata required for registry queries.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::capacity::CapacityDeclarationRecord")]
 pub struct CapacityDeclarationRecord {
     /// Provider that authored the capacity declaration.
     pub provider_id: ProviderId,
@@ -105,6 +109,8 @@ impl Ord for CapacityDeclarationRecord {
 /// Telemetry snapshot reported by a provider for a given epoch window.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::capacity::CapacityTelemetryRecord")]
 pub struct CapacityTelemetryRecord {
     /// Provider identifier.
     pub provider_id: ProviderId,
@@ -214,6 +220,8 @@ impl Ord for CapacityTelemetryRecord {
 /// Aggregated fee ledger entry for a provider.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::capacity::CapacityFeeLedgerEntry")]
 pub struct CapacityFeeLedgerEntry {
     /// Provider identifier.
     pub provider_id: ProviderId,
@@ -451,6 +459,8 @@ pub enum CapacityLedgerMutationError {
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[repr(transparent)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::capacity::CapacityDisputeId")]
 pub struct CapacityDisputeId(pub [u8; 32]);
 impl CapacityDisputeId {
     /// Construct a dispute identifier from raw bytes.
@@ -467,6 +477,8 @@ impl CapacityDisputeId {
 /// Evidence metadata recorded alongside a dispute.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::capacity::CapacityDisputeEvidence")]
 pub struct CapacityDisputeEvidence {
     /// Deterministic digest (BLAKE3-256) of the evidence bundle.
     pub digest: [u8; 32],
@@ -484,6 +496,8 @@ pub struct CapacityDisputeEvidence {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize),
     norito(tag = "outcome", content = "value")
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::capacity::CapacityDisputeOutcome")]
 pub enum CapacityDisputeOutcome {
     /// Dispute was upheld and remediation is required.
     Upheld,
@@ -495,6 +509,8 @@ pub enum CapacityDisputeOutcome {
 /// Resolution metadata captured when a dispute leaves the pending queue.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::capacity::CapacityDisputeResolution")]
 pub struct CapacityDisputeResolution {
     /// Epoch (inclusive) when the dispute was resolved.
     pub resolved_epoch: u64,
@@ -510,6 +526,8 @@ pub struct CapacityDisputeResolution {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize),
     norito(tag = "status", content = "payload")
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::capacity::CapacityDisputeStatus")]
 pub enum CapacityDisputeStatus {
     /// Dispute awaiting governance review.
     Pending,
@@ -526,6 +544,8 @@ impl CapacityDisputeStatus {
 /// Registry record for disputes raised against a capacity provider.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::capacity::CapacityDisputeRecord")]
 pub struct CapacityDisputeRecord {
     /// Unique identifier derived from the canonical payload.
     pub dispute_id: CapacityDisputeId,
@@ -826,3 +846,6 @@ mod tests {
         assert_eq!(entry, event_overflow);
     }
 }
+
+#[cfg(test)]
+mod captured_capacity_schema_tests;

@@ -32,7 +32,6 @@ use fastpq_prover::fastpq_isi_v1::{FASTPQ_QUERY_COUNT_V1, GOLDILOCKS_DIGEST384_B
 #[cfg(test)]
 use iroha_data_model::privacy::PrivacyProtocolIdV1;
 use rand::TryRngCore;
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 use rayon::prelude::*;
 use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
@@ -65,8 +64,15 @@ pub(crate) const fn aggregate_stark_reserved_domains_v1() -> [&'static [u8]; 5] 
 }
 /// Rows processed per bounded DEEP/FRI denominator-inversion batch.
 pub(crate) const DEEP_FRI_BASE_BATCH_ROWS_V1: usize = 1 << 12;
-/// Exact maximum number of independent masked-trace LDE columns retained
-/// concurrently by one deterministic parallel batch.
+/// Canonical independent row batch used by materialized FRI folding.
+const FRI_FOLD_PARALLEL_BATCH_ROWS_V1: usize = 1 << 12;
+/// Exact maximum number of independent LDE columns resident in one parallel dispatch.
+///
+/// Callers process these source-ordered batches sequentially. Peak transform scratch therefore
+/// remains bounded by this protocol-source constant even when Rayon's global pool is wider or is
+/// configured differently by the surrounding process. The historical `MASKED_TRACE` name is
+/// retained because release-readiness certificates bind it directly; the same ceiling now covers
+/// verifier-fixed and DEEP-opening column transforms too.
 pub(crate) const MASKED_TRACE_LDE_COLUMN_BATCH_V1: usize = 8;
 /// Shared aggregate-STARK failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
@@ -1228,6 +1234,11 @@ pub(crate) struct AggregateFriMaskOracleMaterialV1 {
     /// Authenticated oracle commitment.
     pub(crate) tree: GoldilocksMerkleTreeV1,
 }
+impl Drop for AggregateFriMaskOracleMaterialV1 {
+    fn drop(&mut self) {
+        zeroize_extension_field_column_v1(&mut self.evaluations);
+    }
+}
 fn fri_mask_leaf_hash_v1(
     domains: AggregateStarkDomainsV1,
     lane: usize,
@@ -1257,7 +1268,7 @@ fn fri_mask_tree_v1(
         return Err(AggregateStarkErrorV1::InvalidLayout);
     }
     let leaves = evaluations
-        .iter()
+        .par_iter()
         .copied()
         .enumerate()
         .map(|(index, value)| fri_mask_leaf_hash_v1(domains, lane, index, value))
@@ -1300,15 +1311,20 @@ pub(crate) fn build_fri_mask_oracles_v1<R: TryRngCore>(
                 .push(random_goldilocks_fp4_v1(rng).map_err(map_transparent_error_v1)?);
         }
         coefficients.0.resize(lde_size, E::ZERO);
-        let evaluations = goldilocks_fp4_evaluate_coset_v1(
-            &coefficients,
-            lde_size,
-            lde_root,
-            F(GOLDILOCKS_GENERATOR_V1),
-        )
-        .map_err(map_transparent_error_v1)?;
+        let evaluations = ZeroizingExtensionFieldColumnV1(
+            goldilocks_fp4_evaluate_coset_v1(
+                &coefficients,
+                lde_size,
+                lde_root,
+                F(GOLDILOCKS_GENERATOR_V1),
+            )
+            .map_err(map_transparent_error_v1)?,
+        );
         let tree = fri_mask_tree_v1(domains, lane, &evaluations)?;
-        oracles.push(AggregateFriMaskOracleMaterialV1 { evaluations, tree });
+        oracles.push(AggregateFriMaskOracleMaterialV1 {
+            evaluations: evaluations.into_vec_v1(),
+            tree,
+        });
     }
     Ok(oracles)
 }
@@ -1366,6 +1382,7 @@ pub(crate) fn row_tree_v1(
         return Err(AggregateStarkErrorV1::InvalidLayout);
     }
     let leaves = (0..rows)
+        .into_par_iter()
         .map(|index| {
             row_leaf_hash_v1(
                 context,
@@ -1750,30 +1767,29 @@ pub(crate) struct StreamingTraceMaskSetV1 {
 }
 /// Owner of one secret-bearing field column that overwrites every cell on
 /// every return path.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) struct ZeroizingFieldColumnV1(Vec<F>);
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ZeroizingFieldColumnV1 {
     /// Transfer ownership to another zeroizing container without duplicating
     /// the secret-bearing allocation.
     pub(super) fn into_vec_v1(mut self) -> Vec<F> {
         core::mem::take(&mut self.0)
     }
+
+    fn zeroize_v1(&mut self) {
+        zeroize_field_column_v1(&mut self.0);
+    }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl core::ops::Deref for ZeroizingFieldColumnV1 {
     type Target = [F];
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for ZeroizingFieldColumnV1 {
     fn drop(&mut self) {
-        zeroize_field_column_v1(&mut self.0);
+        self.zeroize_v1();
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn zeroize_field_column_v1(values: &mut [F]) {
     for value in values {
         value.zeroize_v1();
@@ -1782,15 +1798,60 @@ fn zeroize_field_column_v1(values: &mut [F]) {
 /// Owner of one secret-bearing quartic-extension column that overwrites every
 /// base-field coefficient on every return path.
 struct ZeroizingExtensionFieldColumnV1(Vec<E>);
+impl ZeroizingExtensionFieldColumnV1 {
+    fn into_vec_v1(mut self) -> Vec<E> {
+        core::mem::take(&mut self.0)
+    }
+
+    fn zeroize_v1(&mut self) {
+        zeroize_extension_field_column_v1(&mut self.0);
+    }
+}
 impl core::ops::Deref for ZeroizingExtensionFieldColumnV1 {
     type Target = [E];
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
+impl core::ops::DerefMut for ZeroizingExtensionFieldColumnV1 {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
 impl Drop for ZeroizingExtensionFieldColumnV1 {
     fn drop(&mut self) {
-        zeroize_extension_field_column_v1(&mut self.0);
+        self.zeroize_v1();
+    }
+}
+/// Clone-preserving owner for prover-only extension matrices that recursively wipes on drop.
+#[derive(Clone)]
+pub(crate) struct ZeroizingExtensionFieldMatrixV1(Vec<Vec<E>>);
+impl ZeroizingExtensionFieldMatrixV1 {
+    fn into_vec_v1(mut self) -> Vec<Vec<E>> {
+        core::mem::take(&mut self.0)
+    }
+
+    fn zeroize_v1(&mut self) {
+        for column in &mut self.0 {
+            zeroize_extension_field_column_v1(column);
+        }
+    }
+}
+impl core::ops::Deref for ZeroizingExtensionFieldMatrixV1 {
+    type Target = Vec<Vec<E>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl core::ops::DerefMut for ZeroizingExtensionFieldMatrixV1 {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+impl Drop for ZeroizingExtensionFieldMatrixV1 {
+    fn drop(&mut self) {
+        self.zeroize_v1();
     }
 }
 fn zeroize_extension_field_column_v1(values: &mut [E]) {
@@ -2109,8 +2170,9 @@ where
     // The profile's eight-column batch is a memory ceiling as well as a
     // throughput choice. Coefficients and masks are sampled serially above,
     // preserving the byte-exact transcript, while independent LDEs within
-    // each bounded batch use the release runner's fixed Rayon pool. Roots are
-    // still absorbed in canonical column order.
+    // each bounded batch may use the active Rayon pool. No pool setting can
+    // make more than eight transforms resident, and roots are still absorbed
+    // in canonical column order.
     for batch in columns.chunks(MASKED_TRACE_LDE_COLUMN_BATCH_V1) {
         let evaluations = batch
             .par_iter()
@@ -2192,6 +2254,7 @@ pub(crate) fn composition_tree_v1(
         return Err(AggregateStarkErrorV1::InvalidLayout);
     }
     let leaves = (0..rows)
+        .into_par_iter()
         .map(|index| {
             let values = chunks.iter().map(|chunk| chunk[index]).collect::<Vec<_>>();
             composition_leaf_hash_unchecked_v1(domains, lane, index, &values)
@@ -2244,7 +2307,7 @@ fn composition_chunks_from_coefficients_v1(
     let root =
         goldilocks_primitive_root_v1(layout.common_lde_log2).map_err(map_transparent_error_v1)?;
     let chunk_size = layout.fri_degree_cap(parameters)?;
-    let mut chunks = Vec::new();
+    let mut chunks = ZeroizingExtensionFieldMatrixV1(Vec::new());
     chunks
         .try_reserve_exact(parameters.composition_degree_chunks)
         .map_err(|_| AggregateStarkErrorV1::AllocationFailure)?;
@@ -2273,7 +2336,7 @@ fn composition_chunks_from_coefficients_v1(
             .map_err(map_transparent_error_v1)?,
         );
     }
-    Ok(chunks)
+    Ok(chunks.into_vec_v1())
 }
 /// Split one common-domain quotient codeword into canonical FRI chunks.
 pub(crate) fn split_composition_evaluations_v1(
@@ -2956,7 +3019,7 @@ pub(crate) fn fri_tree_v1(
 ) -> Result<GoldilocksMerkleTreeV1, AggregateStarkErrorV1> {
     domains.validate()?;
     let leaves = values
-        .iter()
+        .par_iter()
         .copied()
         .enumerate()
         .map(|(index, value)| fri_leaf_hash_unchecked_v1(domains, lane, round, index, value))
@@ -4256,11 +4319,21 @@ pub(crate) struct AggregateTraceGroupMaterialV1 {
     /// Auxiliary vector-row Merkle tree.
     pub(crate) aux_tree: GoldilocksMerkleTreeV1,
 }
+impl Drop for AggregateTraceGroupMaterialV1 {
+    fn drop(&mut self) {
+        for column in &mut self.base_lde {
+            zeroize_field_column_v1(column);
+        }
+        for column in &mut self.aux_lde {
+            zeroize_field_column_v1(column);
+        }
+    }
+}
 /// Prover material for one shared FRI lane.
 #[derive(Clone)]
 pub(crate) struct AggregateFriLaneMaterialV1 {
     /// Every FRI layer including the terminal vector.
-    pub(crate) layers: Vec<Vec<E>>,
+    pub(crate) layers: ZeroizingExtensionFieldMatrixV1,
     /// Merkle tree for every layer including the terminal vector.
     pub(crate) trees: Vec<GoldilocksMerkleTreeV1>,
     /// Root for every layer including the terminal vector.
@@ -4281,25 +4354,45 @@ fn fold_fri_layer_v1(
     let inverse_root = domain_root
         .inv()
         .ok_or(AggregateStarkErrorV1::InternalInvariant)?;
-    let mut inverse_x = domain_shift
+    let initial_inverse_x = domain_shift
         .inv()
         .ok_or(AggregateStarkErrorV1::InternalInvariant)?;
-    let mut next = Vec::new();
-    next.try_reserve_exact(half)
+    let mut next = ZeroizingExtensionFieldColumnV1(Vec::new());
+    next.0
+        .try_reserve_exact(half)
         .map_err(|_| AggregateStarkErrorV1::AllocationFailure)?;
-    for index in 0..half {
-        next.push(
-            fri_fold_pair_with_inverse_x_fp4_v1(
-                current[index],
-                current[index + half],
-                beta,
-                inverse_x,
-            )
-            .map_err(map_transparent_error_v1)?,
-        );
-        inverse_x = inverse_x.mul(inverse_root);
-    }
-    Ok(next)
+    next.0.resize(half, E::ZERO);
+    // A batch derives the same first inverse-domain point as the serial recurrence, then keeps
+    // that recurrence unchanged within the batch. Disjoint indexed slices make the final layer
+    // independent of Rayon scheduling and worker count.
+    next.0
+        .par_chunks_mut(FRI_FOLD_PARALLEL_BATCH_ROWS_V1)
+        .enumerate()
+        .try_for_each(
+            |(batch_index, output)| -> Result<(), AggregateStarkErrorV1> {
+                let start = batch_index
+                    .checked_mul(FRI_FOLD_PARALLEL_BATCH_ROWS_V1)
+                    .ok_or(AggregateStarkErrorV1::AllocationFailure)?;
+                let exponent =
+                    u128::try_from(start).map_err(|_| AggregateStarkErrorV1::InvalidLayout)?;
+                let mut inverse_x = initial_inverse_x.mul(inverse_root.pow(exponent));
+                for (local_index, folded) in output.iter_mut().enumerate() {
+                    let index = start
+                        .checked_add(local_index)
+                        .ok_or(AggregateStarkErrorV1::AllocationFailure)?;
+                    *folded = fri_fold_pair_with_inverse_x_fp4_v1(
+                        current[index],
+                        current[index + half],
+                        beta,
+                        inverse_x,
+                    )
+                    .map_err(map_transparent_error_v1)?;
+                    inverse_x = inverse_x.mul(inverse_root);
+                }
+                Ok(())
+            },
+        )?;
+    Ok(next.into_vec_v1())
 }
 /// Build and transcript-bind one complete shared binary-FRI lane.
 pub(crate) fn build_fri_lane_v1(
@@ -4310,13 +4403,22 @@ pub(crate) fn build_fri_lane_v1(
     base_values: Vec<E>,
     transcript: &mut TransparentTranscriptV1,
 ) -> Result<AggregateFriLaneMaterialV1, AggregateStarkErrorV1> {
+    let base_values = ZeroizingExtensionFieldColumnV1(base_values);
     layout.validate(parameters)?;
     domains.validate()?;
     if lane >= parameters.security_lanes || base_values.len() != layout.common_lde_size() {
         return Err(AggregateStarkErrorV1::InvalidLayout);
     }
     let fri_rounds = layout.fri_rounds(parameters)?;
-    let mut layers = vec![base_values];
+    let mut layers = ZeroizingExtensionFieldMatrixV1(Vec::new());
+    layers
+        .try_reserve_exact(
+            fri_rounds
+                .checked_add(1)
+                .ok_or(AggregateStarkErrorV1::InvalidLayout)?,
+        )
+        .map_err(|_| AggregateStarkErrorV1::AllocationFailure)?;
+    layers.push(base_values.into_vec_v1());
     let mut trees = Vec::with_capacity(fri_rounds + 1);
     let mut roots = Vec::with_capacity(fri_rounds + 1);
     let mut domain_shift = F(GOLDILOCKS_GENERATOR_V1);
@@ -4332,10 +4434,15 @@ pub(crate) fn build_fri_lane_v1(
         let beta = transcript
             .challenge_fp4(domains.fri_beta_label)
             .map_err(map_transparent_error_v1)?;
-        let next = fold_fri_layer_v1(current, beta, domain_shift, domain_root)?;
+        let next = ZeroizingExtensionFieldColumnV1(fold_fri_layer_v1(
+            current,
+            beta,
+            domain_shift,
+            domain_root,
+        )?);
         trees.push(tree);
         roots.push(root);
-        layers.push(next);
+        layers.push(next.into_vec_v1());
         domain_shift = domain_shift.mul(domain_shift);
         domain_root = domain_root.mul(domain_root);
     }
@@ -4395,6 +4502,7 @@ pub(crate) fn build_streaming_fri_lane_v1(
     base_values: Vec<E>,
     transcript: &mut TransparentTranscriptV1,
 ) -> Result<AggregateStreamingFriLaneMaterialV1, AggregateStarkErrorV1> {
+    let base_values = ZeroizingExtensionFieldColumnV1(base_values);
     layout.validate(parameters)?;
     domains.validate()?;
     if lane >= parameters.security_lanes || base_values.len() != layout.common_lde_size() {
@@ -4423,7 +4531,12 @@ pub(crate) fn build_streaming_fri_lane_v1(
         let beta = transcript
             .challenge_fp4(domains.fri_beta_label)
             .map_err(map_transparent_error_v1)?;
-        let next = fold_fri_layer_v1(&current, beta, domain_shift, domain_root)?;
+        let next = ZeroizingExtensionFieldColumnV1(fold_fri_layer_v1(
+            &current,
+            beta,
+            domain_shift,
+            domain_root,
+        )?);
         roots.push(commitment.root);
         betas.push(beta);
         current = next;
@@ -4445,7 +4558,7 @@ pub(crate) fn build_streaming_fri_lane_v1(
     Ok(AggregateStreamingFriLaneMaterialV1 {
         roots,
         betas,
-        terminal_values: current,
+        terminal_values: current.into_vec_v1(),
     })
 }
 /// Replay a committed FRI lane after transcript queries are fixed, retaining
@@ -4460,6 +4573,7 @@ pub(crate) fn open_streaming_fri_lane_v1(
     material: &AggregateStreamingFriLaneMaterialV1,
     query_indices: &[usize],
 ) -> Result<AggregateStreamingFriLaneOpeningsV1, AggregateStarkErrorV1> {
+    let base_values = ZeroizingExtensionFieldColumnV1(base_values);
     layout.validate(parameters)?;
     domains.validate()?;
     let fri_rounds = layout.fri_rounds(parameters)?;
@@ -4519,7 +4633,12 @@ pub(crate) fn open_streaming_fri_lane_v1(
                 high: current[low + half].coefficients().map(F::value),
             });
         }
-        let next = fold_fri_layer_v1(&current, material.betas[round], domain_shift, domain_root)?;
+        let next = ZeroizingExtensionFieldColumnV1(fold_fri_layer_v1(
+            &current,
+            material.betas[round],
+            domain_shift,
+            domain_root,
+        )?);
         for index in &mut layer_indices {
             *index %= half;
         }
@@ -4528,7 +4647,7 @@ pub(crate) fn open_streaming_fri_lane_v1(
         domain_shift = domain_shift.mul(domain_shift);
         domain_root = domain_root.mul(domain_root);
     }
-    if current != material.terminal_values {
+    if current.0.as_slice() != material.terminal_values.as_slice() {
         return Err(AggregateStarkErrorV1::InternalInvariant);
     }
     let terminal = streaming_fri_commitment_v1(domains, lane, fri_rounds, &current, &[])?;
@@ -6535,6 +6654,114 @@ mod tests {
         );
     }
     #[test]
+    fn fri_fold_is_identical_across_rayon_widths() {
+        let log2 = 14_u8;
+        let values = (0_u64..(1_u64 << log2))
+            .map(|index| {
+                E::from_coefficients([
+                    F::reduce(u128::from(index + 3) * 5),
+                    F::reduce(u128::from(index + 7) * 11),
+                    F::reduce(u128::from(index + 13) * 17),
+                    F::reduce(u128::from(index + 19) * 23),
+                ])
+                .expect("canonical extension-field value")
+            })
+            .collect::<Vec<_>>();
+        let beta =
+            E::from_coefficients([F(29), F(31), F(37), F(41)]).expect("canonical FRI challenge");
+        let domain_root = goldilocks_primitive_root_v1(log2).expect("FRI domain root");
+        let run = |threads| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .expect("private test thread pool")
+                .install(|| {
+                    fold_fri_layer_v1(&values, beta, F(GOLDILOCKS_GENERATOR_V1), domain_root)
+                        .expect("FRI fold")
+                })
+        };
+        let half = values.len() / 2;
+        let inverse_root = domain_root.inv().expect("inverse FRI root");
+        let mut inverse_x = F(GOLDILOCKS_GENERATOR_V1).inv().expect("inverse FRI shift");
+        let expected = (0..half)
+            .map(|index| {
+                let folded = fri_fold_pair_with_inverse_x_fp4_v1(
+                    values[index],
+                    values[index + half],
+                    beta,
+                    inverse_x,
+                )
+                .expect("reference serial FRI fold");
+                inverse_x = inverse_x.mul(inverse_root);
+                folded
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(run(1), expected);
+        assert_eq!(run(4), expected);
+    }
+    #[test]
+    fn fri_fold_partial_batch_matches_serial_recurrence() {
+        let log2 = 11_u8;
+        let values = (0_u64..(1_u64 << log2))
+            .map(|index| {
+                E::from_coefficients([
+                    F::reduce(u128::from(index + 3) * 5),
+                    F::reduce(u128::from(index + 7) * 11),
+                    F::reduce(u128::from(index + 13) * 17),
+                    F::reduce(u128::from(index + 19) * 23),
+                ])
+                .expect("canonical extension-field value")
+            })
+            .collect::<Vec<_>>();
+        let beta =
+            E::from_coefficients([F(29), F(31), F(37), F(41)]).expect("canonical FRI challenge");
+        let domain_root = goldilocks_primitive_root_v1(log2).expect("FRI domain root");
+        let actual = rayon::ThreadPoolBuilder::new()
+            .num_threads(4)
+            .build()
+            .expect("private FRI pool")
+            .install(|| {
+                fold_fri_layer_v1(&values, beta, F(GOLDILOCKS_GENERATOR_V1), domain_root)
+                    .expect("partial-batch FRI fold")
+            });
+        assert!(actual.len() < FRI_FOLD_PARALLEL_BATCH_ROWS_V1);
+        let half = values.len() / 2;
+        let inverse_root = domain_root.inv().expect("inverse FRI root");
+        let mut inverse_x = F(GOLDILOCKS_GENERATOR_V1).inv().expect("inverse FRI shift");
+        let expected = (0..half)
+            .map(|index| {
+                let folded = fri_fold_pair_with_inverse_x_fp4_v1(
+                    values[index],
+                    values[index + half],
+                    beta,
+                    inverse_x,
+                )
+                .expect("reference serial FRI fold");
+                inverse_x = inverse_x.mul(inverse_root);
+                folded
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected);
+    }
+    #[test]
+    fn secret_material_wipe_routines_cover_owned_columns_and_layers() {
+        let mut base = ZeroizingFieldColumnV1(vec![F::ONE; 4]);
+        base.zeroize_v1();
+        assert!(base.iter().all(|value| *value == F::ZERO));
+        let mut extension = ZeroizingExtensionFieldColumnV1(vec![E::ONE; 4]);
+        extension.zeroize_v1();
+        assert!(extension.iter().all(|value| *value == E::ZERO));
+        let mut layers = ZeroizingExtensionFieldMatrixV1(vec![vec![E::ONE; 4]; 3]);
+        layers.zeroize_v1();
+        assert!(layers.iter().flatten().all(|value| *value == E::ZERO));
+        assert!(core::mem::needs_drop::<AggregateTraceGroupMaterialV1>());
+        assert!(core::mem::needs_drop::<AggregateFriMaskOracleMaterialV1>());
+        assert!(core::mem::needs_drop::<AggregateFriLaneMaterialV1>());
+        fn assert_clone<T: Clone>() {}
+        assert_clone::<AggregateTraceGroupMaterialV1>();
+        assert_clone::<AggregateFriLaneMaterialV1>();
+    }
+    #[test]
     fn streaming_composition_and_fri_match_materialized_commitments_and_openings() {
         let layout = layout();
         let rows = layout.common_lde_size();
@@ -6548,7 +6775,9 @@ mod tests {
                 E::from_base(value)
             })
             .collect::<Vec<_>>();
-        let indices = vec![1, 7];
+        let indices = (0..PARAMETERS.query_count)
+            .map(|index| index * 3 + 1)
+            .collect::<Vec<_>>();
         let composition_chunks = vec![values.clone()];
         let composition_tree =
             composition_tree_v1(DOMAINS, 0, &composition_chunks).expect("composition tree");
@@ -6651,7 +6880,9 @@ mod tests {
             &mut prover_transcript,
         )
         .expect("streaming FRI");
-        let indices = [1, 7];
+        let indices = (0..PARAMETERS.query_count)
+            .map(|index| index * 3 + 1)
+            .collect::<Vec<_>>();
         let mut changed = material.clone();
         changed.roots[0] = mutate_digest_v1(changed.roots[0]);
         assert!(
@@ -6694,7 +6925,14 @@ mod tests {
             )
             .is_err()
         );
-        for hostile in [vec![1], vec![1, 1], vec![1, layout.common_lde_size()]] {
+        let mut missing = indices.clone();
+        missing.pop();
+        let mut duplicate = indices.clone();
+        let first = duplicate[0];
+        *duplicate.last_mut().expect("nonempty query fixture") = first;
+        let mut out_of_range = indices.clone();
+        *out_of_range.last_mut().expect("nonempty query fixture") = layout.common_lde_size();
+        for hostile in [missing, duplicate, out_of_range] {
             assert!(
                 open_streaming_fri_lane_v1(
                     PARAMETERS,

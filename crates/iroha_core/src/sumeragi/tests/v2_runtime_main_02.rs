@@ -575,7 +575,7 @@ fn scheduler_owner_carrier_pins_exact_fifo_identity_and_rank_fields() {
     assert_eq!(candidate.admission_ordinal, 3);
     assert_eq!(candidate.lifecycle_ordinal, lifecycle_ordinal);
     assert_eq!(
-        candidate.causal_origin.root_lifecycle_ordinal,
+        candidate.causal_origin.root_lifecycle_ordinal(),
         Some(lifecycle_ordinal)
     );
     assert_eq!(candidate.fifo_position, 1);
@@ -609,6 +609,14 @@ fn scheduler_owner_carrier_pins_exact_fifo_identity_and_rank_fields() {
         unreachable!();
     };
     candidate.kind = RuntimeCommandKind::Authenticated;
+    rejected(mutated);
+    let mut mutated = evidence.clone();
+    let RuntimeSelectedCandidateOwnership::Exact(candidate) = &mut mutated.candidate else {
+        unreachable!();
+    };
+    candidate.local_proposal_worker_completed_before_deadline = true;
+    candidate.projection_hash = runtime_fifo_candidate_projection_hash(candidate);
+    mutated.projection_hash = runtime_scheduler_projection_hash(&mutated);
     rejected(mutated);
     let mut mutated = evidence.clone();
     let RuntimeSelectedCandidateOwnership::Exact(candidate) = &mut mutated.candidate else {
@@ -939,6 +947,255 @@ fn full_lane_retryable_backpressure_preserves_owner_across_class_fairness() {
     );
     assert_eq!(runtime.ingress.len(), 0);
 }
+
+#[test]
+fn prepared_completion_capacity_relief_dispatches_only_the_frozen_completion() {
+    let start = Instant::now();
+    let owner_tag = tag(0);
+    let mut runtime = runtime(
+        FakeDriver::new(owner_tag),
+        start,
+        RuntimeQueueConfig::new(4, 1, 1),
+    );
+    for (class, value) in [
+        (CommandClass::Normal, 1),
+        (CommandClass::Completion, 2),
+        (CommandClass::Progress, 3),
+    ] {
+        enqueue_fake(&mut runtime, owner_tag, class, FakeCommand::record(value))
+            .expect("fill one ordinary runtime position per service class");
+    }
+    runtime.ingress.next_class = CommandClass::Normal;
+    for queued in &mut runtime.ingress.commands {
+        queued.eligible_skips = match queued.command.record {
+            Some(1) => 2,
+            Some(2) => 7,
+            Some(3) => 3,
+            _ => unreachable!("fixture contains only record commands"),
+        };
+    }
+    assert_eq!(runtime.remaining_completion_capacity(), 0);
+    let cursor_before = runtime.ingress.next_class;
+    let schedule_before = runtime.schedule;
+    let blocked_completion_lifecycle_ordinal = runtime
+        .ingress
+        .commands
+        .iter()
+        .find(|queued| queued.command.record == Some(2))
+        .and_then(|queued| queued.lifecycle_ordinal)
+        .expect("queued Completion exposes its lifecycle ordinal");
+    let prepared = runtime
+        .prepare_completion_capacity_relief(blocked_completion_lifecycle_ordinal)
+        .expect("freeze exact full-FIFO Completion relief")
+        .expect("a physical Completion owner can release capacity");
+    assert_eq!(
+        prepared.blocked_completion_lifecycle_ordinal,
+        blocked_completion_lifecycle_ordinal
+    );
+    assert!(prepared.validate_identity());
+    assert_eq!(runtime.driver.delivered, Vec::new());
+    assert_eq!(runtime.queued_commands(), 3);
+
+    let supplied_cut = start + Duration::from_secs(30);
+    assert!(matches!(
+        runtime.step_prepared_completion_capacity_relief(supplied_cut, prepared),
+        Ok(RuntimeStep::Advanced(ref effects)) if effects.len() == 1
+    ));
+    assert_eq!(runtime.driver.delivered, vec![(owner_tag, 2)]);
+    assert!(runtime.driver.timeouts.is_empty());
+    assert!(runtime.driver.retransmits.is_empty());
+    assert_eq!(runtime.ingress.next_class, cursor_before);
+    assert_eq!(runtime.schedule, schedule_before);
+    assert_eq!(runtime.remaining_completion_capacity(), 1);
+    assert_eq!(
+        runtime
+            .ingress
+            .commands
+            .iter()
+            .map(|queued| (queued.command.record, queued.eligible_skips))
+            .collect::<Vec<_>>(),
+        vec![(Some(1), 2), (Some(3), 3)],
+        "capacity relief neither selects nor charges Normal/Progress work"
+    );
+    let evidence = runtime
+        .take_last_scheduler_ownership()
+        .expect("capacity relief publishes exact scheduler ownership");
+    assert_eq!(
+        evidence.selected,
+        RuntimeSelectedOwnerKind::CompletionCapacityRelief
+    );
+    assert_eq!(evidence.queue_before.service_cursor, SERVICE_CLASS_NORMAL);
+    assert_eq!(evidence.queue_after.service_cursor, SERVICE_CLASS_NORMAL);
+    assert_eq!(evidence.fifo_owed_before, evidence.fifo_owed_after);
+    let RuntimeSelectedCandidateOwnership::Exact(candidate) = &evidence.candidate else {
+        panic!("capacity relief must retain one exact FIFO candidate")
+    };
+    assert_eq!(candidate.class, SERVICE_CLASS_COMPLETION);
+    assert_eq!(
+        candidate.causal_origin.root_lifecycle_ordinal(),
+        Some(blocked_completion_lifecycle_ordinal)
+    );
+    assert_eq!(
+        candidate.identity,
+        FakeCommand::record(2)
+            .exact_runtime_command_identity()
+            .digest()
+    );
+    assert_eq!(candidate.eligible_skips_before, 7);
+    assert_eq!(candidate.eligible_skips_after, 7);
+    assert_eq!(
+        candidate.selection_seal.kind,
+        RuntimeQueueSelectionKind::CompletionCapacityRelief
+    );
+    assert_eq!(
+        candidate.selection_seal.ordinary_remaining_capacity_before,
+        Some(0)
+    );
+    assert_eq!(evidence.validate_exact(), Ok(()));
+    runtime
+        .take_effect_ownership(1)
+        .expect("consume the capacity-relief effect owner");
+}
+
+#[test]
+fn prepared_completion_capacity_relief_rejects_nonfull_younger_and_retyped_owners() {
+    let start = Instant::now();
+    let owner_tag = tag(0);
+    let mut runtime = runtime(
+        FakeDriver::new(owner_tag),
+        start,
+        RuntimeQueueConfig::new(4, 1, 1),
+    );
+    for (class, value) in [(CommandClass::Normal, 1), (CommandClass::Completion, 2)] {
+        enqueue_fake(&mut runtime, owner_tag, class, FakeCommand::record(value))
+            .expect("ordinary owner fits before the lane is full");
+    }
+    let completion_ordinal = runtime
+        .ingress
+        .commands
+        .iter()
+        .find(|queued| queued.class == CommandClass::Completion)
+        .and_then(|queued| queued.lifecycle_ordinal)
+        .expect("Completion owner has an ordinal");
+    assert!(matches!(
+        runtime.prepare_completion_capacity_relief(completion_ordinal),
+        Ok(None)
+    ));
+    enqueue_fake(
+        &mut runtime,
+        owner_tag,
+        CommandClass::Progress,
+        FakeCommand::record(3),
+    )
+    .expect("fill the last ordinary runtime position");
+    assert_eq!(runtime.remaining_completion_capacity(), 0);
+    assert!(matches!(
+        runtime.prepare_completion_capacity_relief(
+            completion_ordinal
+                .checked_sub(1)
+                .expect("fixture Completion ordinal has a predecessor")
+        ),
+        Ok(None)
+    ));
+
+    let mut rebound = runtime
+        .prepare_completion_capacity_relief(completion_ordinal)
+        .expect("prepare a bound-integrity probe")
+        .expect("the exact Completion is eligible");
+    rebound.blocked_completion_lifecycle_ordinal = completion_ordinal
+        .checked_add(1)
+        .expect("bounded fixture ordinal has a successor");
+    assert!(
+        !rebound.validate_identity(),
+        "the blocked Completion bound is part of the move-only token projection"
+    );
+
+    let mut prepared = runtime
+        .prepare_completion_capacity_relief(completion_ordinal)
+        .expect("prepare full-FIFO Completion relief")
+        .expect("the exact Completion is not younger than the blocked owner");
+    let (progress_position, progress) = runtime
+        .ingress
+        .commands
+        .iter()
+        .enumerate()
+        .find(|(_, queued)| queued.class == CommandClass::Progress)
+        .expect("fixture retains one Progress owner");
+    prepared.selected_position =
+        u64::try_from(progress_position).expect("bounded test position fits u64");
+    prepared.selected_owner = progress
+        .cached_queue_occurrence_owner(&runtime.ingress.selection_source_identity)
+        .cloned()
+        .expect("Progress owner retains its queue capability");
+    prepared.selected_lifecycle_ordinal = progress
+        .lifecycle_ordinal
+        .expect("Progress owner has a lifecycle ordinal");
+    prepared.blocked_completion_lifecycle_ordinal = prepared.selected_lifecycle_ordinal;
+    prepared.projection_hash = prepared_completion_capacity_relief_projection_hash(&prepared);
+    assert!(matches!(
+        runtime.step_prepared_completion_capacity_relief(start, prepared),
+        Err(RuntimeError::FailClosed)
+    ));
+    assert!(runtime.fail_closed);
+    assert_eq!(runtime.driver.delivered, Vec::new());
+    assert_eq!(runtime.queued_commands(), 3);
+}
+
+#[test]
+fn retryable_completion_capacity_relief_preserves_cursor_debt_and_exact_owner() {
+    let start = Instant::now();
+    let owner_tag = tag(0);
+    let mut driver = FakeDriver::new(owner_tag);
+    assert!(driver.retry_once.insert(2));
+    let mut runtime = runtime(driver, start, RuntimeQueueConfig::new(4, 1, 1));
+    for (class, value) in [
+        (CommandClass::Normal, 1),
+        (CommandClass::Completion, 2),
+        (CommandClass::Progress, 3),
+    ] {
+        enqueue_fake(&mut runtime, owner_tag, class, FakeCommand::record(value))
+            .expect("fill one ordinary runtime position per service class");
+    }
+    runtime.ingress.next_class = CommandClass::Progress;
+    for queued in &mut runtime.ingress.commands {
+        queued.eligible_skips = u64::from(queued.command.record.expect("record command")) + 4;
+    }
+    let queue_before = runtime.ingress.ownership_snapshot();
+    let schedule_before = runtime.schedule;
+    let blocked_completion_lifecycle_ordinal = runtime
+        .ingress
+        .commands
+        .iter()
+        .find(|queued| queued.class == CommandClass::Completion)
+        .and_then(|queued| queued.lifecycle_ordinal)
+        .expect("Completion owner has a lifecycle ordinal");
+    let prepared = runtime
+        .prepare_completion_capacity_relief(blocked_completion_lifecycle_ordinal)
+        .expect("prepare retryable capacity relief")
+        .expect("full queue has one runnable Completion owner");
+    assert!(matches!(
+        runtime.step_prepared_completion_capacity_relief(start, prepared),
+        Ok(RuntimeStep::Advanced(ref effects)) if effects.is_empty()
+    ));
+    assert_eq!(runtime.ingress.ownership_snapshot(), queue_before);
+    assert_eq!(runtime.schedule, schedule_before);
+    assert_eq!(runtime.remaining_completion_capacity(), 0);
+    assert_eq!(runtime.driver.delivered, Vec::new());
+    let evidence = runtime
+        .take_last_scheduler_ownership()
+        .expect("retry publishes typed retained ownership");
+    assert_eq!(
+        evidence.selected,
+        RuntimeSelectedOwnerKind::CompletionCapacityReliefRetryRetained
+    );
+    assert_eq!(evidence.queue_before, evidence.queue_after);
+    assert_eq!(evidence.fifo_owed_before, evidence.fifo_owed_after);
+    assert_eq!(evidence.validate_exact(), Ok(()));
+    runtime
+        .take_effect_ownership(0)
+        .expect("retry emits no effect ownership");
+}
+
 #[test]
 fn typed_pacemaker_escape_selects_only_progress_root() {
     let start = Instant::now();

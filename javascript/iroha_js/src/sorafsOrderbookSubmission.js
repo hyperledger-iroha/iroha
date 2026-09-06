@@ -6,10 +6,11 @@ export const SORAFS_ORDERBOOK_TRANSACTION_MAX_BYTES_V1 = 2 * 1024 * 1024;
 export const SORAFS_ORDERBOOK_RECEIPT_MAX_BYTES_V1 = 1024 * 1024;
 
 export class SorafsOrderbookSubmissionAmbiguousError extends Error {
-  constructor(route, identity) {
+  constructor(route, identity, cause) {
     super(
       "SoraFS orderbook submission outcome is ambiguous after dispatch; "
       + "do not resubmit automatically, reconcile the expected transaction identity",
+      cause === undefined ? undefined : { cause },
     );
     this.name = "SorafsOrderbookSubmissionAmbiguousError";
     Object.defineProperties(this, {
@@ -219,7 +220,7 @@ export function createSorafsOrderbookSubmissionDeadline(
   callerSignal,
   timeoutMs,
   context,
-  { addAbortListener, removeAbortListener, isAborted },
+  { addAbortListener, removeAbortListener, isAborted, abortReason },
 ) {
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) {
     throw new TypeError(`${context} requires a positive finite client timeoutMs`);
@@ -228,7 +229,11 @@ export function createSorafsOrderbookSubmissionDeadline(
     throw new Error(`${context} requires AbortController for its bounded operation deadline`);
   }
   const controller = new AbortControllerConstructor();
-  const forwardAbort = () => Reflect.apply(abortControllerAbort, controller, []);
+  const forwardAbort = () => Reflect.apply(
+    abortControllerAbort,
+    controller,
+    [abortReason(callerSignal)],
+  );
   if (callerSignal) addAbortListener(callerSignal, forwardAbort);
   const timer = scheduleTimeout(() => {
     const error = new Error(`${context} exceeded its ${timeoutMs}ms operation deadline`);

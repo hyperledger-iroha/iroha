@@ -45,7 +45,7 @@ fn shifts_rtype_property_random() {
     // Deterministic seed for reproducibility
     let mut rng = SplitMix64::new(0xDEAD_BEEF_CAFE_BABE);
     let mut vm = IVM::new(50_000);
-    vm.memory.load_code(&code);
+    vm.memory.load_code(&code).unwrap();
     // Cover a decent set of random values and shifts
     for _ in 0..512 {
         let val = rng.next();

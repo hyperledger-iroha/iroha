@@ -77,7 +77,7 @@ pub(crate) fn build_issuer(
     }
 }
 impl crate::ToriiRuntimeDeps {
-    /// Attach the runtime-only HSM/KMS signer used for stream-token issuance.
+    /// Attach the qualified runtime-only signer used for stream-token issuance.
     #[must_use]
     pub fn with_sorafs_stream_token_signer(
         mut self,

@@ -3129,6 +3129,12 @@ fn recovered_current_timeout_then_historical_commit_keeps_intrinsic_vote_round()
             phase,
             semantic_origin: origin.clone(),
             canonical_wire_hash: Hash::new(b"replayed historical Commit vote"),
+            vote_statement_hash: Some(super::leader_wire_vote_statement_hash(
+                locked_round,
+                subject,
+                &historical_commit.execution_commitment,
+            )),
+            timeout_prepare_view: None,
         },
         slot: super::super::FairV2IngressLeaderWireSlot {
             semantic_origin: origin,

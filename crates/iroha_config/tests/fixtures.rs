@@ -8,10 +8,10 @@ use iroha_config::parameters::user::ParseError;
 use iroha_config::parameters::{
     actual::{
         BlockSync, DaManifestPolicy, DataspaceGossip, DataspaceGossipFallback, FraudRiskBand,
-        LaneProfile, NexusFeeSettlementMode, NexusStorage, OperatorAuthLockout,
-        OperatorTokenFallback, OperatorTokenSource, OracleChangeThresholds, OracleEconomics,
-        OracleGovernance, OracleTwitterBinding, Queue, Root as Config, SoranetVpn, Streaming,
-        StreamingSync, ToriiOperatorAuth, TransactionGossiper,
+        LaneProfile, NexusFeeSettlementMode, NexusStorage, NoritoRpcStage, OperatorAuthLockout,
+        OracleChangeThresholds, OracleEconomics, OracleGovernance, OracleTwitterBinding, Queue,
+        Root as Config, SoranetVpn, Streaming, StreamingSync, ToriiMcpProfile, ToriiOperatorAuth,
+        TransactionGossiper,
     },
     defaults,
     user::{Root as UserConfig, ToriiSoranetPrivacyIngest},
@@ -217,6 +217,46 @@ fn torii_max_content_len_defaults_to_sixty_four_megabytes() {
     );
 }
 #[test]
+fn portable_production_capabilities_default_to_enabled() {
+    let config = load_config_from_fixtures("minimal_with_trusted_peers.toml")
+        .expect("config should be valid");
+
+    assert!(config.confidential.enabled);
+    assert!(!config.confidential.assume_valid);
+    assert!(config.zk.halo2.enabled);
+    assert!(config.zk.stark.enabled);
+    assert!(config.gov.plain_voting_enabled);
+    assert!(config.streaming.sync.enabled);
+    assert!(config.streaming.sync.observe_only);
+    assert!(config.torii.webhooks_enabled);
+    assert!(config.torii.zk_attachments_enabled);
+    assert!(config.torii.zk_prover_enabled);
+    assert!(config.torii.transport.norito_rpc.enabled);
+    assert_eq!(config.torii.transport.norito_rpc.stage, NoritoRpcStage::Ga);
+    assert!(config.torii.mcp.enabled);
+    assert_eq!(config.torii.mcp.profile, ToriiMcpProfile::ReadOnly);
+    assert!(!config.torii.mcp.expose_operator_routes);
+    assert!(!config.torii.cors.enabled);
+    assert!(!config.torii.push.enabled);
+    assert!(config.torii.sorafs_gateway.enforce_capabilities);
+    assert_eq!(
+        config
+            .torii
+            .sorafs_storage
+            .metering_smoothing
+            .gib_hours_alpha,
+        Some(0.2)
+    );
+    assert_eq!(
+        config
+            .torii
+            .sorafs_storage
+            .metering_smoothing
+            .por_success_alpha,
+        Some(0.2)
+    );
+}
+#[test]
 fn ivm_banner_override_applies() {
     let config =
         load_config_from_fixtures("ivm_banner_override.toml").expect("config should be valid");
@@ -414,6 +454,8 @@ fn nexus_atomic_private_settlement_fields_load_from_fixture() {
     assert_eq!(private.activation_height, Some(100_000));
     assert_eq!(private.max_participants.get(), 16);
     assert_eq!(private.proof_profile_version.get(), 1);
+    assert_eq!(private.sidecar_max_records.get(), 512);
+    assert_eq!(private.sidecar_max_total_bytes.get(), 6_442_450_944);
     assert_eq!(
         private
             .capsule_padding_classes_bytes
@@ -436,6 +478,31 @@ fn nexus_atomic_private_settlement_rejects_invalid_participant_bound() {
     let result = load_config_from_fixtures("bad.nexus_atomic_private_settlement_participants.toml");
     assert!(result.is_err(), "one-leg private bundles must be rejected");
 }
+
+#[test]
+fn nexus_atomic_private_settlement_rejects_sidecar_capacity_above_v1_caps() {
+    use iroha_config::parameters::{
+        defaults,
+        user::{Nexus, NexusAtomicPrivateSettlement},
+    };
+    use iroha_config_base::util::Emitter;
+
+    let mut emitter = Emitter::<ParseError>::new();
+    let private = NexusAtomicPrivateSettlement {
+        sidecar_max_records: defaults::nexus::atomic_private_settlement::SIDECAR_MAX_RECORDS_LIMIT
+            + 1,
+        sidecar_max_total_bytes:
+            defaults::nexus::atomic_private_settlement::SIDECAR_MAX_TOTAL_BYTES_LIMIT + 1,
+        ..NexusAtomicPrivateSettlement::default()
+    };
+    let nexus = Nexus {
+        atomic_private_settlement: private,
+        ..Nexus::default()
+    };
+    assert!(nexus.parse(&mut emitter).is_none());
+    assert!(emitter.into_result().is_err());
+}
+
 #[test]
 fn nexus_atomic_private_settlement_requires_activation_height_and_canonical_bounds() {
     use iroha_config::parameters::user::{Nexus, NexusAtomicPrivateSettlement};
@@ -456,27 +523,94 @@ fn nexus_atomic_private_settlement_requires_activation_height_and_canonical_boun
     assert!(nexus.parse(&mut emitter).is_none());
     assert!(emitter.into_result().is_err());
 }
+
 #[test]
-fn sumeragi_v2_rejects_unknown_v1_actor_and_global_rbc_fields() {
-    let report = load_config_from_fixtures("bad.sumeragi_legacy_v1_fields.toml")
-        .expect_err("retired v1 actor/global-RBC schema must be rejected");
-    let message = format!("{report:?}");
-    assert!(
-        message.contains("collectors")
-            || message.contains("advanced")
-            || message.contains("recovery"),
-        "diagnostic should identify a retired v1 table: {message}",
-    );
+fn nexus_atomic_private_settlement_capsule_bound_covers_complete_default_auditor_roster() {
+    use iroha_config::parameters::user::{Nexus, NexusAtomicPrivateSettlement};
+    use iroha_config_base::util::Emitter;
+    use iroha_data_model::nexus::private_settlement_capsule_canonical_upper_bound_v1;
+
+    for auditors in [1_u16, 32] {
+        let exact_bound =
+            private_settlement_capsule_canonical_upper_bound_v1(4_096, u64::from(auditors));
+        let mut valid_emitter = Emitter::<ParseError>::new();
+        let valid = Nexus {
+            atomic_private_settlement: NexusAtomicPrivateSettlement {
+                capsule_padding_classes_bytes: vec![4_096],
+                max_capsule_bytes: exact_bound,
+                default_min_auditor_approvals: auditors,
+                ..NexusAtomicPrivateSettlement::default()
+            },
+            ..Nexus::default()
+        };
+        assert!(valid.parse(&mut valid_emitter).is_some());
+        assert!(valid_emitter.into_result().is_ok());
+
+        let mut short_emitter = Emitter::<ParseError>::new();
+        let one_byte_short = Nexus {
+            atomic_private_settlement: NexusAtomicPrivateSettlement {
+                capsule_padding_classes_bytes: vec![4_096],
+                max_capsule_bytes: exact_bound - 1,
+                default_min_auditor_approvals: auditors,
+                ..NexusAtomicPrivateSettlement::default()
+            },
+            ..Nexus::default()
+        };
+        assert!(one_byte_short.parse(&mut short_emitter).is_none());
+        assert!(short_emitter.into_result().is_err());
+    }
+}
+
+#[test]
+fn nexus_atomic_private_settlement_rejects_default_auditor_threshold_above_v1_roster() {
+    use iroha_config::parameters::user::{Nexus, NexusAtomicPrivateSettlement};
+    use iroha_config_base::util::Emitter;
+
+    let mut emitter = Emitter::<ParseError>::new();
+    let nexus = Nexus {
+        atomic_private_settlement: NexusAtomicPrivateSettlement {
+            default_min_auditor_approvals: 33,
+            ..NexusAtomicPrivateSettlement::default()
+        },
+        ..Nexus::default()
+    };
+    assert!(nexus.parse(&mut emitter).is_none());
+    assert!(emitter.into_result().is_err());
 }
 #[test]
-fn sumeragi_v2_rejects_retired_byzantine_rbc_debug_fields() {
-    let report = load_config_from_fixtures("bad.sumeragi_retired_debug_rbc_fields.toml")
-        .expect_err("retired Byzantine RBC debug fields must be rejected");
-    let message = strip_ansi_codes(&format!("{report:?}"));
-    assert!(
-        message.contains("sumeragi.debug") || message.contains("sumeragi.debug.rbc"),
-        "diagnostic should identify the retired debug table: {message}",
-    );
+fn sumeragi_v2_rejects_each_retired_v1_table_independently() {
+    for (fixture, expected_parameter) in [
+        ("bad.sumeragi_retired_collectors_table.toml", "collectors"),
+        ("bad.sumeragi_retired_advanced_rbc_table.toml", "advanced"),
+        ("bad.sumeragi_retired_recovery_table.toml", "recovery"),
+    ] {
+        let report = match load_config_from_fixtures(fixture) {
+            Ok(_) => panic!("retired v1 fixture {fixture} was accepted"),
+            Err(report) => report,
+        };
+        let message = strip_ansi_codes(&format!("{report:?}"));
+        assert!(
+            message.contains(expected_parameter),
+            "diagnostic for {fixture} should identify `{expected_parameter}`: {message}",
+        );
+    }
+}
+#[test]
+fn sumeragi_v2_rejects_each_retired_byzantine_rbc_debug_field_independently() {
+    for fixture in [
+        "bad.sumeragi_retired_debug_rbc_conflicting_ready_mask.toml",
+        "bad.sumeragi_retired_debug_rbc_duplicate_inits.toml",
+    ] {
+        let report = match load_config_from_fixtures(fixture) {
+            Ok(_) => panic!("retired debug fixture {fixture} was accepted"),
+            Err(report) => report,
+        };
+        let message = strip_ansi_codes(&format!("{report:?}"));
+        assert!(
+            message.contains("sumeragi.debug") || message.contains("sumeragi.debug.rbc"),
+            "diagnostic for {fixture} should identify the retired debug table: {message}",
+        );
+    }
 }
 #[test]
 fn retired_plan_journal_toggle_fails_during_config_parse_before_runtime_storage() {
@@ -1814,7 +1948,7 @@ fn taira_config_enables_untrusted_cid_hosting() {
         .expect("Taira should configure an aggregate canonical wire-byte budget");
     assert_eq!(
         body_bytes,
-        198 * 1024 * 1024,
+        204 * 1024 * 1024,
         "Taira aggregate canonical wire-byte budget should isolate its six ingress source partitions"
     );
     let body_source_bytes = queues
@@ -1823,7 +1957,7 @@ fn taira_config_enables_untrusted_cid_hosting() {
         .expect("Taira should configure a per-source canonical wire-byte budget");
     assert_eq!(
         body_source_bytes,
-        33 * 1024 * 1024,
+        34 * 1024 * 1024,
         "Taira should retain one canonical outer-ingress wire-byte quota per source"
     );
     assert_eq!(
@@ -2069,18 +2203,16 @@ fn sumeragi_v2_explicit_schema_parses() {
         2
     );
     assert_eq!(cfg.sumeragi.queues.bodies.get(), 96);
-    assert_eq!(cfg.sumeragi.queues.body_bytes.get(), 68 * 1024 * 1024);
+    assert_eq!(cfg.sumeragi.queues.body_bytes.get(), 72 * 1024 * 1024);
     assert_eq!(
         cfg.sumeragi.queues.body_source_bytes.get(),
-        17 * 1024 * 1024
+        18 * 1024 * 1024
     );
     assert_eq!(cfg.sumeragi.queues.chunks.get(), 768);
     assert_eq!(cfg.sumeragi.queues.ready_bodies.get(), 48);
     assert_eq!(cfg.sumeragi.keys.activation_lead_blocks, 2);
     assert_eq!(cfg.sumeragi.keys.overlap_grace_blocks, 12);
     assert_eq!(cfg.sumeragi.keys.expiry_grace_blocks, 3);
-    assert!(cfg.sumeragi.keys.require_hsm);
-    assert_eq!(cfg.sumeragi.keys.allowed_hsm_providers.len(), 2);
     assert_eq!(cfg.kura.lane_history_retention.get(), 8_192);
     let shared = cfg
         .sumeragi
@@ -2101,7 +2233,7 @@ fn sumeragi_v2_rejects_queue_and_key_policy_errors() {
         ),
         (
             "bad.sumeragi_body_source_bytes_too_small.toml",
-            "sumeragi.queues.body_source_bytes must isolate max-payload envelopes, 65536 bytes of fixed headroom per envelope, 33800 recommended payload-completion manifest bytes, 1048576 lane-progress bytes, 4194304 lane-completion bytes, 65536 certified-fence-escape bytes, and 65536 timeout-vote bytes (minimum 33850376, configured 16777216)",
+            "sumeragi.queues.body_source_bytes must isolate max-payload envelopes, 65536 bytes of fixed headroom per envelope, 33800 recommended payload-completion manifest bytes, 1048576 lane-progress bytes, 4194304 lane-completion bytes, 1048576 certified-fence-escape bytes, and 65536 timeout-vote bytes (minimum 34833416, configured 16777216)",
         ),
         (
             "bad.sumeragi_body_queue_too_small.toml",
@@ -2109,11 +2241,7 @@ fn sumeragi_v2_rejects_queue_and_key_policy_errors() {
         ),
         (
             "bad.sumeragi_body_bytes_too_small.toml",
-            "sumeragi.queues.body_bytes must reserve one validator and every configured authenticated non-validator source (minimum 103809024, configured 103809023)",
-        ),
-        (
-            "bad.sumeragi_empty_hsm_provider.toml",
-            "sumeragi.keys.allowed_hsm_providers must not contain empty names",
+            "sumeragi.queues.body_bytes must reserve one validator and every configured authenticated non-validator source (minimum 106954752, configured 106954751)",
         ),
     ] {
         let report = load_config_from_fixtures(fixture)

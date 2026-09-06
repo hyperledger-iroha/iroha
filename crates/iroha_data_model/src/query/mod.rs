@@ -1333,14 +1333,32 @@ mod model {
         FindSorafsReserveAppeals(sorafs::prelude::FindSorafsReserveAppeals),
         /// Fetch a cursor-bounded page of committed `SoraFS` reserve events.
         FindSorafsReserveEvents(sorafs::prelude::FindSorafsReserveEvents),
+        /// Fetch the active authoritative `SoraFS` `PoP` issuer policy.
+        FindSorafsPopIssuerPolicy(sorafs::prelude::FindSorafsPopIssuerPolicy),
+        /// Fetch one payload-free `PoP` credential commitment.
+        FindSorafsPopCredentialCommitmentByDigest(
+            sorafs::prelude::FindSorafsPopCredentialCommitmentByDigest,
+        ),
+        /// Fetch one signed `PoP` commitment-root publication by version.
+        FindSorafsPopCommitmentRootByVersion(sorafs::prelude::FindSorafsPopCommitmentRootByVersion),
+        /// Fetch one signed `PoP` revocation publication by version.
+        FindSorafsPopRevocationPublicationByVersion(
+            sorafs::prelude::FindSorafsPopRevocationPublicationByVersion,
+        ),
+        /// Fetch one payload-free `PoP` revocation by nonce commitment.
+        FindSorafsPopRevocationByNonceCommitment(
+            sorafs::prelude::FindSorafsPopRevocationByNonceCommitment,
+        ),
+        /// Fetch one `PoP` registry audit-chain link by sequence.
+        FindSorafsPopAuditDigestBySequence(sorafs::prelude::FindSorafsPopAuditDigestBySequence),
+        /// Fetch constant-time authoritative `PoP` registry anchors and counters.
+        FindSorafsPopRegistryStatus(sorafs::prelude::FindSorafsPopRegistryStatus),
         /// Fetch one commitment-only citizen bond by immutable serial commitment.
         FindSorafsCitizenBondBySerialCommitment(
             sorafs::prelude::FindSorafsCitizenBondBySerialCommitment,
         ),
         /// Fetch the current frozen citizen-bond membership snapshot.
         FindSorafsCitizenBondSnapshot(sorafs::prelude::FindSorafsCitizenBondSnapshot),
-        /// Fetch one identity-free anonymous service-note escrow.
-        FindSorafsAnonymousServiceEscrowById(sorafs::prelude::FindSorafsAnonymousServiceEscrowById),
         /// Fetch one chain-authoritative repair task by canonical ticket identifier.
         FindSorafsRepairTask(sorafs::prelude::FindSorafsRepairTask),
         /// Fetch a cursor-bounded page of chain-authoritative repair tasks.
@@ -1367,8 +1385,8 @@ mod model {
         FindSorafsModerationPolicy(sorafs::prelude::FindSorafsModerationPolicy),
         /// Fetch one authoritative moderation appeal intake and sortition lifecycle.
         FindSorafsModerationAppeal(sorafs::prelude::FindSorafsModerationAppeal),
-        /// Fetch one payload-free anonymous juror candidacy record.
-        FindSorafsAnonymousJurorCandidacy(sorafs::prelude::FindSorafsAnonymousJurorCandidacy),
+        /// Fetch one payload-free, PoP-verified juror eligibility record.
+        FindSorafsModerationJurorEligibility(sorafs::prelude::FindSorafsModerationJurorEligibility),
         /// Fetch one authoritative `SoraFS` moderation case.
         FindSorafsModerationCase(sorafs::prelude::FindSorafsModerationCase),
         /// Fetch one authoritative juror commitment.
@@ -1530,12 +1548,26 @@ mod model {
         SorafsReserveAppealPage(crate::sorafs::reserve::ReserveAppealPageV1),
         /// Cursor-bounded page of committed `SoraFS` reserve events.
         SorafsReserveEventPage(crate::sorafs::reserve::ReserveFinalizedEventPageV1),
+        /// Active authoritative `SoraFS` `PoP` issuer policy.
+        SorafsPopIssuerPolicy(crate::sorafs::pop_registry::PopIssuerPolicyRecordV1),
+        /// Payload-free authoritative `PoP` credential commitment.
+        SorafsPopCredentialCommitment(crate::sorafs::pop_registry::PopCredentialCommitmentRecordV1),
+        /// Authoritative signed `PoP` commitment-root publication.
+        SorafsPopCommitmentRoot(crate::sorafs::pop_registry::PopCommitmentRootRecordV1),
+        /// Authoritative signed `PoP` revocation publication.
+        SorafsPopRevocationPublication(
+            crate::sorafs::pop_registry::PopRevocationPublicationRecordV1,
+        ),
+        /// Payload-free authoritative `PoP` revocation.
+        SorafsPopRevocation(crate::sorafs::pop_registry::PopRevocationRecordV1),
+        /// Authoritative `PoP` registry audit-chain link.
+        SorafsPopAuditDigest(crate::sorafs::pop_registry::PopRegistryAuditDigestRecordV1),
+        /// Authoritative `PoP` registry anchors and counters.
+        SorafsPopRegistryStatus(crate::sorafs::pop_registry::PopRegistryStatusV1),
         /// Commitment-only citizen-bond record.
         SorafsCitizenBond(crate::sorafs::anonymity::SorafsCitizenBondV1),
         /// Current frozen citizen-bond membership snapshot.
         SorafsCitizenBondSnapshot(crate::sorafs::anonymity::SorafsCitizenBondSnapshotV1),
-        /// Identity-free anonymous service-note escrow.
-        SorafsAnonymousServiceEscrow(crate::sorafs::anonymity::SorafsAnonymousServiceEscrowV1),
         /// Finalized chain-authoritative repair task, lease, outcome, slash, and appeal.
         SorafsRepairTask(crate::sorafs::moderation_ledger::RepairFinalizedTaskV1),
         /// Cursor-bounded chain-authoritative repair-task page.
@@ -1562,9 +1594,9 @@ mod model {
         SorafsModerationPolicy(crate::sorafs::moderation_ledger::ModerationLedgerPolicyRecord),
         /// Authoritative appeal intake, citizen-bond snapshot, and sortition lifecycle.
         SorafsModerationAppeal(crate::sorafs::moderation_ledger::ModerationAppealRecordV1),
-        /// Payload-free anonymous juror candidacy record.
-        SorafsAnonymousJurorCandidacy(
-            crate::sorafs::anonymity::SorafsAnonymousJurorCandidacyRecordV1,
+        /// Payload-free, PoP-verified juror eligibility record.
+        SorafsModerationJurorEligibility(
+            crate::sorafs::moderation_ledger::ModerationJurorEligibilityRecordV1,
         ),
         /// Authoritative `SoraFS` moderation case payload.
         SorafsModerationCase(crate::sorafs::moderation_ledger::ModerationCaseRecordV1),

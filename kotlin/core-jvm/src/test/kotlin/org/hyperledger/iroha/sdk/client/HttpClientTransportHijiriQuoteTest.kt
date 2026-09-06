@@ -42,11 +42,11 @@ class HttpClientTransportHijiriQuoteTest {
         val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
         val auth = ToriiCanonicalRequestAuth(
             signatoryAccountId,
-            keyPair.private,
+            RequestSigner.ed25519(keyPair.private),
             1_700_000_000_123L,
             "hijiri-quote-1",
         )
-        val transport = HttpClientTransport.withExecutor(
+        val transport = HttpClientTransport(
             executor,
             ClientConfig.builder()
                 .setBaseUri(URI.create("https://torii.example/api"))
@@ -105,7 +105,7 @@ class HttpClientTransportHijiriQuoteTest {
     @Test
     fun `quote rejects encoded request drift and hostile success metadata`() {
         val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
-        val auth = ToriiCanonicalRequestAuth(accountId, keyPair.private)
+        val auth = ToriiCanonicalRequestAuth(accountId, RequestSigner.ed25519(keyPair.private))
         val request = ValidationFeeHijiriQuoteRequestV1(accountId, 2)
         val oversizedCodec = CapturingCodec(ByteArray(4 * 1024 + 1), projectionJson())
         val neverExecutor = ExactResponseExecutor(byteArrayOf(1))
@@ -116,7 +116,7 @@ class HttpClientTransportHijiriQuoteTest {
         }
         assertEquals(0, neverExecutor.requestCount)
 
-        val insecureTransport = HttpClientTransport.withExecutor(
+        val insecureTransport = HttpClientTransport(
             neverExecutor,
             ClientConfig.builder()
                 .setBaseUri(URI.create("http://torii.example"))
@@ -319,7 +319,7 @@ class HttpClientTransportHijiriQuoteTest {
     @Test
     fun `quote parses cache directives without trusting quoted comma decoys`() {
         val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
-        val auth = ToriiCanonicalRequestAuth(accountId, keyPair.private)
+        val auth = ToriiCanonicalRequestAuth(accountId, RequestSigner.ed25519(keyPair.private))
         val request = ValidationFeeHijiriQuoteRequestV1(accountId, 2)
         val invalidCacheControls = listOf(
             "private, x=\"a,no-store,b\"",
@@ -365,7 +365,7 @@ class HttpClientTransportHijiriQuoteTest {
     }
 
     private fun transport(executor: HttpTransportExecutor): HttpClientTransport =
-        HttpClientTransport.withExecutor(
+        HttpClientTransport(
             executor,
             ClientConfig.builder()
                 .setBaseUri(URI.create("https://torii.example"))

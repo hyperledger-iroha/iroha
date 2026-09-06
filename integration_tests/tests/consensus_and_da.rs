@@ -2,8 +2,6 @@
 //! Grouped integration harness for revision-4 consensus, DA, and localnet scenarios.
 #[path = "da.rs"]
 mod da;
-#[path = "sumeragi_commit_certificates.rs"]
-mod sumeragi_commit_certificates;
 #[path = "sumeragi_da.rs"]
 mod sumeragi_da;
 #[path = "sumeragi_kagami_localnet.rs"]
@@ -22,8 +20,6 @@ mod sumeragi_npos_pacemaker_latency;
 mod sumeragi_npos_performance;
 #[path = "sumeragi_npos_stake_activation.rs"]
 mod sumeragi_npos_stake_activation;
-#[path = "sumeragi_rotation.rs"]
-mod sumeragi_rotation;
 #[path = "sumeragi_vote_qc_commit.rs"]
 mod sumeragi_vote_qc_commit;
 #[path = "taikai_da.rs"]

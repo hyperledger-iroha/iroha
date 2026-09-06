@@ -3,17 +3,48 @@
 mod tests {
     use super::*;
     #[test]
-    fn query_projection_checkpoint_plan_is_non_mutating_compute() {
+    fn diagnostic_status_routes_are_explicit() {
+        let routes = [
+            diagnostic::STATUS,
+            diagnostic::STATUS_BLOCKS,
+            diagnostic::STATUS_PEERS,
+        ];
         assert_eq!(
-            runtime_governance::NODE_PROJECTION_CHECKPOINT_PLAN.effect(),
-            RouteEffect::ExpensiveCompute
+            routes.map(|route| route.path()),
+            ["/status", "/status/blocks", "/status/peers"]
+        );
+        assert!(
+            routes
+                .iter()
+                .all(|route| route.route_match() == RouteMatch::Exact)
+        );
+        assert!(
+            diagnostic::ROUTES
+                .iter()
+                .all(|route| route.path() != "/status/{*tail}")
         );
     }
+    #[test]
+    fn unverified_query_projection_publication_routes_are_absent() {
+        for retired_path in [
+            "/v1/node/query/projection/checkpoint/plan",
+            "/v1/node/query/projection/checkpoint/publish",
+        ] {
+            assert!(
+                CATALOGED_ROUTES
+                    .iter()
+                    .all(|route| route.path() != retired_path),
+                "retired unverified projection route remains catalogued: {retired_path}"
+            );
+        }
+    }
+
     #[test]
     fn credential_bound_authentication_boundaries_require_private_no_store() {
         for policy in [
             AuthenticationPolicy::OnboardingToken,
             AuthenticationPolicy::CanonicalAccountSignature,
+            AuthenticationPolicy::OptionalCanonicalAccountSignature,
             AuthenticationPolicy::OperatorSignature,
             AuthenticationPolicy::OperatorCredentialExchange,
         ] {
@@ -36,6 +67,154 @@ mod tests {
                 "unexpected private no-store policy for {policy:?}"
             );
         }
+    }
+
+    #[test]
+    fn dataspace_reads_advertise_their_real_authentication_boundary() {
+        for route in [
+            streaming::EVENTS_SSE,
+            streaming::CONTRACT_EVENTS_SSE,
+            streaming::SUBSCRIPTION_WS,
+            telemetry::ASSET_HOLDERS,
+            application_api::CONTRACTS_ACTIVITY_GET,
+            application_api::CONTRACTS_EVENTS_GET,
+            application_api::CONTRACTS_ROLLUPS_SWAPS_FILLS_GET,
+            application_api::CONTRACTS_ROLLUPS_SWAPS_CANDLES_GET,
+            application_api::CONTRACTS_ROLLUPS_URANAI_MARKETS_HISTORY_GET,
+            application_api::CONTRACTS_ROLLUPS_TRADER_ACTIVITY_GET,
+            application_api::CONTRACTS_ROLLUPS_TRADER_ACCOUNT_GET,
+            application_api::CONTRACTS_ROLLUPS_INTENTS_GET,
+            application_api::CONTRACTS_ROLLUPS_VAULTS_POSITIONS_GET,
+            application_api::CONTRACTS_ROLLUPS_OPERATORS_STATUS_GET,
+            application_api::CONTRACTS_ROLLUPS_MARGIN_HEALTH_GET,
+            application_api::CONTRACTS_ROLLUPS_RWA_LOTS_GET,
+            application_api::CONTRACTS_ROLLUPS_DLMM_HOOKS_GET,
+            application_api::ACCOUNTS_BY_ACCOUNT_ID_GET,
+            application_api::ACCOUNTS_BY_ACCOUNT_ID_ASSETS_GET,
+            application_api::ACCOUNTS_BY_ACCOUNT_ID_PERMISSIONS_GET,
+            application_api::ACCOUNTS_BY_ACCOUNT_ID_TRANSACTIONS_GET,
+            application_api::ACCOUNTS_BY_ACCOUNT_ID_HISTORY_GET,
+            application_api::DOMAINS_GET,
+            application_api::DOMAINS_QUERY_POST,
+            application_api::ACCOUNTS_GET,
+            application_api::ACCOUNTS_QUERY_POST,
+            application_api::TRANSACTIONS_QUERY_POST,
+            application_api::ACCOUNTS_BY_UAID_PORTFOLIO_GET,
+            application_api::NEXUS_DATASPACES_ACCOUNTS_BY_LITERAL_SUMMARY_GET,
+            application_api::SPACE_DIRECTORY_UAIDS_BY_UAID_GET,
+            application_api::SPACE_DIRECTORY_UAIDS_BY_UAID_MANIFESTS_GET,
+            application_api::ASSETS_DEFINITIONS_GET,
+            application_api::ASSETS_DEFINITIONS_BY_ASSET_GET,
+            application_api::ASSETS_DEFINITIONS_QUERY_POST,
+            application_api::NFTS_GET,
+            application_api::NFTS_QUERY_POST,
+            application_api::RWAS_GET,
+            application_api::RWAS_QUERY_POST,
+            application_api::EXPLORER_ACCOUNTS_GET,
+            application_api::EXPLORER_DOMAINS_GET,
+            application_api::EXPLORER_ASSET_DEFINITIONS_GET,
+            application_api::EXPLORER_ASSETS_GET,
+            application_api::EXPLORER_NFTS_GET,
+            application_api::EXPLORER_RWAS_GET,
+            application_api::EXPLORER_BLOCKS_GET,
+            application_api::EXPLORER_BLOCKS_STREAM_GET,
+            application_api::EXPLORER_TRANSACTIONS_GET,
+            application_api::EXPLORER_TRANSACTIONS_LATEST_GET,
+            application_api::EXPLORER_TRANSACTIONS_STREAM_GET,
+            application_api::EXPLORER_INSTRUCTIONS_GET,
+            application_api::EXPLORER_INSTRUCTIONS_LATEST_GET,
+            application_api::EXPLORER_INSTRUCTIONS_STREAM_GET,
+            application_api::EXPLORER_ACCOUNTS_BY_ACCOUNT_ID_GET,
+            application_api::EXPLORER_ACCOUNTS_BY_ACCOUNT_ID_QR_GET,
+            application_api::EXPLORER_DOMAINS_BY_DOMAIN_ID_GET,
+            application_api::EXPLORER_ASSET_DEFINITIONS_BY_DEFINITION_ID_GET,
+            application_api::EXPLORER_ASSET_DEFINITIONS_BY_DEFINITION_ID_ECONOMETRICS_GET,
+            application_api::EXPLORER_ASSET_DEFINITIONS_BY_DEFINITION_ID_SNAPSHOT_GET,
+            application_api::EXPLORER_ASSETS_BY_ASSET_ID_GET,
+            application_api::EXPLORER_NFTS_BY_NFT_ID_GET,
+            application_api::EXPLORER_RWAS_BY_RWA_ID_GET,
+            application_api::EXPLORER_BLOCKS_BY_IDENTIFIER_GET,
+            application_api::EXPLORER_TRANSACTIONS_BY_HASH_GET,
+            application_api::EXPLORER_INSTRUCTIONS_BY_HASH_BY_INDEX_GET,
+            application_api::EXPLORER_INSTRUCTIONS_BY_HASH_BY_INDEX_CONTRACT_VIEW_GET,
+            aliases::RESOLVE,
+            aliases::RESOLVE_INDEX,
+            aliases::BY_ACCOUNT,
+        ] {
+            assert_eq!(route.admission(), AdmissionPolicy::DataspaceVisible);
+            assert_eq!(
+                route.authentication(),
+                AuthenticationPolicy::OptionalCanonicalAccountSignature
+            );
+            assert!(route.requires_private_no_store());
+            assert_eq!(validate_catalog(&[route]), Ok(()));
+        }
+        assert_eq!(
+            streaming::BLOCKS_WS.authentication(),
+            AuthenticationPolicy::CanonicalAccountSignature
+        );
+        assert_eq!(
+            streaming::BLOCKS_WS.admission(),
+            AdmissionPolicy::AuthenticatedAccount
+        );
+        assert_eq!(validate_catalog(&[streaming::BLOCKS_WS]), Ok(()));
+        assert_eq!(
+            application_api::ACCOUNTS_BY_ACCOUNT_ID_ALIASES_GET.authentication(),
+            AuthenticationPolicy::CanonicalAccountSignature
+        );
+        assert_eq!(
+            application_api::ACCOUNTS_BY_ACCOUNT_ID_ALIASES_GET.admission(),
+            AdmissionPolicy::AuthenticatedAccount
+        );
+        assert_eq!(
+            validate_catalog(&[application_api::ACCOUNTS_BY_ACCOUNT_ID_ALIASES_GET]),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn contract_rollup_replays_are_dataspace_visible_optional_identity_reads() {
+        let routes = [
+            application_api::CONTRACTS_ROLLUPS_SWAPS_FILLS_GET,
+            application_api::CONTRACTS_ROLLUPS_SWAPS_CANDLES_GET,
+            application_api::CONTRACTS_ROLLUPS_URANAI_MARKETS_HISTORY_GET,
+            application_api::CONTRACTS_ROLLUPS_TRADER_ACTIVITY_GET,
+            application_api::CONTRACTS_ROLLUPS_TRADER_ACCOUNT_GET,
+            application_api::CONTRACTS_ROLLUPS_INTENTS_GET,
+            application_api::CONTRACTS_ROLLUPS_VAULTS_POSITIONS_GET,
+            application_api::CONTRACTS_ROLLUPS_OPERATORS_STATUS_GET,
+            application_api::CONTRACTS_ROLLUPS_MARGIN_HEALTH_GET,
+            application_api::CONTRACTS_ROLLUPS_RWA_LOTS_GET,
+            application_api::CONTRACTS_ROLLUPS_DLMM_HOOKS_GET,
+        ];
+        assert_eq!(routes.len(), 11);
+        for route in routes {
+            assert_eq!(route.method(), HttpMethod::Get);
+            assert_eq!(route.admission(), AdmissionPolicy::DataspaceVisible);
+            assert_eq!(
+                route.authentication(),
+                AuthenticationPolicy::OptionalCanonicalAccountSignature
+            );
+            assert!(route.requires_private_no_store());
+        }
+        assert_eq!(validate_catalog(&routes), Ok(()));
+    }
+
+    #[test]
+    fn dataspace_admission_rejects_a_hollow_authentication_witness() {
+        let route = RouteDescriptor::new(
+            "test.dataspace_without_optional_auth",
+            HttpMethod::Get,
+            "/v1/tests/dataspace-without-optional-auth",
+            ApiSurface::Public,
+            Listener::Torii,
+            RouteEffect::ReadOnly,
+            AdmissionPolicy::DataspaceVisible,
+        );
+        let errors = validate_catalog(&[route]).expect_err("missing optional auth must fail");
+        assert!(errors.iter().any(|error| {
+            error.kind == CatalogValidationErrorKind::DataspaceVisibleRequiresOptionalAuthentication
+        }));
     }
     #[test]
     fn mcp_json_rpc_is_a_sealed_nested_route_gateway() {
@@ -112,8 +291,8 @@ mod tests {
         ),
     ];
     #[test]
-    fn final_offline_catalog_is_valid_and_unique() {
-        let catalog = RouteCatalog::new(offline::ROUTES);
+    fn final_kagemusha_catalog_is_valid_and_unique() {
+        let catalog = RouteCatalog::new(kagemusha::ROUTES);
         assert_eq!(catalog.validate(), Ok(()));
         let ids: BTreeSet<_> = catalog
             .routes()
@@ -125,16 +304,16 @@ mod tests {
             .iter()
             .map(|route| (route.method(), route.path()))
             .collect();
-        assert_eq!(ids.len(), offline::ROUTES.len());
-        assert_eq!(method_paths.len(), offline::ROUTES.len());
+        assert_eq!(ids.len(), kagemusha::ROUTES.len());
+        assert_eq!(method_paths.len(), kagemusha::ROUTES.len());
     }
     #[test]
     fn canonical_catalog_satisfies_closed_security_axes() {
         assert_eq!(RouteCatalog::new(CATALOGED_ROUTES).validate(), Ok(()));
     }
     #[test]
-    fn offline_routes_are_universal_for_app_api_and_project_to_mcp() {
-        let catalog = RouteCatalog::new(offline::ROUTES);
+    fn kagemusha_routes_are_universal_for_app_api_and_project_to_mcp() {
+        let catalog = RouteCatalog::new(kagemusha::ROUTES);
         assert_eq!(
             catalog
                 .project(
@@ -142,43 +321,15 @@ mod tests {
                     EnabledFeatures::new(&["app_api"]),
                 )
                 .len(),
-            offline::ROUTES.len(),
-            "every app-api node must expose the complete offline route family"
+            kagemusha::ROUTES.len(),
+            "every app-api node must expose the complete KAGEMUSHA route family"
         );
         assert_eq!(
             catalog
                 .project(CatalogProjection::Mcp, EnabledFeatures::new(&["app_api"]))
                 .len(),
-            offline::ROUTES.len(),
-            "the offline route family must be available to MCP clients"
-        );
-    }
-    #[test]
-    fn ordinary_kagemusha_lifecycle_has_one_dedicated_canonical_signed_route() {
-        let route = offline::KAGEMUSHA_LIFECYCLE_TRANSACTION;
-        assert_eq!(
-            route.path(),
-            "/v1/offline/kagemusha/lifecycle-v4/transactions"
-        );
-        assert_eq!(crate::uri::KAGEMUSHA_LIFECYCLE_TRANSACTION, route.path());
-        assert_eq!(route.method(), HttpMethod::Post);
-        assert_eq!(route.surface(), ApiSurface::Public);
-        assert_eq!(route.effect(), RouteEffect::Mutation);
-        assert_eq!(route.admission(), AdmissionPolicy::AuthenticatedAccount);
-        assert_eq!(
-            route.authentication(),
-            AuthenticationPolicy::CanonicalSignedBody
-        );
-        assert_eq!(route.feature_gate(), FeatureGate::Feature("app_api"));
-        assert_eq!(route.route_match(), RouteMatch::Exact);
-        assert_eq!(route.path_normalization(), PathNormalization::Strict);
-        assert_ne!(route.path(), pipeline::TRANSACTION.path());
-        assert_eq!(
-            offline::ROUTES
-                .iter()
-                .filter(|candidate| candidate.path() == route.path())
-                .count(),
-            1
+            kagemusha::ROUTES.len(),
+            "the KAGEMUSHA route family must be available to MCP clients"
         );
     }
     #[test]
@@ -201,6 +352,55 @@ mod tests {
                 "retired route {retired} leaked into the canonical catalog"
             );
         }
+    }
+
+    #[test]
+    fn protocol_handshake_is_reserved_for_protocol_principals() {
+        for route in CATALOGED_ROUTES
+            .iter()
+            .filter(|route| route.authentication() == AuthenticationPolicy::ProtocolHandshake)
+        {
+            assert!(
+                matches!(
+                    route.admission(),
+                    AdmissionPolicy::AuthenticatedProtocolPrincipal
+                        | AdmissionPolicy::ValidatorRosterMember
+                ),
+                "{} assigns a protocol handshake to a non-protocol principal",
+                route.stable_route_id(),
+            );
+        }
+
+        for route in [
+            runtime_governance::GOV_STREAM,
+            application_api::KAIGI_CALLS_BY_CALL_ID_EVENTS_GET,
+            application_api::KAIGI_RELAYS_EVENTS_GET,
+            sorafs::REPUTATION_EVENTS_STREAM,
+            sorafs::REPUTATION_EVENTS_WEBSOCKET,
+            contracts_and_verification_keys::SORAFS_ORDERBOOK_EVENTS_STREAM_GET,
+            contracts_and_verification_keys::SORAFS_ORDERBOOK_EVENTS_WS_GET,
+            contracts_and_verification_keys::SORAFS_RESERVE_EVENTS_STREAM_GET,
+            contracts_and_verification_keys::SORAFS_RESERVE_EVENTS_WS_GET,
+        ] {
+            assert_eq!(
+                route.authentication(),
+                AuthenticationPolicy::CanonicalAccountSignature,
+                "{} must authenticate the human account principal",
+                route.stable_route_id(),
+            );
+            assert_eq!(route.admission(), AdmissionPolicy::AuthenticatedAccount);
+        }
+    }
+
+    #[test]
+    fn explorer_metrics_requires_a_canonical_global_reader_boundary() {
+        let route = application_api::EXPLORER_METRICS_GET;
+        assert_eq!(
+            route.authentication(),
+            AuthenticationPolicy::CanonicalAccountSignature
+        );
+        assert_eq!(route.admission(), AdmissionPolicy::AuthenticatedAccount);
+        assert!(route.requires_private_no_store());
     }
     #[test]
     fn canonical_catalog_excludes_unmounted_zk_prover_report_adapters() {
@@ -308,7 +508,7 @@ mod tests {
             assert_eq!(route.route_match(), RouteMatch::Exact);
             assert_eq!(route.path_normalization(), PathNormalization::Strict);
             assert!(route.cors_options());
-            assert!(!route.implicit_head());
+            assert_eq!(route.transport(), RouteTransport::Http);
         }
     }
     #[test]
@@ -356,6 +556,30 @@ mod tests {
                 .all(|route| route.stable_route_id() != "sorafs.storage.pin"),
             "the retired direct storage-ingest route id must not be reusable"
         );
+    }
+    #[test]
+    fn public_sorafs_gateways_are_anonymous_and_feature_independent() {
+        let routes = [
+            sorafs::CID_LOOKUP,
+            sorafs::SITE_MANIFEST,
+            sorafs::CID_ROOT,
+            sorafs::CID_PATH,
+        ];
+        let mounted =
+            RouteCatalog::new(&routes).project(CatalogProjection::Mounted, EnabledFeatures::none());
+        assert_eq!(mounted.len(), routes.len());
+        for route in routes {
+            assert_eq!(route.feature_gate(), FeatureGate::Always);
+            assert_eq!(route.admission(), AdmissionPolicy::Public);
+            assert_eq!(
+                route.authentication(),
+                AuthenticationPolicy::Unauthenticated
+            );
+            assert_eq!(route.transport(), RouteTransport::Http);
+            assert!(route.cors_options());
+            assert!(!route.requires_private_no_store());
+        }
+        assert_eq!(validate_catalog(&routes), Ok(()));
     }
     #[test]
     fn internal_torii_proxy_is_the_only_identity_bound_operator_route() {
@@ -437,7 +661,8 @@ mod tests {
         }
     }
     #[test]
-    fn parliament_cutover_excludes_legacy_governance_mutation_routes() {
+    fn parliament_cutover_excludes_legacy_governance_surfaces() {
+        let retired_current_council_path = ["/v1/gov/", "council/", "current"].concat();
         for retired_path in [
             "/v1/gov/parliament/ballots",
             "/v1/gov/finalize",
@@ -447,9 +672,20 @@ mod tests {
                 runtime_governance::ROUTES
                     .iter()
                     .all(|route| route.path() != retired_path),
-                "retired governance mutation route remains cataloged: {retired_path}"
+                "retired governance route remains cataloged: {retired_path}"
             );
         }
+        assert!(
+            runtime_governance::ROUTES
+                .iter()
+                .all(|route| route.path() != retired_current_council_path)
+        );
+        let retired_current_council_route_id = ["governance.", "council.", "current"].concat();
+        assert!(
+            runtime_governance::ROUTES.iter().all(|route| {
+                route.stable_route_id() != retired_current_council_route_id.as_str()
+            })
+        );
         for active_path in [
             "/v1/gov/parliament/attempts/draft",
             "/v1/gov/parliament/attempts/{governance_attempt_id}",
@@ -511,11 +747,11 @@ mod tests {
             RouteCatalog::new(CATALOGED_ROUTES).project(CatalogProjection::OpenApi, enabled);
         for route in [
             diagnostic::STATUS,
-            diagnostic::STATUS_TAIL,
+            diagnostic::STATUS_BLOCKS,
+            diagnostic::STATUS_PEERS,
             diagnostic::METRICS,
             diagnostic::PROFILE,
             diagnostic::OPENAPI_JSON,
-            diagnostic::OPENAPI,
             application_api::EXPLORER_METRICS_GET,
             application_api::TELEMETRY_PEERS_INFO_GET,
             application_api::TELEMETRY_LIVE_GET,
@@ -539,7 +775,9 @@ mod tests {
     #[test]
     fn first_release_catalog_excludes_unsupported_method_paths() {
         for (method, path) in [
+            (HttpMethod::Get, "/openapi"),
             (HttpMethod::Post, "/v1/nexus/lifecycle"),
+            (HttpMethod::Post, "/v1/sorafs/storage/fetch"),
             (HttpMethod::Post, "/v1/sorafs/capacity/por-challenge"),
             (HttpMethod::Post, "/v1/sorafs/capacity/por"),
             (HttpMethod::Post, "/v1/sorafs/por/trigger"),
@@ -555,6 +793,7 @@ mod tests {
                 "unsupported route leaked into the first-release catalog: {method:?} {path}"
             );
         }
+        assert!(CATALOGED_ROUTES.contains(&diagnostic::OPENAPI_JSON));
         assert!(CATALOGED_ROUTES.contains(&core::NEXUS_LIFECYCLE_GET));
         assert!(
             CATALOGED_ROUTES
@@ -720,10 +959,11 @@ mod tests {
         ] {
             assert_eq!(
                 route.authentication(),
-                AuthenticationPolicy::ToriiDefault,
-                "{} conditionally authenticates restricted dataspace reads in its handler",
+                AuthenticationPolicy::OptionalCanonicalAccountSignature,
+                "{} must project its conditional canonical authentication",
                 route.stable_route_id()
             );
+            assert_eq!(route.admission(), AdmissionPolicy::DataspaceVisible);
         }
         for route in [
             aliases::SETUP_PLAN,
@@ -823,8 +1063,7 @@ mod tests {
                 Listener::Torii,
                 RouteEffect::ReadOnly,
                 AdmissionPolicy::Public,
-            )
-            .with_implicit_head(true);
+            );
             assert!(
                 validate_catalog(&[descriptor]).is_err(),
                 "normalization alias must be rejected: {invalid_path}"
@@ -841,8 +1080,7 @@ mod tests {
         )
         .with_path_policy(PathPolicy::ProtocolException {
             reason: "adversarial trailing-slash test",
-        })
-        .with_implicit_head(true);
+        });
         assert!(validate_catalog(&[trailing_root]).is_err());
     }
     #[test]
@@ -971,11 +1209,47 @@ mod tests {
                 "unsupported route must not enter the first-release catalog: {unsupported_path}"
             );
         }
-        assert!(operator_authentication::ROUTES.iter().all(|route| {
-            route.surface() == ApiSurface::Operator
-                && route.authentication() == AuthenticationPolicy::OperatorCredentialExchange
+        for route in [
+            operator_authentication::REGISTRATION_OPTIONS,
+            operator_authentication::REGISTRATION_VERIFY,
+            operator_authentication::LOGIN_OPTIONS,
+            operator_authentication::LOGIN_VERIFY,
+        ] {
+            assert!(
+                route.surface() == ApiSurface::Operator
+                    && route.authentication() == AuthenticationPolicy::OperatorCredentialExchange
+                    && !route.projections().sdk()
+                    && !route.projections().mcp()
+            );
+        }
+        let inventory = operator_authentication::CREDENTIALS;
+        assert_eq!(inventory.method(), HttpMethod::Get);
+        assert_eq!(inventory.path(), "/v1/operator/auth/credentials");
+        assert_eq!(inventory.surface(), ApiSurface::Operator);
+        assert_eq!(inventory.effect(), RouteEffect::ReadOnly);
+        assert_eq!(inventory.admission(), AdmissionPolicy::Operator);
+        assert_eq!(
+            inventory.authentication(),
+            AuthenticationPolicy::OperatorSignature
+        );
+        let deletion = operator_authentication::CREDENTIAL_DELETE;
+        assert_eq!(deletion.method(), HttpMethod::Delete);
+        assert_eq!(
+            deletion.path(),
+            "/v1/operator/auth/credentials/{credential_id}"
+        );
+        assert_eq!(deletion.surface(), ApiSurface::Operator);
+        assert_eq!(deletion.effect(), RouteEffect::Mutation);
+        assert_eq!(deletion.admission(), AdmissionPolicy::Operator);
+        assert_eq!(
+            deletion.authentication(),
+            AuthenticationPolicy::OperatorSignature
+        );
+        assert!([inventory, deletion].iter().all(|route| {
+            route.projections().openapi()
                 && !route.projections().sdk()
                 && !route.projections().mcp()
+                && route.requires_private_no_store()
         }));
     }
     fn contract_and_application_routes() -> Vec<RouteDescriptor> {
@@ -997,6 +1271,27 @@ mod tests {
             );
             assert_eq!(expected.path_normalization(), PathNormalization::Strict);
         }
+    }
+    #[test]
+    fn transaction_queries_distinguish_optional_visible_and_required_account_scopes() {
+        let visible_fanout = application_api::TRANSACTIONS_QUERY_POST;
+        assert_eq!(visible_fanout.effect(), RouteEffect::ExpensiveCompute);
+        assert_eq!(
+            visible_fanout.admission(),
+            AdmissionPolicy::DataspaceVisible
+        );
+        assert_eq!(
+            visible_fanout.authentication(),
+            AuthenticationPolicy::OptionalCanonicalAccountSignature
+        );
+
+        let visible = application_api::TRANSACTIONS_VISIBLE_QUERY_POST;
+        assert_eq!(visible.effect(), RouteEffect::ExpensiveCompute);
+        assert_eq!(visible.admission(), AdmissionPolicy::AuthenticatedAccount);
+        assert_eq!(
+            visible.authentication(),
+            AuthenticationPolicy::CanonicalAccountSignature
+        );
     }
     #[test]
     fn kaigi_signal_history_is_account_gated_expensive_compute() {
@@ -1325,12 +1620,7 @@ mod tests {
                 route.path()
             );
             assert!(route.cors_options(), "{}", route.path());
-            assert_eq!(
-                route.implicit_head(),
-                route.method() == HttpMethod::Get,
-                "{}",
-                route.path()
-            );
+            assert_eq!(route.transport(), RouteTransport::Http, "{}", route.path());
 
             if public_reads.contains(route.path()) {
                 assert_eq!(route.method(), HttpMethod::Get, "{}", route.path());
@@ -1450,17 +1740,31 @@ mod tests {
             assert!(route.projections().sdk(), "{}", route.path());
             assert!(!route.projections().mcp(), "{}", route.path());
         }
-        assert!(
-            [sumeragi::STATUS_SSE]
-                .into_iter()
-                .all(|route| route.surface() == ApiSurface::Protocol
-                    && route.authentication() == AuthenticationPolicy::ProtocolHandshake
-                    && route.projections().openapi()
-                    && !route.projections().sdk()
-                    && !route.projections().mcp())
+        assert_eq!(sumeragi::STATUS_SSE.surface(), ApiSurface::Operator);
+        assert_eq!(sumeragi::STATUS_SSE.admission(), AdmissionPolicy::Operator);
+        assert_eq!(
+            sumeragi::STATUS_SSE.authentication(),
+            AuthenticationPolicy::OperatorSignature
         );
+        assert_eq!(sumeragi::STATUS_SSE.effect(), RouteEffect::LongLivedStream);
+        assert!(matches!(
+            sumeragi::STATUS_SSE.path_policy(),
+            PathPolicy::ProtocolException { .. }
+        ));
+        assert!(sumeragi::STATUS_SSE.projections().openapi());
+        assert!(!sumeragi::STATUS_SSE.projections().sdk());
+        assert!(!sumeragi::STATUS_SSE.projections().mcp());
         assert!(!sumeragi::SCCP_CAPABILITIES.projections().mcp());
         assert!(!telemetry::DEBUG_WITNESS.projections().openapi());
+        assert_eq!(
+            telemetry::DEBUG_WITNESS.authentication(),
+            AuthenticationPolicy::OperatorSignature,
+            "the cleartext witness diagnostic must require a trusted operator signature"
+        );
+        assert_eq!(
+            telemetry::DEBUG_WITNESS.admission(),
+            AdmissionPolicy::Operator
+        );
         for route in [
             telemetry::SORANET_PRIVACY_EVENT,
             telemetry::SORANET_PRIVACY_SHARE,
@@ -1540,6 +1844,89 @@ mod tests {
         assert_ne!(openapi, mcp);
     }
     #[test]
+    fn route_auth_metadata_schema_is_v1_in_every_projection_and_fails_closed() {
+        let catalog = RouteCatalog::new(FEATURED_ROUTES);
+        let features = EnabledFeatures::new(&["app_api"]);
+        for projection in [
+            CatalogProjection::Mounted,
+            CatalogProjection::OpenApi,
+            CatalogProjection::Sdk,
+            CatalogProjection::Mcp,
+        ] {
+            let projected = catalog.project(projection, features);
+            assert!(!projected.is_empty(), "{projection:?} projection");
+            assert!(projected.iter().all(|route| {
+                route.auth_metadata_schema_version() == ROUTE_AUTH_METADATA_SCHEMA_VERSION_V1
+            }));
+        }
+
+        let mut incompatible = FEATURED_ROUTES[0];
+        incompatible.auth_metadata_schema_version = 0;
+        let errors = validate_catalog(&[incompatible])
+            .expect_err("pre-versioned route-auth metadata must fail validation");
+        assert!(errors.iter().any(|error| {
+            matches!(
+                error.kind,
+                CatalogValidationErrorKind::UnsupportedAuthMetadataSchemaVersion { found: 0 }
+            )
+        }));
+    }
+    #[test]
+    fn route_auth_metadata_labels_are_first_release_stable() {
+        assert_eq!(
+            [
+                AuthenticationPolicy::ToriiDefault.as_str(),
+                AuthenticationPolicy::OnboardingToken.as_str(),
+                AuthenticationPolicy::CanonicalAccountSignature.as_str(),
+                AuthenticationPolicy::OptionalCanonicalAccountSignature.as_str(),
+                AuthenticationPolicy::CanonicalSignedBody.as_str(),
+                AuthenticationPolicy::ManifestConditionalContent.as_str(),
+                AuthenticationPolicy::IdentityBoundSignature.as_str(),
+                AuthenticationPolicy::OperatorSignature.as_str(),
+                AuthenticationPolicy::OperatorCredentialExchange.as_str(),
+                AuthenticationPolicy::ProtocolHandshake.as_str(),
+                AuthenticationPolicy::NestedRouteAuthentication.as_str(),
+                AuthenticationPolicy::Unauthenticated.as_str(),
+            ],
+            [
+                "torii_default",
+                "onboarding_token",
+                "canonical_account_signature",
+                "optional_canonical_account_signature",
+                "canonical_signed_body",
+                "manifest_conditional_content",
+                "identity_bound_signature",
+                "operator_signature",
+                "operator_credential_exchange",
+                "protocol_handshake",
+                "nested_route_authentication",
+                "unauthenticated",
+            ]
+        );
+        assert_eq!(
+            [
+                AdmissionPolicy::Public.as_str(),
+                AdmissionPolicy::AuthenticatedAccount.as_str(),
+                AdmissionPolicy::DataspaceVisible.as_str(),
+                AdmissionPolicy::AuthenticatedProtocolPrincipal.as_str(),
+                AdmissionPolicy::ValidatorRosterMember.as_str(),
+                AdmissionPolicy::GovernedAuditor.as_str(),
+                AdmissionPolicy::Operator.as_str(),
+                AdmissionPolicy::TargetRoute.as_str(),
+            ],
+            [
+                "public",
+                "authenticated_account",
+                "dataspace_visible",
+                "authenticated_protocol_principal",
+                "validator_roster_member",
+                "governed_auditor",
+                "operator",
+                "target_route",
+            ]
+        );
+    }
+    #[test]
     fn feature_expressions_have_deterministic_semantics() {
         let enabled = EnabledFeatures::new(&["app_api", "telemetry"]);
         assert!(FeatureGate::Always.is_enabled(enabled));
@@ -1568,7 +1955,7 @@ mod tests {
         .with_path_policy(PathPolicy::ProtocolException {
             reason: "content-addressed protocol namespace",
         })
-        .with_implicit_head(true)
+        .with_transport(RouteTransport::Http)
         .with_cors_options(true);
         assert_eq!(descriptor.stable_route_id(), "protocol.content");
         assert_eq!(descriptor.method(), HttpMethod::Get);
@@ -1576,6 +1963,10 @@ mod tests {
         assert_eq!(descriptor.path(), "/content/{*tail}");
         assert_eq!(descriptor.surface(), ApiSurface::Protocol);
         assert_eq!(descriptor.listener(), Listener::Torii);
+        assert_eq!(
+            descriptor.auth_metadata_schema_version(),
+            ROUTE_AUTH_METADATA_SCHEMA_VERSION_V1
+        );
         assert_eq!(
             descriptor.authentication(),
             AuthenticationPolicy::ProtocolHandshake
@@ -1591,7 +1982,7 @@ mod tests {
             PathPolicy::ProtocolException { .. }
         ));
         assert_eq!(descriptor.path_normalization(), PathNormalization::Strict);
-        assert!(descriptor.implicit_head());
+        assert_eq!(descriptor.transport(), RouteTransport::Http);
         assert!(descriptor.cors_options());
         assert_eq!(validate_catalog(&[descriptor]), Ok(()));
     }
@@ -1795,8 +2186,7 @@ mod tests {
             RouteEffect::ReadOnly,
             AdmissionPolicy::Public,
         )
-        .with_route_match(RouteMatch::Wildcard)
-        .with_implicit_head(true);
+        .with_route_match(RouteMatch::Wildcard);
         let health = RouteDescriptor::new(
             "protocol.health",
             HttpMethod::Get,
@@ -1808,8 +2198,7 @@ mod tests {
         )
         .with_path_policy(PathPolicy::ProtocolException {
             reason: "orchestrator health-probe convention",
-        })
-        .with_implicit_head(true);
+        });
         assert_eq!(validate_catalog(&[wildcard, health]), Ok(()));
         let implicit_wildcard = RouteDescriptor::new(
             "test.implicit_wildcard",
@@ -1823,7 +2212,7 @@ mod tests {
         assert!(validate_catalog(&[implicit_wildcard]).is_err());
     }
     #[test]
-    fn validation_enforces_projection_and_implicit_method_boundaries() {
+    fn validation_enforces_projection_and_authentication_boundaries() {
         let routes = [
             RouteDescriptor::new(
                 "test.diagnostic_sdk",
@@ -1857,16 +2246,6 @@ mod tests {
             )
             .with_projections(RouteProjections::MCP),
             RouteDescriptor::new(
-                "test.head_on_post",
-                HttpMethod::Post,
-                "/v1/tests/head-on-post",
-                ApiSurface::Public,
-                Listener::Torii,
-                RouteEffect::ReadOnly,
-                AdmissionPolicy::Public,
-            )
-            .with_implicit_head(true),
-            RouteDescriptor::new(
                 "test.public_credential_exchange",
                 HttpMethod::Post,
                 "/v1/tests/public-credential-exchange",
@@ -1891,11 +2270,6 @@ mod tests {
             error.kind
                 == CatalogValidationErrorKind::OperatorCredentialExchangeRequiresOperatorSurface
         }));
-        assert!(
-            errors
-                .iter()
-                .any(|error| { error.kind == CatalogValidationErrorKind::ImplicitHeadRequiresGet })
-        );
     }
     #[test]
     fn validation_rejects_unsafe_effect_and_principal_combinations() {
@@ -1957,7 +2331,8 @@ mod tests {
                 RouteEffect::LongLivedStream,
                 AdmissionPolicy::ValidatorRosterMember,
             )
-            .with_authentication(AuthenticationPolicy::ProtocolHandshake),
+            .with_authentication(AuthenticationPolicy::ProtocolHandshake)
+            .with_transport(RouteTransport::ServerSentEvents),
         ];
         let errors = validate_catalog(&routes).expect_err("unsafe admission metadata must fail");
         for expected in [
@@ -1966,13 +2341,118 @@ mod tests {
             CatalogValidationErrorKind::AuthenticatedAccountRequiresAuthentication,
             CatalogValidationErrorKind::AuthenticatedProtocolPrincipalRequiresHandshake,
             CatalogValidationErrorKind::ValidatorAdmissionRequiresAuthentication,
-            CatalogValidationErrorKind::LongLivedStreamRequiresGetOrAny,
+            CatalogValidationErrorKind::StreamingTransportRequiresGet,
         ] {
             assert!(
                 errors.iter().any(|error| error.kind == expected),
                 "missing catalog validation error: {expected:?}"
             );
         }
+    }
+    #[test]
+    fn validation_enforces_transport_method_and_effect_invariants() {
+        let routes = [
+            RouteDescriptor::new(
+                "test.streaming_transport_method",
+                HttpMethod::Post,
+                "/v1/tests/transport-method",
+                ApiSurface::Protocol,
+                Listener::Torii,
+                RouteEffect::LongLivedStream,
+                AdmissionPolicy::ValidatorRosterMember,
+            )
+            .with_authentication(AuthenticationPolicy::ProtocolHandshake)
+            .with_transport(RouteTransport::ServerSentEvents),
+            RouteDescriptor::new(
+                "test.streaming_transport_effect",
+                HttpMethod::Get,
+                "/v1/tests/transport-effect",
+                ApiSurface::Protocol,
+                Listener::Torii,
+                RouteEffect::ReadOnly,
+                AdmissionPolicy::AuthenticatedAccount,
+            )
+            .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
+            .with_transport(RouteTransport::WebSocket),
+            RouteDescriptor::new(
+                "test.long_lived_transport_missing",
+                HttpMethod::Get,
+                "/v1/tests/transport-missing",
+                ApiSurface::Protocol,
+                Listener::Torii,
+                RouteEffect::LongLivedStream,
+                AdmissionPolicy::AuthenticatedAccount,
+            )
+            .with_authentication(AuthenticationPolicy::CanonicalAccountSignature),
+        ];
+        let errors = validate_catalog(&routes).expect_err("invalid transports must fail");
+        for (stable_route_id, kind) in [
+            (
+                "test.streaming_transport_method",
+                CatalogValidationErrorKind::StreamingTransportRequiresGet,
+            ),
+            (
+                "test.streaming_transport_effect",
+                CatalogValidationErrorKind::StreamingTransportRequiresLongLivedStream,
+            ),
+            (
+                "test.long_lived_transport_missing",
+                CatalogValidationErrorKind::LongLivedStreamRequiresStreamingTransport,
+            ),
+        ] {
+            assert!(
+                errors
+                    .iter()
+                    .any(|error| error.stable_route_id == stable_route_id && error.kind == kind),
+                "missing catalog validation error for {stable_route_id}: {kind:?}"
+            );
+        }
+    }
+    #[test]
+    fn catalog_declares_exact_long_lived_transport_inventory() {
+        let expected_websockets = [
+            "blocks.stream_websocket",
+            "connect.websocket",
+            "contracts.sorafs_orderbook_events_ws_get",
+            "contracts.sorafs_reserve_events_ws_get",
+            "events.stream_websocket",
+            "protocol.sorafs.reputation_event_websocket",
+        ];
+        let mut actual_websockets = Vec::new();
+        for route in CATALOGED_ROUTES {
+            if route.effect() == RouteEffect::LongLivedStream {
+                assert_eq!(
+                    route.method(),
+                    HttpMethod::Get,
+                    "{}",
+                    route.stable_route_id()
+                );
+                let expected_transport = if expected_websockets.contains(&route.stable_route_id()) {
+                    RouteTransport::WebSocket
+                } else {
+                    RouteTransport::ServerSentEvents
+                };
+                assert_eq!(
+                    route.transport(),
+                    expected_transport,
+                    "{}",
+                    route.stable_route_id()
+                );
+            } else {
+                assert_eq!(
+                    route.transport(),
+                    RouteTransport::Http,
+                    "{}",
+                    route.stable_route_id()
+                );
+            }
+            if route.transport() == RouteTransport::WebSocket {
+                actual_websockets.push(route.stable_route_id());
+            }
+        }
+        actual_websockets.sort_unstable();
+        assert_eq!(actual_websockets, expected_websockets);
+        assert_eq!(RouteCatalog::new(CATALOGED_ROUTES).validate(), Ok(()));
     }
     #[test]
     fn critical_routes_expose_closed_effect_and_admission_axes() {
@@ -2001,6 +2481,18 @@ mod tests {
         assert_eq!(
             pipeline::TRANSACTION_STATUS.admission(),
             AdmissionPolicy::Public
+        );
+        assert_eq!(
+            pipeline::TRIGGER_COMPLETIONS.effect(),
+            RouteEffect::ExpensiveCompute
+        );
+        assert_eq!(
+            pipeline::TRIGGER_COMPLETIONS.admission(),
+            AdmissionPolicy::Operator
+        );
+        assert_eq!(
+            pipeline::TRIGGER_COMPLETIONS.authentication(),
+            AuthenticationPolicy::OperatorSignature
         );
         assert_eq!(
             pipeline::TRANSACTION_DETAILS.effect(),
@@ -2036,7 +2528,7 @@ mod tests {
         );
     }
     #[test]
-    fn implicit_head_and_cors_routes_are_separate_from_explicit_operations() {
+    fn cors_options_are_separate_from_explicit_operations() {
         let routes = [
             RouteDescriptor::new(
                 "test.read",
@@ -2047,7 +2539,6 @@ mod tests {
                 RouteEffect::ReadOnly,
                 AdmissionPolicy::Public,
             )
-            .with_implicit_head(true)
             .with_cors_options(true),
             RouteDescriptor::new(
                 "test.write",
@@ -2062,15 +2553,10 @@ mod tests {
         ];
         let catalog = RouteCatalog::new(&routes);
         let implicit = catalog.implicit_routes(EnabledFeatures::none());
-        assert_eq!(implicit.len(), 2, "OPTIONS is emitted once per path");
-        assert!(implicit.iter().any(|route| {
-            route.kind() == ImplicitRouteKind::Head
-                && route.parent_route_id() == "test.read"
-                && route.path() == "/v1/tests/resource"
-        }));
-        assert!(implicit.iter().any(|route| {
-            route.kind() == ImplicitRouteKind::CorsOptions && route.path() == "/v1/tests/resource"
-        }));
+        assert_eq!(implicit.len(), 1, "OPTIONS is emitted once per path");
+        assert_eq!(implicit[0].kind(), ImplicitRouteKind::CorsOptions);
+        assert_eq!(implicit[0].parent_route_id(), "test.read");
+        assert_eq!(implicit[0].path(), "/v1/tests/resource");
         assert_eq!(
             catalog
                 .project(CatalogProjection::Mounted, EnabledFeatures::none())
@@ -2208,10 +2694,14 @@ mod tests {
                 route.authentication(),
                 AuthenticationPolicy::CanonicalAccountSignature
             );
-            assert!(
-                route.implicit_head(),
-                "Axum GET routing provides authenticated framework HEAD handling"
-            );
+            let expected_transport = if route == sorafs::REPUTATION_EVENTS_WEBSOCKET {
+                RouteTransport::WebSocket
+            } else if route == sorafs::REPUTATION_EVENTS_STREAM {
+                RouteTransport::ServerSentEvents
+            } else {
+                RouteTransport::Http
+            };
+            assert_eq!(route.transport(), expected_transport);
             assert_eq!(
                 CATALOGED_ROUTES
                     .iter()

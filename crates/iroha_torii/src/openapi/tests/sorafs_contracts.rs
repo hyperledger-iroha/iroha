@@ -61,6 +61,7 @@ const OPENAPI_CONTRACT_SECTION_ORDER: &[&str] = &[
     "contract.alias.binding.optional",
     "contract.alias.response.required",
     "governed.found.fields",
+    "governed.inactive.fields",
     "governed.missing.fields",
 ];
 const OPENAPI_CONTRACT_ASSET: &[u8] = include_bytes!(concat!(

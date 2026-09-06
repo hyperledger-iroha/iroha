@@ -1,4 +1,6 @@
 //! Crash-safe replay and idempotency persistence for the private Musubi publication service.
+#[cfg(test)]
+pub(super) mod wire_fixtures;
 #[cfg(unix)]
 use super::publication_filesystem_owner_probe;
 use super::{
@@ -11,7 +13,7 @@ use super::{
     MusubiPublicationServiceJournalV1, valid_storage_generation_target,
 };
 #[cfg(unix)]
-use crate::musubi_archive_fetch::{
+use iroha_primitives::fs::{
     secure_directory_open_flags, secure_no_follow_nonblocking_flags,
 };
 #[cfg(unix)]
@@ -41,6 +43,8 @@ const JOURNAL_DECODE_FIXED_ALLOCATION_BYTES_V1: usize = 64 * 1024;
     clippy::struct_field_names,
     reason = "the stable max_* names distinguish immutable upper bounds from live journal counts"
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha::musubi_runtime::publication_journal::DurableMusubiPublicationServiceJournalLimitsV1")]
 pub struct DurableMusubiPublicationServiceJournalLimitsV1 {
     max_operations: u32,
     max_authorizations: u32,
@@ -181,11 +185,15 @@ impl fmt::Display for DurableMusubiPublicationServiceJournalOpenErrorV1 {
 }
 impl std::error::Error for DurableMusubiPublicationServiceJournalOpenErrorV1 {}
 #[derive(Clone, Debug, PartialEq, Eq, norito::derive::Encode, norito::derive::Decode)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha::musubi_runtime::publication_journal::DurablePublicationOperationRecordV1")]
 struct DurablePublicationOperationRecordV1 {
     operation_id: [u8; 32],
     binding: MusubiPublicationOperationBindingV1,
 }
 #[derive(Clone, Debug, PartialEq, Eq, norito::derive::Encode, norito::derive::Decode)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha::musubi_runtime::publication_journal::DurablePublicationResultStateV1")]
 enum DurablePublicationResultStateV1 {
     #[codec(index = 0)]
     Pending {
@@ -207,16 +215,22 @@ enum DurablePublicationResultStateV1 {
     },
 }
 #[derive(Clone, Debug, PartialEq, Eq, norito::derive::Encode, norito::derive::Decode)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha::musubi_runtime::publication_journal::DurablePublicationResultRecordV1")]
 struct DurablePublicationResultRecordV1 {
     key: MusubiPublicationIdempotencyKeyV1,
     state: DurablePublicationResultStateV1,
 }
 #[derive(Clone, Debug, PartialEq, Eq, norito::derive::Encode, norito::derive::Decode)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha::musubi_runtime::publication_journal::DurablePublicationAuthorizationRecordV1")]
 struct DurablePublicationAuthorizationRecordV1 {
     authorization_digest: [u8; 32],
     expires_at_ms: u64,
 }
 #[derive(Clone, Debug, PartialEq, Eq, norito::derive::Encode, norito::derive::Decode)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha::musubi_runtime::publication_journal::DurablePublicationJournalStateV1")]
 struct DurablePublicationJournalStateV1 {
     domain: [u8; 32],
     schema: u8,
@@ -239,6 +253,8 @@ impl DurablePublicationJournalStateV1 {
     }
 }
 #[derive(Clone, Debug, PartialEq, Eq, norito::derive::Encode, norito::derive::Decode)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha::musubi_runtime::publication_journal::DurablePublicationJournalEnvelopeV1")]
 struct DurablePublicationJournalEnvelopeV1 {
     state: DurablePublicationJournalStateV1,
     state_digest: [u8; 32],

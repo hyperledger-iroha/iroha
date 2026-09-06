@@ -57,9 +57,10 @@ test("package browser field maps only the local crypto adapter", () => {
     new URL("../src/instructionBuilders.js", import.meta.url),
     "utf8",
   );
-  assert.match(
+  assert.doesNotMatch(
     instructionBuilders,
-    /import \{ createHash \} from "\.\/cryptoHash\.js";/u,
+    /from "\.\/cryptoHash\.js"/u,
+    "instruction builders must not retain the removed hashing adapter import",
   );
   const canonicalRequest = readFileSync(
     new URL("../src/canonicalRequest.js", import.meta.url),

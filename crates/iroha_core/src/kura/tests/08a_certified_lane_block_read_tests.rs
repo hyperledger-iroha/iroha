@@ -905,11 +905,52 @@ fn latest_lane_block_artifact_returns_highest_valid_height() {
         .expect("store sparse later artifact");
     let latest = kura
         .latest_lane_block_artifact(lane_id)
+        .expect("read canonical lane frontier")
         .expect("latest lane block artifact");
     assert_eq!(latest.ownership, expected);
     assert_eq!(latest.ownership.lane_block_height, 3);
     assert!(
         kura.read_lane_block_artifact(lane_id, 2).is_none(),
         "sparse placeholder entries must not decode as artifacts"
+    );
+}
+
+#[test]
+fn consensus_certificate_read_rejects_occupied_corruption_without_repair() {
+    let (temp_dir, config, lane_config) = two_lane_storage_fixture();
+    let lane_id = LaneId::from(1);
+    let lane = lane_config.entry(lane_id).expect("configured lane");
+    let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
+    assert!(
+        kura.read_certified_lane_block_artifact_read_only(lane_id, 1)
+            .expect("empty certificate slot")
+            .is_none()
+    );
+    let (session, pops) =
+        sample_committed_lane_block_session_for_kura(lane_id, lane.dataspace_id, 1);
+    kura.persist_committed_lane_block_session(&session, &pops)
+        .expect("persist quorum certificate");
+    assert!(
+        kura.read_lane_completion_certificate(lane_id, 1)
+            .expect("attest exact certificate")
+            .is_some()
+    );
+    let (data_path, index_path) = Kura::certified_lane_block_paths_for_entry(lane, temp_dir.path());
+    fs::write(&data_path, b"occupied corrupted certificate").expect("corrupt durable certificate");
+    let before = (
+        fs::read(&data_path).expect("data evidence"),
+        fs::read(&index_path).expect("index evidence"),
+    );
+    assert!(
+        kura.read_certified_lane_block_artifact_read_only(lane_id, 1)
+            .is_err()
+    );
+    assert!(kura.read_lane_completion_certificate(lane_id, 1).is_err());
+    assert_eq!(
+        (
+            fs::read(data_path).expect("retained data"),
+            fs::read(index_path).expect("retained index")
+        ),
+        before
     );
 }

@@ -142,6 +142,7 @@ fn commit_main_trace_group_v1<R: TryRngCore>(
     };
     let mut source_error = None;
     let result = aggregate::commit_masked_trace_polynomial_columns_v1(
+        AGGREGATE_DOMAINS_V1.digest_context,
         leaf_domain,
         node_domain,
         group_index,
@@ -791,9 +792,13 @@ impl ZkX509MainCompositionPhaseV1<'_> {
             &composition_roots,
         )
         .map_err(map_aggregate_error_v1)?;
-        let fri_masks =
-            aggregate::build_fri_mask_oracles_v1(AGGREGATE_PARAMETERS_V1, &shared_layout, rng)
-                .map_err(map_aggregate_error_v1)?;
+        let fri_masks = aggregate::build_fri_mask_oracles_v1(
+            AGGREGATE_PARAMETERS_V1,
+            AGGREGATE_DOMAINS_V1,
+            &shared_layout,
+            rng,
+        )
+        .map_err(map_aggregate_error_v1)?;
         let fri_mask_roots = fri_masks
             .iter()
             .map(|mask| mask.tree.root())
@@ -801,6 +806,7 @@ impl ZkX509MainCompositionPhaseV1<'_> {
         aggregate::absorb_fri_mask_roots_v1(
             &mut self.transcript,
             AGGREGATE_PARAMETERS_V1,
+            AGGREGATE_DOMAINS_V1,
             &fri_mask_roots,
         )
         .map_err(map_aggregate_error_v1)?;
@@ -908,8 +914,12 @@ impl ZkX509MainCompositionPhaseV1<'_> {
             aggregate::add_fri_mask_oracle_v1(base, mask).map_err(map_aggregate_error_v1)?;
         }
         let grinding_state = self.transcript.state();
-        let grinding_nonce = grind_nonce_v1(&grinding_state, ZK_X509_GRINDING_BITS_V1)
-            .map_err(map_transparent_error_v1)?;
+        let grinding_nonce = grind_nonce_v1(
+            ZK_X509_DIGEST_CONTEXT_V1,
+            &grinding_state,
+            ZK_X509_GRINDING_BITS_V1,
+        )
+        .map_err(map_transparent_error_v1)?;
         absorb_grinding_nonce_v1(&mut self.transcript, grinding_nonce)?;
         let query_indices = query_indices_v1(&self.transcript, &self.layout)?;
         let query_skeleton = query_indices
@@ -941,6 +951,7 @@ impl ZkX509MainCompositionPhaseV1<'_> {
             )
             .map_err(map_aggregate_error_v1)?;
             let base = aggregate::replay_masked_trace_polynomial_columns_v1(
+                AGGREGATE_DOMAINS_V1.digest_context,
                 BASE_LEAF_DOMAIN,
                 BASE_NODE_DOMAIN,
                 group_index,
@@ -953,6 +964,7 @@ impl ZkX509MainCompositionPhaseV1<'_> {
             )
             .map_err(map_aggregate_error_v1)?;
             let aux = aggregate::replay_masked_trace_polynomial_columns_v1(
+                AGGREGATE_DOMAINS_V1.digest_context,
                 AUX_LEAF_DOMAIN,
                 AUX_NODE_DOMAIN,
                 group_index,
@@ -3160,6 +3172,7 @@ pub(crate) fn verify_zk_x509_main_aggregate_stark_v1(
     aggregate::absorb_fri_mask_roots_v1(
         &mut transcript,
         AGGREGATE_PARAMETERS_V1,
+        AGGREGATE_DOMAINS_V1,
         &proof.aggregate.fri_mask_roots,
     )
     .map_err(map_aggregate_error_v1)?;
@@ -3186,6 +3199,7 @@ pub(crate) fn verify_zk_x509_main_aggregate_stark_v1(
     .map_err(map_aggregate_error_v1)?;
     let grinding_state = transcript.state();
     verify_grinding_nonce_v1(
+        ZK_X509_DIGEST_CONTEXT_V1,
         &grinding_state,
         ZK_X509_GRINDING_BITS_V1,
         proof.aggregate.grinding_nonce,

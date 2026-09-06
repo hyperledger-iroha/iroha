@@ -30,6 +30,9 @@ use iroha_config_base::{
 };
 use iroha_data_model::{
     domain::DomainId,
+    governance::types::{
+        MAX_PARLIAMENT_BODY_TARGET_SEATS_V1, MIN_PARLIAMENT_HIDDEN_BALLOT_ANONYMITY_V1,
+    },
     merge::{MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES, MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES},
     soracloud::{
         SORA_INROU_EPHEMERAL_STORAGE_ALIGNMENT_BYTES_V1, SORA_INROU_MIN_CPU_MILLIS_V1,
@@ -1210,6 +1213,11 @@ impl Root {
         let mut snapshot = self.snapshot;
         Self::derive_default_snapshot_store_dir(&mut snapshot, &kura);
         let dev_telemetry = self.dev_telemetry;
+        if let Err(message) =
+            validate_sccp_replay_archive_norito_limit(&self.torii.sccp_replay_archive, &self.norito)
+        {
+            emit_torii_config_error(&mut emitter, message);
+        }
         let parsed_sorafs = self.sorafs.parse(&mut emitter);
         let (torii, live_query_store) = self.torii.parse(&mut emitter, parsed_sorafs);
         let soracloud_runtime = self.soracloud_runtime.parse(&mut emitter);
@@ -2037,75 +2045,6 @@ impl SorafsTelemetryPolicy {
         }
     }
 }
-/// Citizen service discipline (user view).
-#[derive(Debug, ReadConfig, Clone)]
-pub struct CitizenServiceDiscipline {
-    /// Cooldown (blocks) enforced after a citizen accepts a seat.
-    #[config(
-        env = "GOV_CITIZEN_SEAT_COOLDOWN_BLOCKS",
-        default = "defaults::governance::citizen_service::SEAT_COOLDOWN_BLOCKS"
-    )]
-    pub seat_cooldown_blocks: u64,
-    /// Maximum seats a single citizen may occupy in one epoch.
-    #[config(
-        env = "GOV_CITIZEN_MAX_SEATS_PER_EPOCH",
-        default = "defaults::governance::citizen_service::MAX_SEATS_PER_EPOCH"
-    )]
-    pub max_seats_per_epoch: u32,
-    /// Number of declines that do not trigger slashing per epoch.
-    #[config(
-        env = "GOV_CITIZEN_FREE_DECLINES_PER_EPOCH",
-        default = "defaults::governance::citizen_service::FREE_DECLINES_PER_EPOCH"
-    )]
-    pub free_declines_per_epoch: u32,
-    /// Slash percentage applied when declines exceed the free allowance (basis points).
-    #[config(
-        env = "GOV_CITIZEN_DECLINE_SLASH_BPS",
-        default = "defaults::governance::citizen_service::DECLINE_SLASH_BPS"
-    )]
-    pub decline_slash_bps: u16,
-    /// Slash percentage applied when a citizen fails to appear (basis points).
-    #[config(
-        env = "GOV_CITIZEN_NO_SHOW_SLASH_BPS",
-        default = "defaults::governance::citizen_service::NO_SHOW_SLASH_BPS"
-    )]
-    pub no_show_slash_bps: u16,
-    /// Slash percentage applied when misconduct is recorded (basis points).
-    #[config(
-        env = "GOV_CITIZEN_MISCONDUCT_SLASH_BPS",
-        default = "defaults::governance::citizen_service::MISCONDUCT_SLASH_BPS"
-    )]
-    pub misconduct_slash_bps: u16,
-    /// Optional bond multipliers keyed by governance role name.
-    #[config(default = "defaults::governance::citizen_service::role_bond_multipliers()")]
-    pub role_bond_multipliers: BTreeMap<String, u64>,
-}
-impl CitizenServiceDiscipline {
-    fn parse(self) -> actual::CitizenServiceDiscipline {
-        actual::CitizenServiceDiscipline {
-            seat_cooldown_blocks: self.seat_cooldown_blocks,
-            max_seats_per_epoch: self.max_seats_per_epoch,
-            free_declines_per_epoch: self.free_declines_per_epoch,
-            decline_slash_bps: self.decline_slash_bps,
-            no_show_slash_bps: self.no_show_slash_bps,
-            misconduct_slash_bps: self.misconduct_slash_bps,
-            role_bond_multipliers: self.role_bond_multipliers,
-        }
-    }
-}
-impl Default for CitizenServiceDiscipline {
-    fn default() -> Self {
-        Self {
-            seat_cooldown_blocks: defaults::governance::citizen_service::SEAT_COOLDOWN_BLOCKS,
-            max_seats_per_epoch: defaults::governance::citizen_service::MAX_SEATS_PER_EPOCH,
-            free_declines_per_epoch: defaults::governance::citizen_service::FREE_DECLINES_PER_EPOCH,
-            decline_slash_bps: defaults::governance::citizen_service::DECLINE_SLASH_BPS,
-            no_show_slash_bps: defaults::governance::citizen_service::NO_SHOW_SLASH_BPS,
-            misconduct_slash_bps: defaults::governance::citizen_service::MISCONDUCT_SLASH_BPS,
-            role_bond_multipliers: defaults::governance::citizen_service::role_bond_multipliers(),
-        }
-    }
-}
 /// Runtime-upgrade provenance enforcement modes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, strum::EnumString, strum::Display)]
 #[strum(serialize_all = "snake_case")]
@@ -2258,6 +2197,40 @@ impl Default for ParliamentTimedOvn {
         }
     }
 }
+/// Consensus-critical activation, expiry, and use bounds for Parliament TLE keys.
+#[derive(Debug, ReadConfig, Clone, Copy)]
+pub struct ParliamentTleKeyLifecycle {
+    /// Inclusive new-ballot lifetime after the mandatory next-height activation.
+    #[config(
+        default = "defaults::governance::parliament_tle_key_lifecycle::SESSION_LIFETIME_BLOCKS"
+    )]
+    pub session_lifetime_blocks: u64,
+    /// Maximum committed fresh ballots admitted under one unrefreshed key.
+    #[config(
+        default = "defaults::governance::parliament_tle_key_lifecycle::MAX_FRESH_BALLOTS_PER_SESSION"
+    )]
+    pub max_fresh_ballots_per_session: u32,
+}
+impl ParliamentTleKeyLifecycle {
+    fn parse(self) -> actual::ParliamentTleKeyLifecycle {
+        let policy = actual::ParliamentTleKeyLifecycle {
+            session_lifetime_blocks: self.session_lifetime_blocks,
+            max_fresh_ballots_per_session: self.max_fresh_ballots_per_session,
+        };
+        policy.assert_valid();
+        policy
+    }
+}
+impl Default for ParliamentTleKeyLifecycle {
+    fn default() -> Self {
+        Self {
+            session_lifetime_blocks:
+                defaults::governance::parliament_tle_key_lifecycle::SESSION_LIFETIME_BLOCKS,
+            max_fresh_ballots_per_session:
+                defaults::governance::parliament_tle_key_lifecycle::MAX_FRESH_BALLOTS_PER_SESSION,
+        }
+    }
+}
 /// Governance configuration (user view).
 #[derive(Debug, ReadConfig, Clone)]
 pub struct Governance {
@@ -2349,9 +2322,6 @@ pub struct Governance {
     /// Runtime upgrade provenance enforcement policy.
     #[config(nested)]
     pub runtime_upgrade_provenance: RuntimeUpgradeProvenance,
-    /// Citizen service discipline knobs (cooldowns, slashing, seat caps).
-    #[config(nested)]
-    pub citizen_service: CitizenServiceDiscipline,
     /// Account supplying viral incentive payouts and sender bonuses.
     #[config(
         env = "GOV_VIRAL_INCENTIVE_POOL_ACCOUNT",
@@ -2439,10 +2409,10 @@ pub struct Governance {
     /// Trusted pre-genesis SoraFS provider→owner bindings (hex provider id → account id).
     #[config(default = "BTreeMap::new()")]
     pub sorafs_provider_owners: BTreeMap<String, String>,
-    /// Conviction step in blocks. duration/step increases conviction by 1.
+    /// Nonzero conviction step in blocks. duration/step increases conviction by 1.
     #[config(env = "GOV_CONVICTION_STEP_BLOCKS", default = "100")]
     pub conviction_step_blocks: u64,
-    /// Maximum conviction multiplier.
+    /// Nonzero maximum conviction multiplier.
     #[config(env = "GOV_MAX_CONVICTION", default = "6")]
     pub max_conviction: u64,
     /// Minimum enactment delay in blocks when scheduling a referendum.
@@ -2451,8 +2421,17 @@ pub struct Governance {
     /// Referendum window span in blocks.
     #[config(env = "GOV_WINDOW_SPAN", default = "100")]
     pub window_span: u64,
+    /// Maximum number of non-closed governance referenda retained at once.
+    #[config(default = "defaults::governance::MAX_ACTIVE_REFERENDA")]
+    pub max_active_referenda: NonZeroU32,
+    /// Maximum distinct governance-lock owners retained for one referendum.
+    #[config(default = "defaults::governance::MAX_LOCK_OWNERS_PER_REFERENDUM")]
+    pub max_lock_owners_per_referendum: NonZeroU32,
     /// Enable non‑ZK quadratic voting globally (plain ballots)
-    #[config(env = "GOV_PLAIN_VOTING_ENABLED", default = "false")]
+    #[config(
+        env = "GOV_PLAIN_VOTING_ENABLED",
+        default = "defaults::governance::PLAIN_VOTING_ENABLED"
+    )]
     pub plain_voting_enabled: bool,
     /// Approval threshold numerator (approve/(approve+reject) >= num/den)
     #[config(env = "GOV_APPROVAL_Q_NUM", default = "1")]
@@ -2463,39 +2442,9 @@ pub struct Governance {
     /// Minimum turnout required (approve+reject+abstain)
     #[config(env = "GOV_MIN_TURNOUT", default = "0")]
     pub min_turnout: u128,
-    /// Size of the sortition council committee.
-    #[config(
-        env = "GOV_PARLIAMENT_COMMITTEE_SIZE",
-        default = "crate::parameters::defaults::governance::PARLIAMENT_COMMITTEE_SIZE"
-    )]
-    pub parliament_committee_size: usize,
-    /// Length of a council term in blocks.
-    #[config(
-        env = "GOV_PARLIAMENT_TERM_BLOCKS",
-        default = "crate::parameters::defaults::governance::PARLIAMENT_TERM_BLOCKS"
-    )]
-    pub parliament_term_blocks: u64,
-    /// Minimum required stake to qualify for sortition.
-    #[config(
-        env = "GOV_PARLIAMENT_MIN_STAKE",
-        default = "crate::parameters::defaults::governance::parliament_min_stake()"
-    )]
-    pub parliament_min_stake: Quantity,
-    /// Asset definition id that provides voting stake eligibility.
-    #[config(
-        env = "GOV_PARLIAMENT_ELIGIBILITY_ASSET_ID",
-        default = "crate::parameters::defaults::governance::parliament_eligibility_asset_id()"
-    )]
-    pub parliament_eligibility_asset_id: String,
-    /// Number of alternates to draw per term (None = committee size).
-    #[config(env = "GOV_PARLIAMENT_ALTERNATE_SIZE")]
-    pub parliament_alternate_size: Option<usize>,
-    /// Council quorum requirement expressed in basis points (ceil-divided).
-    #[config(
-        env = "GOV_PARLIAMENT_QUORUM_BPS",
-        default = "crate::parameters::defaults::governance::PARLIAMENT_QUORUM_BPS"
-    )]
-    pub parliament_quorum_bps: u16,
+    /// Alternates retained for each attempt-local Parliament body draw.
+    #[config(default = "crate::parameters::defaults::governance::PARLIAMENT_ALTERNATE_SIZE")]
+    pub parliament_alternate_size: usize,
     /// Exact nonzero delay from a committed Parliament sortition request to its beacon pulse.
     #[config(
         default = "crate::parameters::defaults::governance::PARLIAMENT_SORTITION_PULSE_DELAY_BLOCKS"
@@ -2514,6 +2463,9 @@ pub struct Governance {
     /// Consensus-critical timed-OVN phase and resource policy.
     #[config(nested)]
     pub parliament_timed_ovn: ParliamentTimedOvn,
+    /// Consensus-critical lifecycle policy for adaptive Parliament TLE keys.
+    #[config(nested)]
+    pub parliament_tle_key_lifecycle: ParliamentTleKeyLifecycle,
     /// Credential-free deployment handle for the Parliament TLE release-share signer.
     pub parliament_tle_partial_release_signer_provider_handle: Option<String>,
     /// Exact non-zero provider contract revision for the Parliament TLE release-share signer.
@@ -2549,13 +2501,13 @@ pub struct Governance {
         default = "crate::parameters::defaults::governance::PARLIAMENT_COORDINATION_COUNCIL_SIZE"
     )]
     pub coordination_council_size: usize,
-    /// Policy Jury size (at least two for non-identity timed-OVN masks).
+    /// Policy Jury size (at least the hidden-ballot anonymity floor).
     #[config(
         env = "GOV_POLICY_JURY_SIZE",
         default = "crate::parameters::defaults::governance::PARLIAMENT_POLICY_JURY_SIZE"
     )]
     pub policy_jury_size: usize,
-    /// Maximum Confirmation Jury size (at least two for timed-OVN confirmation).
+    /// Maximum Confirmation Jury size (at least the hidden-ballot anonymity floor).
     #[config(
         default = "crate::parameters::defaults::governance::PARLIAMENT_CONFIRMATION_JURY_SIZE"
     )]
@@ -2596,7 +2548,6 @@ impl Default for Governance {
             debug_trace_pipeline: defaults::governance::DEBUG_TRACE_PIPELINE,
             jdg_signature_schemes: defaults::governance::jdg_signature_schemes(),
             runtime_upgrade_provenance: RuntimeUpgradeProvenance::default(),
-            citizen_service: CitizenServiceDiscipline::default(),
             viral_incentive_pool_account: defaults::governance::viral_incentive_pool_account(),
             viral_escrow_account: defaults::governance::viral_escrow_account(),
             viral_reward_asset_id: defaults::governance::viral_reward_asset_id(),
@@ -2622,17 +2573,13 @@ impl Default for Governance {
             max_conviction: 6,
             min_enactment_delay: 20,
             window_span: 100,
-            plain_voting_enabled: false,
+            max_active_referenda: defaults::governance::MAX_ACTIVE_REFERENDA,
+            max_lock_owners_per_referendum: defaults::governance::MAX_LOCK_OWNERS_PER_REFERENDUM,
+            plain_voting_enabled: defaults::governance::PLAIN_VOTING_ENABLED,
             approval_threshold_q_num: 1,
             approval_threshold_q_den: 2,
             min_turnout: 0,
-            parliament_committee_size: defaults::governance::PARLIAMENT_COMMITTEE_SIZE,
-            parliament_term_blocks: defaults::governance::PARLIAMENT_TERM_BLOCKS,
-            parliament_min_stake: defaults::governance::parliament_min_stake(),
-            parliament_eligibility_asset_id: defaults::governance::parliament_eligibility_asset_id(
-            ),
             parliament_alternate_size: defaults::governance::PARLIAMENT_ALTERNATE_SIZE,
-            parliament_quorum_bps: defaults::governance::PARLIAMENT_QUORUM_BPS,
             parliament_sortition_pulse_delay_blocks:
                 defaults::governance::PARLIAMENT_SORTITION_PULSE_DELAY_BLOCKS,
             parliament_invitation_phase_blocks:
@@ -2640,6 +2587,7 @@ impl Default for Governance {
             parliament_public_finding_phase_blocks:
                 defaults::governance::PARLIAMENT_PUBLIC_FINDING_PHASE_BLOCKS,
             parliament_timed_ovn: ParliamentTimedOvn::default(),
+            parliament_tle_key_lifecycle: ParliamentTleKeyLifecycle::default(),
             parliament_tle_partial_release_signer_provider_handle: None,
             parliament_tle_partial_release_signer_provider_revision: None,
             parliament_tle_partial_release_signer_provider_policy_digest_hex: None,
@@ -2668,15 +2616,25 @@ impl Governance {
                     .as_deref(),
             )
             .expect("invalid Parliament TLE partial-release signer provider binding");
-        let citizen_service = self.citizen_service.parse();
-        citizen_service.assert_valid();
         assert!(
             self.min_enactment_delay > 0,
             "min_enactment_delay must be non-zero"
         );
         assert!(
-            (1..=10_000).contains(&self.parliament_quorum_bps),
-            "parliament_quorum_bps must be within 1..=10_000 (basis points)"
+            self.conviction_step_blocks > 0,
+            "governance.conviction_step_blocks must be non-zero"
+        );
+        assert!(
+            self.max_conviction > 0,
+            "governance.max_conviction must be non-zero"
+        );
+        assert!(
+            self.approval_threshold_q_den > 0,
+            "governance.approval_threshold_q_den must be non-zero"
+        );
+        assert!(
+            self.approval_threshold_q_num <= self.approval_threshold_q_den,
+            "governance.approval_threshold_q_num must not exceed governance.approval_threshold_q_den"
         );
         assert!(
             self.parliament_sortition_pulse_delay_blocks > 0,
@@ -2689,6 +2647,12 @@ impl Governance {
         assert!(
             self.parliament_public_finding_phase_blocks > 0,
             "parliament_public_finding_phase_blocks must be non-zero"
+        );
+        let maximum_parliament_body_size = usize::try_from(MAX_PARLIAMENT_BODY_TARGET_SEATS_V1)
+            .expect("Parliament body target bound fits usize");
+        assert!(
+            self.parliament_alternate_size <= maximum_parliament_body_size,
+            "parliament_alternate_size must be within 0..={MAX_PARLIAMENT_BODY_TARGET_SEATS_V1}"
         );
         for (name, size) in [
             ("rules_committee_size", self.rules_committee_size),
@@ -2703,20 +2667,24 @@ impl Governance {
             ("fma_committee_size", self.fma_committee_size),
         ] {
             assert!(
-                (1..=1_000).contains(&size),
-                "{name} must be within 1..=1_000"
+                (1..=maximum_parliament_body_size).contains(&size),
+                "{name} must be within 1..={MAX_PARLIAMENT_BODY_TARGET_SEATS_V1}"
             );
         }
         for (name, size) in [
             ("policy_jury_size", self.policy_jury_size),
             ("confirmation_jury_size", self.confirmation_jury_size),
         ] {
+            let minimum_hidden_body_size =
+                usize::try_from(MIN_PARLIAMENT_HIDDEN_BALLOT_ANONYMITY_V1)
+                    .expect("Parliament anonymity floor fits usize");
             assert!(
-                (2..=1_000).contains(&size),
-                "{name} must be within 2..=1_000 because hidden timed-OVN ballots require at least two seats"
+                (minimum_hidden_body_size..=maximum_parliament_body_size).contains(&size),
+                "{name} must be within {MIN_PARLIAMENT_HIDDEN_BALLOT_ANONYMITY_V1}..={MAX_PARLIAMENT_BODY_TARGET_SEATS_V1} because exact hidden-ballot tallies require the canonical anonymity floor"
             );
         }
         let parliament_timed_ovn = self.parliament_timed_ovn.parse();
+        let parliament_tle_key_lifecycle = self.parliament_tle_key_lifecycle.parse();
         let maximum_hidden_body_size = self.policy_jury_size.max(self.confirmation_jury_size);
         assert!(
             usize::try_from(parliament_timed_ovn.max_corpus_entries)
@@ -2800,7 +2768,6 @@ impl Governance {
             debug_trace_pipeline: self.debug_trace_pipeline,
             jdg_signature_schemes,
             runtime_upgrade_provenance,
-            citizen_service,
             viral_incentives,
             sorafs_pin_policy: self.sorafs_pin_policy.parse(),
             sorafs_pin_fee_asset_id: self
@@ -2839,23 +2806,18 @@ impl Governance {
             max_conviction: self.max_conviction,
             min_enactment_delay: self.min_enactment_delay,
             window_span: self.window_span,
+            max_active_referenda: self.max_active_referenda,
+            max_lock_owners_per_referendum: self.max_lock_owners_per_referendum,
             plain_voting_enabled: self.plain_voting_enabled,
             approval_threshold_q_num: self.approval_threshold_q_num,
             approval_threshold_q_den: self.approval_threshold_q_den,
             min_turnout: self.min_turnout,
-            parliament_committee_size: self.parliament_committee_size,
-            parliament_term_blocks: self.parliament_term_blocks,
-            parliament_min_stake: self.parliament_min_stake,
-            parliament_eligibility_asset_id: self
-                .parliament_eligibility_asset_id
-                .parse()
-                .expect("invalid parliament eligibility asset id"),
             parliament_alternate_size: self.parliament_alternate_size,
-            parliament_quorum_bps: self.parliament_quorum_bps,
             parliament_sortition_pulse_delay_blocks: self.parliament_sortition_pulse_delay_blocks,
             parliament_invitation_phase_blocks: self.parliament_invitation_phase_blocks,
             parliament_public_finding_phase_blocks: self.parliament_public_finding_phase_blocks,
             parliament_timed_ovn,
+            parliament_tle_key_lifecycle,
             parliament_tle_partial_release_signer_provider_handle: self
                 .parliament_tle_partial_release_signer_provider_handle,
             parliament_tle_partial_release_signer_provider_revision: self
@@ -2953,6 +2915,43 @@ mod governance_tests {
     }
 
     #[test]
+    fn governance_cardinality_bounds_are_file_configured_nonzero_and_defaulted() {
+        let table: toml::Table =
+            toml::from_str("max_active_referenda = 7\nmax_lock_owners_per_referendum = 11")
+                .expect("parse governance cardinality bounds TOML");
+        let parsed = ConfigReader::new()
+            .with_toml_source(TomlSource::inline(table))
+            .read_and_complete::<Governance>()
+            .expect("read Governance with cardinality bounds")
+            .parse();
+
+        assert_eq!(parsed.max_active_referenda.get(), 7);
+        assert_eq!(parsed.max_lock_owners_per_referendum.get(), 11);
+
+        let defaults = Governance::default().parse();
+        assert_eq!(
+            defaults.max_active_referenda,
+            crate::parameters::defaults::governance::MAX_ACTIVE_REFERENDA
+        );
+        assert_eq!(
+            defaults.max_lock_owners_per_referendum,
+            crate::parameters::defaults::governance::MAX_LOCK_OWNERS_PER_REFERENDUM
+        );
+
+        for field in ["max_active_referenda", "max_lock_owners_per_referendum"] {
+            let table: toml::Table =
+                toml::from_str(&format!("{field} = 0")).expect("parse zero governance bound TOML");
+            assert!(
+                ConfigReader::new()
+                    .with_toml_source(TomlSource::inline(table))
+                    .read_and_complete::<Governance>()
+                    .is_err(),
+                "{field} must reject zero during configuration loading"
+            );
+        }
+    }
+
+    #[test]
     fn parliament_enactment_delay_rejects_zero_at_startup() {
         let mut governance = Governance::default();
         governance.min_enactment_delay = 0;
@@ -2961,6 +2960,63 @@ mod governance_tests {
             panic.is_err(),
             "zero enactment delay must fail before a proposal can become stranded"
         );
+    }
+
+    #[test]
+    #[should_panic(expected = "governance.approval_threshold_q_den must be non-zero")]
+    fn governance_approval_threshold_rejects_zero_denominator() {
+        Governance {
+            approval_threshold_q_den: 0,
+            ..Governance::default()
+        }
+        .parse();
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "governance.approval_threshold_q_num must not exceed governance.approval_threshold_q_den"
+    )]
+    fn governance_approval_threshold_rejects_numerator_above_denominator() {
+        Governance {
+            approval_threshold_q_num: 3,
+            approval_threshold_q_den: 2,
+            ..Governance::default()
+        }
+        .parse();
+    }
+
+    #[test]
+    fn governance_approval_threshold_accepts_closed_unit_interval_boundaries() {
+        for (numerator, denominator) in [(0, 1), (1, 1)] {
+            let parsed = Governance {
+                approval_threshold_q_num: numerator,
+                approval_threshold_q_den: denominator,
+                ..Governance::default()
+            }
+            .parse();
+            assert_eq!(parsed.approval_threshold_q_num, numerator);
+            assert_eq!(parsed.approval_threshold_q_den, denominator);
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "governance.conviction_step_blocks must be non-zero")]
+    fn governance_conviction_step_rejects_zero() {
+        Governance {
+            conviction_step_blocks: 0,
+            ..Governance::default()
+        }
+        .parse();
+    }
+
+    #[test]
+    #[should_panic(expected = "governance.max_conviction must be non-zero")]
+    fn governance_max_conviction_rejects_zero() {
+        Governance {
+            max_conviction: 0,
+            ..Governance::default()
+        }
+        .parse();
     }
 
     #[test]
@@ -3111,6 +3167,10 @@ max_corpus_entries = 16
                 ..valid
             },
             actual::ParliamentTimedOvn {
+                max_corpus_entries: MIN_PARLIAMENT_HIDDEN_BALLOT_ANONYMITY_V1 - 1,
+                ..valid
+            },
+            actual::ParliamentTimedOvn {
                 max_corpus_entries:
                     defaults::governance::parliament_timed_ovn::MAX_CORPUS_ENTRIES_LIMIT + 1,
                 ..valid
@@ -3141,19 +3201,33 @@ max_corpus_entries = 16
     }
 
     #[test]
-    fn parliament_hidden_body_sizes_require_two_seats() {
+    fn parliament_hidden_body_sizes_require_the_anonymity_floor() {
         let mut one_policy_seat = Governance::default();
         one_policy_seat.policy_jury_size = 1;
         assert!(
             std::panic::catch_unwind(|| one_policy_seat.parse()).is_err(),
-            "a single-seat Policy Jury would produce identity timed-OVN masks"
+            "a single-seat Policy Jury is below the hidden-ballot anonymity floor"
+        );
+
+        let mut two_policy_seats = Governance::default();
+        two_policy_seats.policy_jury_size = 2;
+        assert!(
+            std::panic::catch_unwind(|| two_policy_seats.parse()).is_err(),
+            "a two-seat Policy Jury would expose choices through the exact tally"
         );
 
         let mut one_confirmation_seat = Governance::default();
         one_confirmation_seat.confirmation_jury_size = 1;
         assert!(
             std::panic::catch_unwind(|| one_confirmation_seat.parse()).is_err(),
-            "a single-seat Confirmation Jury would produce identity timed-OVN masks"
+            "a single-seat Confirmation Jury is below the hidden-ballot anonymity floor"
+        );
+
+        let mut two_confirmation_seats = Governance::default();
+        two_confirmation_seats.confirmation_jury_size = 2;
+        assert!(
+            std::panic::catch_unwind(|| two_confirmation_seats.parse()).is_err(),
+            "a two-seat Confirmation Jury would expose choices through the exact tally"
         );
 
         let mut one_public_seat = Governance::default();
@@ -6255,7 +6329,7 @@ pub struct SumeragiV2RuntimeLimits {
     #[config(default = "defaults::sumeragi::V2_NATIVE_AMX_SIGNING_GUARD_ANCHOR_BYTES")]
     pub native_amx_signing_guard_anchor_bytes: NonZeroUsize,
 }
-/// User-level consensus key-rotation and HSM policy.
+/// User-level consensus key-rotation and algorithm policy.
 #[derive(Debug, Clone, ReadConfig)]
 pub struct SumeragiKeys {
     /// Minimum lead time between publishing and activating a consensus key.
@@ -6267,15 +6341,9 @@ pub struct SumeragiKeys {
     /// Grace window after declared consensus-key expiry.
     #[config(default = "defaults::sumeragi::KEY_EXPIRY_GRACE_BLOCKS")]
     pub expiry_grace_blocks: u64,
-    /// Whether consensus keys must be bound to an admitted HSM provider.
-    #[config(default = "defaults::sumeragi::KEY_REQUIRE_HSM")]
-    pub require_hsm: bool,
     /// Allowed consensus signing algorithms.
     #[config(default = "defaults::sumeragi::key_allowed_algorithms()")]
     pub allowed_algorithms: Vec<Algorithm>,
-    /// Admitted HSM provider identifiers.
-    #[config(default = "defaults::sumeragi::key_allowed_hsm_providers()")]
-    pub allowed_hsm_providers: Vec<String>,
 }
 /// First-release Sumeragi v2 node configuration.
 ///
@@ -6305,7 +6373,7 @@ pub struct Sumeragi {
     /// Node-local durable storage budgets.
     #[config(nested)]
     pub storage: SumeragiStorage,
-    /// Consensus key-rotation and HSM policy.
+    /// Consensus key-rotation and algorithm policy.
     #[config(nested)]
     pub keys: SumeragiKeys,
 }
@@ -6556,25 +6624,6 @@ impl Sumeragi {
             );
             valid = false;
         }
-        let mut key_providers = BTreeSet::new();
-        for provider in keys.allowed_hsm_providers {
-            let provider = provider.trim();
-            if provider.is_empty() {
-                emitter
-                    .emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
-                        "sumeragi.keys.allowed_hsm_providers must not contain empty names",
-                    ));
-                valid = false;
-            } else {
-                key_providers.insert(provider.to_owned());
-            }
-        }
-        if keys.require_hsm && key_providers.is_empty() {
-            emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
-                "sumeragi.keys.allowed_hsm_providers must not be empty when HSM is required",
-            ));
-            valid = false;
-        }
         if !valid {
             return None;
         }
@@ -6646,9 +6695,7 @@ impl Sumeragi {
                 activation_lead_blocks: keys.activation_lead_blocks,
                 overlap_grace_blocks: keys.overlap_grace_blocks,
                 expiry_grace_blocks: keys.expiry_grace_blocks,
-                require_hsm: keys.require_hsm,
                 allowed_algorithms: key_algorithms,
-                allowed_hsm_providers: key_providers,
             },
         })
     }
@@ -8583,67 +8630,32 @@ impl Queue {
 /// User-level configuration container for `Settlement`.
 #[derive(Debug, ReadConfig, Clone, Default)]
 pub struct Settlement {
-    /// Optional Kagemusha proof-release cache controls.
-    ///
-    /// This is not offline enablement and is never node readiness.
+    /// KAGEMUSHA V1 runtime-state configuration.
     #[config(nested)]
-    pub offline: Offline,
+    pub kagemusha: Kagemusha,
     /// Router configuration (shadow price, buffers).
     #[config(nested)]
     pub router: Router,
 }
-/// User-level optional Kagemusha proof-release cache configuration.
-#[derive(Debug, ReadConfig, Clone)]
-#[expect(
-    clippy::struct_field_names,
-    reason = "the kagemusha_ prefix is part of the public settlement configuration schema"
-)]
-pub struct Offline {
-    /// Canonical Norito policy authenticating promoted Kagemusha releases.
-    ///
-    /// This optional cache source is used only when an operator explicitly
-    /// validates or promotes a verifier release. It does not enable offline
-    /// support and its absence never prevents node startup.
-    pub kagemusha_release_policy_path: Option<PathBuf>,
-    /// Directory containing manifest-digest-addressed Kagemusha release artifacts.
-    pub kagemusha_artifact_dir: Option<PathBuf>,
-    /// Absolute root-trusted path to a canonical Kagemusha catalog qualification seal.
-    pub kagemusha_catalog_qualification_seal_path: Option<PathBuf>,
-    /// Pinned Ed25519 key of the root promotion controller.
-    pub kagemusha_promotion_controller_public_key: Option<PublicKey>,
-    /// Pinned identifier of the independent catalog-revalidation authority.
-    pub kagemusha_catalog_revalidation_authority_key_id: Option<String>,
-    /// Pinned Ed25519 key of the independent catalog-revalidation authority.
-    pub kagemusha_catalog_revalidation_authority_public_key: Option<PublicKey>,
-    /// Absolute root-trusted path to the signed promotion reservation.
-    pub kagemusha_promotion_reservation_path: Option<PathBuf>,
-    /// Absolute root-owned no-replace output path for this validator's seal.
-    pub kagemusha_validator_qualification_seal_path: Option<PathBuf>,
-    /// Estimated decoded Kagemusha verifier budget, capped at the 256 MiB default.
-    #[config(default = "defaults::settlement::offline::KAGEMUSHA_MAX_DECODED_BYTES")]
-    pub kagemusha_max_decoded_bytes: u64,
-}
-impl Default for Offline {
-    fn default() -> Self {
-        Self {
-            kagemusha_release_policy_path:
-                defaults::settlement::offline::kagemusha_release_policy_path(),
-            kagemusha_artifact_dir: defaults::settlement::offline::kagemusha_artifact_dir(),
-            kagemusha_catalog_qualification_seal_path:
-                defaults::settlement::offline::kagemusha_catalog_qualification_seal_path(),
-            kagemusha_promotion_controller_public_key:
-                defaults::settlement::offline::kagemusha_promotion_controller_public_key(),
-            kagemusha_catalog_revalidation_authority_key_id:
-                defaults::settlement::offline::kagemusha_catalog_revalidation_authority_key_id(),
-            kagemusha_catalog_revalidation_authority_public_key:
-                defaults::settlement::offline::kagemusha_catalog_revalidation_authority_public_key(),
-            kagemusha_promotion_reservation_path:
-                defaults::settlement::offline::kagemusha_promotion_reservation_path(),
-            kagemusha_validator_qualification_seal_path:
-                defaults::settlement::offline::kagemusha_validator_qualification_seal_path(),
-            kagemusha_max_decoded_bytes: defaults::settlement::offline::KAGEMUSHA_MAX_DECODED_BYTES,
-        }
-    }
+/// User-level KAGEMUSHA V1 proof-release configuration.
+///
+/// The six paths are all-or-none. Their contents do not become monetary authority merely by
+/// being configured: startup threshold-authenticates the release and rechecks every artifact's
+/// content address and compiled protocol identity.
+#[derive(Debug, ReadConfig, Clone, Default)]
+pub struct Kagemusha {
+    /// Canonical Norito release manifest.
+    pub release_manifest_path: Option<PathBuf>,
+    /// Canonical Norito internal qualification receipt.
+    pub validation_receipt_path: Option<PathBuf>,
+    /// Canonical Norito locally trusted release-authority policy.
+    pub authority_policy_path: Option<PathBuf>,
+    /// Canonical Norito threshold-signed release attestation.
+    pub release_attestation_path: Option<PathBuf>,
+    /// Canonical JSON recursive circuit profile signed through its digest.
+    pub recursive_profile_path: Option<PathBuf>,
+    /// Directory containing files named only by lowercase SHA-256 artifact address.
+    pub artifact_directory: Option<PathBuf>,
 }
 /// User-level configuration for the settlement router.
 #[derive(Debug, ReadConfig, Clone, Copy)]
@@ -8801,207 +8813,54 @@ impl Settlement {
     /// Convert this user configuration into the runtime representation.
     pub fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::Settlement {
         actual::Settlement {
-            offline: self.offline.parse(emitter),
+            kagemusha: self.kagemusha.parse(emitter),
             router: self.router.parse(emitter),
         }
     }
 }
-impl Offline {
-    /// Convert optional Kagemusha proof-release cache controls into runtime parameters.
-    pub fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::Offline {
-        let Offline {
-            kagemusha_release_policy_path,
-            kagemusha_artifact_dir,
-            kagemusha_catalog_qualification_seal_path,
-            kagemusha_promotion_controller_public_key,
-            kagemusha_catalog_revalidation_authority_key_id,
-            kagemusha_catalog_revalidation_authority_public_key,
-            kagemusha_promotion_reservation_path,
-            kagemusha_validator_qualification_seal_path,
-            mut kagemusha_max_decoded_bytes,
-        } = self;
-        if kagemusha_release_policy_path.is_some() != kagemusha_artifact_dir.is_some() {
-            emitter.emit(
-                Report::new(ParseError::InvalidSettlementConfig).attach(
-                    "settlement.offline.kagemusha_release_policy_path and settlement.offline.kagemusha_artifact_dir must be configured together",
-                ),
-            );
-        }
-        if kagemusha_catalog_qualification_seal_path.is_some()
-            && (kagemusha_release_policy_path.is_none() || kagemusha_artifact_dir.is_none())
-        {
-            emitter.emit(
-                Report::new(ParseError::InvalidSettlementConfig).attach(
-                    "settlement.offline.kagemusha_catalog_qualification_seal_path requires both Kagemusha release paths",
-                ),
-            );
-        }
-        let validator_qualification_inputs = [
-            kagemusha_promotion_controller_public_key.is_some(),
-            kagemusha_catalog_revalidation_authority_key_id.is_some(),
-            kagemusha_catalog_revalidation_authority_public_key.is_some(),
-            kagemusha_promotion_reservation_path.is_some(),
-            kagemusha_validator_qualification_seal_path.is_some(),
-        ]
-        .into_iter()
-        .filter(|present| *present)
-        .count();
-        if validator_qualification_inputs != 0 && validator_qualification_inputs != 5 {
-            emitter.emit(
-                Report::new(ParseError::InvalidSettlementConfig).attach(
-                    "settlement.offline Kagemusha validator qualification requires kagemusha_promotion_controller_public_key, kagemusha_catalog_revalidation_authority_key_id, kagemusha_catalog_revalidation_authority_public_key, kagemusha_promotion_reservation_path, and kagemusha_validator_qualification_seal_path together",
-                ),
-            );
-        }
-        if validator_qualification_inputs != 0
-            && kagemusha_catalog_qualification_seal_path.is_none()
-        {
-            emitter.emit(
-                Report::new(ParseError::InvalidSettlementConfig).attach(
-                    "settlement.offline Kagemusha validator qualification requires kagemusha_catalog_qualification_seal_path",
-                ),
-            );
-        }
-        if kagemusha_promotion_controller_public_key
-            .as_ref()
-            .is_some_and(|key| !matches!(key.try_algorithm(), Ok(Algorithm::Ed25519)))
-        {
-            emitter.emit(Report::new(ParseError::InvalidSettlementConfig).attach(
-                "settlement.offline.kagemusha_promotion_controller_public_key must be Ed25519",
-            ));
-        }
-        if kagemusha_catalog_revalidation_authority_public_key
-            .as_ref()
-            .is_some_and(|key| !matches!(key.try_algorithm(), Ok(Algorithm::Ed25519)))
-        {
-            emitter.emit(Report::new(ParseError::InvalidSettlementConfig).attach(
-                "settlement.offline.kagemusha_catalog_revalidation_authority_public_key must be Ed25519",
-            ));
-        }
-        if kagemusha_catalog_revalidation_authority_key_id
-            .as_deref()
-            .is_some_and(|key_id| {
-                let bytes = key_id.as_bytes();
-                bytes.is_empty()
-                    || bytes.len() > 128
-                    || !bytes[0].is_ascii_alphanumeric()
-                    || !bytes[1..].iter().all(|byte| {
-                        byte.is_ascii_alphanumeric() || matches!(*byte, b'.' | b'_' | b'-')
-                    })
+impl Kagemusha {
+    /// Validate the all-or-none release file set and construct runtime configuration.
+    pub fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::Kagemusha {
+        let paths = [
+            self.release_manifest_path.is_some(),
+            self.validation_receipt_path.is_some(),
+            self.authority_policy_path.is_some(),
+            self.release_attestation_path.is_some(),
+            self.recursive_profile_path.is_some(),
+            self.artifact_directory.is_some(),
+        ];
+        let proof_release = if paths.iter().all(|present| !present) {
+            None
+        } else if paths.iter().all(|present| *present) {
+            Some(actual::KagemushaV1ProofReleaseFiles {
+                manifest: self
+                    .release_manifest_path
+                    .expect("all release paths were checked present"),
+                validation_receipt: self
+                    .validation_receipt_path
+                    .expect("all release paths were checked present"),
+                authority_policy: self
+                    .authority_policy_path
+                    .expect("all release paths were checked present"),
+                attestation: self
+                    .release_attestation_path
+                    .expect("all release paths were checked present"),
+                recursive_profile: self
+                    .recursive_profile_path
+                    .expect("all release paths were checked present"),
+                artifact_directory: self
+                    .artifact_directory
+                    .expect("all release paths were checked present"),
             })
-        {
+        } else {
             emitter.emit(Report::new(ParseError::InvalidSettlementConfig).attach(
-                "settlement.offline.kagemusha_catalog_revalidation_authority_key_id must match [A-Za-z0-9][A-Za-z0-9._-]{0,127}",
+                "settlement.kagemusha proof-release paths must be configured all together",
             ));
-        }
-        if kagemusha_promotion_controller_public_key.is_some()
-            && kagemusha_promotion_controller_public_key
-                == kagemusha_catalog_revalidation_authority_public_key
-        {
-            emitter.emit(Report::new(ParseError::InvalidSettlementConfig).attach(
-                "settlement.offline catalog-revalidation authority must differ from the promotion controller",
-            ));
-        }
-        if kagemusha_release_policy_path
-            .as_ref()
-            .is_some_and(|path| path.as_os_str().is_empty())
-            || kagemusha_artifact_dir
-                .as_ref()
-                .is_some_and(|path| path.as_os_str().is_empty())
-            || kagemusha_catalog_qualification_seal_path
-                .as_ref()
-                .is_some_and(|path| path.as_os_str().is_empty())
-            || kagemusha_promotion_reservation_path
-                .as_ref()
-                .is_some_and(|path| path.as_os_str().is_empty())
-            || kagemusha_validator_qualification_seal_path
-                .as_ref()
-                .is_some_and(|path| path.as_os_str().is_empty())
-        {
-            emitter.emit(
-                Report::new(ParseError::InvalidSettlementConfig)
-                    .attach("settlement.offline Kagemusha release paths must not be empty"),
-            );
-        }
-        for (label, path) in [
-            (
-                "kagemusha_catalog_qualification_seal_path",
-                kagemusha_catalog_qualification_seal_path.as_ref(),
-            ),
-            (
-                "kagemusha_promotion_reservation_path",
-                kagemusha_promotion_reservation_path.as_ref(),
-            ),
-            (
-                "kagemusha_validator_qualification_seal_path",
-                kagemusha_validator_qualification_seal_path.as_ref(),
-            ),
-        ] {
-            if path.is_some_and(|path| {
-                !path.is_absolute()
-                    || path.components().any(|component| {
-                        matches!(
-                            component,
-                            std::path::Component::CurDir | std::path::Component::ParentDir
-                        )
-                    })
-            }) {
-                emitter.emit(
-                    Report::new(ParseError::InvalidSettlementConfig).attach(format!(
-                        "settlement.offline.{label} must be absolute without `.` or `..` components"
-                    )),
-                );
-            }
-        }
-        let trusted_artifact_paths = [
-            kagemusha_catalog_qualification_seal_path.as_ref(),
-            kagemusha_promotion_reservation_path.as_ref(),
-            kagemusha_validator_qualification_seal_path.as_ref(),
-        ]
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>();
-        if trusted_artifact_paths
-            .iter()
-            .enumerate()
-            .any(|(index, path)| trusted_artifact_paths[index + 1..].contains(path))
-        {
-            emitter.emit(
-                Report::new(ParseError::InvalidSettlementConfig).attach(
-                    "settlement.offline Kagemusha catalog, reservation, and validator-seal paths must be distinct",
-                ),
-            );
-        }
-        if kagemusha_max_decoded_bytes == 0 {
-            emitter.emit(Report::new(ParseError::InvalidSettlementConfig).attach(
-                "settlement.offline.kagemusha_max_decoded_bytes must be greater than zero",
-            ));
-            kagemusha_max_decoded_bytes =
-                defaults::settlement::offline::KAGEMUSHA_MAX_DECODED_BYTES;
-        } else if kagemusha_max_decoded_bytes
-            > defaults::settlement::offline::KAGEMUSHA_MAX_DECODED_BYTES
-        {
-            emitter.emit(Report::new(ParseError::InvalidSettlementConfig).attach(format!(
-                "settlement.offline.kagemusha_max_decoded_bytes cannot exceed the non-raiseable {}-byte safety ceiling",
-                defaults::settlement::offline::KAGEMUSHA_MAX_DECODED_BYTES
-            )));
-            kagemusha_max_decoded_bytes =
-                defaults::settlement::offline::KAGEMUSHA_MAX_DECODED_BYTES;
-        }
-        actual::Offline {
-            // Escrow bindings are deterministic runtime state. They are
-            // populated lazily by offline instructions and are never supplied
-            // by node configuration.
-            escrow_accounts: BTreeMap::new(),
-            kagemusha_release_policy_path,
-            kagemusha_artifact_dir,
-            kagemusha_catalog_qualification_seal_path,
-            kagemusha_promotion_controller_public_key,
-            kagemusha_catalog_revalidation_authority_key_id,
-            kagemusha_catalog_revalidation_authority_public_key,
-            kagemusha_promotion_reservation_path,
-            kagemusha_validator_qualification_seal_path,
-            kagemusha_max_decoded_bytes,
+            None
+        };
+        actual::Kagemusha {
+            reserve_accounts: BTreeMap::new(),
+            proof_release,
         }
     }
 }
@@ -10167,12 +10026,15 @@ pub struct NexusStaking {
     /// Maximum number of validators allowed per lane.
     #[config(default = "defaults::nexus::staking::MAX_VALIDATORS")]
     pub max_validators: NonZeroU32,
+    /// Maximum number of stake-share rows retained for one validator.
+    #[config(default = "defaults::nexus::staking::MAX_STAKE_SHARES_PER_VALIDATOR")]
+    pub max_stake_shares_per_validator: NonZeroU32,
+    /// Maximum number of pending unbond requests retained in one stake share.
+    #[config(default = "defaults::nexus::staking::MAX_PENDING_UNBONDS_PER_SHARE")]
+    pub max_pending_unbonds_per_share: NonZeroU32,
     /// Minimum delay between scheduling and finalising an unbond (milliseconds).
     #[config(default = "defaults::nexus::staking::UNBONDING_DELAY.into()")]
     pub unbonding_delay_ms: DurationMs,
-    /// Grace window after `release_at_ms` during which withdrawals must be finalised (milliseconds).
-    #[config(default = "defaults::nexus::staking::WITHDRAW_GRACE.into()")]
-    pub withdraw_grace_ms: DurationMs,
     /// Maximum slash ratio allowed (basis points, 10_000 = 100%).
     #[config(default = "defaults::nexus::staking::MAX_SLASH_BPS")]
     pub max_slash_bps: u16,
@@ -10194,8 +10056,9 @@ impl_default!(NexusStaking {
     restricted_validator_mode: LaneValidatorModeConfig::AdminManaged,
     min_validator_stake: defaults::nexus::staking::min_validator_stake(),
     max_validators: defaults::nexus::staking::MAX_VALIDATORS,
+    max_stake_shares_per_validator: defaults::nexus::staking::MAX_STAKE_SHARES_PER_VALIDATOR,
+    max_pending_unbonds_per_share: defaults::nexus::staking::MAX_PENDING_UNBONDS_PER_SHARE,
     unbonding_delay_ms: defaults::nexus::staking::UNBONDING_DELAY.into(),
-    withdraw_grace_ms: defaults::nexus::staking::WITHDRAW_GRACE.into(),
     max_slash_bps: defaults::nexus::staking::MAX_SLASH_BPS,
     reward_dust_threshold: defaults::nexus::staking::reward_dust_threshold(),
     stake_asset_id: defaults::nexus::staking::stake_asset_id(),
@@ -10237,8 +10100,9 @@ impl NexusStaking {
             restricted_validator_mode: self.restricted_validator_mode.into(),
             min_validator_stake: self.min_validator_stake,
             max_validators: self.max_validators,
+            max_stake_shares_per_validator: self.max_stake_shares_per_validator,
+            max_pending_unbonds_per_share: self.max_pending_unbonds_per_share,
             unbonding_delay: self.unbonding_delay_ms.get(),
-            withdraw_grace: self.withdraw_grace_ms.get(),
             max_slash_bps: self.max_slash_bps,
             reward_dust_threshold: self.reward_dust_threshold,
             stake_asset_id,
@@ -11432,7 +11296,8 @@ pub struct NexusAtomicPrivateSettlement {
     pub commit_timeout_blocks: u64,
     /// Strictly increasing canonical padded-plaintext classes, in bytes.
     ///
-    /// The authenticated ciphertext is exactly 16 bytes larger.
+    /// The authenticated ciphertext is exactly 16 bytes larger; configuration
+    /// also reserves canonical AAD, nonce, vector, and wrapped-DEK framing.
     #[config(
         default = "defaults::nexus::atomic_private_settlement::capsule_padding_classes_bytes()"
     )]
@@ -11443,13 +11308,19 @@ pub struct NexusAtomicPrivateSettlement {
     /// Maximum encrypted audit capsule size per leg.
     #[config(default = "defaults::nexus::atomic_private_settlement::MAX_CAPSULE_BYTES")]
     pub max_capsule_bytes: u64,
-    /// Maximum encoded global carrier size.
+    /// Maximum canonical sponsor-signed direct carrier transaction size.
     #[config(default = "defaults::nexus::atomic_private_settlement::MAX_CARRIER_BYTES")]
     pub max_carrier_bytes: u64,
     /// Minimum durable sidecar retention after admission, in blocks.
     #[config(default = "defaults::nexus::atomic_private_settlement::SIDECAR_RETENTION_BLOCKS")]
     pub sidecar_retention_blocks: u64,
-    /// Default online auditor threshold for new governed policies.
+    /// Maximum encrypted settlement records retained by one local sidecar store.
+    #[config(default = "defaults::nexus::atomic_private_settlement::SIDECAR_MAX_RECORDS")]
+    pub sidecar_max_records: u32,
+    /// Maximum canonical bytes retained by one local sidecar store.
+    #[config(default = "defaults::nexus::atomic_private_settlement::SIDECAR_MAX_TOTAL_BYTES")]
+    pub sidecar_max_total_bytes: u64,
+    /// Governed minimum online auditor threshold accepted for new policies.
     #[config(
         default = "defaults::nexus::atomic_private_settlement::DEFAULT_MIN_AUDITOR_APPROVALS"
     )]
@@ -11475,6 +11346,8 @@ impl_default!(NexusAtomicPrivateSettlement {
     max_capsule_bytes: defaults::nexus::atomic_private_settlement::MAX_CAPSULE_BYTES,
     max_carrier_bytes: defaults::nexus::atomic_private_settlement::MAX_CARRIER_BYTES,
     sidecar_retention_blocks: defaults::nexus::atomic_private_settlement::SIDECAR_RETENTION_BLOCKS,
+    sidecar_max_records: defaults::nexus::atomic_private_settlement::SIDECAR_MAX_RECORDS,
+    sidecar_max_total_bytes: defaults::nexus::atomic_private_settlement::SIDECAR_MAX_TOTAL_BYTES,
     default_min_auditor_approvals:
         defaults::nexus::atomic_private_settlement::DEFAULT_MIN_AUDITOR_APPROVALS,
     permitted_policy_versions:
@@ -11609,6 +11482,18 @@ impl NexusAtomicPrivateSettlement {
             self.sidecar_retention_blocks,
             "nexus.atomic_private_settlement.sidecar_retention_blocks"
         );
+        let sidecar_max_records = NonZeroU32::new(self.sidecar_max_records).unwrap_or_else(|| {
+            invalid = true;
+            emitter.emit(
+                Report::new(ParseError::InvalidNexusConfig)
+                    .attach("nexus.atomic_private_settlement.sidecar_max_records must be > 0"),
+            );
+            NonZeroU32::new(1).expect("private-settlement record placeholder is non-zero")
+        });
+        let sidecar_max_total_bytes = nonzero_u64!(
+            self.sidecar_max_total_bytes,
+            "nexus.atomic_private_settlement.sidecar_max_total_bytes"
+        );
 
         if self.proof_profile_version
             != defaults::nexus::atomic_private_settlement::PROOF_PROFILE_VERSION
@@ -11648,6 +11533,15 @@ impl NexusAtomicPrivateSettlement {
                 ));
                 NonZeroU16::new(1).expect("private-settlement approval placeholder is non-zero")
             });
+        if usize::from(default_min_auditor_approvals.get())
+            > iroha_data_model::nexus::PRIVATE_SETTLEMENT_MAX_AUDITORS_V1
+        {
+            invalid = true;
+            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
+                "nexus.atomic_private_settlement.default_min_auditor_approvals must be at most {}",
+                iroha_data_model::nexus::PRIVATE_SETTLEMENT_MAX_AUDITORS_V1
+            )));
+        }
 
         let phase_budget = self
             .audit_timeout_blocks
@@ -11695,6 +11589,24 @@ impl NexusAtomicPrivateSettlement {
                 defaults::nexus::atomic_private_settlement::MAX_CARRIER_BYTES_LIMIT
             )));
         }
+        if self.sidecar_max_records
+            > defaults::nexus::atomic_private_settlement::SIDECAR_MAX_RECORDS_LIMIT
+        {
+            invalid = true;
+            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
+                "nexus.atomic_private_settlement.sidecar_max_records must be at most {}",
+                defaults::nexus::atomic_private_settlement::SIDECAR_MAX_RECORDS_LIMIT
+            )));
+        }
+        if self.sidecar_max_total_bytes
+            > defaults::nexus::atomic_private_settlement::SIDECAR_MAX_TOTAL_BYTES_LIMIT
+        {
+            invalid = true;
+            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
+                "nexus.atomic_private_settlement.sidecar_max_total_bytes must be at most {}",
+                defaults::nexus::atomic_private_settlement::SIDECAR_MAX_TOTAL_BYTES_LIMIT
+            )));
+        }
 
         if self.capsule_padding_classes_bytes.is_empty() {
             invalid = true;
@@ -11725,10 +11637,15 @@ impl NexusAtomicPrivateSettlement {
                     "nexus.atomic_private_settlement.capsule_padding_classes_bytes[{index}] is not supported by proof profile V1"
                 )));
             }
-            if u64::from(bytes).saturating_add(16) > self.max_capsule_bytes {
+            let required_capsule_bytes =
+                iroha_data_model::nexus::private_settlement_capsule_canonical_upper_bound_v1(
+                    u64::from(bytes),
+                    u64::from(default_min_auditor_approvals.get()),
+                );
+            if required_capsule_bytes > self.max_capsule_bytes {
                 invalid = true;
                 emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
-                    "nexus.atomic_private_settlement.capsule_padding_classes_bytes[{index}] plus the 16-byte authentication tag exceeds max_capsule_bytes"
+                    "nexus.atomic_private_settlement.capsule_padding_classes_bytes[{index}] cannot fit the complete canonical capsule for default_min_auditor_approvals"
                 )));
             }
             previous_padding = bytes;
@@ -11776,6 +11693,8 @@ impl NexusAtomicPrivateSettlement {
             max_capsule_bytes,
             max_carrier_bytes,
             sidecar_retention_blocks,
+            sidecar_max_records,
+            sidecar_max_total_bytes,
             default_min_auditor_approvals,
             permitted_policy_versions,
         })
@@ -11894,6 +11813,13 @@ impl Nexus {
             Self::build_dataspace_catalog(dataspace_catalog, emitter)?;
         let lane_catalog =
             Self::build_lane_catalog(lane_count, lane_catalog, &dataspace_catalog, emitter)?;
+        if let Err(error) = iroha_data_model::merge::validate_merge_lane_authority_geometry(
+            &lane_catalog,
+            &dataspace_catalog,
+        ) {
+            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(error.to_string()));
+            return None;
+        }
         let routing_policy =
             Self::build_routing_policy(routing_policy, &lane_catalog, &dataspace_catalog, emitter)?;
         let registry = registry.parse(emitter)?;
@@ -14305,13 +14231,21 @@ impl SoracloudRuntimeMutationSignerBinding {
                 .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
         {
             let mut digest = [0_u8; 32];
-            hex::decode_to_slice(policy_digest_hex, &mut digest)
-                .expect("validated lowercase 32-byte hexadecimal");
-            if digest == [0; 32] {
-                emit(emitter, format!("{PATH}.policy_digest_hex must be nonzero"));
-                None
-            } else {
-                Some(digest)
+            match hex::decode_to_slice(policy_digest_hex, &mut digest) {
+                Ok(()) if digest == [0; 32] => {
+                    emit(emitter, format!("{PATH}.policy_digest_hex must be nonzero"));
+                    None
+                }
+                Ok(()) => Some(digest),
+                Err(_) => {
+                    emit(
+                        emitter,
+                        format!(
+                            "{PATH}.policy_digest_hex must be exactly 64 lowercase hexadecimal characters"
+                        ),
+                    );
+                    None
+                }
             }
         } else {
             emit(
@@ -14338,44 +14272,95 @@ impl SoracloudRuntimeSubmission {
         production_mode: bool,
         emitter: &mut Emitter<ParseError>,
     ) -> actual::SoracloudRuntimeSubmission {
-        let fee_payer = match self.fee_payer.as_deref().unwrap_or("authority") {
+        let Self {
+            fee_payer,
+            fee_program_id,
+            fee_program_revision,
+            signer,
+        } = self;
+        let emit = |emitter: &mut Emitter<ParseError>, message: String| {
+            emitter.emit(Report::new(ParseError::InvalidSoracloudConfig).attach(message));
+        };
+        let fee_payer = match fee_payer.as_deref().unwrap_or("authority") {
             "authority" => {
-                assert!(
-                    self.fee_program_id.is_none() && self.fee_program_revision.is_none(),
-                    "soracloud_runtime.submission authority payer forbids fee_program_id and fee_program_revision"
-                );
+                if fee_program_id.is_some() {
+                    emit(
+                        emitter,
+                        "soracloud_runtime.submission.fee_program_id is only valid when fee_payer = `sponsor`"
+                            .to_owned(),
+                    );
+                }
+                if fee_program_revision.is_some() {
+                    emit(
+                        emitter,
+                        "soracloud_runtime.submission.fee_program_revision is only valid when fee_payer = `sponsor`"
+                            .to_owned(),
+                    );
+                }
                 actual::SoracloudRuntimeFeePayer::Authority
             }
             "sponsor" => {
-                let program_id_literal = self
-                    .fee_program_id
-                    .as_deref()
-                    .filter(|value| !value.is_empty())
-                    .unwrap_or_else(|| {
-                        panic!("soracloud_runtime.submission sponsor payer requires fee_program_id")
-                    });
-                let program_id = program_id_literal
-                    .parse::<FeeSponsorProgramId>()
-                    .unwrap_or_else(|error| {
-                        panic!("invalid soracloud_runtime.submission.fee_program_id: {error}")
-                    });
-                assert_eq!(
-                    program_id_literal,
-                    program_id.to_string(),
-                    "soracloud_runtime.submission.fee_program_id must use its canonical literal"
-                );
-                let program_revision = self.fee_program_revision.unwrap_or_else(|| {
-                    panic!(
-                        "soracloud_runtime.submission sponsor payer requires fee_program_revision"
-                    )
-                });
-                assert!(
-                    program_revision > 0,
-                    "soracloud_runtime.submission.fee_program_revision must be greater than zero"
-                );
-                actual::SoracloudRuntimeFeePayer::Sponsor {
-                    program_id,
-                    program_revision,
+                let program_id = match fee_program_id {
+                    Some(program_id_literal) => {
+                        match program_id_literal.parse::<FeeSponsorProgramId>() {
+                            Ok(program_id) if program_id_literal == program_id.to_string() => {
+                                Some(program_id)
+                            }
+                            Ok(_) => {
+                                emit(
+                                    emitter,
+                                    "soracloud_runtime.submission.fee_program_id must use its canonical literal"
+                                        .to_owned(),
+                                );
+                                None
+                            }
+                            Err(error) => {
+                                emit(
+                                    emitter,
+                                    format!(
+                                        "invalid soracloud_runtime.submission.fee_program_id: {error}"
+                                    ),
+                                );
+                                None
+                            }
+                        }
+                    }
+                    None => {
+                        emit(
+                            emitter,
+                            "soracloud_runtime.submission sponsor payer requires fee_program_id"
+                                .to_owned(),
+                        );
+                        None
+                    }
+                };
+                let program_revision = match fee_program_revision {
+                    Some(program_revision) if program_revision > 0 => Some(program_revision),
+                    Some(_) => {
+                        emit(
+                            emitter,
+                            "soracloud_runtime.submission.fee_program_revision must be greater than zero"
+                                .to_owned(),
+                        );
+                        None
+                    }
+                    None => {
+                        emit(
+                            emitter,
+                            "soracloud_runtime.submission sponsor payer requires fee_program_revision"
+                                .to_owned(),
+                        );
+                        None
+                    }
+                };
+                match (program_id, program_revision) {
+                    (Some(program_id), Some(program_revision)) => {
+                        actual::SoracloudRuntimeFeePayer::Sponsor {
+                            program_id,
+                            program_revision,
+                        }
+                    }
+                    _ => actual::SoracloudRuntimeFeePayer::Authority,
                 }
             }
             payer => {
@@ -14387,13 +14372,13 @@ impl SoracloudRuntimeSubmission {
                 actual::SoracloudRuntimeFeePayer::Authority
             }
         };
-        if production_mode && self.signer.is_none() {
+        if production_mode && signer.is_none() {
             emitter.emit(
                 Report::new(ParseError::InvalidSoracloudConfig)
                     .attach("soracloud_runtime.submission.signer is required in production mode"),
             );
         }
-        let signer = self.signer.and_then(|signer| signer.parse(emitter));
+        let signer = signer.and_then(|signer| signer.parse(emitter));
         actual::SoracloudRuntimeSubmission { fee_payer, signer }
     }
 }
@@ -14468,8 +14453,24 @@ impl SoracloudRuntimeEgress {
         }
     }
 }
+#[derive(Clone, Copy)]
+struct RedactedConfigSecret(usize);
+impl RedactedConfigSecret {
+    const fn present(present: bool) -> Self {
+        if present { Self(1) } else { Self(0) }
+    }
+
+    const fn count(count: usize) -> Self {
+        Self(count)
+    }
+}
+impl core::fmt::Debug for RedactedConfigSecret {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(formatter, "[REDACTED; {} configured]", self.0)
+    }
+}
 /// User-level configuration container for `Torii`.
-#[derive(Debug, ReadConfig)]
+#[derive(ReadConfig)]
 pub struct Torii {
     /// Listening address for the public Torii API.
     #[config(env = "API_ADDRESS")]
@@ -14581,12 +14582,14 @@ pub struct Torii {
     pub proof_max_body_bytes: Bytes,
     /// Maximum proof-bearing request bodies buffered concurrently before handler admission.
     ///
-    /// This aggregate gate also covers SCCP bridge proof/message submissions.
+    /// This aggregate gate also covers SCCP bridge proof/message submissions and
+    /// KAGEMUSHA V1 top-up/redemption command bodies.
     #[config(default = "defaults::torii::PROOF_BODY_MAX_INFLIGHT")]
     pub proof_body_max_inflight: NonZeroUsize,
     /// Absolute deadline for reading one admitted proof-bearing request body (milliseconds).
     ///
-    /// This deadline also applies to SCCP bridge proof/message submissions.
+    /// This deadline also applies to SCCP bridge proof/message submissions and
+    /// KAGEMUSHA V1 top-up/redemption command bodies.
     #[config(
         default = "DurationMs(std::time::Duration::from_millis(defaults::torii::PROOF_BODY_READ_TIMEOUT_MS))"
     )]
@@ -14613,7 +14616,7 @@ pub struct Torii {
     #[config(default = "defaults::torii::REQUIRE_API_TOKEN")]
     pub require_api_token: bool,
     /// Allowed API tokens (opaque strings). Empty means no tokens defined.
-    pub api_tokens: Option<Vec<String>>,
+    pub api_tokens: Option<actual::ToriiApiTokens>,
     /// Optional fee policy: asset id used for operator fee.
     pub api_fee_asset_id: Option<String>,
     /// Optional fee policy: amount charged per endpoint use.
@@ -14897,14 +14900,69 @@ pub struct Torii {
     pub account_onboarding: Option<AccountOnboarding>,
     /// Optional faucet configuration for app API endpoints.
     pub faucet: Option<ToriiFaucet>,
-    /// Optional Kagemusha command-submission authority for app API endpoints.
-    pub kagemusha_commands: Option<ToriiKagemushaCommands>,
+    /// Optional KAGEMUSHA V1 command-submission authority for app API endpoints.
+    pub kagemusha_v1_commands: Option<ToriiKagemushaV1Commands>,
     /// Optional RAM-LFE runtime configuration for app API endpoints.
     pub ram_lfe: Option<ToriiRamLfe>,
     /// Optional transaction-history visibility/auth configuration for direct wallet reads.
     pub tx_history: Option<ToriiTxHistory>,
     /// Retail recipient lookup routes used by Torii app API.
     pub recipient_lookup: Option<ToriiRecipientLookup>,
+    /// Explicit Torii origins used for public-dataspace routed reads.
+    #[config(default)]
+    pub public_dataspace_upstreams: Vec<ToriiPublicDataspaceUpstream>,
+}
+impl core::fmt::Debug for Torii {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("Torii")
+            .field("address", &self.address)
+            .field("max_content_len", &self.max_content_len)
+            .field("data_dir", &self.data_dir)
+            .field("receipt_public_key", &self.receipt_public_key)
+            .field(
+                "receipt_private_key",
+                &RedactedConfigSecret::present(self.receipt_private_key.is_some()),
+            )
+            .field("query_max_inflight", &self.query_max_inflight)
+            .field("query_heavy_max_inflight", &self.query_heavy_max_inflight)
+            .field("require_api_token", &self.require_api_token)
+            .field("api_tokens", &self.api_tokens)
+            .field(
+                "peer_telemetry_urls",
+                &RedactedConfigSecret::count(self.peer_telemetry_urls.len()),
+            )
+            .field("peer_geo", &self.peer_geo)
+            .field("operator_auth", &self.operator_auth)
+            .field("operator_signatures", &self.operator_signatures)
+            .field("transport", &self.transport)
+            .field("mcp", &self.mcp)
+            .field(
+                "account_onboarding",
+                &RedactedConfigSecret::present(self.account_onboarding.is_some()),
+            )
+            .field("faucet_configured", &self.faucet.is_some())
+            .field(
+                "kagemusha_v1_commands",
+                &RedactedConfigSecret::present(self.kagemusha_v1_commands.is_some()),
+            )
+            .field(
+                "ram_lfe_program_count",
+                &self
+                    .ram_lfe
+                    .as_ref()
+                    .map_or(0, |config| config.programs.len()),
+            )
+            .field("tx_history", &self.tx_history)
+            .field("recipient_lookup", &self.recipient_lookup)
+            .field(
+                "public_dataspace_upstream_count",
+                &self.public_dataspace_upstreams.len(),
+            )
+            .field("da_ingest", &self.da_ingest)
+            .field("push", &self.push)
+            .finish_non_exhaustive()
+    }
 }
 include!("user/torii_peer_geo.rs");
 include!("user/torii_soranet_privacy_ingest.rs");
@@ -15220,16 +15278,21 @@ mod torii_bootle_lantern_issuer_tests {
     }
 }
 /// Push-notification configuration (FCM/APNS bridge).
-#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+#[derive(ReadConfig, Clone, norito::JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 pub struct ToriiPush {
     /// Master enable switch for the push bridge.
     #[config(default = "defaults::torii::PUSH_ENABLED")]
     pub enabled: bool,
-    /// Optional steady-state rate (requests per minute). None disables.
-    pub rate_per_minute: Option<u32>,
-    /// Optional burst tokens for push notifications.
-    pub burst: Option<u32>,
+    /// Whether push-notification rate limiting is enabled.
+    #[config(default = "defaults::torii::PUSH_RATE_LIMIT_ENABLED")]
+    pub rate_limit_enabled: bool,
+    /// Steady-state rate (requests per minute) when rate limiting is enabled.
+    #[config(default = "defaults::torii::PUSH_RATE_PER_MINUTE")]
+    pub rate_per_minute: NonZeroU32,
+    /// Burst tokens for push notifications when rate limiting is enabled.
+    #[config(default = "defaults::torii::PUSH_BURST")]
+    pub burst: NonZeroU32,
     /// HTTP connect timeout for push delivery.
     #[config(
         default = "DurationMs(std::time::Duration::from_millis(defaults::torii::PUSH_CONNECT_TIMEOUT_MS))"
@@ -15242,7 +15305,7 @@ pub struct ToriiPush {
     pub request_timeout_ms: DurationMs,
     /// Maximum topics recorded per registered device.
     #[config(default = "defaults::torii::PUSH_MAX_TOPICS_PER_DEVICE")]
-    pub max_topics_per_device: usize,
+    pub max_topics_per_device: NonZeroUsize,
     /// Firebase project ID used with FCM HTTP v1.
     pub fcm_project_id: Option<String>,
     /// Path to a Firebase service-account JSON key used to mint FCM OAuth tokens.
@@ -15261,10 +15324,42 @@ pub struct ToriiPush {
     /// Optional APNs endpoint base URL override for tests or private deployments.
     pub apns_endpoint: Option<String>,
 }
+impl core::fmt::Debug for ToriiPush {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("ToriiPush")
+            .field("enabled", &self.enabled)
+            .field("rate_limit_enabled", &self.rate_limit_enabled)
+            .field("rate_per_minute", &self.rate_per_minute)
+            .field("burst", &self.burst)
+            .field("connect_timeout_ms", &self.connect_timeout_ms)
+            .field("request_timeout_ms", &self.request_timeout_ms)
+            .field("max_topics_per_device", &self.max_topics_per_device)
+            .field("fcm_project_id", &self.fcm_project_id)
+            .field(
+                "fcm_service_account_path",
+                &RedactedConfigSecret::present(self.fcm_service_account_path.is_some()),
+            )
+            .field("apns_environment", &self.apns_environment)
+            .field("apns_topic", &self.apns_topic)
+            .field("apns_team_id", &self.apns_team_id)
+            .field("apns_key_id", &self.apns_key_id)
+            .field(
+                "apns_private_key_path",
+                &RedactedConfigSecret::present(self.apns_private_key_path.is_some()),
+            )
+            .field(
+                "apns_endpoint",
+                &RedactedConfigSecret::present(self.apns_endpoint.is_some()),
+            )
+            .finish()
+    }
+}
 impl Default for ToriiPush {
     fn default() -> Self {
         Self {
             enabled: defaults::torii::PUSH_ENABLED,
+            rate_limit_enabled: defaults::torii::PUSH_RATE_LIMIT_ENABLED,
             rate_per_minute: defaults::torii::PUSH_RATE_PER_MINUTE,
             burst: defaults::torii::PUSH_BURST,
             connect_timeout_ms: DurationMs(std::time::Duration::from_millis(
@@ -15285,45 +15380,141 @@ impl Default for ToriiPush {
         }
     }
 }
-fn trim_optional(value: Option<String>) -> Option<String> {
-    value.and_then(|raw| {
-        let trimmed = raw.trim();
-        if trimmed.is_empty() {
-            None
-        } else {
-            Some(trimmed.to_owned())
-        }
-    })
+fn validate_optional_push_text(
+    emitter: &mut Emitter<ParseError>,
+    field: &str,
+    value: Option<String>,
+) -> Option<String> {
+    if let Some(value) = value.as_ref()
+        && (value.is_empty() || value.trim() != value)
+    {
+        emit_torii_config_error(
+            emitter,
+            format!("{field} must be non-empty and must not contain surrounding whitespace"),
+        );
+    }
+    value
+}
+fn validate_optional_push_path(
+    emitter: &mut Emitter<ParseError>,
+    field: &str,
+    value: Option<PathBuf>,
+) -> Option<PathBuf> {
+    if value
+        .as_ref()
+        .is_some_and(|path| path.as_os_str().is_empty())
+    {
+        emit_torii_config_error(emitter, format!("{field} must not be an empty path"));
+        return None;
+    }
+    value
 }
 impl ToriiPush {
-    fn parse(self) -> actual::Push {
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::Push {
+        if self.max_topics_per_device.get() > defaults::torii::PUSH_MAX_TOPICS_PER_DEVICE_V1 {
+            emit_torii_config_error(
+                emitter,
+                format!(
+                    "torii.push.max_topics_per_device must not exceed {}",
+                    defaults::torii::PUSH_MAX_TOPICS_PER_DEVICE_V1
+                ),
+            );
+        }
+        if self.connect_timeout_ms.get().is_zero() {
+            emit_torii_config_error(
+                emitter,
+                "torii.push.connect_timeout_ms must be greater than zero",
+            );
+        }
+        if self.request_timeout_ms.get().is_zero() {
+            emit_torii_config_error(
+                emitter,
+                "torii.push.request_timeout_ms must be greater than zero",
+            );
+        }
+        let fcm_project_id =
+            validate_optional_push_text(emitter, "torii.push.fcm_project_id", self.fcm_project_id);
+        let fcm_service_account_path = validate_optional_push_path(
+            emitter,
+            "torii.push.fcm_service_account_path",
+            self.fcm_service_account_path,
+        );
+        let apns_topic =
+            validate_optional_push_text(emitter, "torii.push.apns_topic", self.apns_topic);
+        let apns_team_id =
+            validate_optional_push_text(emitter, "torii.push.apns_team_id", self.apns_team_id);
+        let apns_key_id =
+            validate_optional_push_text(emitter, "torii.push.apns_key_id", self.apns_key_id);
+        let apns_endpoint = self.apns_endpoint.and_then(|raw| {
+            parse_torii_outbound_base_url(&raw).map_or_else(
+                |reason| {
+                    emit_torii_config_error(emitter, format!("torii.push.apns_endpoint {reason}"));
+                    None
+                },
+                Some,
+            )
+        });
+        let apns_private_key_path = validate_optional_push_path(
+            emitter,
+            "torii.push.apns_private_key_path",
+            self.apns_private_key_path,
+        );
+        let fcm_any = fcm_project_id.is_some() || fcm_service_account_path.is_some();
+        let fcm_complete = fcm_project_id.is_some() && fcm_service_account_path.is_some();
+        if fcm_any && !fcm_complete {
+            emit_torii_config_error(
+                emitter,
+                "torii.push FCM configuration requires both fcm_project_id and fcm_service_account_path",
+            );
+        }
+        let apns_any = apns_topic.is_some()
+            || apns_team_id.is_some()
+            || apns_key_id.is_some()
+            || apns_private_key_path.is_some()
+            || apns_endpoint.is_some();
+        let apns_complete = apns_topic.is_some()
+            && apns_team_id.is_some()
+            && apns_key_id.is_some()
+            && apns_private_key_path.is_some();
+        if apns_any && !apns_complete {
+            emit_torii_config_error(
+                emitter,
+                "torii.push APNs configuration requires apns_topic, apns_team_id, apns_key_id, and apns_private_key_path",
+            );
+        }
+        if self.enabled && !fcm_complete && !apns_complete {
+            emit_torii_config_error(
+                emitter,
+                "torii.push requires at least one complete FCM or APNs provider binding when enabled",
+            );
+        }
+        let apns_environment = match self.apns_environment.as_str() {
+            "sandbox" | "production" => self.apns_environment,
+            value => {
+                emit_torii_config_error(
+                    emitter,
+                    format!(
+                        "torii.push.apns_environment must be exactly `sandbox` or `production`, got `{value}`"
+                    ),
+                );
+                defaults::torii::PUSH_APNS_ENVIRONMENT.to_owned()
+            }
+        };
         actual::Push {
             enabled: self.enabled,
-            rate_per_minute: self
-                .rate_per_minute
-                .or(defaults::torii::PUSH_RATE_PER_MINUTE)
-                .and_then(std::num::NonZeroU32::new),
-            burst: self
-                .burst
-                .or(defaults::torii::PUSH_BURST)
-                .and_then(std::num::NonZeroU32::new),
+            rate_per_minute: self.rate_limit_enabled.then_some(self.rate_per_minute),
+            burst: self.rate_limit_enabled.then_some(self.burst),
             connect_timeout: self.connect_timeout_ms.get(),
             request_timeout: self.request_timeout_ms.get(),
-            max_topics_per_device: std::num::NonZeroUsize::new(self.max_topics_per_device.max(1))
-                .unwrap_or(nonzero!(1_usize)),
-            fcm_project_id: trim_optional(self.fcm_project_id),
-            fcm_service_account_path: self.fcm_service_account_path,
-            apns_environment: match self.apns_environment.as_str() {
-                "sandbox" | "production" => self.apns_environment,
-                value => panic!(
-                    "torii.push.apns_environment must be exactly `sandbox` or `production`, got `{value}`"
-                ),
-            },
-            apns_topic: trim_optional(self.apns_topic),
-            apns_team_id: trim_optional(self.apns_team_id),
-            apns_key_id: trim_optional(self.apns_key_id),
-            apns_private_key_path: self.apns_private_key_path,
-            apns_endpoint: self.apns_endpoint,
+            max_topics_per_device: self.max_topics_per_device,
+            fcm_project_id,
+            fcm_service_account_path,
+            apns_environment,
+            apns_topic,
+            apns_team_id,
+            apns_key_id,
+            apns_private_key_path,
+            apns_endpoint,
         }
     }
 }
@@ -15332,15 +15523,19 @@ mod torii_push_tests {
     use super::*;
     #[test]
     fn torii_push_parse_defaults_push_bridge_fields() {
-        let parsed = ToriiPush::default().parse();
+        let mut emitter = Emitter::new();
+        let parsed = ToriiPush::default().parse(&mut emitter);
+        emitter
+            .into_result()
+            .expect("default push configuration must be valid");
         assert!(!parsed.enabled);
         assert_eq!(
             parsed.rate_per_minute.map(NonZeroU32::get),
-            defaults::torii::PUSH_RATE_PER_MINUTE
+            Some(defaults::torii::PUSH_RATE_PER_MINUTE.get())
         );
         assert_eq!(
             parsed.burst.map(NonZeroU32::get),
-            defaults::torii::PUSH_BURST
+            Some(defaults::torii::PUSH_BURST.get())
         );
         assert_eq!(
             parsed.connect_timeout,
@@ -15352,7 +15547,7 @@ mod torii_push_tests {
         );
         assert_eq!(
             parsed.max_topics_per_device.get(),
-            defaults::torii::PUSH_MAX_TOPICS_PER_DEVICE
+            defaults::torii::PUSH_MAX_TOPICS_PER_DEVICE.get()
         );
         assert_eq!(
             parsed.apns_environment,
@@ -15367,29 +15562,34 @@ mod torii_push_tests {
     }
     #[test]
     fn torii_push_parse_canonical_fcm_http_v1_and_apns_bindings() {
+        let mut emitter = Emitter::new();
         let parsed = ToriiPush {
             enabled: true,
-            rate_per_minute: Some(0),
-            burst: Some(0),
+            rate_limit_enabled: false,
+            rate_per_minute: nonzero!(60_u32),
+            burst: nonzero!(30_u32),
             connect_timeout_ms: DurationMs(Duration::from_millis(250)),
             request_timeout_ms: DurationMs(Duration::from_millis(750)),
-            max_topics_per_device: 0,
-            fcm_project_id: Some("  taira-mobile  ".to_owned()),
+            max_topics_per_device: nonzero!(32_usize),
+            fcm_project_id: Some("taira-mobile".to_owned()),
             fcm_service_account_path: Some(PathBuf::from("/run/secrets/fcm.json")),
             apns_environment: "production".to_owned(),
-            apns_topic: Some("  org.sora.wallet  ".to_owned()),
-            apns_team_id: Some("  TEAMID  ".to_owned()),
-            apns_key_id: Some("  KEYID  ".to_owned()),
+            apns_topic: Some("org.sora.wallet".to_owned()),
+            apns_team_id: Some("TEAMID".to_owned()),
+            apns_key_id: Some("KEYID".to_owned()),
             apns_private_key_path: Some(PathBuf::from("/run/secrets/AuthKey_KEYID.p8")),
             apns_endpoint: Some("https://apns.internal.example".to_owned()),
         }
-        .parse();
+        .parse(&mut emitter);
+        emitter
+            .into_result()
+            .expect("canonical push configuration must be valid");
         assert!(parsed.enabled);
         assert!(parsed.rate_per_minute.is_none());
         assert!(parsed.burst.is_none());
         assert_eq!(parsed.connect_timeout, Duration::from_millis(250));
         assert_eq!(parsed.request_timeout, Duration::from_millis(750));
-        assert_eq!(parsed.max_topics_per_device.get(), 1);
+        assert_eq!(parsed.max_topics_per_device.get(), 32);
         assert_eq!(parsed.fcm_project_id.as_deref(), Some("taira-mobile"));
         assert_eq!(
             parsed.fcm_service_account_path.as_deref(),
@@ -15404,8 +15604,8 @@ mod torii_push_tests {
             Some(Path::new("/run/secrets/AuthKey_KEYID.p8"))
         );
         assert_eq!(
-            parsed.apns_endpoint.as_deref(),
-            Some("https://apns.internal.example")
+            parsed.apns_endpoint,
+            Some(Url::parse("https://apns.internal.example").expect("canonical APNs endpoint"))
         );
     }
     #[test]
@@ -15415,10 +15615,75 @@ mod torii_push_tests {
                 apns_environment: apns_environment.to_owned(),
                 ..ToriiPush::default()
             };
+            let mut emitter = Emitter::new();
+            let _ = config.parse(&mut emitter);
+            let error = emitter
+                .into_result()
+                .expect_err("non-canonical APNs environments must fail closed");
             assert!(
-                std::panic::catch_unwind(|| config.parse()).is_err(),
-                "{apns_environment:?} must fail closed"
+                format!("{error:?}").contains("apns_environment must be exactly"),
+                "{apns_environment:?} produced an unexpected error: {error:?}"
             );
+        }
+    }
+
+    #[test]
+    fn torii_push_apns_endpoint_requires_a_canonical_secure_base_url() {
+        let config = |endpoint: &str| ToriiPush {
+            apns_topic: Some("org.sora.wallet".to_owned()),
+            apns_team_id: Some("TEAMID".to_owned()),
+            apns_key_id: Some("KEYID".to_owned()),
+            apns_private_key_path: Some(PathBuf::from("/run/secrets/AuthKey_KEYID.p8")),
+            apns_endpoint: Some(endpoint.to_owned()),
+            ..ToriiPush::default()
+        };
+        for endpoint in [
+            "http://apns.example",
+            "http://localhost:8080",
+            "https://APNS.example",
+            "https://apns.example/",
+            "https://user@apns.example",
+            "https://apns.example?target=other",
+        ] {
+            let mut emitter = Emitter::new();
+            let parsed = config(endpoint).parse(&mut emitter);
+            assert!(parsed.apns_endpoint.is_none(), "{endpoint}");
+            let error = emitter
+                .into_result()
+                .expect_err("unsafe APNs endpoint must fail closed");
+            assert!(format!("{error:?}").contains("torii.push.apns_endpoint"));
+        }
+        for endpoint in ["https://apns.example", "http://127.0.0.1:8080"] {
+            let mut emitter = Emitter::new();
+            let parsed = config(endpoint).parse(&mut emitter);
+            emitter
+                .into_result()
+                .expect("secure APNs endpoint must be accepted");
+            assert_eq!(
+                parsed.apns_endpoint,
+                Some(Url::parse(endpoint).expect("canonical APNs endpoint"))
+            );
+        }
+    }
+
+    #[test]
+    fn torii_push_rejects_partial_or_noncanonical_provider_bindings() {
+        let mut partial_fcm = ToriiPush::default();
+        partial_fcm.fcm_project_id = Some("project".to_owned());
+        let mut partial_apns = ToriiPush::default();
+        partial_apns.apns_topic = Some("org.sora.wallet".to_owned());
+        let mut padded = ToriiPush::default();
+        padded.fcm_project_id = Some(" project ".to_owned());
+        padded.fcm_service_account_path = Some(PathBuf::from("/run/secrets/fcm.json"));
+        let mut empty_path = ToriiPush::default();
+        empty_path.fcm_project_id = Some("project".to_owned());
+        empty_path.fcm_service_account_path = Some(PathBuf::new());
+        for config in [partial_fcm, partial_apns, padded, empty_path] {
+            let mut emitter = Emitter::new();
+            let _ = config.parse(&mut emitter);
+            emitter
+                .into_result()
+                .expect_err("invalid provider binding must fail closed");
         }
     }
 }
@@ -15482,6 +15747,10 @@ impl Torii {
         parsed_sorafs: ParsedSorafs,
     ) -> (actual::Torii, actual::LiveQueryStore) {
         let app_api_routed_read_body_read_timeout = app_routed_read_config::body_timeout(&self);
+        validate_torii_api_tokens(&self, emitter);
+        validate_app_api_limits(&self, emitter);
+        validate_torii_optional_rate_limits(&self, emitter);
+        validate_proof_api_limits(&self, emitter);
         validate_replay_window(
             emitter,
             "torii.app_auth_nonce_ttl_secs",
@@ -15687,22 +15956,18 @@ impl Torii {
                 true,
             );
         }
-        let default_list_limit = std::num::NonZeroU32::new(self.app_api_default_list_limit.max(1))
-            .unwrap_or(nonzero!(1_u32));
-        let max_list_limit = std::num::NonZeroU32::new(
-            self.app_api_max_list_limit
-                .max(default_list_limit.get())
-                .max(1),
-        )
-        .unwrap_or(default_list_limit);
-        let max_fetch_size = std::num::NonZeroU32::new(self.app_api_max_fetch_size.max(1))
-            .unwrap_or(nonzero!(1_u32));
+        let default_list_limit =
+            std::num::NonZeroU32::new(self.app_api_default_list_limit).unwrap_or(nonzero!(1_u32));
+        let max_list_limit =
+            std::num::NonZeroU32::new(self.app_api_max_list_limit).unwrap_or(nonzero!(1_u32));
+        let max_fetch_size =
+            std::num::NonZeroU32::new(self.app_api_max_fetch_size).unwrap_or(nonzero!(1_u32));
         let rate_limit_cost_per_row =
-            std::num::NonZeroU32::new(self.app_api_rate_limit_cost_per_row.max(1))
+            std::num::NonZeroU32::new(self.app_api_rate_limit_cost_per_row)
                 .unwrap_or(nonzero!(1_u32));
         let webhook = self.webhook.parse();
         let webhook_security = self.webhook_security.parse();
-        let push = self.push.parse();
+        let push = self.push.parse(emitter);
         let privacy_bootle_lantern_issuer = self.privacy_bootle_lantern_issuer.parse(emitter);
         let sccp_replay_archive = self.sccp_replay_archive.parse(emitter);
         let (
@@ -15805,11 +16070,11 @@ impl Torii {
                     .proof_egress_burst_bytes
                     .or(super::defaults::torii::PROOF_EGRESS_BURST_BYTES)
                     .and_then(std::num::NonZeroU64::new),
-                max_list_limit: std::num::NonZeroU32::new(self.proof_max_list_limit.max(1))
-                    .expect("proof_max_list_limit must be non-zero"),
+                max_list_limit: std::num::NonZeroU32::new(self.proof_max_list_limit)
+                    .unwrap_or(nonzero!(1_u32)),
                 request_timeout: self.proof_request_timeout_ms.get(),
-                cache_max_age: Duration::from_secs(self.proof_cache_max_age_secs.max(1)),
-                retry_after: Duration::from_secs(self.proof_retry_after_secs.max(1)),
+                cache_max_age: Duration::from_secs(self.proof_cache_max_age_secs),
+                retry_after: Duration::from_secs(self.proof_retry_after_secs),
             },
             require_api_token: self.require_api_token,
             api_tokens: self.api_tokens.unwrap_or_default(),
@@ -15892,10 +16157,10 @@ impl Torii {
             zk_ivm_prove_job_max_entries_per_owner: self.zk_ivm_prove_job_max_entries_per_owner,
             zk_ivm_prove_job_max_retained_bytes_per_owner: self
                 .zk_ivm_prove_job_max_retained_bytes_per_owner,
-            connect: self.connect.parse(),
+            connect: self.connect.parse(emitter),
             iso_bridge: self.iso_bridge.parse(),
             transaction_ingress: self.transaction_ingress.parse(emitter),
-            da_ingest: self.da_ingest.parse(),
+            da_ingest: self.da_ingest.parse(emitter),
             sorafs_discovery,
             sorafs_storage,
             sorafs_repair,
@@ -15915,15 +16180,19 @@ impl Torii {
                 .account_onboarding
                 .and_then(|config| config.parse(emitter)),
             faucet: self.faucet.and_then(|config| config.parse(emitter)),
-            kagemusha_commands: self
-                .kagemusha_commands
+            kagemusha_v1_commands: self
+                .kagemusha_v1_commands
                 .and_then(|config| config.parse(emitter)),
-            ram_lfe: self.ram_lfe.and_then(ToriiRamLfe::parse),
-            tx_history: self.tx_history.map(ToriiTxHistory::parse),
+            ram_lfe: self.ram_lfe.and_then(|config| config.parse(emitter)),
+            tx_history: self.tx_history.map(|config| config.parse(emitter)),
             recipient_lookup: self
                 .recipient_lookup
                 .and_then(|config| config.parse(emitter))
                 .unwrap_or_default(),
+            public_dataspace_upstreams: parse_public_dataspace_upstreams(
+                self.public_dataspace_upstreams,
+                emitter,
+            ),
             app_api: actual::AppApi {
                 default_list_limit,
                 max_list_limit,
@@ -15990,6 +16259,68 @@ mod torii_receipt_signer_tests {
     }
 }
 include!("user/torii_tx_history.rs");
+const TORII_PUBLIC_DATASPACE_UPSTREAM_MAX_ROUTES_V1: usize = 256;
+
+/// One explicitly configured public-dataspace Torii upstream.
+#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+pub struct ToriiPublicDataspaceUpstream {
+    /// Exact numeric dataspace identity (`0` selects the universal dataspace).
+    pub dataspace_id: u64,
+    /// Canonical credential-free Torii base URL.
+    pub base_url: String,
+}
+
+fn parse_public_dataspace_upstreams(
+    configured: Vec<ToriiPublicDataspaceUpstream>,
+    emitter: &mut Emitter<ParseError>,
+) -> Vec<actual::ToriiPublicDataspaceUpstream> {
+    if configured.len() > TORII_PUBLIC_DATASPACE_UPSTREAM_MAX_ROUTES_V1 {
+        emit_torii_config_error(
+            emitter,
+            format!(
+                "torii.public_dataspace_upstreams must contain at most {TORII_PUBLIC_DATASPACE_UPSTREAM_MAX_ROUTES_V1} routes"
+            ),
+        );
+    }
+    let mut seen = BTreeSet::new();
+    let mut parsed = Vec::with_capacity(
+        configured
+            .len()
+            .min(TORII_PUBLIC_DATASPACE_UPSTREAM_MAX_ROUTES_V1),
+    );
+    for (index, route) in configured
+        .into_iter()
+        .take(TORII_PUBLIC_DATASPACE_UPSTREAM_MAX_ROUTES_V1)
+        .enumerate()
+    {
+        if !seen.insert(route.dataspace_id) {
+            emit_torii_config_error(
+                emitter,
+                format!(
+                    "torii.public_dataspace_upstreams contains duplicate dataspace_id {}",
+                    route.dataspace_id
+                ),
+            );
+            continue;
+        }
+        let base_url = match parse_torii_outbound_base_url(&route.base_url) {
+            Ok(base_url) => base_url,
+            Err(reason) => {
+                emit_torii_config_error(
+                    emitter,
+                    format!("torii.public_dataspace_upstreams[{index}].base_url {reason}"),
+                );
+                continue;
+            }
+        };
+        parsed.push(actual::ToriiPublicDataspaceUpstream {
+            dataspace_id: iroha_data_model::nexus::DataSpaceId::new(route.dataspace_id),
+            base_url,
+        });
+    }
+    parsed
+}
+
 /// Retail recipient lookup route configuration for Torii app API.
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
 pub struct ToriiRecipientLookup {
@@ -16069,15 +16400,28 @@ impl ToriiRecipientLookup {
         })
     }
 }
+const TORII_RECIPIENT_LOOKUP_BEARER_TOKEN_MAX_BYTES_V1: usize = 4 * 1024;
+const TORII_OUTBOUND_BASE_URL_MAX_BYTES_V1: usize = 2 * 1024;
+
 /// Single bank Core API route used by the retail recipient lookup endpoint.
-#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+#[derive(ReadConfig, Clone, norito::JsonDeserialize)]
 pub struct ToriiRecipientLookupRoute {
     /// Canonical FI identifier, for example `hbl.sbp` or `ubl.sbp`.
     pub fi_id: String,
     /// Bank Core API base URL.
-    pub base_url: Url,
+    pub base_url: String,
     /// Service bearer token used only by Torii when calling the bank Core API.
     pub bearer_token: String,
+}
+impl core::fmt::Debug for ToriiRecipientLookupRoute {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("ToriiRecipientLookupRoute")
+            .field("fi_id", &self.fi_id)
+            .field("base_url", &RedactedConfigSecret::present(true))
+            .field("bearer_token", &RedactedConfigSecret::present(true))
+            .finish()
+    }
 }
 impl ToriiRecipientLookupRoute {
     fn parse(
@@ -16085,32 +16429,162 @@ impl ToriiRecipientLookupRoute {
         index: usize,
         emitter: &mut Emitter<ParseError>,
     ) -> Option<actual::ToriiRecipientLookupRoute> {
-        let fi_id = match self.fi_id.as_str() {
-            "hbl.sbp" | "ubl.sbp" => self.fi_id,
+        let Self {
+            fi_id,
+            base_url,
+            bearer_token,
+        } = self;
+        let fi_id = match fi_id.as_str() {
+            "hbl.sbp" | "ubl.sbp" => Some(fi_id),
             _ => {
                 emit_torii_config_error(
                     emitter,
                     format!(
                         "invalid torii.recipient_lookup.routes[{index}].fi_id `{}`; expected exactly `hbl.sbp` or `ubl.sbp`",
-                        self.fi_id
+                        fi_id
                     ),
                 );
-                return None;
+                None
             }
         };
-        let bearer_token = self.bearer_token.trim().to_owned();
-        if bearer_token.is_empty() {
+        let base_url = parse_torii_outbound_base_url(&base_url).map_or_else(
+            |reason| {
+                emit_torii_config_error(
+                    emitter,
+                    format!("torii.recipient_lookup.routes[{index}].base_url {reason}"),
+                );
+                None
+            },
+            Some,
+        );
+        let bearer_token = if bearer_token.is_empty()
+            || bearer_token.len() > TORII_RECIPIENT_LOOKUP_BEARER_TOKEN_MAX_BYTES_V1
+            || !bearer_token.bytes().all(|byte| matches!(byte, 0x21..=0x7e))
+        {
             emit_torii_config_error(
                 emitter,
-                format!("torii.recipient_lookup.routes[{index}].bearer_token must not be empty"),
+                format!(
+                    "torii.recipient_lookup.routes[{index}].bearer_token must contain 1..={TORII_RECIPIENT_LOOKUP_BEARER_TOKEN_MAX_BYTES_V1} visible ASCII bytes without whitespace"
+                ),
             );
-            return None;
-        }
+            None
+        } else {
+            Some(bearer_token)
+        };
         Some(actual::ToriiRecipientLookupRoute {
-            fi_id,
-            base_url: self.base_url,
-            bearer_token,
+            fi_id: fi_id?,
+            base_url: base_url?,
+            bearer_token: bearer_token?,
         })
+    }
+}
+
+fn parse_torii_outbound_base_url(raw: &str) -> core::result::Result<Url, &'static str> {
+    if raw.is_empty() || raw.len() > TORII_OUTBOUND_BASE_URL_MAX_BYTES_V1 {
+        return Err("must contain 1..=2048 bytes");
+    }
+    if !raw.bytes().all(|byte| matches!(byte, 0x21..=0x7e)) {
+        return Err("must contain visible ASCII without whitespace");
+    }
+    if raw.as_bytes().contains(&b'%') {
+        return Err("must not use percent-encoded path aliases");
+    }
+    let parsed = Url::parse(raw).map_err(|_| "must be an absolute HTTP(S) URL with a host")?;
+    let host = parsed
+        .host()
+        .ok_or("must be an absolute HTTP(S) URL with a host")?;
+    if parsed.cannot_be_a_base() {
+        return Err("must be an absolute HTTP(S) URL with a host");
+    }
+    let literal_loopback = match host {
+        url::Host::Ipv4(address) => address.is_loopback(),
+        url::Host::Ipv6(address) => address.is_loopback(),
+        url::Host::Domain(domain) => {
+            if domain.ends_with('.') {
+                return Err("must not use a trailing-dot host alias");
+            }
+            false
+        }
+    };
+    if parsed.scheme() != "https" && !(parsed.scheme() == "http" && literal_loopback) {
+        return Err("must use HTTPS; HTTP is allowed only for a literal loopback IP address");
+    }
+    let authority_has_at = raw
+        .split_once("://")
+        .and_then(|(_, suffix)| suffix.split('/').next())
+        .is_some_and(|authority| authority.contains('@'));
+    if authority_has_at || !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err("must not contain user information");
+    }
+    if parsed.query().is_some() || parsed.fragment().is_some() {
+        return Err("must not contain a query or fragment");
+    }
+    if parsed.port() == Some(0) {
+        return Err("must not use port zero");
+    }
+    let canonical = parsed.as_str().strip_suffix('/').unwrap_or(parsed.as_str());
+    if raw != canonical {
+        return Err("must use its exact canonical spelling without a trailing slash");
+    }
+    Ok(parsed)
+}
+#[cfg(test)]
+mod torii_public_dataspace_upstream_tests {
+    use super::*;
+
+    #[test]
+    fn public_dataspace_upstreams_parse_exact_numeric_routes() {
+        let mut emitter = Emitter::new();
+        let parsed = parse_public_dataspace_upstreams(
+            vec![
+                ToriiPublicDataspaceUpstream {
+                    dataspace_id: 0,
+                    base_url: "https://universal.example".to_owned(),
+                },
+                ToriiPublicDataspaceUpstream {
+                    dataspace_id: 7,
+                    base_url: "http://127.0.0.1:8080/torii".to_owned(),
+                },
+            ],
+            &mut emitter,
+        );
+        emitter
+            .into_result()
+            .expect("canonical public-dataspace routes must parse");
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(
+            parsed[0].dataspace_id,
+            iroha_data_model::nexus::DataSpaceId::UNIVERSAL
+        );
+        assert_eq!(
+            parsed[1].dataspace_id,
+            iroha_data_model::nexus::DataSpaceId::new(7)
+        );
+    }
+
+    #[test]
+    fn public_dataspace_upstreams_reject_duplicates_and_unsafe_urls() {
+        let mut emitter = Emitter::new();
+        let parsed = parse_public_dataspace_upstreams(
+            vec![
+                ToriiPublicDataspaceUpstream {
+                    dataspace_id: 9,
+                    base_url: "http://public.example".to_owned(),
+                },
+                ToriiPublicDataspaceUpstream {
+                    dataspace_id: 9,
+                    base_url: "https://safe.example".to_owned(),
+                },
+            ],
+            &mut emitter,
+        );
+        assert!(parsed.is_empty());
+        let error = emitter
+            .into_result()
+            .expect_err("invalid routes must fail closed");
+        let diagnostic = format!("{error:?}");
+        assert!(diagnostic.contains("must use HTTPS"));
+        assert!(diagnostic.contains("duplicate dataspace_id 9"));
     }
 }
 #[cfg(test)]
@@ -16125,8 +16599,8 @@ mod torii_recipient_lookup_tests {
             request_timeout_ms: DurationMs(Duration::from_millis(750)),
             routes: vec![ToriiRecipientLookupRoute {
                 fi_id: "hbl.sbp".to_owned(),
-                base_url: Url::parse("https://core-api.example/hbl.sbp").expect("valid URL"),
-                bearer_token: " service-token ".to_owned(),
+                base_url: "https://core-api.example/hbl.sbp".to_owned(),
+                bearer_token: "service-token".to_owned(),
             }],
         }
         .parse(&mut emitter)
@@ -16138,11 +16612,105 @@ mod torii_recipient_lookup_tests {
         assert_eq!(parsed.routes[0].fi_id, "hbl.sbp");
         assert_eq!(parsed.routes[0].bearer_token, "service-token");
     }
+
+    #[test]
+    fn torii_recipient_lookup_rejects_unsafe_urls_and_noncanonical_tokens() {
+        for base_url in [
+            "http://bank.example",
+            "http://localhost:8080",
+            "https://user:password@bank.example",
+            "https://@bank.example",
+            "https://bank.example?target=other",
+            "https://bank.example#fragment",
+            "https://bank.example/%61",
+            "https://BANK.example",
+            "https://bank.example.",
+            "https://bank.example:443",
+            "https://bank.example/",
+            "https://bank.example:0",
+        ] {
+            let route = ToriiRecipientLookupRoute {
+                fi_id: "hbl.sbp".to_owned(),
+                base_url: base_url.to_owned(),
+                bearer_token: "service-token".to_owned(),
+            };
+            let mut emitter = Emitter::new();
+            assert!(route.parse(0, &mut emitter).is_none(), "{base_url}");
+            emitter
+                .into_result()
+                .expect_err("unsafe recipient lookup URL must fail closed");
+        }
+        let oversized_url = format!(
+            "https://{}.example",
+            "a".repeat(TORII_OUTBOUND_BASE_URL_MAX_BYTES_V1)
+        );
+        assert!(parse_torii_outbound_base_url(&oversized_url).is_err());
+        for bearer_token in [
+            String::new(),
+            " service-token".to_owned(),
+            "service token".to_owned(),
+            "service-token\n".to_owned(),
+            "x".repeat(TORII_RECIPIENT_LOOKUP_BEARER_TOKEN_MAX_BYTES_V1 + 1),
+        ] {
+            let route = ToriiRecipientLookupRoute {
+                fi_id: "hbl.sbp".to_owned(),
+                base_url: "https://bank.example".to_owned(),
+                bearer_token,
+            };
+            let mut emitter = Emitter::new();
+            assert!(route.parse(0, &mut emitter).is_none());
+            emitter
+                .into_result()
+                .expect_err("noncanonical recipient lookup token must fail closed");
+        }
+
+        for base_url in ["https://bank.example", "http://127.0.0.1:8080"] {
+            let route = ToriiRecipientLookupRoute {
+                fi_id: "hbl.sbp".to_owned(),
+                base_url: base_url.to_owned(),
+                bearer_token: "service-token".to_owned(),
+            };
+            let mut emitter = Emitter::new();
+            assert!(route.parse(0, &mut emitter).is_some(), "{base_url}");
+            emitter
+                .into_result()
+                .expect("secure recipient lookup URL must be accepted");
+        }
+    }
+
+    #[test]
+    fn torii_recipient_lookup_route_accumulates_field_errors_without_leaking_token() {
+        let token = "do-not-log invalid token";
+        let route = ToriiRecipientLookupRoute {
+            fi_id: "HBL.SBP".to_owned(),
+            base_url: " http://localhost/".to_owned(),
+            bearer_token: token.to_owned(),
+        };
+        let mut emitter = Emitter::new();
+        assert!(route.parse(7, &mut emitter).is_none());
+        let diagnostic = format!(
+            "{:?}",
+            emitter
+                .into_result()
+                .expect_err("all invalid route fields must emit diagnostics")
+        );
+        for field in [
+            "routes[7].fi_id",
+            "routes[7].base_url",
+            "routes[7].bearer_token",
+        ] {
+            assert!(diagnostic.contains(field), "{diagnostic}");
+        }
+        assert!(
+            !diagnostic.contains(token),
+            "credential leaked: {diagnostic}"
+        );
+    }
     #[test]
     fn torii_recipient_lookup_parse_rejects_short_fi_routes() {
         let route = ToriiRecipientLookupRoute {
             fi_id: "hbl".to_owned(),
-            base_url: Url::parse("https://core-api.example/hbl").expect("valid URL"),
+            base_url: "https://core-api.example/hbl".to_owned(),
             bearer_token: "service-token".to_owned(),
         };
         let mut emitter = Emitter::new();
@@ -16155,7 +16723,7 @@ mod torii_recipient_lookup_tests {
         for fi_id in ["HBL.SBP", " hbl.sbp", "hbl.sbp "] {
             let route = ToriiRecipientLookupRoute {
                 fi_id: fi_id.to_owned(),
-                base_url: Url::parse("https://bank.example").expect("valid URL"),
+                base_url: "https://bank.example".to_owned(),
                 bearer_token: "secret".to_owned(),
             };
             let mut emitter = Emitter::new();
@@ -16170,7 +16738,7 @@ mod torii_recipient_lookup_tests {
     fn torii_recipient_lookup_rejects_zero_timeout_and_duplicate_routes() {
         let route = ToriiRecipientLookupRoute {
             fi_id: "hbl.sbp".to_owned(),
-            base_url: Url::parse("https://bank.example").expect("valid URL"),
+            base_url: "https://bank.example".to_owned(),
             bearer_token: "secret".to_owned(),
         };
         let mut emitter = Emitter::new();
@@ -16230,7 +16798,7 @@ impl ToriiOperatorSignatures {
     }
 }
 /// Operator authentication configuration for Torii operator endpoints.
-#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+#[derive(ReadConfig, Clone, norito::JsonDeserialize)]
 pub struct ToriiOperatorAuth {
     /// Master enable switch for operator authentication.
     #[config(default = "defaults::torii::operator_auth::ENABLED")]
@@ -16241,19 +16809,19 @@ pub struct ToriiOperatorAuth {
     /// Explicit trusted proxy hosts allowed to assert forwarded client certificates.
     #[config(default = "defaults::torii::operator_auth::mtls_trusted_proxy_cidrs()")]
     pub mtls_trusted_proxy_cidrs: Vec<String>,
-    /// Token fallback mode (`disabled`, `bootstrap`, `always`).
-    #[config(default = "defaults::torii::operator_auth::TOKEN_FALLBACK.to_string()")]
-    pub token_fallback: String,
-    /// Token source (`operator`, `api`, `both`).
-    #[config(default = "defaults::torii::operator_auth::TOKEN_SOURCE.to_string()")]
-    pub token_source: String,
-    /// Token allow-list used for operator fallback (if enabled).
+    /// Operator-token allow-list used only to bootstrap the first credential.
     #[config(default = "defaults::torii::operator_auth::tokens()")]
     pub tokens: Vec<String>,
     /// Auth attempt rate (per minute). None disables.
     pub rate_per_minute: Option<u32>,
     /// Auth attempt burst tokens. None disables.
     pub burst: Option<u32>,
+    /// Per-kind capacity for expiry-bound challenges, sessions, and lockout identities.
+    #[config(default = "default_operator_auth_ephemeral_state_capacity()")]
+    pub ephemeral_state_capacity: NonZeroUsize,
+    /// Maximum number of persisted operator WebAuthn credentials.
+    #[config(default = "default_operator_auth_credential_capacity()")]
+    pub credential_capacity: NonZeroUsize,
     /// Failures before triggering a temporary lockout (0 disables).
     #[config(default = "defaults::torii::operator_auth::LOCKOUT_FAILURES")]
     pub lockout_failures: u32,
@@ -16266,6 +16834,25 @@ pub struct ToriiOperatorAuth {
     /// WebAuthn configuration block.
     #[config(nested)]
     pub webauthn: ToriiOperatorWebAuthn,
+}
+impl core::fmt::Debug for ToriiOperatorAuth {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("ToriiOperatorAuth")
+            .field("enabled", &self.enabled)
+            .field("require_mtls", &self.require_mtls)
+            .field("mtls_trusted_proxy_cidrs", &self.mtls_trusted_proxy_cidrs)
+            .field("tokens", &RedactedConfigSecret::count(self.tokens.len()))
+            .field("rate_per_minute", &self.rate_per_minute)
+            .field("burst", &self.burst)
+            .field("ephemeral_state_capacity", &self.ephemeral_state_capacity)
+            .field("credential_capacity", &self.credential_capacity)
+            .field("lockout_failures", &self.lockout_failures)
+            .field("lockout_window_secs", &self.lockout_window_secs)
+            .field("lockout_duration_secs", &self.lockout_duration_secs)
+            .field("webauthn", &self.webauthn)
+            .finish()
+    }
 }
 /// WebAuthn configuration for operator authentication.
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
@@ -16305,16 +16892,59 @@ pub struct ToriiOperatorWebAuthn {
 }
 impl ToriiOperatorAuth {
     fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::ToriiOperatorAuth {
-        let token_fallback =
-            parse_operator_token_fallback(&self.token_fallback).unwrap_or_else(|message| {
-                emit_torii_config_error(emitter, message);
-                actual::OperatorTokenFallback::Disabled
-            });
-        let token_source =
-            parse_operator_token_source(&self.token_source).unwrap_or_else(|message| {
-                emit_torii_config_error(emitter, message);
-                actual::OperatorTokenSource::OperatorTokens
-            });
+        if self.ephemeral_state_capacity.get()
+            > defaults::torii::operator_auth::MAX_EPHEMERAL_STATE_CAPACITY
+        {
+            emit_torii_config_error(
+                emitter,
+                format!(
+                    "torii.operator_auth.ephemeral_state_capacity must not exceed {}",
+                    defaults::torii::operator_auth::MAX_EPHEMERAL_STATE_CAPACITY
+                ),
+            );
+        }
+        if self.credential_capacity.get() > defaults::torii::operator_auth::MAX_CREDENTIAL_CAPACITY
+        {
+            emit_torii_config_error(
+                emitter,
+                format!(
+                    "torii.operator_auth.credential_capacity must not exceed {}",
+                    defaults::torii::operator_auth::MAX_CREDENTIAL_CAPACITY
+                ),
+            );
+        }
+        if self.tokens.len() > defaults::torii::operator_auth::MAX_BOOTSTRAP_TOKENS {
+            emit_torii_config_error(
+                emitter,
+                format!(
+                    "torii.operator_auth.tokens must not contain more than {} entries",
+                    defaults::torii::operator_auth::MAX_BOOTSTRAP_TOKENS
+                ),
+            );
+        }
+        let mut unique_tokens = BTreeSet::new();
+        for token in &self.tokens {
+            let min = defaults::torii::operator_auth::BOOTSTRAP_TOKEN_MIN_BYTES;
+            let max = defaults::torii::operator_auth::BOOTSTRAP_TOKEN_MAX_BYTES;
+            if !(min..=max).contains(&token.len()) {
+                emit_torii_config_error(
+                    emitter,
+                    format!("torii.operator_auth.tokens entries must contain {min}..={max} bytes"),
+                );
+            }
+            if !token.bytes().all(|byte| (0x21..=0x7e).contains(&byte)) {
+                emit_torii_config_error(
+                    emitter,
+                    "torii.operator_auth.tokens entries must use visible ASCII without whitespace",
+                );
+            }
+            if !unique_tokens.insert(token) {
+                emit_torii_config_error(
+                    emitter,
+                    "torii.operator_auth.tokens must not contain duplicates",
+                );
+            }
+        }
         let rate_per_minute = self
             .rate_per_minute
             .or(super::defaults::torii::operator_auth::RATE_PER_MIN)
@@ -16324,8 +16954,20 @@ impl ToriiOperatorAuth {
             .or(super::defaults::torii::operator_auth::BURST)
             .and_then(std::num::NonZeroU32::new);
         let lockout_failures = std::num::NonZeroU32::new(self.lockout_failures);
-        let lockout_window = Duration::from_secs(self.lockout_window_secs.max(1));
-        let lockout_duration = Duration::from_secs(self.lockout_duration_secs.max(1));
+        if self.lockout_window_secs == 0 {
+            emit_torii_config_error(
+                emitter,
+                "torii.operator_auth.lockout_window_secs must be greater than zero",
+            );
+        }
+        if self.lockout_duration_secs == 0 {
+            emit_torii_config_error(
+                emitter,
+                "torii.operator_auth.lockout_duration_secs must be greater than zero",
+            );
+        }
+        let lockout_window = Duration::from_secs(self.lockout_window_secs);
+        let lockout_duration = Duration::from_secs(self.lockout_duration_secs);
         let webauthn = if self.enabled {
             self.webauthn.parse(emitter)
         } else {
@@ -16341,11 +16983,11 @@ impl ToriiOperatorAuth {
             enabled: self.enabled,
             require_mtls: self.require_mtls,
             mtls_trusted_proxy_cidrs: self.mtls_trusted_proxy_cidrs,
-            token_fallback,
-            token_source,
             tokens: self.tokens,
             rate_per_minute,
             burst,
+            ephemeral_state_capacity: self.ephemeral_state_capacity,
+            credential_capacity: self.credential_capacity,
             lockout: actual::OperatorAuthLockout {
                 failures: lockout_failures,
                 window: lockout_window,
@@ -16556,30 +17198,6 @@ mod torii_operator_webauthn_tests {
         assert!(emitter.into_result().is_err());
     }
 }
-fn parse_operator_token_fallback(
-    value: &str,
-) -> core::result::Result<actual::OperatorTokenFallback, String> {
-    match value {
-        "disabled" => Ok(actual::OperatorTokenFallback::Disabled),
-        "bootstrap" => Ok(actual::OperatorTokenFallback::Bootstrap),
-        "always" => Ok(actual::OperatorTokenFallback::Always),
-        other => Err(format!(
-            "invalid torii.operator_auth.token_fallback `{other}`; expected `disabled`, `bootstrap`, or `always`"
-        )),
-    }
-}
-fn parse_operator_token_source(
-    value: &str,
-) -> core::result::Result<actual::OperatorTokenSource, String> {
-    match value {
-        "operator" => Ok(actual::OperatorTokenSource::OperatorTokens),
-        "api" => Ok(actual::OperatorTokenSource::ApiTokens),
-        "both" => Ok(actual::OperatorTokenSource::Both),
-        other => Err(format!(
-            "invalid torii.operator_auth.token_source `{other}`; expected `operator`, `api`, or `both`"
-        )),
-    }
-}
 fn parse_attachment_sanitizer_mode(
     value: &str,
 ) -> core::result::Result<actual::AttachmentSanitizerMode, String> {
@@ -16608,20 +17226,9 @@ mod exact_torii_label_tests {
 
     #[test]
     fn operator_and_sanitizer_labels_reject_aliases_and_normalization() {
-        parse_operator_token_fallback("disabled").expect("canonical fallback");
-        parse_operator_token_source("operator").expect("canonical source");
         parse_attachment_sanitizer_mode("in_process").expect("canonical sanitizer");
         parse_operator_webauthn_algorithm("es256").expect("canonical algorithm");
 
-        for invalid in ["DISABLED", " disabled", "disabled "] {
-            assert!(
-                parse_operator_token_fallback(invalid).is_err(),
-                "{invalid:?}"
-            );
-        }
-        for invalid in ["API", " api", "api "] {
-            assert!(parse_operator_token_source(invalid).is_err(), "{invalid:?}");
-        }
         for invalid in ["inline", "inprocess", "external", "process", "IN_PROCESS"] {
             assert!(
                 parse_attachment_sanitizer_mode(invalid).is_err(),
@@ -16664,7 +17271,7 @@ pub struct ToriiHttpTransport {
         default = "DurationMs(std::time::Duration::from_millis(defaults::torii::transport::http::HEADER_READ_TIMEOUT_MS))"
     )]
     pub header_read_timeout_ms: DurationMs,
-    /// Maximum duration without socket write progress.
+    /// Maximum duration without socket write progress and graceful connection-drain deadline.
     #[config(
         default = "DurationMs(std::time::Duration::from_millis(defaults::torii::transport::http::WRITE_TIMEOUT_MS))"
     )]
@@ -16693,7 +17300,7 @@ impl Default for ToriiHttpTransport {
     }
 }
 /// Norito-RPC transport configuration parameters.
-#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+#[derive(ReadConfig, Clone, norito::JsonDeserialize)]
 pub struct ToriiNoritoRpcTransport {
     /// Master enable switch for Norito-RPC decoding.
     #[config(default = "defaults::torii::transport::norito_rpc::ENABLED")]
@@ -16710,6 +17317,21 @@ pub struct ToriiNoritoRpcTransport {
     /// Rollout stage label (`disabled`, `canary`, `ga`).
     #[config(default = "defaults::torii::transport::norito_rpc::STAGE.to_string()")]
     pub stage: String,
+}
+impl core::fmt::Debug for ToriiNoritoRpcTransport {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("ToriiNoritoRpcTransport")
+            .field("enabled", &self.enabled)
+            .field("require_mtls", &self.require_mtls)
+            .field("mtls_trusted_proxy_cidrs", &self.mtls_trusted_proxy_cidrs)
+            .field(
+                "allowed_clients",
+                &RedactedConfigSecret::count(self.allowed_clients.len()),
+            )
+            .field("stage", &self.stage)
+            .finish()
+    }
 }
 impl Default for ToriiNoritoRpcTransport {
     fn default() -> Self {
@@ -16766,13 +17388,13 @@ pub struct ToriiMcp {
     /// Master enable switch for native `/v1/mcp`.
     #[config(default = "defaults::torii::mcp::ENABLED")]
     pub enabled: bool,
-    /// Maximum accepted request payload size in bytes.
+    /// Non-zero maximum accepted request payload size in bytes.
     #[config(default = "defaults::torii::mcp::MAX_REQUEST_BYTES")]
     pub max_request_bytes: usize,
-    /// Maximum number of tools emitted in one `tools/list` response page.
+    /// Non-zero maximum number of tools emitted in one `tools/list` response page.
     #[config(default = "defaults::torii::mcp::MAX_TOOLS_PER_LIST")]
     pub max_tools_per_list: usize,
-    /// Maximum number of MCP tool dispatches executing concurrently.
+    /// Non-zero maximum number of MCP tool dispatches executing concurrently.
     #[config(default = "defaults::torii::mcp::MAX_INFLIGHT_DISPATCHES")]
     pub max_inflight_dispatches: usize,
     /// MCP tool profile (`read_only`, `writer`, `operator`).
@@ -16804,12 +17426,44 @@ impl ToriiMcp {
             );
             actual::ToriiMcpProfile::ReadOnly
         });
+        if self.expose_operator_routes && profile != actual::ToriiMcpProfile::Operator {
+            emit_torii_config_error(
+                emitter,
+                "torii.mcp.expose_operator_routes=true requires torii.mcp.profile=\"operator\"",
+            );
+        }
+        let max_request_bytes = if self.max_request_bytes == 0 {
+            emit_torii_config_error(
+                emitter,
+                "torii.mcp.max_request_bytes must be greater than zero",
+            );
+            defaults::torii::mcp::MAX_REQUEST_BYTES
+        } else {
+            self.max_request_bytes
+        };
+        let max_tools_per_list = if self.max_tools_per_list == 0 {
+            emit_torii_config_error(
+                emitter,
+                "torii.mcp.max_tools_per_list must be greater than zero",
+            );
+            defaults::torii::mcp::MAX_TOOLS_PER_LIST
+        } else {
+            self.max_tools_per_list
+        };
+        let max_inflight_dispatches = NonZeroUsize::new(self.max_inflight_dispatches)
+            .unwrap_or_else(|| {
+                emit_torii_config_error(
+                    emitter,
+                    "torii.mcp.max_inflight_dispatches must be greater than zero",
+                );
+                NonZeroUsize::new(defaults::torii::mcp::MAX_INFLIGHT_DISPATCHES)
+                    .expect("default MCP in-flight dispatch limit is non-zero")
+            });
         actual::ToriiMcp {
             enabled: self.enabled,
-            max_request_bytes: self.max_request_bytes.max(1),
-            max_tools_per_list: self.max_tools_per_list.max(1),
-            max_inflight_dispatches: NonZeroUsize::new(self.max_inflight_dispatches.max(1))
-                .expect("clamped MCP in-flight dispatch limit is non-zero"),
+            max_request_bytes,
+            max_tools_per_list,
+            max_inflight_dispatches,
             profile,
             expose_operator_routes: self.expose_operator_routes,
             allow_tool_prefixes: self.allow_tool_prefixes,
@@ -16848,15 +17502,55 @@ mod exact_torii_transport_label_tests {
     }
 
     #[test]
-    fn mcp_inflight_dispatch_limit_is_never_zero() {
+    fn mcp_zero_capacities_are_rejected_without_unwinding() {
+        for field in [
+            "max_request_bytes",
+            "max_tools_per_list",
+            "max_inflight_dispatches",
+        ] {
+            let mut mcp = ToriiMcp::default();
+            match field {
+                "max_request_bytes" => mcp.max_request_bytes = 0,
+                "max_tools_per_list" => mcp.max_tools_per_list = 0,
+                "max_inflight_dispatches" => mcp.max_inflight_dispatches = 0,
+                _ => unreachable!("test enumerates every MCP capacity field"),
+            }
+            let mut emitter = Emitter::new();
+            let _ = mcp.parse(&mut emitter);
+            let error = emitter
+                .into_result()
+                .expect_err("zero MCP capacities must fail closed");
+            assert!(format!("{error:?}").contains(field), "{field}: {error:?}");
+        }
+    }
+
+    #[test]
+    fn mcp_operator_routes_require_the_operator_profile() {
+        for profile in ["read_only", "writer"] {
+            let mut mcp = ToriiMcp::default();
+            mcp.profile = profile.to_owned();
+            mcp.expose_operator_routes = true;
+            let mut emitter = Emitter::new();
+            let _ = mcp.parse(&mut emitter);
+            let error = emitter
+                .into_result()
+                .expect_err("operator MCP exposure must keep both configuration gates");
+            assert!(
+                format!("{error:?}").contains("expose_operator_routes"),
+                "{profile}: {error:?}"
+            );
+        }
+
         let mut mcp = ToriiMcp::default();
-        mcp.max_inflight_dispatches = 0;
+        mcp.profile = "operator".to_owned();
+        mcp.expose_operator_routes = true;
         let mut emitter = Emitter::new();
-        let actual = mcp.parse(&mut emitter);
+        let parsed = mcp.parse(&mut emitter);
         emitter
             .into_result()
-            .expect("the canonical default MCP profile is valid");
-        assert_eq!(actual.max_inflight_dispatches.get(), 1);
+            .expect("the explicit Torii-local operator double opt-in is valid");
+        assert_eq!(parsed.profile, actual::ToriiMcpProfile::Operator);
+        assert!(parsed.expose_operator_routes);
     }
 }
 /// CORS response-header policy for Torii.
@@ -17047,6 +17741,200 @@ fn is_http_token(value: &str) -> bool {
 }
 fn emit_torii_config_error(emitter: &mut Emitter<ParseError>, message: impl Into<String>) {
     emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(message.into()));
+}
+fn validate_torii_api_tokens(config: &Torii, emitter: &mut Emitter<ParseError>) {
+    let tokens = config.api_tokens.as_deref().unwrap_or_default();
+    if config.require_api_token && tokens.is_empty() {
+        emit_torii_config_error(
+            emitter,
+            "torii.require_api_token=true requires at least one torii.api_tokens entry",
+        );
+    }
+    if !config.require_api_token && !tokens.is_empty() {
+        emit_torii_config_error(
+            emitter,
+            "torii.api_tokens must be empty when torii.require_api_token=false",
+        );
+    }
+    if tokens.len() > defaults::torii::API_TOKEN_MAX_COUNT_V1 {
+        emit_torii_config_error(
+            emitter,
+            format!(
+                "torii.api_tokens must not contain more than {} entries",
+                defaults::torii::API_TOKEN_MAX_COUNT_V1
+            ),
+        );
+    }
+    let mut unique_tokens = BTreeSet::new();
+    for token in tokens {
+        let min = defaults::torii::API_TOKEN_MIN_BYTES_V1;
+        let max = defaults::torii::API_TOKEN_MAX_BYTES_V1;
+        if !(min..=max).contains(&token.len()) {
+            emit_torii_config_error(
+                emitter,
+                format!("torii.api_tokens entries must contain {min}..={max} bytes"),
+            );
+        }
+        if !token.bytes().all(|byte| (0x21..=0x7e).contains(&byte)) {
+            emit_torii_config_error(
+                emitter,
+                "torii.api_tokens entries must use visible ASCII without whitespace",
+            );
+        }
+        if !unique_tokens.insert(token) {
+            emit_torii_config_error(emitter, "torii.api_tokens must not contain duplicates");
+        }
+    }
+}
+fn validate_app_api_limits(config: &Torii, emitter: &mut Emitter<ParseError>) {
+    for (field, value) in [
+        (
+            "torii.app_api_default_list_limit",
+            config.app_api_default_list_limit,
+        ),
+        (
+            "torii.app_api_max_list_limit",
+            config.app_api_max_list_limit,
+        ),
+        (
+            "torii.app_api_max_fetch_size",
+            config.app_api_max_fetch_size,
+        ),
+        (
+            "torii.app_api_rate_limit_cost_per_row",
+            config.app_api_rate_limit_cost_per_row,
+        ),
+    ] {
+        if value == 0 {
+            emit_torii_config_error(emitter, format!("{field} must be greater than zero"));
+        }
+    }
+    if config.app_api_default_list_limit != 0
+        && config.app_api_max_list_limit < config.app_api_default_list_limit
+    {
+        emit_torii_config_error(
+            emitter,
+            "torii.app_api_max_list_limit must be at least torii.app_api_default_list_limit",
+        );
+    }
+    if config.app_api_default_list_limit != 0
+        && config.app_api_max_fetch_size < config.app_api_default_list_limit
+    {
+        emit_torii_config_error(
+            emitter,
+            "torii.app_api_max_fetch_size must be at least torii.app_api_default_list_limit",
+        );
+    }
+}
+fn validate_torii_optional_rate_limits(config: &Torii, emitter: &mut Emitter<ParseError>) {
+    for (field, is_zero) in [
+        (
+            "torii.query_rate_per_authority_per_sec",
+            config.query_rate_per_authority_per_sec == Some(0),
+        ),
+        (
+            "torii.query_burst_per_authority",
+            config.query_burst_per_authority == Some(0),
+        ),
+        (
+            "torii.tx_rate_per_authority_per_sec",
+            config.tx_rate_per_authority_per_sec == Some(0),
+        ),
+        (
+            "torii.tx_burst_per_authority",
+            config.tx_burst_per_authority == Some(0),
+        ),
+        (
+            "torii.deploy_rate_per_origin_per_sec",
+            config.deploy_rate_per_origin_per_sec == Some(0),
+        ),
+        (
+            "torii.deploy_burst_per_origin",
+            config.deploy_burst_per_origin == Some(0),
+        ),
+        (
+            "torii.soracloud_public_rate_per_ip_per_sec",
+            config.soracloud_public_rate_per_ip_per_sec == Some(0),
+        ),
+        (
+            "torii.soracloud_public_burst_per_ip",
+            config.soracloud_public_burst_per_ip == Some(0),
+        ),
+        (
+            "torii.soracloud_mutation_rate_per_account_origin_per_sec",
+            config.soracloud_mutation_rate_per_account_origin_per_sec == Some(0),
+        ),
+        (
+            "torii.soracloud_mutation_burst_per_account_origin",
+            config.soracloud_mutation_burst_per_account_origin == Some(0),
+        ),
+        (
+            "torii.preauth_rate_per_ip_per_sec",
+            config.preauth_rate_per_ip_per_sec == Some(0),
+        ),
+        (
+            "torii.preauth_burst_per_ip",
+            config.preauth_burst_per_ip == Some(0),
+        ),
+        (
+            "torii.proof_rate_per_minute",
+            config.proof_rate_per_minute == Some(0),
+        ),
+        ("torii.proof_burst", config.proof_burst == Some(0)),
+        (
+            "torii.proof_egress_bytes_per_sec",
+            config.proof_egress_bytes_per_sec == Some(0),
+        ),
+        (
+            "torii.proof_egress_burst_bytes",
+            config.proof_egress_burst_bytes == Some(0),
+        ),
+    ] {
+        if is_zero {
+            emit_torii_config_error(
+                emitter,
+                format!("{field} must be greater than zero when configured"),
+            );
+        }
+    }
+}
+fn validate_proof_api_limits(config: &Torii, emitter: &mut Emitter<ParseError>) {
+    if config.proof_max_body_bytes.get() == 0 {
+        emit_torii_config_error(
+            emitter,
+            "torii.proof_max_body_bytes must be greater than zero",
+        );
+    }
+    if config.proof_body_read_timeout_ms.get().is_zero() {
+        emit_torii_config_error(
+            emitter,
+            "torii.proof_body_read_timeout_ms must be at least 1 ms",
+        );
+    }
+    if config.proof_max_list_limit == 0 {
+        emit_torii_config_error(
+            emitter,
+            "torii.proof_max_list_limit must be greater than zero",
+        );
+    }
+    if config.proof_request_timeout_ms.get().is_zero() {
+        emit_torii_config_error(
+            emitter,
+            "torii.proof_request_timeout_ms must be at least 1 ms",
+        );
+    }
+    if config.proof_cache_max_age_secs == 0 {
+        emit_torii_config_error(
+            emitter,
+            "torii.proof_cache_max_age_secs must be greater than zero",
+        );
+    }
+    if config.proof_retry_after_secs == 0 {
+        emit_torii_config_error(
+            emitter,
+            "torii.proof_retry_after_secs must be greater than zero",
+        );
+    }
 }
 fn replay_window_is_covered(max_clock_skew_secs: u64, nonce_ttl_secs: u64) -> bool {
     max_clock_skew_secs
@@ -17272,7 +18160,7 @@ pub struct AccountOnboarding {
     pub auto_renew: Option<AccountOnboardingAutoRenew>,
 }
 /// One API-token credential and its exact onboarding scope.
-#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+#[derive(ReadConfig, Clone, norito::JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 pub struct AccountOnboardingCredential {
     /// Stable operator-facing credential identifier.
@@ -17283,6 +18171,20 @@ pub struct AccountOnboardingCredential {
     pub token_hash: String,
     #[norito(default)]
     token: Option<ForbiddenOnboardingSecretInput>,
+}
+impl core::fmt::Debug for AccountOnboardingCredential {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("AccountOnboardingCredential")
+            .field("id", &self.id)
+            .field("scope", &self.scope)
+            .field("token_hash", &RedactedConfigSecret::present(true))
+            .field(
+                "token",
+                &RedactedConfigSecret::present(self.token.is_some()),
+            )
+            .finish()
+    }
 }
 /// User-facing credential scope encoded as `{ domain = "..." }` or
 /// `{ dataspace = "..." }`.
@@ -17626,9 +18528,7 @@ impl AccountOnboarding {
             "CanManagePeers",
             "CanManageLaneRelayEmergency",
             "CanResolveEscrowDispute",
-            "CanManageOfflineEscrow",
-            "CanActivateKagemushaRecursiveReleaseV4",
-            "CanManageOfflineDeviceAttestationPolicy",
+            "CanManageKagemushaReserve",
             "CanSetParameters",
             "CanSetHijiriParameters",
             "CanManageSccpGovernance",
@@ -18147,154 +19047,163 @@ impl ToriiFaucet {
         }
     }
 }
-/// Kagemusha command-submission configuration for app-facing lifecycle routes.
+/// KAGEMUSHA V1 command-admission configuration for app-facing KAGEMUSHA V1 routes.
 ///
-/// The whole table is optional. When present, every policy and capacity field is required.
+/// The whole table is optional. When present, every capacity field is required.
+/// The redemption signer fields are an optional all-or-none group; payer-signed top-ups do not
+/// require Torii to hold an issuer key.
 #[derive(Debug, Clone, norito::JsonDeserialize)]
 #[norito(deny_unknown_fields)]
-pub struct ToriiKagemushaCommands {
-    /// Private key for the account submitting typed Kagemusha instructions.
-    pub private_key: Option<PrivateKey>,
-    /// Owner-held file containing the Kagemusha command submitter's private key.
-    pub private_key_file: Option<WithOrigin<PathBuf>>,
-    /// Minimum live XOR balance required for the self-funded command authority.
+pub struct ToriiKagemushaV1Commands {
+    /// Optional private key for the account submitting redemption instructions.
+    pub redemption_private_key: Option<PrivateKey>,
+    /// Optional owner-held file containing the KAGEMUSHA V1 redemption issuer's private key.
+    pub redemption_private_key_file: Option<WithOrigin<PathBuf>>,
+    /// Minimum live XOR balance required for the self-funded redemption authority.
     ///
-    /// This has no default: enabling the command service requires an explicit,
-    /// positive operational funding floor.
-    pub minimum_xor_balance: Quantity,
-    /// Maximum value accepted for one Kagemusha command.
-    pub max_tx_value: Quantity,
+    /// This is required and must be positive when a redemption key is configured, and must be
+    /// absent when no redemption issuer is configured.
+    pub redemption_minimum_xor_balance: Option<Quantity>,
     /// Maximum number of admitted and in-flight operations retained in memory.
     pub operation_registry_max_entries: usize,
     /// Maximum canonical bytes reserved by admitted and in-flight operations.
     pub operation_registry_max_bytes: usize,
 }
-impl ToriiKagemushaCommands {
-    fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::ToriiKagemushaCommands> {
+impl ToriiKagemushaV1Commands {
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::ToriiKagemushaV1Commands> {
         let Self {
-            private_key,
-            private_key_file,
-            minimum_xor_balance,
-            max_tx_value,
+            redemption_private_key,
+            redemption_private_key_file,
+            redemption_minimum_xor_balance,
             operation_registry_max_entries,
             operation_registry_max_bytes,
         } = self;
-        let private_key = match (private_key, private_key_file) {
+        let redemption_private_key = match (redemption_private_key, redemption_private_key_file) {
             (Some(_), Some(_)) => {
                 emit_torii_config_error(
                     emitter,
-                    "torii.kagemusha_commands.private_key and torii.kagemusha_commands.private_key_file are mutually exclusive",
+                    "torii.kagemusha_v1_commands.redemption_private_key and torii.kagemusha_v1_commands.redemption_private_key_file are mutually exclusive",
                 );
-                None
+                return None;
             }
-            (Some(private_key), None) => Some(private_key),
+            (Some(redemption_private_key), None) => Some(redemption_private_key),
             (None, Some(file)) => {
-                match read_private_key_file(file, "torii.kagemusha_commands.private_key_file") {
-                    Ok((private_key, _)) => Some(private_key),
+                match read_private_key_file(
+                    file,
+                    "torii.kagemusha_v1_commands.redemption_private_key_file",
+                ) {
+                    Ok((redemption_private_key, _)) => Some(redemption_private_key),
                     Err(error) => {
                         emit_torii_config_error(emitter, error);
-                        None
+                        return None;
                     }
                 }
             }
-            (None, None) => {
-                emit_torii_config_error(
-                    emitter,
-                    "exactly one of torii.kagemusha_commands.private_key or torii.kagemusha_commands.private_key_file is required",
-                );
-                None
-            }
+            (None, None) => None,
         };
-        let key_pair = private_key.and_then(|private_key| {
-            let key_pair = match KeyPair::from_private_key(private_key) {
+        let key_pair = match redemption_private_key.map(|redemption_private_key| {
+            let key_pair = match KeyPair::from_private_key(redemption_private_key) {
                 Ok(key_pair) => key_pair,
                 Err(error) => {
                     emit_torii_config_error(
                         emitter,
-                        format!("invalid torii.kagemusha_commands.private_key: {error}"),
+                        format!(
+                            "invalid torii.kagemusha_v1_commands.redemption_private_key: {error}"
+                        ),
                     );
-                    return None;
+                    return Err(());
                 }
             };
             match key_pair.public_key().try_algorithm() {
-                Ok(Algorithm::Ed25519 | Algorithm::Secp256k1) => Some(key_pair),
+                Ok(Algorithm::Ed25519 | Algorithm::Secp256k1) => Ok(key_pair),
                 Ok(_) => {
                     emit_torii_config_error(
                         emitter,
-                        "torii.kagemusha_commands.private_key must use ed25519 or secp256k1",
+                        "torii.kagemusha_v1_commands.redemption_private_key must use ed25519 or secp256k1",
                     );
-                    None
+                    Err(())
                 }
                 Err(error) => {
                     emit_torii_config_error(
                         emitter,
-                        format!("invalid torii.kagemusha_commands.public_key: {error}"),
+                        format!(
+                            "invalid public key derived from torii.kagemusha_v1_commands.redemption_private_key: {error}"
+                        ),
                     );
-                    None
+                    Err(())
                 }
             }
-        });
-        let minimum_xor_balance_valid = !minimum_xor_balance.is_zero();
-        if !minimum_xor_balance_valid {
-            emit_torii_config_error(
-                emitter,
-                "torii.kagemusha_commands.minimum_xor_balance must be greater than zero",
-            );
-        }
-        let max_tx_value_valid = !max_tx_value.is_zero();
-        if !max_tx_value_valid {
-            emit_torii_config_error(
-                emitter,
-                "torii.kagemusha_commands.max_tx_value must be greater than zero",
-            );
-        }
+        }) {
+            Some(Ok(key_pair)) => Some(key_pair),
+            Some(Err(())) => return None,
+            None => None,
+        };
+        let redemption_issuer = match (key_pair, redemption_minimum_xor_balance) {
+            (Some(key_pair), Some(redemption_minimum_xor_balance))
+                if !redemption_minimum_xor_balance.is_zero() =>
+            {
+                Some(actual::ToriiKagemushaV1RedemptionIssuer {
+                    authority: AccountId::new(key_pair.public_key().clone()),
+                    key_pair,
+                    minimum_xor_balance: redemption_minimum_xor_balance,
+                })
+            }
+            (Some(_), Some(_)) => {
+                emit_torii_config_error(
+                    emitter,
+                    "torii.kagemusha_v1_commands.redemption_minimum_xor_balance must be greater than zero",
+                );
+                return None;
+            }
+            (Some(_), None) => {
+                emit_torii_config_error(
+                    emitter,
+                    "torii.kagemusha_v1_commands.redemption_minimum_xor_balance is required when a redemption private key is configured",
+                );
+                return None;
+            }
+            (None, Some(_)) => {
+                emit_torii_config_error(
+                    emitter,
+                    "torii.kagemusha_v1_commands.redemption_minimum_xor_balance requires a redemption private key",
+                );
+                return None;
+            }
+            (None, None) => None,
+        };
         let operation_registry_max_entries = NonZeroUsize::new(operation_registry_max_entries);
         if operation_registry_max_entries.is_none() {
             emit_torii_config_error(
                 emitter,
-                "torii.kagemusha_commands.operation_registry_max_entries must be greater than zero",
+                "torii.kagemusha_v1_commands.operation_registry_max_entries must be greater than zero",
             );
         }
         let operation_registry_max_bytes = NonZeroUsize::new(operation_registry_max_bytes);
         if operation_registry_max_bytes.is_none() {
             emit_torii_config_error(
                 emitter,
-                "torii.kagemusha_commands.operation_registry_max_bytes must be greater than zero",
+                "torii.kagemusha_v1_commands.operation_registry_max_bytes must be greater than zero",
             );
         } else if operation_registry_max_bytes.is_some_and(|limit| {
             limit.get()
-                < defaults::torii::kagemusha_commands::OPERATION_REGISTRY_ACCOUNTED_BYTES_PER_ENTRY
+                < defaults::torii::kagemusha_v1_commands::OPERATION_REGISTRY_ACCOUNTED_BYTES_PER_ENTRY
         }) {
             emit_torii_config_error(
                 emitter,
                 format!(
-                    "torii.kagemusha_commands.operation_registry_max_bytes must be at least {}",
-                    defaults::torii::kagemusha_commands::OPERATION_REGISTRY_ACCOUNTED_BYTES_PER_ENTRY
+                    "torii.kagemusha_v1_commands.operation_registry_max_bytes must be at least {}",
+                    defaults::torii::kagemusha_v1_commands::OPERATION_REGISTRY_ACCOUNTED_BYTES_PER_ENTRY
                 ),
             );
             return None;
         }
-        let (
-            Some(key_pair),
-            true,
-            true,
-            Some(operation_registry_max_entries),
-            Some(operation_registry_max_bytes),
-        ) = (
-            key_pair,
-            minimum_xor_balance_valid,
-            max_tx_value_valid,
-            operation_registry_max_entries,
-            operation_registry_max_bytes,
-        )
+        let (Some(operation_registry_max_entries), Some(operation_registry_max_bytes)) =
+            (operation_registry_max_entries, operation_registry_max_bytes)
         else {
             return None;
         };
-        Some(actual::ToriiKagemushaCommands {
-            authority: AccountId::new(key_pair.public_key().clone()),
-            key_pair,
-            minimum_xor_balance,
-            max_tx_value,
+        Some(actual::ToriiKagemushaV1Commands {
+            redemption_issuer,
             operation_registry_max_entries,
             operation_registry_max_bytes,
         })
@@ -18304,42 +19213,59 @@ impl ToriiKagemushaCommands {
 #[path = "user/torii_faucet_tests.rs"]
 mod torii_faucet_tests;
 #[cfg(test)]
-#[path = "user/torii_kagemusha_commands_tests.rs"]
-mod torii_kagemusha_commands_tests;
+#[path = "user/torii_kagemusha_v1_commands_tests.rs"]
+mod torii_kagemusha_v1_commands_tests;
 /// RAM-LFE runtime configuration.
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub struct ToriiRamLfe {
-    /// Master enable switch for Torii's in-process RAM-LFE runtime.
-    #[config(default = "defaults::torii::ram_lfe::ENABLED")]
-    pub enabled: bool,
-    /// Per-program runtime entries.
+    /// Non-empty per-program runtime entries. Presence of this table enables the runtime.
     #[config(default)]
     pub programs: Vec<ToriiRamLfeProgram>,
 }
 impl ToriiRamLfe {
-    fn parse(self) -> Option<actual::ToriiRamLfe> {
-        if !self.enabled {
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::ToriiRamLfe> {
+        if self.programs.is_empty() {
+            emit_torii_config_error(
+                emitter,
+                "torii.ram_lfe.programs must contain at least one program when torii.ram_lfe is configured",
+            );
             return None;
         }
-        Some(actual::ToriiRamLfe {
-            programs: self
-                .programs
-                .into_iter()
-                .enumerate()
-                .map(|(index, program)| program.parse(index))
-                .collect(),
-        })
+        let mut program_ids = BTreeSet::new();
+        let mut programs = Vec::with_capacity(self.programs.len());
+        for (index, program) in self.programs.into_iter().enumerate() {
+            let Some(program) = program.parse(index, emitter) else {
+                continue;
+            };
+            if !program_ids.insert(program.program_id.clone()) {
+                emit_torii_config_error(
+                    emitter,
+                    format!(
+                        "torii.ram_lfe.programs[{index}].program_id duplicates `{}`",
+                        program.program_id
+                    ),
+                );
+                continue;
+            }
+            programs.push(program);
+        }
+        if programs.is_empty() {
+            return None;
+        }
+        Some(actual::ToriiRamLfe { programs })
     }
 }
 /// Per-program runtime material for Torii's RAM-LFE runtime.
 #[derive(ReadConfig, Clone, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub struct ToriiRamLfeProgram {
     /// On-chain RAM-LFE program identifier.
     pub program_id: String,
     /// Hidden derivation secret encoded as hex.
     pub secret_hex: RamLfeSecret,
-    /// Norito-encoded hidden BFV RAM-FHE program encoded as hex.
-    pub hidden_program_hex: Option<String>,
+    /// Norito-encoded hidden BFV RAM-FHE program as exact `0x`-prefixed lowercase hex.
+    pub hidden_program_hex: String,
     /// Private key used to sign receipts for this program.
     pub signer_private_key: PrivateKey,
     /// Optional receipt TTL expressed in milliseconds.
@@ -18357,45 +19283,136 @@ impl Debug for ToriiRamLfeProgram {
             .finish()
     }
 }
-fn default_ram_lfe_hidden_program_hex() -> String {
-    let bytes = iroha_crypto::default_bfv_programmed_hidden_program()
-        .to_bytes()
-        .expect("default RAM-LFE hidden program should encode");
-    hex::encode(bytes)
-}
 impl ToriiRamLfeProgram {
-    fn parse(self, index: usize) -> actual::ToriiRamLfeProgram {
-        let program_id: iroha_data_model::ram_lfe::RamLfeProgramId =
-            self.program_id.parse().unwrap_or_else(|err| {
-                panic!(
-                    "invalid torii.ram_lfe.programs[{index}].program_id `{}`: {err}",
-                    self.program_id
-                )
-            });
-        let hidden_program_hex = self
-            .hidden_program_hex
-            .unwrap_or_else(default_ram_lfe_hidden_program_hex);
-        let hidden_program_literal = hidden_program_hex.trim().trim_start_matches("0x");
-        let hidden_program_bytes = Vec::from_hex(hidden_program_literal).unwrap_or_else(|err| {
-            panic!("invalid torii.ram_lfe.programs[{index}].hidden_program_hex: {err}")
-        });
-        if hidden_program_bytes.is_empty() {
-            panic!("torii.ram_lfe.programs[{index}].hidden_program_hex must not be empty");
+    fn parse(
+        self,
+        index: usize,
+        emitter: &mut Emitter<ParseError>,
+    ) -> Option<actual::ToriiRamLfeProgram> {
+        if self.program_id.trim() != self.program_id {
+            emit_torii_config_error(
+                emitter,
+                format!(
+                    "torii.ram_lfe.programs[{index}].program_id must not contain surrounding whitespace"
+                ),
+            );
+            return None;
         }
-        let hidden_program: iroha_crypto::HiddenRamFheProgram =
-            norito::decode_from_bytes(hidden_program_bytes.as_slice()).unwrap_or_else(|err| {
-                panic!("invalid torii.ram_lfe.programs[{index}].hidden_program_hex payload: {err}")
-            });
-        iroha_crypto::validate_hidden_ram_fhe_program(&hidden_program).unwrap_or_else(|err| {
-            panic!("invalid torii.ram_lfe.programs[{index}].hidden_program_hex program: {err}")
-        });
-        actual::ToriiRamLfeProgram {
+        let program_id: iroha_data_model::ram_lfe::RamLfeProgramId =
+            match self
+                .program_id
+                .parse::<iroha_data_model::ram_lfe::RamLfeProgramId>()
+            {
+                Ok(program_id) if program_id.to_string() == self.program_id => program_id,
+                Ok(program_id) => {
+                    emit_torii_config_error(
+                        emitter,
+                        format!(
+                            "torii.ram_lfe.programs[{index}].program_id must use the canonical spelling `{program_id}`"
+                        ),
+                    );
+                    return None;
+                }
+                Err(err) => {
+                    emit_torii_config_error(
+                        emitter,
+                        format!(
+                            "invalid torii.ram_lfe.programs[{index}].program_id `{}`: {err}",
+                            self.program_id
+                        ),
+                    );
+                    return None;
+                }
+            };
+        let Some(hidden_program_literal) = self.hidden_program_hex.strip_prefix("0x") else {
+            emit_torii_config_error(
+                emitter,
+                format!(
+                    "torii.ram_lfe.programs[{index}].hidden_program_hex must be exact `0x`-prefixed lowercase hex"
+                ),
+            );
+            return None;
+        };
+        if hidden_program_literal.is_empty()
+            || !hidden_program_literal
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            emit_torii_config_error(
+                emitter,
+                format!(
+                    "torii.ram_lfe.programs[{index}].hidden_program_hex must contain non-empty lowercase hex after `0x`"
+                ),
+            );
+            return None;
+        }
+        let hidden_program_bytes = match Vec::from_hex(hidden_program_literal) {
+            Ok(bytes) => bytes,
+            Err(err) => {
+                emit_torii_config_error(
+                    emitter,
+                    format!("invalid torii.ram_lfe.programs[{index}].hidden_program_hex: {err}"),
+                );
+                return None;
+            }
+        };
+        let hidden_program: iroha_crypto::HiddenRamFheProgram = match norito::decode_from_bytes(
+            hidden_program_bytes.as_slice(),
+        ) {
+            Ok(program) => program,
+            Err(err) => {
+                emit_torii_config_error(
+                    emitter,
+                    format!(
+                        "invalid torii.ram_lfe.programs[{index}].hidden_program_hex payload: {err}"
+                    ),
+                );
+                return None;
+            }
+        };
+        if let Err(err) = iroha_crypto::validate_hidden_ram_fhe_program(&hidden_program) {
+            emit_torii_config_error(
+                emitter,
+                format!(
+                    "invalid torii.ram_lfe.programs[{index}].hidden_program_hex program: {err}"
+                ),
+            );
+            return None;
+        }
+        if let Err(err) = KeyPair::from_private_key(self.signer_private_key.clone()) {
+            emit_torii_config_error(
+                emitter,
+                format!("invalid torii.ram_lfe.programs[{index}].signer_private_key: {err}"),
+            );
+            return None;
+        }
+        if let Some(ttl) = self.receipt_ttl_ms {
+            if ttl.get().is_zero() {
+                emit_torii_config_error(
+                    emitter,
+                    format!(
+                        "torii.ram_lfe.programs[{index}].receipt_ttl_ms must be greater than zero when configured"
+                    ),
+                );
+                return None;
+            }
+            if u64::try_from(ttl.get().as_millis()).is_err() {
+                emit_torii_config_error(
+                    emitter,
+                    format!(
+                        "torii.ram_lfe.programs[{index}].receipt_ttl_ms must fit the runtime millisecond domain"
+                    ),
+                );
+                return None;
+            }
+        }
+        Some(actual::ToriiRamLfeProgram {
             program_id,
             secret: self.secret_hex,
             hidden_program,
             signer_private_key: self.signer_private_key,
             receipt_ttl: self.receipt_ttl_ms.map(DurationMs::get),
-        }
+        })
     }
 }
 fn default_events_buffer_capacity() -> NonZeroUsize {
@@ -18409,6 +19426,14 @@ fn default_app_auth_replay_cache_capacity() -> NonZeroUsize {
 fn default_operator_signature_replay_cache_capacity() -> NonZeroUsize {
     std::num::NonZeroUsize::new(defaults::torii::operator_signatures::REPLAY_CACHE_CAPACITY)
         .expect("operator signature replay cache capacity must be non-zero")
+}
+fn default_operator_auth_ephemeral_state_capacity() -> NonZeroUsize {
+    std::num::NonZeroUsize::new(defaults::torii::operator_auth::EPHEMERAL_STATE_CAPACITY)
+        .expect("operator auth ephemeral state capacity must be non-zero")
+}
+fn default_operator_auth_credential_capacity() -> NonZeroUsize {
+    std::num::NonZeroUsize::new(defaults::torii::operator_auth::CREDENTIAL_CAPACITY)
+        .expect("operator auth credential capacity must be non-zero")
 }
 fn default_webhook_queue_capacity() -> NonZeroUsize {
     std::num::NonZeroUsize::new(defaults::torii::WEBHOOK_QUEUE_CAPACITY)
@@ -18625,7 +19650,46 @@ pub struct PreauthSchemeLimit {
     pub max_connections: NonZeroUsize,
 }
 impl Connect {
-    fn parse(self) -> actual::Connect {
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::Connect {
+        for (field, invalid) in [
+            ("torii.connect.ws_max_sessions", self.ws_max_sessions == 0),
+            (
+                "torii.connect.session_ttl_ms",
+                self.session_ttl_ms.get().is_zero(),
+            ),
+            ("torii.connect.frame_max_bytes", self.frame_max_bytes == 0),
+            (
+                "torii.connect.session_buffer_max_bytes",
+                self.session_buffer_max_bytes == 0,
+            ),
+            (
+                "torii.connect.ping_interval_ms",
+                self.ping_interval_ms.get().is_zero(),
+            ),
+            (
+                "torii.connect.ping_miss_tolerance",
+                self.ping_miss_tolerance == 0,
+            ),
+            (
+                "torii.connect.ping_min_interval_ms",
+                self.ping_min_interval_ms.get().is_zero(),
+            ),
+            (
+                "torii.connect.dedupe_ttl_ms",
+                self.dedupe_ttl_ms.get().is_zero(),
+            ),
+            ("torii.connect.dedupe_cap", self.dedupe_cap == 0),
+        ] {
+            if invalid {
+                emit_torii_config_error(emitter, format!("{field} must be greater than zero"));
+            }
+        }
+        if self.ping_interval_ms.get() < self.ping_min_interval_ms.get() {
+            emit_torii_config_error(
+                emitter,
+                "torii.connect.ping_interval_ms must be at least torii.connect.ping_min_interval_ms",
+            );
+        }
         actual::Connect {
             enabled: self.enabled,
             ws_max_sessions: self.ws_max_sessions,
@@ -18692,6 +19756,14 @@ pub struct IsoBridge {
     /// Signing credentials used for bridge operations.
     pub signer: Option<IsoBridgeSigner>,
     #[config(default = "Vec::new()")]
+    #[norito(default)]
+    /// Mutually isolated institutions admitted to the ISO bridge.
+    pub participants: Vec<IsoBridgeParticipant>,
+    #[config(default = "Vec::new()")]
+    #[norito(default)]
+    /// Operator keys with global read-only access to ISO records.
+    pub audit_admin_keys: Vec<PublicKey>,
+    #[config(default = "Vec::new()")]
     /// Mapping of external identifiers (e.g., IBAN) to local accounts.
     pub account_aliases: Vec<IsoAccountAlias>,
     #[config(default = "Vec::new()")]
@@ -18700,6 +19772,24 @@ pub struct IsoBridge {
     #[config(default = "IsoReferenceData::default()")]
     /// Reference-data ingestion configuration.
     pub reference_data: IsoReferenceData,
+}
+/// User-level ISO bridge participant configuration.
+#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+pub struct IsoBridgeParticipant {
+    /// Stable, deployment-unique participant identifier.
+    pub id: String,
+    #[config(default = "Vec::new()")]
+    /// Operator request-signature keys owned by this participant.
+    pub operator_keys: Vec<PublicKey>,
+    #[config(default = "Vec::new()")]
+    /// BIC, LEI, or clearing-member identifiers owned by this participant.
+    pub financial_identifiers: Vec<String>,
+    #[config(default = "Vec::new()")]
+    /// Rail/profile identifiers this participant may use.
+    pub allowed_profiles: Vec<String>,
+    #[config(default = "Vec::new()")]
+    /// Assigned bridge roles (`originator` and/or `counterparty`).
+    pub roles: Vec<String>,
 }
 /// User-level ISO bridge rail profile override.
 #[derive(Debug, ReadConfig, Clone)]
@@ -18981,7 +20071,7 @@ impl TransactionIngress {
     }
 }
 /// User-level configuration for DA ingest replay cache behaviour.
-#[derive(Debug, ReadConfig, Clone)]
+#[derive(ReadConfig, Clone)]
 #[allow(clippy::struct_field_names)]
 pub struct DaIngest {
     /// Per-`(lane, epoch)` capacity for committed replay entries and in-flight reservations.
@@ -19012,7 +20102,7 @@ pub struct DaIngest {
     /// Maximum number of DA spool batches flushed by one worker write pass.
     #[config(default = "defaults::torii::DA_SPOOL_BATCH_MAX")]
     pub spool_batch_max: NonZeroUsize,
-    /// Optional hex-encoded ChaCha20Poly1305 key for governance-only metadata encryption.
+    /// Optional non-zero ChaCha20Poly1305 key encoded as 64 lowercase hexadecimal characters.
     pub governance_metadata_key_hex: Option<String>,
     /// Optional label recorded alongside governance metadata ciphertexts.
     pub governance_metadata_key_label: Option<String>,
@@ -19026,6 +20116,43 @@ pub struct DaIngest {
     pub rent_policy: DaRentPolicy,
     /// Optional telemetry cluster label for ingest metrics.
     pub telemetry_cluster_label: Option<String>,
+}
+impl core::fmt::Debug for DaIngest {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("DaIngest")
+            .field("replay_cache_capacity", &self.replay_cache_capacity)
+            .field(
+                "replay_cache_max_lane_epochs",
+                &self.replay_cache_max_lane_epochs,
+            )
+            .field("replay_cache_ttl_secs", &self.replay_cache_ttl_secs)
+            .field(
+                "replay_cache_max_sequence_lag",
+                &self.replay_cache_max_sequence_lag,
+            )
+            .field("replay_cache_store_dir", &self.replay_cache_store_dir)
+            .field("manifest_store_dir", &self.manifest_store_dir)
+            .field(
+                "max_concurrent_compute_jobs",
+                &self.max_concurrent_compute_jobs,
+            )
+            .field("spool_queue_capacity", &self.spool_queue_capacity)
+            .field("spool_batch_max", &self.spool_batch_max)
+            .field(
+                "governance_metadata_key_hex",
+                &RedactedConfigSecret::present(self.governance_metadata_key_hex.is_some()),
+            )
+            .field(
+                "governance_metadata_key_label",
+                &self.governance_metadata_key_label.is_some(),
+            )
+            .field("taikai_anchor", &self.taikai_anchor)
+            .field("replication_policy", &self.replication_policy)
+            .field("rent_policy", &self.rent_policy)
+            .field("telemetry_cluster_label", &self.telemetry_cluster_label)
+            .finish()
+    }
 }
 impl Default for DaIngest {
     fn default() -> Self {
@@ -19049,17 +20176,11 @@ impl Default for DaIngest {
     }
 }
 impl DaIngest {
-    fn parse(self) -> actual::DaIngest {
-        let governance_metadata_key = self.governance_metadata_key_hex.as_ref().map(|hex_key| {
-            let bytes = hex::decode(hex_key).unwrap_or_else(|err| {
-                panic!("invalid governance_metadata_key_hex value `{hex_key}`: {err}")
-            });
-            <[u8; 32]>::try_from(bytes.as_slice()).unwrap_or_else(|_| {
-                panic!(
-                    "invalid governance_metadata_key_hex value `{hex_key}`: expected 32-byte key"
-                )
-            })
-        });
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::DaIngest {
+        let governance_metadata_key = self
+            .governance_metadata_key_hex
+            .as_deref()
+            .and_then(|encoded| parse_da_governance_metadata_key(encoded, emitter));
         actual::DaIngest {
             replay_cache_capacity: self.replay_cache_capacity,
             replay_cache_max_lane_epochs: self.replay_cache_max_lane_epochs,
@@ -19072,12 +20193,44 @@ impl DaIngest {
             spool_batch_max: self.spool_batch_max,
             governance_metadata_key,
             governance_metadata_key_label: self.governance_metadata_key_label,
-            taikai_anchor: self.taikai_anchor.map(DaTaikaiAnchor::parse),
-            replication_policy: self.replication_policy.parse(),
-            rent_policy: self.rent_policy.into_policy(),
+            taikai_anchor: self.taikai_anchor.and_then(|anchor| anchor.parse(emitter)),
+            replication_policy: self.replication_policy.parse(emitter),
+            rent_policy: self.rent_policy.into_policy(emitter).unwrap_or_default(),
             telemetry_cluster_label: self.telemetry_cluster_label,
         }
     }
+}
+fn parse_da_governance_metadata_key(
+    encoded: &str,
+    emitter: &mut Emitter<ParseError>,
+) -> Option<[u8; 32]> {
+    if encoded.len() != 64
+        || !encoded
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+    {
+        emit_torii_config_error(
+            emitter,
+            "torii.da_ingest.governance_metadata_key_hex must be exactly 64 lowercase hexadecimal characters",
+        );
+        return None;
+    }
+    let mut key = [0_u8; 32];
+    if hex::decode_to_slice(encoded, &mut key).is_err() {
+        emit_torii_config_error(
+            emitter,
+            "torii.da_ingest.governance_metadata_key_hex failed fixed-width hexadecimal decoding",
+        );
+        return None;
+    }
+    if key == [0; 32] {
+        emit_torii_config_error(
+            emitter,
+            "torii.da_ingest.governance_metadata_key_hex must not be the all-zero key",
+        );
+        return None;
+    }
+    Some(key)
 }
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
 #[doc = "User-facing configuration for the DA replication policy."]
@@ -19125,29 +20278,75 @@ pub struct DaRetentionTemplate {
     pub governance_tag: String,
 }
 impl DaReplicationPolicy {
-    fn parse(self) -> actual::DaReplicationPolicy {
-        let default = self.default_retention.into_policy();
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::DaReplicationPolicy {
+        let default = self
+            .default_retention
+            .into_policy(
+                "torii.da_ingest.replication_policy.default_retention",
+                emitter,
+            )
+            .unwrap_or_else(defaults::torii::da_replication_default_policy);
         let mut overrides = BTreeMap::new();
-        for DaReplicationOverride { class, retention } in self.overrides {
-            let parsed_class = parse_blob_class(&class);
-            let policy = retention.into_policy();
-            assert!(
-                overrides.insert(parsed_class, policy).is_none(),
-                "duplicate DA replication override for class `{class}`",
+        let mut seen_classes = BTreeSet::new();
+        for (index, DaReplicationOverride { class, retention }) in
+            self.overrides.into_iter().enumerate()
+        {
+            let path = format!("torii.da_ingest.replication_policy.overrides[{index}]");
+            let parsed_class = parse_blob_class(&class).map_or_else(
+                |message| {
+                    emit_torii_config_error(emitter, format!("{path}.class {message}"));
+                    None
+                },
+                Some,
             );
+            let policy = retention.into_policy(&format!("{path}.retention"), emitter);
+            if let Some(parsed_class) = parsed_class {
+                if !seen_classes.insert(parsed_class) {
+                    emit_torii_config_error(
+                        emitter,
+                        format!(
+                            "torii.da_ingest.replication_policy.overrides contains duplicate class `{class}`"
+                        ),
+                    );
+                } else if let Some(policy) = policy {
+                    overrides.insert(parsed_class, policy);
+                }
+            }
         }
         let mut taikai_availability = BTreeMap::new();
-        for DaTaikaiAvailabilityOverride {
-            availability_class,
-            retention,
-        } in self.taikai_availability
+        let mut seen_availability_classes = BTreeSet::new();
+        for (
+            index,
+            DaTaikaiAvailabilityOverride {
+                availability_class,
+                retention,
+            },
+        ) in self.taikai_availability.into_iter().enumerate()
         {
-            let parsed_class = parse_taikai_availability_class(&availability_class);
-            let policy = retention.into_policy();
-            assert!(
-                taikai_availability.insert(parsed_class, policy).is_none(),
-                "duplicate Taikai availability override `{availability_class}`",
+            let path = format!("torii.da_ingest.replication_policy.taikai_availability[{index}]");
+            let parsed_class = parse_taikai_availability_class(&availability_class).map_or_else(
+                |message| {
+                    emit_torii_config_error(
+                        emitter,
+                        format!("{path}.availability_class {message}"),
+                    );
+                    None
+                },
+                Some,
             );
+            let policy = retention.into_policy(&format!("{path}.retention"), emitter);
+            if let Some(parsed_class) = parsed_class {
+                if !seen_availability_classes.insert(parsed_class) {
+                    emit_torii_config_error(
+                        emitter,
+                        format!(
+                            "torii.da_ingest.replication_policy.taikai_availability contains duplicate availability_class `{availability_class}`"
+                        ),
+                    );
+                } else if let Some(policy) = policy {
+                    taikai_availability.insert(parsed_class, policy);
+                }
+            }
         }
         actual::DaReplicationPolicy::new(default, overrides, taikai_availability)
     }
@@ -19189,14 +20388,39 @@ impl DaRetentionTemplate {
             governance_tag: policy.governance_tag.0.clone(),
         }
     }
-    fn into_policy(self) -> RetentionPolicy {
-        RetentionPolicy {
+    fn into_policy(self, path: &str, emitter: &mut Emitter<ParseError>) -> Option<RetentionPolicy> {
+        let mut valid = true;
+        let storage_class = parse_storage_class(&self.storage_class).unwrap_or_else(|message| {
+            emit_torii_config_error(emitter, format!("{path}.storage_class {message}"));
+            valid = false;
+            SorafsStorageClass::Hot
+        });
+        if self.required_replicas == 0 {
+            emit_torii_config_error(
+                emitter,
+                format!("{path}.required_replicas must be greater than zero"),
+            );
+            valid = false;
+        }
+        if self.governance_tag.is_empty()
+            || self.governance_tag.trim() != self.governance_tag
+            || self.governance_tag.chars().any(char::is_control)
+        {
+            emit_torii_config_error(
+                emitter,
+                format!(
+                    "{path}.governance_tag must be non-empty and contain no surrounding whitespace or control characters"
+                ),
+            );
+            valid = false;
+        }
+        valid.then(|| RetentionPolicy {
             hot_retention_secs: self.hot_retention_secs,
             cold_retention_secs: self.cold_retention_secs,
             required_replicas: self.required_replicas,
-            storage_class: parse_storage_class(&self.storage_class),
+            storage_class,
             governance_tag: GovernanceTag::new(self.governance_tag),
-        }
+        })
     }
 }
 impl Default for DaRetentionTemplate {
@@ -19239,7 +20463,7 @@ impl DaRentPolicy {
             egress_credit_per_gib: policy.egress_credit_per_gib.clone(),
         }
     }
-    fn into_policy(self) -> DaRentPolicyV1 {
+    fn into_policy(self, emitter: &mut Emitter<ParseError>) -> Option<DaRentPolicyV1> {
         let policy = DaRentPolicyV1::from_components(
             self.base_rate_per_gib_month,
             self.protocol_reserve_bps,
@@ -19247,10 +20471,14 @@ impl DaRentPolicy {
             self.potr_bonus_bps,
             self.egress_credit_per_gib,
         );
-        policy
-            .validate()
-            .unwrap_or_else(|error| panic!("invalid DA rent policy: {error}"));
-        policy
+        if let Err(error) = policy.validate() {
+            emit_torii_config_error(
+                emitter,
+                format!("torii.da_ingest.rent_policy is invalid: {error}"),
+            );
+            return None;
+        }
+        Some(policy)
     }
 }
 impl Default for DaRentPolicy {
@@ -19303,17 +20531,27 @@ mod da_rent_policy_tests {
         let parsed =
             norito::json::from_str::<DaRentPolicy>(&policy_json(&format!("\"{wide}\""), "\"0\""))
                 .expect("wide exact XOR config");
+        let mut emitter = Emitter::new();
         assert_eq!(
-            parsed.into_policy().base_rate_per_gib_month.to_string(),
+            parsed
+                .into_policy(&mut emitter)
+                .expect("wide rate policy is valid")
+                .base_rate_per_gib_month
+                .to_string(),
             wide
         );
+        emitter
+            .into_result()
+            .expect("wide rate policy emits no diagnostics");
         let scale_nine =
             norito::json::from_str::<DaRentPolicy>(&policy_json("\"0.000000001\"", "\"0\""))
                 .expect("scale-nine value satisfies the nominal XOR boundary");
-        assert!(
-            std::panic::catch_unwind(|| scale_nine.into_policy()).is_err(),
-            "DA rate policy must retain its stricter six-decimal accounting scale"
-        );
+        let mut emitter = Emitter::new();
+        assert!(scale_nine.into_policy(&mut emitter).is_none());
+        let error = emitter
+            .into_result()
+            .expect_err("DA rate policy must retain its six-decimal accounting scale");
+        assert!(format!("{error:?}").contains("torii.da_ingest.rent_policy is invalid"));
     }
     #[test]
     fn da_rent_config_rejects_retired_micro_aliases() {
@@ -19324,22 +20562,25 @@ mod da_rent_policy_tests {
         );
     }
 }
-fn parse_blob_class(value: &str) -> BlobClass {
+fn parse_blob_class(value: &str) -> core::result::Result<BlobClass, String> {
     match value {
-        "taikai_segment" => BlobClass::TaikaiSegment,
-        "nexus_lane_sidecar" => BlobClass::NexusLaneSidecar,
-        "governance_artifact" => BlobClass::GovernanceArtifact,
-        _ => value.strip_prefix("custom:").map_or_else(
-            || {
-                panic!("unsupported blob class `{value}`");
-            },
-            |rest| {
-                let code = rest.parse::<u16>().unwrap_or_else(|err| {
-                    panic!("invalid custom blob class `{value}`: {err}");
-                });
-                BlobClass::Custom(code)
-            },
-        ),
+        "taikai_segment" => Ok(BlobClass::TaikaiSegment),
+        "nexus_lane_sidecar" => Ok(BlobClass::NexusLaneSidecar),
+        "governance_artifact" => Ok(BlobClass::GovernanceArtifact),
+        _ => {
+            let Some(encoded) = value.strip_prefix("custom:") else {
+                return Err(format!("contains unsupported blob class `{value}`"));
+            };
+            let code = encoded.parse::<u16>().map_err(|_| {
+                format!("contains invalid custom blob class `{value}`; expected `custom:<u16>`")
+            })?;
+            if encoded != code.to_string() {
+                return Err(format!(
+                    "contains non-canonical custom blob class `{value}`; expected `custom:{code}`"
+                ));
+            }
+            Ok(BlobClass::Custom(code))
+        }
     }
 }
 fn format_blob_class(class: BlobClass) -> String {
@@ -19350,12 +20591,16 @@ fn format_blob_class(class: BlobClass) -> String {
         BlobClass::Custom(code) => format!("custom:{code}"),
     }
 }
-fn parse_taikai_availability_class(value: &str) -> TaikaiAvailabilityClass {
+fn parse_taikai_availability_class(
+    value: &str,
+) -> core::result::Result<TaikaiAvailabilityClass, String> {
     match value {
-        "hot" => TaikaiAvailabilityClass::Hot,
-        "warm" => TaikaiAvailabilityClass::Warm,
-        "cold" => TaikaiAvailabilityClass::Cold,
-        other => panic!("unsupported Taikai availability_class `{other}`"),
+        "hot" => Ok(TaikaiAvailabilityClass::Hot),
+        "warm" => Ok(TaikaiAvailabilityClass::Warm),
+        "cold" => Ok(TaikaiAvailabilityClass::Cold),
+        other => Err(format!(
+            "contains unsupported value `{other}`; expected `hot`, `warm`, or `cold`"
+        )),
     }
 }
 fn format_taikai_availability_class(class: TaikaiAvailabilityClass) -> String {
@@ -19366,12 +20611,14 @@ fn format_taikai_availability_class(class: TaikaiAvailabilityClass) -> String {
     }
     .to_string()
 }
-fn parse_storage_class(value: &str) -> SorafsStorageClass {
+fn parse_storage_class(value: &str) -> core::result::Result<SorafsStorageClass, String> {
     match value {
-        "hot" => SorafsStorageClass::Hot,
-        "warm" => SorafsStorageClass::Warm,
-        "cold" => SorafsStorageClass::Cold,
-        other => panic!("unsupported storage_class `{other}`"),
+        "hot" => Ok(SorafsStorageClass::Hot),
+        "warm" => Ok(SorafsStorageClass::Warm),
+        "cold" => Ok(SorafsStorageClass::Cold),
+        other => Err(format!(
+            "contains unsupported value `{other}`; expected `hot`, `warm`, or `cold`"
+        )),
     }
 }
 fn storage_class_to_str(class: SorafsStorageClass) -> &'static str {
@@ -19387,12 +20634,22 @@ mod exact_da_label_tests {
 
     #[test]
     fn da_class_labels_reject_aliases_case_and_whitespace() {
-        assert_eq!(parse_blob_class("taikai_segment"), BlobClass::TaikaiSegment);
         assert_eq!(
-            parse_taikai_availability_class("hot"),
+            parse_blob_class("taikai_segment").expect("canonical blob class"),
+            BlobClass::TaikaiSegment
+        );
+        assert_eq!(
+            parse_blob_class("custom:42").expect("canonical custom blob class"),
+            BlobClass::Custom(42)
+        );
+        assert_eq!(
+            parse_taikai_availability_class("hot").expect("canonical availability class"),
             TaikaiAvailabilityClass::Hot
         );
-        assert_eq!(parse_storage_class("warm"), SorafsStorageClass::Warm);
+        assert_eq!(
+            parse_storage_class("warm").expect("canonical storage class"),
+            SorafsStorageClass::Warm
+        );
 
         for invalid in [
             "taikai",
@@ -19400,30 +20657,28 @@ mod exact_da_label_tests {
             "governance",
             "TAIKAI_SEGMENT",
             " taikai_segment",
+            "custom:",
+            "custom:+1",
+            "custom:01",
+            "custom:65536",
         ] {
-            assert!(
-                std::panic::catch_unwind(|| parse_blob_class(invalid)).is_err(),
-                "{invalid:?}"
-            );
+            assert!(parse_blob_class(invalid).is_err(), "{invalid:?}");
         }
         for invalid in ["HOT", " hot", "hot "] {
             assert!(
-                std::panic::catch_unwind(|| parse_taikai_availability_class(invalid)).is_err(),
+                parse_taikai_availability_class(invalid).is_err(),
                 "{invalid:?}"
             );
-            assert!(
-                std::panic::catch_unwind(|| parse_storage_class(invalid)).is_err(),
-                "{invalid:?}"
-            );
+            assert!(parse_storage_class(invalid).is_err(), "{invalid:?}");
         }
     }
 }
 /// User-facing Taikai anchoring configuration.
-#[derive(Debug, ReadConfig, Clone)]
+#[derive(ReadConfig, Clone)]
 pub struct DaTaikaiAnchor {
-    /// HTTP(S) endpoint that receives Taikai artefacts.
+    /// Absolute HTTPS endpoint that receives Taikai artefacts (HTTP only for loopback hosts).
     pub endpoint: String,
-    /// Optional bearer token for the remote service.
+    /// Optional non-empty visible-ASCII bearer token for the remote service.
     pub api_token: Option<String>,
     /// Ed25519 public key required to authenticate anchor receipts.
     pub receipt_public_key: PublicKey,
@@ -19434,39 +20689,110 @@ pub struct DaTaikaiAnchor {
     /// Absolute upload and response deadline in seconds.
     pub request_timeout_secs: u64,
 }
+impl core::fmt::Debug for DaTaikaiAnchor {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("DaTaikaiAnchor")
+            .field("endpoint", &RedactedConfigSecret::present(true))
+            .field(
+                "api_token",
+                &RedactedConfigSecret::present(self.api_token.is_some()),
+            )
+            .field("receipt_public_key", &self.receipt_public_key)
+            .field("poll_interval_secs", &self.poll_interval_secs)
+            .field("request_timeout_secs", &self.request_timeout_secs)
+            .finish()
+    }
+}
 impl DaTaikaiAnchor {
-    fn parse(self) -> actual::DaTaikaiAnchor {
-        let endpoint = url::Url::parse(&self.endpoint).unwrap_or_else(|err| {
-            panic!("invalid Taikai anchor endpoint `{}`: {err}", self.endpoint)
-        });
-        let loopback = match endpoint.host() {
-            Some(url::Host::Ipv4(address)) => address.is_loopback(),
-            Some(url::Host::Ipv6(address)) => address.is_loopback(),
-            Some(url::Host::Domain(domain)) => domain.eq_ignore_ascii_case("localhost"),
-            None => false,
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::DaTaikaiAnchor> {
+        let mut valid = true;
+        let endpoint = match url::Url::parse(&self.endpoint) {
+            Ok(endpoint) => Some(endpoint),
+            Err(_) => {
+                emit_torii_config_error(
+                    emitter,
+                    "torii.da_ingest.taikai_anchor.endpoint must be an absolute URL",
+                );
+                valid = false;
+                None
+            }
         };
-        if endpoint.scheme() != "https" && !(endpoint.scheme() == "http" && loopback) {
-            panic!(
-                "Taikai anchor endpoint `{}` must use HTTPS (HTTP is allowed only for loopback)",
-                self.endpoint
-            );
+        if let Some(endpoint) = endpoint.as_ref() {
+            let loopback = match endpoint.host() {
+                Some(url::Host::Ipv4(address)) => address.is_loopback(),
+                Some(url::Host::Ipv6(address)) => address.is_loopback(),
+                Some(url::Host::Domain(domain)) => domain.eq_ignore_ascii_case("localhost"),
+                None => false,
+            };
+            if endpoint.scheme() != "https" && !(endpoint.scheme() == "http" && loopback) {
+                emit_torii_config_error(
+                    emitter,
+                    "torii.da_ingest.taikai_anchor.endpoint must use HTTPS (HTTP is allowed only for loopback)",
+                );
+                valid = false;
+            }
+            if !endpoint.username().is_empty() || endpoint.password().is_some() {
+                emit_torii_config_error(
+                    emitter,
+                    "torii.da_ingest.taikai_anchor.endpoint must not contain user information",
+                );
+                valid = false;
+            }
+            if endpoint.fragment().is_some() {
+                emit_torii_config_error(
+                    emitter,
+                    "torii.da_ingest.taikai_anchor.endpoint must not contain a fragment",
+                );
+                valid = false;
+            }
         }
-        if !matches!(
-            self.receipt_public_key.try_algorithm(),
-            Ok(Algorithm::Ed25519)
-        ) {
-            panic!("Taikai anchor receipt_public_key must use Ed25519");
+        match self.receipt_public_key.try_algorithm() {
+            Ok(Algorithm::Ed25519) => {}
+            Ok(_) | Err(_) => {
+                emit_torii_config_error(
+                    emitter,
+                    "torii.da_ingest.taikai_anchor.receipt_public_key must use Ed25519",
+                );
+                valid = false;
+            }
+        }
+        if self.api_token.as_ref().is_some_and(|token| {
+            token.is_empty() || !token.bytes().all(|byte| matches!(byte, 0x21..=0x7e))
+        }) {
+            emit_torii_config_error(
+                emitter,
+                "torii.da_ingest.taikai_anchor.api_token must be non-empty visible ASCII without whitespace",
+            );
+            valid = false;
+        }
+        if self.poll_interval_secs == 0 {
+            emit_torii_config_error(
+                emitter,
+                "torii.da_ingest.taikai_anchor.poll_interval_secs must be positive",
+            );
+            valid = false;
         }
         if self.request_timeout_secs == 0 {
-            panic!("Taikai anchor request_timeout_secs must be positive");
+            emit_torii_config_error(
+                emitter,
+                "torii.da_ingest.taikai_anchor.request_timeout_secs must be positive",
+            );
+            valid = false;
         }
-        actual::DaTaikaiAnchor {
+        if !valid {
+            return None;
+        }
+        let Some(endpoint) = endpoint else {
+            return None;
+        };
+        Some(actual::DaTaikaiAnchor {
             endpoint,
             api_token: self.api_token,
             receipt_public_key: self.receipt_public_key,
             poll_interval: Duration::from_secs(self.poll_interval_secs),
             request_timeout: Duration::from_secs(self.request_timeout_secs),
-        }
+        })
     }
 }
 impl json::JsonSerialize for DaTaikaiAnchor {
@@ -19543,7 +20869,6 @@ impl json::JsonDeserialize for DaTaikaiAnchor {
 #[cfg(test)]
 mod da_taikai_anchor_config_tests {
     use super::*;
-    use std::panic::{AssertUnwindSafe, catch_unwind};
 
     fn anchor_config(
         endpoint: &str,
@@ -19566,6 +20891,28 @@ mod da_taikai_anchor_config_tests {
         }
     }
 
+    fn parse_valid(config: DaTaikaiAnchor) -> actual::DaTaikaiAnchor {
+        let mut emitter = Emitter::new();
+        let parsed = config
+            .parse(&mut emitter)
+            .expect("valid Taikai anchor config");
+        emitter
+            .into_result()
+            .expect("valid Taikai anchor emits no diagnostics");
+        parsed
+    }
+
+    fn parse_error(config: DaTaikaiAnchor) -> String {
+        let mut emitter = Emitter::new();
+        assert!(config.parse(&mut emitter).is_none());
+        format!(
+            "{:?}",
+            emitter
+                .into_result()
+                .expect_err("invalid Taikai anchor emits diagnostics")
+        )
+    }
+
     #[test]
     fn endpoint_requires_https_except_for_loopback() {
         for endpoint in [
@@ -19574,7 +20921,7 @@ mod da_taikai_anchor_config_tests {
             "http://127.0.0.1:8080/v1/taikai",
             "http://[::1]:8080/v1/taikai",
         ] {
-            let parsed = anchor_config(endpoint, Algorithm::Ed25519, 15).parse();
+            let parsed = parse_valid(anchor_config(endpoint, Algorithm::Ed25519, 15));
             assert_eq!(parsed.endpoint.as_str(), endpoint);
         }
 
@@ -19582,47 +20929,169 @@ mod da_taikai_anchor_config_tests {
             "http://anchor.example/v1/taikai",
             "ftp://anchor.example/v1/taikai",
         ] {
+            let error = parse_error(anchor_config(endpoint, Algorithm::Ed25519, 15));
             assert!(
-                catch_unwind(AssertUnwindSafe(|| {
-                    anchor_config(endpoint, Algorithm::Ed25519, 15).parse()
-                }))
-                .is_err(),
-                "insecure non-loopback endpoint must fail closed: {endpoint}"
+                error.contains("endpoint must use HTTPS"),
+                "insecure non-loopback endpoint must fail closed: {endpoint}: {error}"
             );
         }
     }
 
     #[test]
     fn receipt_key_requires_ed25519() {
-        let parsed =
-            anchor_config("https://anchor.example/v1/taikai", Algorithm::Ed25519, 15).parse();
+        let parsed = parse_valid(anchor_config(
+            "https://anchor.example/v1/taikai",
+            Algorithm::Ed25519,
+            15,
+        ));
         assert!(matches!(
             parsed.receipt_public_key.try_algorithm(),
             Ok(Algorithm::Ed25519)
         ));
 
+        let error = parse_error(anchor_config(
+            "https://anchor.example/v1/taikai",
+            Algorithm::Secp256k1,
+            15,
+        ));
         assert!(
-            catch_unwind(AssertUnwindSafe(|| {
-                anchor_config("https://anchor.example/v1/taikai", Algorithm::Secp256k1, 15).parse()
-            }))
-            .is_err(),
-            "non-Ed25519 receipt key must fail closed"
+            error.contains("receipt_public_key must use Ed25519"),
+            "non-Ed25519 receipt key must fail closed: {error}"
         );
     }
 
     #[test]
     fn request_timeout_must_be_nonzero() {
-        let parsed =
-            anchor_config("https://anchor.example/v1/taikai", Algorithm::Ed25519, 9).parse();
+        let parsed = parse_valid(anchor_config(
+            "https://anchor.example/v1/taikai",
+            Algorithm::Ed25519,
+            9,
+        ));
         assert_eq!(parsed.request_timeout, Duration::from_secs(9));
 
+        let error = parse_error(anchor_config(
+            "https://anchor.example/v1/taikai",
+            Algorithm::Ed25519,
+            0,
+        ));
         assert!(
-            catch_unwind(AssertUnwindSafe(|| {
-                anchor_config("https://anchor.example/v1/taikai", Algorithm::Ed25519, 0).parse()
-            }))
-            .is_err(),
-            "zero request timeout must fail closed"
+            error.contains("request_timeout_secs must be positive"),
+            "zero request timeout must fail closed: {error}"
         );
+    }
+
+    #[test]
+    fn endpoint_credentials_fragments_and_invalid_token_are_rejected_without_disclosure() {
+        let endpoint = "https://alice:endpoint-secret@anchor.example/v1/taikai#ignored";
+        let mut config = anchor_config(endpoint, Algorithm::Ed25519, 15);
+        config.api_token = Some("token secret".to_owned());
+        config.poll_interval_secs = 0;
+        let error = parse_error(config);
+        for expected in [
+            "endpoint must not contain user information",
+            "endpoint must not contain a fragment",
+            "api_token must be non-empty visible ASCII without whitespace",
+            "poll_interval_secs must be positive",
+        ] {
+            assert!(error.contains(expected), "missing {expected:?}: {error}");
+        }
+        assert!(!error.contains("endpoint-secret"));
+        assert!(!error.contains("token secret"));
+    }
+}
+#[cfg(test)]
+mod da_ingest_projection_tests {
+    use super::*;
+
+    #[test]
+    fn governance_metadata_key_is_exact_nonzero_lowercase_hex() {
+        let mut emitter = Emitter::new();
+        assert_eq!(
+            parse_da_governance_metadata_key(&"11".repeat(32), &mut emitter),
+            Some([0x11; 32])
+        );
+        emitter
+            .into_result()
+            .expect("canonical governance metadata key emits no diagnostics");
+
+        for invalid in ["AA".repeat(32), "11".repeat(31), "00".repeat(32)] {
+            let mut emitter = Emitter::new();
+            assert!(parse_da_governance_metadata_key(&invalid, &mut emitter).is_none());
+            let error = emitter
+                .into_result()
+                .expect_err("invalid governance metadata key emits a diagnostic");
+            assert!(!format!("{error:?}").contains(&invalid));
+        }
+    }
+
+    #[test]
+    fn da_projection_aggregates_invalid_policy_fields_without_unwinding() {
+        let mut config = DaIngest::default();
+        let secret = "do-not-disclose-invalid-governance-key";
+        config.governance_metadata_key_hex = Some(secret.to_owned());
+        config
+            .replication_policy
+            .default_retention
+            .required_replicas = 0;
+        config.replication_policy.default_retention.storage_class = "HOT".to_owned();
+        config.replication_policy.default_retention.governance_tag = " invalid ".to_owned();
+        config.replication_policy.overrides = vec![
+            DaReplicationOverride {
+                class: "custom:01".to_owned(),
+                retention: DaRetentionTemplate::default(),
+            },
+            DaReplicationOverride {
+                class: "taikai_segment".to_owned(),
+                retention: DaRetentionTemplate::default(),
+            },
+            DaReplicationOverride {
+                class: "taikai_segment".to_owned(),
+                retention: DaRetentionTemplate::default(),
+            },
+        ];
+        config.replication_policy.taikai_availability = vec![
+            DaTaikaiAvailabilityOverride {
+                availability_class: "warm".to_owned(),
+                retention: DaRetentionTemplate::default(),
+            },
+            DaTaikaiAvailabilityOverride {
+                availability_class: "warm".to_owned(),
+                retention: DaRetentionTemplate::default(),
+            },
+            DaTaikaiAvailabilityOverride {
+                availability_class: "WARM".to_owned(),
+                retention: DaRetentionTemplate::default(),
+            },
+        ];
+        config.rent_policy.base_rate_per_gib_month =
+            "0.000000001".parse().expect("valid XOR quantity");
+
+        let mut emitter = Emitter::new();
+        let parsed = config.parse(&mut emitter);
+        assert!(parsed.governance_metadata_key.is_none());
+        let diagnostic = format!(
+            "{:?}",
+            emitter
+                .into_result()
+                .expect_err("invalid DA config emits diagnostics")
+        );
+        for expected in [
+            "governance_metadata_key_hex",
+            "default_retention.required_replicas",
+            "default_retention.storage_class",
+            "default_retention.governance_tag",
+            "non-canonical custom blob class",
+            "duplicate class `taikai_segment`",
+            "duplicate availability_class `warm`",
+            "availability_class contains unsupported value `WARM`",
+            "rent_policy is invalid",
+        ] {
+            assert!(
+                diagnostic.contains(expected),
+                "missing {expected:?}: {diagnostic}"
+            );
+        }
+        assert!(!diagnostic.contains(secret));
     }
 }
 /// User-level configuration container for SoraFS discovery, storage, repair, and GC subsystems.
@@ -26185,7 +27654,7 @@ pub struct SorafsStorage {
     pub moderation_screening_authority_bundle_path: Option<PathBuf>,
     /// Reviewed BLAKE3 digest of the exact canonical authority bundle bytes.
     pub moderation_screening_authority_bundle_digest_hex: Option<String>,
-    /// Stable opaque PKCS#11/HSM/KMS quarantine-key provider handle.
+    /// Stable opaque deployment-owned quarantine-key provider handle.
     pub moderation_quarantine_key_provider_handle: Option<String>,
     /// Exact non-zero quarantine-key provider revision.
     pub moderation_quarantine_key_provider_revision: Option<u64>,
@@ -29822,7 +31291,12 @@ fn parse_sorafs_potr_hex32(
         return None;
     }
     let mut decoded = [0_u8; 32];
-    hex::decode_to_slice(value, &mut decoded).expect("validated lowercase fixed-width hexadecimal");
+    if hex::decode_to_slice(value, &mut decoded).is_err() {
+        emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(format!(
+            "{path} must be exactly 64 lowercase hexadecimal characters"
+        )));
+        return None;
+    }
     if decoded == [0; 32] {
         emitter.emit(
             Report::new(ParseError::InvalidSorafsConfig).attach(format!("{path} must be nonzero")),
@@ -30093,20 +31567,27 @@ impl SorafsPor {
             };
             emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(requirement));
         }
+        let auditor_signature_threshold = NonZeroU16::new(self.auditor_signature_threshold)
+            .unwrap_or_else(|| {
+                emitter.emit(
+                    Report::new(ParseError::InvalidSorafsConfig)
+                        .attach("sorafs.por.auditor_signature_threshold must be nonzero"),
+                );
+                NonZeroU16::MIN
+            });
         actual::SorafsPor {
             enabled: self.enabled,
             potr_runtime,
             epoch_interval_secs: self.epoch_interval_secs,
             response_window_secs: self.response_window_secs,
             state_dir,
-            drand: self.drand.parse(drand_state_path),
+            drand: self.drand.parse(drand_state_path, emitter),
             vrf_state_path,
             vrf_submission_deadline_secs: self.vrf_submission_deadline_secs,
             vrf_max_entries: self.vrf_max_entries,
             vrf_retention_epochs: self.vrf_retention_epochs,
             vrf_max_clock_skew_secs: self.vrf_max_clock_skew_secs,
-            auditor_signature_threshold: NonZeroU16::new(self.auditor_signature_threshold)
-                .expect("sorafs.por.auditor_signature_threshold must be non-zero"),
+            auditor_signature_threshold,
         }
     }
 }
@@ -30174,29 +31655,42 @@ impl Default for SorafsPorDrand {
     }
 }
 impl SorafsPorDrand {
-    fn parse(self, state_path: PathBuf) -> actual::SorafsPorDrand {
-        fn decode_fixed<const N: usize>(value: &str, field: &str) -> [u8; N] {
+    fn parse(
+        self,
+        state_path: PathBuf,
+        emitter: &mut Emitter<ParseError>,
+    ) -> actual::SorafsPorDrand {
+        fn decode_fixed<const N: usize>(
+            value: &str,
+            field: &str,
+            emitter: &mut Emitter<ParseError>,
+        ) -> [u8; N] {
             if value.is_empty() {
                 return [0; N];
             }
-            let bytes = hex::decode(value)
-                .unwrap_or_else(|err| panic!("sorafs.por.drand.{field} is invalid hex: {err}"));
-            assert_eq!(
-                hex::encode(&bytes),
-                value,
-                "sorafs.por.drand.{field} must be canonical lowercase hex"
-            );
-            bytes.try_into().unwrap_or_else(|bytes: Vec<u8>| {
-                panic!(
-                    "sorafs.por.drand.{field} must be {N} bytes, found {}",
-                    bytes.len()
-                )
-            })
+            if value.len() != N * 2
+                || !value
+                    .bytes()
+                    .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+            {
+                emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(format!(
+                    "sorafs.por.drand.{field} must be exactly {N} bytes of canonical lowercase hexadecimal"
+                )));
+                return [0; N];
+            }
+            let mut decoded = [0; N];
+            if hex::decode_to_slice(value, &mut decoded).is_err() {
+                emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(format!(
+                    "sorafs.por.drand.{field} must be exactly {N} bytes of canonical lowercase hexadecimal"
+                )));
+                return [0; N];
+            }
+            decoded
         }
         actual::SorafsPorDrand {
             scheme: self.scheme,
-            chain_hash: decode_fixed(&self.chain_hash_hex, "chain_hash_hex"),
-            public_key: decode_fixed(&self.public_key_hex, "public_key_hex"),
+            chain_hash: decode_fixed(&self.chain_hash_hex, "chain_hash_hex", emitter),
+            public_key: decode_fixed(&self.public_key_hex, "public_key_hex", emitter),
             genesis_time: self.genesis_time,
             period_secs: self.period_secs,
             endpoints: self.endpoints,
@@ -30251,14 +31745,45 @@ fn assert_sorafs_por_config_invalid(config: SorafsPor) {
 fn sorafs_por_rejects_zero_auditor_signature_threshold() {
     let mut config = SorafsPor::default();
     config.auditor_signature_threshold = 0;
-    assert!(
-        std::panic::catch_unwind(|| {
-            let mut emitter = Emitter::new();
-            config.parse(&mut emitter)
-        })
-        .is_err(),
-        "zero auditor threshold must fail closed during config parsing"
+    let mut emitter = Emitter::new();
+    let parsed = config.parse(&mut emitter);
+    assert_eq!(parsed.auditor_signature_threshold, NonZeroU16::MIN);
+    let diagnostic = format!(
+        "{:?}",
+        emitter
+            .into_result()
+            .expect_err("zero auditor threshold must emit a configuration error")
     );
+    assert!(
+        diagnostic.contains("sorafs.por.auditor_signature_threshold must be nonzero"),
+        "unexpected diagnostic: {diagnostic}"
+    );
+}
+#[cfg(test)]
+#[test]
+fn sorafs_por_accumulates_malformed_drand_hex_diagnostics() {
+    let mut config = SorafsPor::default();
+    config.drand.chain_hash_hex = "gg".repeat(32);
+    config.drand.public_key_hex = "AA".repeat(96);
+    let mut emitter = Emitter::new();
+    let parsed = config.parse(&mut emitter);
+    assert_eq!(parsed.drand.chain_hash, [0; 32]);
+    assert_eq!(parsed.drand.public_key, [0; 96]);
+    let diagnostic = format!(
+        "{:?}",
+        emitter
+            .into_result()
+            .expect_err("malformed drand pins must emit configuration errors")
+    );
+    for expected in [
+        "sorafs.por.drand.chain_hash_hex must be exactly 32 bytes of canonical lowercase hexadecimal",
+        "sorafs.por.drand.public_key_hex must be exactly 96 bytes of canonical lowercase hexadecimal",
+    ] {
+        assert!(
+            diagnostic.contains(expected),
+            "missing {expected:?}: {diagnostic}"
+        );
+    }
 }
 #[cfg(test)]
 #[test]
@@ -30659,41 +32184,41 @@ impl SorafsQuota {
 #[derive(Debug, ReadConfig, Clone, Copy, norito::JsonDeserialize)]
 pub struct SorafsAliasCache {
     /// Positive TTL in seconds applied to cached alias proofs.
-    #[config(default = "defaults::torii::SORAFS_ALIAS_POSITIVE_TTL_SECS")]
+    #[config(default = "iroha_service_model::sorafs::DEFAULT_ALIAS_POSITIVE_TTL_SECS")]
     pub positive_ttl: u64,
     /// Refresh window in seconds before the positive TTL elapses.
-    #[config(default = "defaults::torii::SORAFS_ALIAS_REFRESH_WINDOW_SECS")]
+    #[config(default = "iroha_service_model::sorafs::DEFAULT_ALIAS_REFRESH_WINDOW_SECS")]
     pub refresh_window: u64,
     /// Hard expiry in seconds after which stale proofs are rejected.
-    #[config(default = "defaults::torii::SORAFS_ALIAS_HARD_EXPIRY_SECS")]
+    #[config(default = "iroha_service_model::sorafs::DEFAULT_ALIAS_HARD_EXPIRY_SECS")]
     pub hard_expiry: u64,
     /// Negative cache TTL in seconds for missing aliases.
-    #[config(default = "defaults::torii::SORAFS_ALIAS_NEGATIVE_TTL_SECS")]
+    #[config(default = "iroha_service_model::sorafs::DEFAULT_ALIAS_NEGATIVE_TTL_SECS")]
     pub negative_ttl: u64,
     /// TTL in seconds for revoked aliases (`410 Gone` responses).
-    #[config(default = "defaults::torii::SORAFS_ALIAS_REVOCATION_TTL_SECS")]
+    #[config(default = "iroha_service_model::sorafs::DEFAULT_ALIAS_REVOCATION_TTL_SECS")]
     pub revocation_ttl: u64,
     /// Maximum age in seconds tolerated before alias proof bundles must rotate.
-    #[config(default = "defaults::torii::SORAFS_ALIAS_ROTATION_MAX_AGE_SECS")]
+    #[config(default = "iroha_service_model::sorafs::DEFAULT_ALIAS_ROTATION_MAX_AGE_SECS")]
     pub rotation_max_age: u64,
     /// Grace period in seconds applied after an approved successor before refusing predecessor proofs.
-    #[config(default = "defaults::torii::SORAFS_ALIAS_SUCCESSOR_GRACE_SECS")]
+    #[config(default = "iroha_service_model::sorafs::DEFAULT_ALIAS_SUCCESSOR_GRACE_SECS")]
     pub successor_grace: u64,
     /// Grace period in seconds applied to governance rotation events.
-    #[config(default = "defaults::torii::SORAFS_ALIAS_GOVERNANCE_GRACE_SECS")]
+    #[config(default = "iroha_service_model::sorafs::DEFAULT_ALIAS_GOVERNANCE_GRACE_SECS")]
     pub governance_grace: u64,
 }
 impl Default for SorafsAliasCache {
     fn default() -> Self {
         Self {
-            positive_ttl: defaults::torii::SORAFS_ALIAS_POSITIVE_TTL_SECS,
-            refresh_window: defaults::torii::SORAFS_ALIAS_REFRESH_WINDOW_SECS,
-            hard_expiry: defaults::torii::SORAFS_ALIAS_HARD_EXPIRY_SECS,
-            negative_ttl: defaults::torii::SORAFS_ALIAS_NEGATIVE_TTL_SECS,
-            revocation_ttl: defaults::torii::SORAFS_ALIAS_REVOCATION_TTL_SECS,
-            rotation_max_age: defaults::torii::SORAFS_ALIAS_ROTATION_MAX_AGE_SECS,
-            successor_grace: defaults::torii::SORAFS_ALIAS_SUCCESSOR_GRACE_SECS,
-            governance_grace: defaults::torii::SORAFS_ALIAS_GOVERNANCE_GRACE_SECS,
+            positive_ttl: iroha_service_model::sorafs::DEFAULT_ALIAS_POSITIVE_TTL_SECS,
+            refresh_window: iroha_service_model::sorafs::DEFAULT_ALIAS_REFRESH_WINDOW_SECS,
+            hard_expiry: iroha_service_model::sorafs::DEFAULT_ALIAS_HARD_EXPIRY_SECS,
+            negative_ttl: iroha_service_model::sorafs::DEFAULT_ALIAS_NEGATIVE_TTL_SECS,
+            revocation_ttl: iroha_service_model::sorafs::DEFAULT_ALIAS_REVOCATION_TTL_SECS,
+            rotation_max_age: iroha_service_model::sorafs::DEFAULT_ALIAS_ROTATION_MAX_AGE_SECS,
+            successor_grace: iroha_service_model::sorafs::DEFAULT_ALIAS_SUCCESSOR_GRACE_SECS,
+            governance_grace: iroha_service_model::sorafs::DEFAULT_ALIAS_GOVERNANCE_GRACE_SECS,
         }
     }
 }
@@ -30782,18 +32307,28 @@ impl SorafsGateway {
             untrusted_hosting,
             direct_mode,
         } = self;
-        let rollout_phase = actual::SorafsRolloutPhase::parse(&rollout_phase).unwrap_or_else(|| {
-            panic!(
-                "invalid `sorafs.gateway.rollout_phase` value `{rollout_phase}`; expected exactly canary|ramp|default"
-            )
-        });
-        let explicit_stage = anonymity_policy.map(|label| {
-            actual::SorafsAnonymityStage::parse(&label).unwrap_or_else(|| {
-                panic!(
-                    "invalid `sorafs.gateway.anonymity_policy` value `{label}`; expected exactly anon-guard-pq|anon-majority-pq|anon-strict-pq"
-                )
-            })
-        });
+        let rollout_phase = match iroha_service_model::soranet::RolloutPhase::parse(&rollout_phase)
+        {
+            Some(phase) => phase,
+            None => {
+                emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(format!(
+                    "invalid `sorafs.gateway.rollout_phase` value `{rollout_phase}`; expected exactly canary|ramp|default"
+                )));
+                iroha_service_model::soranet::RolloutPhase::default()
+            }
+        };
+        let anonymity_policy = match anonymity_policy {
+            Some(label) => match iroha_service_model::soranet::AnonymityPolicy::parse(&label) {
+                Some(stage) => stage,
+                None => {
+                    emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(format!(
+                        "invalid `sorafs.gateway.anonymity_policy` value `{label}`; expected exactly anon-guard-pq|anon-majority-pq|anon-strict-pq"
+                    )));
+                    rollout_phase.default_anonymity_policy()
+                }
+            },
+            None => rollout_phase.default_anonymity_policy(),
+        };
         actual::SorafsGateway {
             require_manifest_envelope,
             enforce_admission,
@@ -30805,11 +32340,88 @@ impl SorafsGateway {
             acme: acme.parse(emitter),
             compliance: compliance.parse(emitter),
             rollout_phase,
-            anonymity_policy: Some(
-                explicit_stage.unwrap_or_else(|| rollout_phase.default_anonymity_policy()),
-            ),
+            anonymity_policy: Some(anonymity_policy),
             direct_mode: direct_mode.map(SorafsGatewayDirectMode::parse),
         }
+    }
+}
+#[cfg(test)]
+mod sorafs_gateway_label_config_tests {
+    use super::*;
+
+    #[test]
+    fn canonical_gateway_labels_parse_exactly() {
+        for (rollout_label, expected_rollout, anonymity_label, expected_anonymity) in [
+            (
+                "canary",
+                iroha_service_model::soranet::RolloutPhase::Canary,
+                "anon-guard-pq",
+                iroha_service_model::soranet::AnonymityPolicy::GuardPq,
+            ),
+            (
+                "ramp",
+                iroha_service_model::soranet::RolloutPhase::Ramp,
+                "anon-majority-pq",
+                iroha_service_model::soranet::AnonymityPolicy::MajorityPq,
+            ),
+            (
+                "default",
+                iroha_service_model::soranet::RolloutPhase::Default,
+                "anon-strict-pq",
+                iroha_service_model::soranet::AnonymityPolicy::StrictPq,
+            ),
+        ] {
+            let mut emitter = Emitter::new();
+            let parsed = SorafsGateway {
+                rollout_phase: rollout_label.to_owned(),
+                anonymity_policy: Some(anonymity_label.to_owned()),
+                ..SorafsGateway::default()
+            }
+            .parse(&mut emitter);
+
+            assert!(emitter.into_result().is_ok(), "{rollout_label}");
+            assert_eq!(parsed.rollout_phase, expected_rollout);
+            assert_eq!(parsed.anonymity_policy, Some(expected_anonymity));
+        }
+    }
+
+    #[test]
+    fn invalid_gateway_labels_accumulate_diagnostics_without_unwinding() {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut emitter = Emitter::new();
+            let parsed = SorafsGateway {
+                rollout_phase: " Canary".to_owned(),
+                anonymity_policy: Some("ANON-GUARD-PQ".to_owned()),
+                ..SorafsGateway::default()
+            }
+            .parse(&mut emitter);
+            let diagnostic = format!(
+                "{:?}",
+                emitter
+                    .into_result()
+                    .expect_err("non-canonical gateway labels must emit diagnostics")
+            );
+            (parsed, diagnostic)
+        }));
+
+        let (parsed, diagnostic) =
+            result.expect("ordinary SoraFS gateway configuration errors must not unwind");
+        assert_eq!(
+            parsed.rollout_phase,
+            iroha_service_model::soranet::RolloutPhase::Canary
+        );
+        assert_eq!(
+            parsed.anonymity_policy,
+            Some(iroha_service_model::soranet::AnonymityPolicy::GuardPq)
+        );
+        assert!(
+            diagnostic.contains("sorafs.gateway.rollout_phase"),
+            "{diagnostic}"
+        );
+        assert!(
+            diagnostic.contains("sorafs.gateway.anonymity_policy"),
+            "{diagnostic}"
+        );
     }
 }
 /// User-level source and resource bounds for named static-site bindings.
@@ -31693,13 +33305,13 @@ impl SorafsAdvertOverrides {
 #[derive(Debug, ReadConfig, Clone, Copy, norito::JsonDeserialize)]
 pub struct SorafsMeteringSmoothing {
     /// Enable EMA smoothing for GiB·hour counters.
-    #[config(default = "false")]
+    #[config(default = "true")]
     pub gib_hours_enabled: bool,
     /// Alpha used for GiB·hour EMA (values <= 0 disable smoothing).
     #[config(default = "0.2")]
     pub gib_hours_alpha: f64,
     /// Enable EMA smoothing for PoR success counters.
-    #[config(default = "false")]
+    #[config(default = "true")]
     pub por_success_enabled: bool,
     /// Alpha used for PoR success EMA (values <= 0 disable smoothing).
     #[config(default = "0.2")]
@@ -31708,9 +33320,9 @@ pub struct SorafsMeteringSmoothing {
 impl Default for SorafsMeteringSmoothing {
     fn default() -> Self {
         Self {
-            gib_hours_enabled: false,
+            gib_hours_enabled: true,
             gib_hours_alpha: 0.2,
-            por_success_enabled: false,
+            por_success_enabled: true,
             por_success_alpha: 0.2,
         }
     }
@@ -31731,6 +33343,19 @@ impl SorafsMeteringSmoothing {
         }
     }
 }
+const SORAFS_DISCOVERY_CAPABILITY_NAMES_V1: [&str; 6] = [
+    "torii_gateway",
+    "quic_noise",
+    "chunk_range_fetch",
+    "soranet_pq",
+    "potr_mldsa",
+    "vendor_reserved",
+];
+
+fn is_sorafs_discovery_capability_name_v1(name: &str) -> bool {
+    SORAFS_DISCOVERY_CAPABILITY_NAMES_V1.contains(&name)
+}
+
 /// Torii discovery cache configuration for SoraFS provider adverts.
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
 pub struct SorafsDiscovery {
@@ -31775,13 +33400,41 @@ impl SorafsDiscovery {
                 "sorafs.discovery.discovery_enabled requires a configured admission trust policy",
             ));
         }
+        let mut capabilities_valid = true;
+        if self.discovery_enabled && self.known_capabilities.is_empty() {
+            emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(
+                "sorafs.discovery.known_capabilities must not be empty when discovery is enabled",
+            ));
+            capabilities_valid = false;
+        }
+        let mut seen_capabilities = BTreeSet::new();
+        for (index, capability) in self.known_capabilities.iter().enumerate() {
+            if !is_sorafs_discovery_capability_name_v1(capability) {
+                emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(format!(
+                    "sorafs.discovery.known_capabilities[{index}] must be one of the exact V1 labels: {}",
+                    SORAFS_DISCOVERY_CAPABILITY_NAMES_V1.join(", ")
+                )));
+                capabilities_valid = false;
+            }
+            if !seen_capabilities.insert(capability.as_str()) {
+                emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(format!(
+                    "sorafs.discovery.known_capabilities[{index}] duplicates an earlier entry"
+                )));
+                capabilities_valid = false;
+            }
+        }
+        let known_capabilities = if capabilities_valid {
+            self.known_capabilities
+        } else {
+            defaults::torii::sorafs_known_capabilities()
+        };
         actual::SorafsDiscovery {
             discovery_enabled: self.discovery_enabled,
-            known_capabilities: self.known_capabilities,
+            known_capabilities,
             replay_checkpoint_path: self.replay_checkpoint_path,
             replay_checkpoint_max_entries: self.replay_checkpoint_max_entries,
             admission,
-            publish: self.publish.parse(),
+            publish: self.publish.parse(emitter),
         }
     }
 }
@@ -31795,19 +33448,187 @@ pub struct SorafsPublishDiscoveryConfig {
     pub pin_torii_urls: Vec<String>,
 }
 impl SorafsPublishDiscoveryConfig {
-    fn parse(self) -> actual::SorafsPublishDiscovery {
-        actual::SorafsPublishDiscovery {
-            gateway_base_url: self
-                .gateway_base_url
-                .map(|url| url.trim().trim_end_matches('/').to_string())
-                .filter(|url| !url.is_empty()),
-            pin_torii_urls: self
-                .pin_torii_urls
-                .into_iter()
-                .map(|url| url.trim().trim_end_matches('/').to_string())
-                .filter(|url| !url.is_empty())
-                .collect(),
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::SorafsPublishDiscovery {
+        let gateway_base_url = self.gateway_base_url.and_then(|raw| {
+            Self::parse_url(&raw, "sorafs.discovery.publish.gateway_base_url", emitter)
+        });
+        if self.pin_torii_urls.len() > actual::SORAFS_PUBLISH_PIN_TORII_URLS_MAX_V1 {
+            emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(format!(
+                "sorafs.discovery.publish.pin_torii_urls must contain at most {} entries",
+                actual::SORAFS_PUBLISH_PIN_TORII_URLS_MAX_V1
+            )));
         }
+        let mut seen_urls = BTreeSet::new();
+        let mut pin_torii_urls = Vec::with_capacity(
+            self.pin_torii_urls
+                .len()
+                .min(actual::SORAFS_PUBLISH_PIN_TORII_URLS_MAX_V1),
+        );
+        for (index, raw) in self
+            .pin_torii_urls
+            .into_iter()
+            .take(actual::SORAFS_PUBLISH_PIN_TORII_URLS_MAX_V1)
+            .enumerate()
+        {
+            let field = format!("sorafs.discovery.publish.pin_torii_urls[{index}]");
+            let Some(url) = Self::parse_url(&raw, &field, emitter) else {
+                continue;
+            };
+            if !seen_urls.insert(url.as_str().to_owned()) {
+                emitter.emit(
+                    Report::new(ParseError::InvalidSorafsConfig)
+                        .attach(format!("{field} duplicates an earlier entry")),
+                );
+                continue;
+            }
+            pin_torii_urls.push(url);
+        }
+        actual::SorafsPublishDiscovery {
+            gateway_base_url,
+            pin_torii_urls,
+        }
+    }
+
+    fn parse_url(
+        raw: &str,
+        field: &str,
+        emitter: &mut Emitter<ParseError>,
+    ) -> Option<actual::SorafsPublishBaseUrl> {
+        match raw.parse() {
+            Ok(url) => Some(url),
+            Err(err) => {
+                emitter.emit(
+                    Report::new(ParseError::InvalidSorafsConfig).attach(format!("{field} {err}")),
+                );
+                None
+            }
+        }
+    }
+}
+#[cfg(test)]
+mod sorafs_publish_discovery_config_tests {
+    use super::*;
+
+    fn parse(
+        config: SorafsPublishDiscoveryConfig,
+    ) -> (
+        actual::SorafsPublishDiscovery,
+        core::result::Result<(), Report<[ParseError]>>,
+    ) {
+        let mut emitter = Emitter::new();
+        let parsed = config.parse(&mut emitter);
+        (parsed, emitter.into_result())
+    }
+
+    #[test]
+    fn publish_origins_accept_only_canonical_https_and_literal_loopback_http() {
+        let (parsed, result) = parse(SorafsPublishDiscoveryConfig {
+            gateway_base_url: Some("https://gateway.example".to_owned()),
+            pin_torii_urls: vec![
+                "https://pin.example:8443".to_owned(),
+                "http://127.0.0.1:8080".to_owned(),
+                "http://[::1]:8081".to_owned(),
+            ],
+        });
+        result.expect("canonical publish origins must be accepted");
+        assert_eq!(
+            parsed.gateway_base_url.as_ref().map(|url| url.as_str()),
+            Some("https://gateway.example")
+        );
+        assert_eq!(
+            parsed
+                .pin_torii_urls
+                .iter()
+                .map(|url| url.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "https://pin.example:8443",
+                "http://127.0.0.1:8080",
+                "http://[::1]:8081",
+            ]
+        );
+    }
+
+    #[test]
+    fn publish_origins_accumulate_noncanonical_and_unsafe_url_diagnostics() {
+        let oversized = format!("https://{}.example", "a".repeat(2_048));
+        let (parsed, result) = parse(SorafsPublishDiscoveryConfig {
+            gateway_base_url: Some(" https://gateway.example".to_owned()),
+            pin_torii_urls: vec![
+                "https://pin.example".to_owned(),
+                "https://pin.example".to_owned(),
+                "https://PIN.example".to_owned(),
+                "https://pin.example:443".to_owned(),
+                "https://pin.example/".to_owned(),
+                "https://pin.example/path".to_owned(),
+                "https://pin.example?region=1".to_owned(),
+                "https://pin.example#peer".to_owned(),
+                "https://operator@pin.example".to_owned(),
+                "https://pin.example.".to_owned(),
+                "http://localhost:8080".to_owned(),
+                "http://192.0.2.1".to_owned(),
+                "https://pin.example:0".to_owned(),
+                String::new(),
+                oversized,
+            ],
+        });
+        let diagnostic = format!(
+            "{:?}",
+            result.expect_err("unsafe and noncanonical publish origins must fail closed")
+        );
+        for expected in [
+            "gateway_base_url must use exact canonical spelling",
+            "pin_torii_urls[1] duplicates an earlier entry",
+            "pin_torii_urls[2] must use exact canonical spelling",
+            "pin_torii_urls[3] must use exact canonical spelling",
+            "pin_torii_urls[4] must use exact canonical spelling",
+            "pin_torii_urls[5] must be an origin without a path",
+            "pin_torii_urls[6] must not contain a query",
+            "pin_torii_urls[7] must not contain a fragment",
+            "pin_torii_urls[8] must not contain user information",
+            "pin_torii_urls[9] must use exact canonical spelling",
+            "pin_torii_urls[10] must use HTTPS",
+            "pin_torii_urls[11] must use HTTPS",
+            "pin_torii_urls[12] must not use port zero",
+            "pin_torii_urls[13] must not be empty",
+            "pin_torii_urls[14] must not exceed 2048 bytes",
+        ] {
+            assert!(
+                diagnostic.contains(expected),
+                "missing {expected:?}: {diagnostic}"
+            );
+        }
+        assert!(parsed.gateway_base_url.is_none());
+        assert_eq!(
+            parsed
+                .pin_torii_urls
+                .iter()
+                .map(|url| url.as_str())
+                .collect::<Vec<_>>(),
+            ["https://pin.example"]
+        );
+    }
+
+    #[test]
+    fn publish_pin_origin_count_is_bounded_by_the_complete_readback_window() {
+        let (parsed, result) = parse(SorafsPublishDiscoveryConfig {
+            gateway_base_url: None,
+            pin_torii_urls: (0..=actual::SORAFS_PUBLISH_PIN_TORII_URLS_MAX_V1)
+                .map(|index| format!("https://pin-{index}.example"))
+                .collect(),
+        });
+        let diagnostic = format!(
+            "{:?}",
+            result.expect_err("unreadable publish origins beyond the V1 limit must be rejected")
+        );
+        assert!(
+            diagnostic.contains("pin_torii_urls must contain at most 500 entries"),
+            "{diagnostic}"
+        );
+        assert_eq!(
+            parsed.pin_torii_urls.len(),
+            actual::SORAFS_PUBLISH_PIN_TORII_URLS_MAX_V1
+        );
     }
 }
 /// Governance admission configuration for SoraFS discovery ingress.
@@ -31970,6 +33791,90 @@ mod sorafs_admission_config_tests {
         assert!(parsed.admission.is_none());
         assert!(emitter.into_result().is_err());
     }
+
+    #[test]
+    fn discovery_accepts_only_the_exact_v1_capability_names() {
+        let expected = SORAFS_DISCOVERY_CAPABILITY_NAMES_V1
+            .map(str::to_owned)
+            .to_vec();
+        let mut discovery = SorafsDiscovery::default();
+        discovery.discovery_enabled = true;
+        discovery.known_capabilities = expected.clone();
+        discovery.admission = valid_config();
+        let mut emitter = Emitter::new();
+        let parsed = discovery.parse(&mut emitter);
+        emitter
+            .into_result()
+            .expect("the complete canonical V1 capability set must be accepted");
+        assert_eq!(parsed.known_capabilities, expected);
+    }
+
+    #[test]
+    fn enabled_discovery_rejects_empty_and_duplicate_capability_lists() {
+        let mut empty = SorafsDiscovery::default();
+        empty.discovery_enabled = true;
+        empty.known_capabilities.clear();
+        empty.admission = valid_config();
+        let mut emitter = Emitter::new();
+        let parsed = empty.parse(&mut emitter);
+        let error = emitter
+            .into_result()
+            .expect_err("an enabled empty capability list must fail closed");
+        assert!(format!("{error:?}").contains(
+            "sorafs.discovery.known_capabilities must not be empty when discovery is enabled"
+        ));
+        assert_eq!(
+            parsed.known_capabilities,
+            defaults::torii::sorafs_known_capabilities()
+        );
+
+        let mut duplicate = SorafsDiscovery::default();
+        duplicate.discovery_enabled = true;
+        duplicate.known_capabilities = vec!["torii_gateway".into(), "torii_gateway".into()];
+        duplicate.admission = valid_config();
+        let mut emitter = Emitter::new();
+        let parsed = duplicate.parse(&mut emitter);
+        let error = emitter
+            .into_result()
+            .expect_err("an enabled duplicate capability list must fail closed");
+        assert!(
+            format!("{error:?}")
+                .contains("sorafs.discovery.known_capabilities[1] duplicates an earlier entry")
+        );
+        assert_eq!(
+            parsed.known_capabilities,
+            defaults::torii::sorafs_known_capabilities()
+        );
+    }
+
+    #[test]
+    fn discovery_accumulates_unknown_and_noncanonical_capability_diagnostics() {
+        let mut discovery = SorafsDiscovery::default();
+        discovery.known_capabilities = vec!["TORII_GATEWAY".into(), "torii".into(), "torii".into()];
+        let mut emitter = Emitter::new();
+        let parsed = discovery.parse(&mut emitter);
+        let error = emitter.into_result().expect_err(
+            "unknown and noncanonical labels must fail even when discovery is disabled",
+        );
+        let diagnostic = format!("{error:?}");
+        for index in 0..3 {
+            assert!(
+                diagnostic.contains(&format!(
+                    "sorafs.discovery.known_capabilities[{index}] must be one of the exact V1 labels"
+                )),
+                "missing diagnostic for invalid label {index}: {diagnostic}"
+            );
+        }
+        assert!(
+            diagnostic
+                .contains("sorafs.discovery.known_capabilities[2] duplicates an earlier entry"),
+            "missing duplicate diagnostic: {diagnostic}"
+        );
+        assert_eq!(
+            parsed.known_capabilities,
+            defaults::torii::sorafs_known_capabilities()
+        );
+    }
 }
 impl IsoBridge {
     fn parse(self) -> actual::IsoBridge {
@@ -31989,6 +33894,12 @@ impl IsoBridge {
             audit_export_dir: self.audit_export_dir,
             embedded_signature_policy: self.embedded_signature_policy,
             signer: self.signer.map(IsoBridgeSigner::parse),
+            participants: self
+                .participants
+                .into_iter()
+                .map(IsoBridgeParticipant::parse)
+                .collect(),
+            audit_admin_keys: self.audit_admin_keys,
             account_aliases: self
                 .account_aliases
                 .into_iter()
@@ -32000,6 +33911,17 @@ impl IsoBridge {
                 .map(IsoCurrencyAsset::parse)
                 .collect(),
             reference_data: self.reference_data.parse(),
+        }
+    }
+}
+impl IsoBridgeParticipant {
+    fn parse(self) -> actual::IsoBridgeParticipant {
+        actual::IsoBridgeParticipant {
+            id: self.id,
+            operator_keys: self.operator_keys,
+            financial_identifiers: self.financial_identifiers,
+            allowed_profiles: self.allowed_profiles,
+            roles: self.roles,
         }
     }
 }
@@ -32203,7 +34125,7 @@ impl IsoCurrencyAsset {
     }
 }
 #[cfg(test)]
-mod offline_cfg_tests {
+mod configuration_regression_tests {
     use super::*;
     use core::str::FromStr;
     use iroha_data_model::DomainId;
@@ -32547,6 +34469,14 @@ mod offline_cfg_tests {
     }
     #[test]
     fn iso_bridge_parse_accepts_asset_alias_selector() {
+        let participant_key = KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
+            .expect("participant key")
+            .public_key()
+            .clone();
+        let audit_key = KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
+            .expect("audit key")
+            .public_key()
+            .clone();
         let cfg = IsoBridge {
             enabled: true,
             max_body_bytes: defaults::torii::ISO_BRIDGE_MAX_BODY_BYTES,
@@ -32559,6 +34489,14 @@ mod offline_cfg_tests {
             audit_export_dir: None,
             embedded_signature_policy: None,
             signer: None,
+            participants: vec![IsoBridgeParticipant {
+                id: "bank-a".to_owned(),
+                operator_keys: vec![participant_key.clone()],
+                financial_identifiers: vec!["BANKAUS1".to_owned()],
+                allowed_profiles: vec!["generic-iso20022".to_owned()],
+                roles: vec!["originator".to_owned()],
+            }],
+            audit_admin_keys: vec![audit_key.clone()],
             account_aliases: Vec::new(),
             currency_assets: vec![IsoCurrencyAsset {
                 currency: "USD".to_owned(),
@@ -32569,6 +34507,9 @@ mod offline_cfg_tests {
         };
         let parsed = cfg.parse();
         assert_eq!(parsed.currency_assets[0].asset_definition, "usd#fin");
+        assert_eq!(parsed.participants[0].id, "bank-a");
+        assert_eq!(parsed.participants[0].operator_keys, vec![participant_key]);
+        assert_eq!(parsed.audit_admin_keys, vec![audit_key]);
     }
     #[test]
     fn iso_bridge_parse_rejects_invalid_asset_selector() {
@@ -32584,6 +34525,8 @@ mod offline_cfg_tests {
             audit_export_dir: None,
             embedded_signature_policy: None,
             signer: None,
+            participants: Vec::new(),
+            audit_admin_keys: Vec::new(),
             account_aliases: Vec::new(),
             currency_assets: vec![IsoCurrencyAsset {
                 currency: "USD".to_owned(),
@@ -32752,12 +34695,11 @@ mod offline_cfg_tests {
             approval_threshold_q_num: 2,
             approval_threshold_q_den: 3,
             min_turnout: 123,
-            parliament_committee_size: 11,
-            parliament_term_blocks: 12_345,
-            parliament_min_stake: 456_u64.into(),
-            parliament_eligibility_asset_id: defaults::governance::parliament_eligibility_asset_id(
-            ),
-            parliament_alternate_size: Some(13),
+            parliament_alternate_size: 13,
+            parliament_tle_key_lifecycle: ParliamentTleKeyLifecycle {
+                session_lifetime_blocks: 77,
+                max_fresh_ballots_per_session: 2,
+            },
             ..Governance::default()
         };
         let parsed = cfg.parse();
@@ -32790,6 +34732,13 @@ mod offline_cfg_tests {
         );
         assert_eq!(parsed.min_bond_amount, Quantity::from(42_u64));
         assert_eq!(
+            parsed.parliament_tle_key_lifecycle,
+            actual::ParliamentTleKeyLifecycle {
+                session_lifetime_blocks: 77,
+                max_fresh_ballots_per_session: 2,
+            }
+        );
+        assert_eq!(
             parsed.bond_escrow_account,
             iroha_data_model::account::AccountId::parse_encoded(
                 &defaults::governance::bond_escrow_account()
@@ -32799,17 +34748,26 @@ mod offline_cfg_tests {
         assert_eq!(parsed.approval_threshold_q_num, 2);
         assert_eq!(parsed.approval_threshold_q_den, 3);
         assert_eq!(parsed.min_turnout, 123);
-        assert_eq!(parsed.parliament_committee_size, 11);
-        assert_eq!(parsed.parliament_term_blocks, 12_345);
-        assert_eq!(parsed.parliament_min_stake, Quantity::from(456_u64));
-        assert_eq!(
-            parsed.parliament_eligibility_asset_id,
-            iroha_data_model::asset::prelude::AssetDefinitionId::derive_from_components(
-                DomainId::try_new("stake", "universal").unwrap(),
-                "SORA".parse().unwrap()
-            )
-        );
-        assert_eq!(parsed.parliament_alternate_size, Some(13));
+        assert_eq!(parsed.parliament_alternate_size, 13);
+    }
+
+    #[test]
+    fn parliament_tle_key_lifecycle_rejects_zero_bounds() {
+        for policy in [
+            ParliamentTleKeyLifecycle {
+                session_lifetime_blocks: 0,
+                max_fresh_ballots_per_session: 1,
+            },
+            ParliamentTleKeyLifecycle {
+                session_lifetime_blocks: 1,
+                max_fresh_ballots_per_session: 0,
+            },
+        ] {
+            assert!(
+                std::panic::catch_unwind(|| policy.parse()).is_err(),
+                "zero TLE lifecycle bounds must fail closed"
+            );
+        }
     }
     #[test]
     fn governance_default_account_literals_ignore_chain_override() {
@@ -32884,13 +34842,18 @@ mod duration_clamp_tests {
         RETIRED_LANE_FUNCTIONAL_METADATA_KEYS, SORA_INROU_EPHEMERAL_STORAGE_ALIGNMENT_BYTES_V1,
         SORA_INROU_MIN_CPU_MILLIS_V1, SORA_INROU_MIN_MEMORY_BYTES_V1,
         SORA_INROU_VMM_CPU_OVERHEAD_MILLIS_V1, SORA_INROU_VMM_MEMORY_OVERHEAD_BYTES_V1,
-        UniversalAccountId, parse_content_auth_mode,
+        UniversalAccountId, Url, parse_content_auth_mode,
     };
     use crate::parameters::{
         actual, defaults,
         user::{LaneValidatorModeConfig, SoracloudRuntime},
     };
-    use iroha_config_base::{env::MockEnv, read::ConfigReader, toml::TomlSource, util::Bytes};
+    use iroha_config_base::{
+        env::MockEnv,
+        read::ConfigReader,
+        toml::TomlSource,
+        util::{Bytes, DurationMs},
+    };
     use iroha_crypto::{Algorithm, ExposedPrivateKey, Hash, HashOf, KeyPair};
     use iroha_data_model::{
         NetworkId,
@@ -33006,6 +34969,35 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             .expect("load minimal user config")
     }
     #[test]
+    fn enabled_sccp_replay_snapshot_must_fit_the_norito_archive_limit() {
+        let mut config = load_user_root(base_table());
+        let replay_archive = &mut config.torii.sccp_replay_archive;
+        replay_archive.enabled = true;
+        replay_archive.state_dir = Some(PathBuf::from("/var/lib/iroha/sccp-replay"));
+        replay_archive.replicas = (1_u8..=3)
+            .map(|index| {
+                let key_pair = KeyPair::from_seed(vec![index; 32], Algorithm::Ed25519);
+                super::ToriiSccpReplayArchiveReplica {
+                    replica_id_hex: hex::encode([index; 32]),
+                    origin: super::Url::parse(&format!("https://replay-{index}.example/"))
+                        .expect("valid replica URL"),
+                    public_key: key_pair.public_key().clone(),
+                }
+            })
+            .collect();
+        replay_archive.max_snapshot_bytes = Bytes(32 * 1024 * 1024);
+        config.norito.max_archive_len = 16 * 1024 * 1024;
+
+        let error = config
+            .parse()
+            .expect_err("Norito must be able to decode every admitted replay snapshot");
+        let report = format!("{error:?}");
+        assert!(
+            report.contains(super::SCCP_REPLAY_NORITO_ARCHIVE_LIMIT_ERROR),
+            "{report}"
+        );
+    }
+    #[test]
     fn network_enum_labels_reject_aliases_without_panicking() {
         for (field, value) in [
             ("lane_profile", "CORE"),
@@ -33117,13 +35109,13 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         let mut table = base_table();
         set_global_beacon_provider_binding(
             &mut table,
-            Some("hsm://iroha/global-beacon/primary"),
+            Some("software://iroha/global-beacon/primary"),
             Some(7),
             Some(&beacon_digest),
         );
         set_parliament_tle_provider_binding(
             &mut table,
-            Some("hsm://iroha/parliament-tle/primary"),
+            Some("software://iroha/parliament-tle/primary"),
             Some(9),
             Some(&tle_digest),
         );
@@ -33131,8 +35123,22 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         assert_eq!(
             parsed
                 .sumeragi
+                .global_beacon_partial_signer_provider_handle
+                .as_deref(),
+            Some("software://iroha/global-beacon/primary")
+        );
+        assert_eq!(
+            parsed
+                .sumeragi
                 .global_beacon_partial_signer_provider_policy_digest,
             Some([0x11; 32])
+        );
+        assert_eq!(
+            parsed
+                .gov
+                .parliament_tle_partial_release_signer_provider_handle
+                .as_deref(),
+            Some("software://iroha/parliament-tle/primary")
         );
         assert_eq!(
             parsed
@@ -33145,32 +35151,32 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
     fn consensus_signer_provider_bindings_reject_partial_inert_and_test_marked_values() {
         let valid_digest = "31".repeat(32);
         for (handle, revision, digest) in [
-            (Some("hsm://iroha/global-beacon/primary"), None, None),
+            (Some("software://iroha/global-beacon/primary"), None, None),
             (None, Some(1), Some(valid_digest.as_str())),
             (Some(""), Some(1), Some(valid_digest.as_str())),
             (Some("   "), Some(1), Some(valid_digest.as_str())),
             (
-                Some("hsm://iroha/global-beacon/test"),
+                Some("software://iroha/global-beacon/test"),
                 Some(1),
                 Some(valid_digest.as_str()),
             ),
             (
-                Some("hsm://iroha/global-beacon/mock"),
+                Some("software://iroha/global-beacon/mock"),
                 Some(1),
                 Some(valid_digest.as_str()),
             ),
             (
-                Some("hsm://iroha/global-beacon/demo"),
+                Some("software://iroha/global-beacon/demo"),
                 Some(1),
                 Some(valid_digest.as_str()),
             ),
             (
-                Some("hsm://iroha/global-beacon/primary"),
+                Some("software://iroha/global-beacon/primary"),
                 Some(0),
                 Some(valid_digest.as_str()),
             ),
             (
-                Some("hsm://iroha/global-beacon/primary"),
+                Some("software://iroha/global-beacon/primary"),
                 Some(1),
                 Some("00"),
             ),
@@ -33186,7 +35192,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         let mut partial_tle = base_table();
         set_parliament_tle_provider_binding(
             &mut partial_tle,
-            Some("hsm://iroha/parliament-tle/primary"),
+            Some("software://iroha/parliament-tle/primary"),
             Some(1),
             None,
         );
@@ -33202,14 +35208,14 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             if configure_tle {
                 set_parliament_tle_provider_binding(
                     &mut table,
-                    Some("hsm://iroha/parliament-tle/primary"),
+                    Some("software://iroha/parliament-tle/primary"),
                     Some(1),
                     Some(&digest),
                 );
             } else {
                 set_global_beacon_provider_binding(
                     &mut table,
-                    Some("hsm://iroha/global-beacon/primary"),
+                    Some("software://iroha/global-beacon/primary"),
                     Some(1),
                     Some(&digest),
                 );
@@ -33289,22 +35295,27 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         config.network.soranet_vpn.operator_private_key = Some(private_key.clone());
         config.torii.receipt_public_key = Some(key_pair.public_key().clone());
         config.torii.receipt_private_key = Some(private_key.clone());
-        config.torii.kagemusha_commands = Some(super::ToriiKagemushaCommands {
-            private_key: Some(private_key.clone()),
-            private_key_file: None,
-            minimum_xor_balance: Quantity::from(1_u64),
-            max_tx_value: defaults::torii::kagemusha_commands::max_tx_value(),
+        config.torii.kagemusha_v1_commands = Some(super::ToriiKagemushaV1Commands {
+            redemption_private_key: Some(private_key.clone()),
+            redemption_private_key_file: None,
+            redemption_minimum_xor_balance: Some(Quantity::from(1_u64)),
             operation_registry_max_entries:
-                defaults::torii::kagemusha_commands::OPERATION_REGISTRY_MAX_ENTRIES,
+                defaults::torii::kagemusha_v1_commands::OPERATION_REGISTRY_MAX_ENTRIES,
             operation_registry_max_bytes:
-                defaults::torii::kagemusha_commands::OPERATION_REGISTRY_MAX_BYTES,
+                defaults::torii::kagemusha_v1_commands::OPERATION_REGISTRY_MAX_BYTES,
         });
         config.torii.ram_lfe = Some(super::ToriiRamLfe {
-            enabled: true,
             programs: vec![super::ToriiRamLfeProgram {
                 program_id: "phone_retail".to_owned(),
                 secret_hex: "01020304".parse().expect("valid RAM-LFE secret"),
-                hidden_program_hex: None,
+                hidden_program_hex: format!(
+                    "0x{}",
+                    hex::encode(
+                        iroha_crypto::default_bfv_programmed_hidden_program()
+                            .to_bytes()
+                            .expect("default RAM-LFE hidden program should encode")
+                    )
+                ),
                 signer_private_key: private_key,
                 receipt_ttl_ms: None,
             }],
@@ -33314,12 +35325,12 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             ("SoraNet VPN", format!("{:?}", config.network.soranet_vpn)),
             ("torii receipt", format!("{:?}", config.torii)),
             (
-                "kagemusha commands",
+                "KAGEMUSHA V1 commands",
                 format!(
                     "{:?}",
                     config
                         .torii
-                        .kagemusha_commands
+                        .kagemusha_v1_commands
                         .as_ref()
                         .expect("configured commands")
                 ),
@@ -33353,8 +35364,8 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             ),
             ("actual Torii", format!("{:?}", actual.torii)),
             (
-                "actual Kagemusha commands",
-                format!("{:?}", actual.torii.kagemusha_commands),
+                "actual KAGEMUSHA V1 commands",
+                format!("{:?}", actual.torii.kagemusha_v1_commands),
             ),
             ("actual RAM-LFE", format!("{:?}", actual.torii.ram_lfe)),
         ] {
@@ -33363,6 +35374,161 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                 !debug.contains(&canonical_private_key),
                 "{subtree} leaked canonical private-key material: {debug}"
             );
+        }
+    }
+    #[test]
+    fn torii_debug_output_redacts_runtime_credentials_and_verifiers() {
+        const BANK_BEARER: &str = "torii-bank-bearer-SENTINEL";
+        const OPERATOR_BOOTSTRAP: &str = "torii-operator-bootstrap-SENTINEL";
+        const RPC_CANARY: &str = "torii-rpc-canary-SENTINEL";
+        const TAIKAI_BEARER: &str = "torii-taikai-bearer-SENTINEL";
+        const ONBOARDING_VERIFIER: &str = "blake3:torii-onboarding-verifier-SENTINEL";
+        const GOVERNANCE_KEY_HEX: &str =
+            "a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7";
+        const URL_PASSWORD: &str = "torii-url-password-SENTINEL";
+        const URL_QUERY_SECRET: &str = "torii-url-query-SENTINEL";
+
+        let key_pair = KeyPair::try_from_seed(
+            b"iroha:config:test:torii-secret-debug".to_vec(),
+            Algorithm::Ed25519,
+        )
+        .expect("deterministic Torii debug public key");
+        let credential_url = Url::parse(&format!(
+            "https://operator:{URL_PASSWORD}@service.example/?token={URL_QUERY_SECRET}"
+        ))
+        .expect("credential-bearing test URL");
+
+        let mut user = load_user_root(base_table());
+        user.torii.peer_telemetry_urls = vec![credential_url.clone()];
+        user.torii.peer_geo.endpoint = Some(credential_url.clone());
+        user.torii.operator_auth.tokens = vec![OPERATOR_BOOTSTRAP.to_owned()];
+        user.torii.transport.norito_rpc.allowed_clients = vec![RPC_CANARY.to_owned()];
+        user.torii.da_ingest.governance_metadata_key_hex = Some(GOVERNANCE_KEY_HEX.to_owned());
+        user.torii.da_ingest.taikai_anchor = Some(super::DaTaikaiAnchor {
+            endpoint: credential_url.to_string(),
+            api_token: Some(TAIKAI_BEARER.to_owned()),
+            receipt_public_key: key_pair.public_key().clone(),
+            poll_interval_secs: 1,
+            request_timeout_secs: 1,
+        });
+        user.torii.push.apns_endpoint = Some(credential_url.to_string());
+        user.torii.recipient_lookup = Some(super::ToriiRecipientLookup {
+            policy_id: "cbuae_aed_sbp_pkr".to_owned(),
+            requests_per_minute: 1,
+            request_timeout_ms: DurationMs(Duration::from_millis(1)),
+            routes: vec![super::ToriiRecipientLookupRoute {
+                fi_id: "hbl.sbp".to_owned(),
+                base_url: credential_url.to_string(),
+                bearer_token: BANK_BEARER.to_owned(),
+            }],
+        });
+        let user_credential = super::AccountOnboardingCredential {
+            id: "debug-credential".to_owned(),
+            scope: super::AccountOnboardingCredentialScope {
+                domain: None,
+                dataspace: Some("debug-dataspace".to_owned()),
+            },
+            token_hash: ONBOARDING_VERIFIER.to_owned(),
+            token: None,
+        };
+        let user_debug = vec![
+            ("user Torii", format!("{:?}", user.torii)),
+            (
+                "user operator auth",
+                format!("{:?}", user.torii.operator_auth),
+            ),
+            (
+                "user Norito-RPC",
+                format!("{:?}", user.torii.transport.norito_rpc),
+            ),
+            (
+                "user recipient route",
+                format!(
+                    "{:?}",
+                    &user
+                        .torii
+                        .recipient_lookup
+                        .as_ref()
+                        .expect("configured recipient lookup")
+                        .routes[0]
+                ),
+            ),
+            ("user DA ingest", format!("{:?}", user.torii.da_ingest)),
+            ("user push", format!("{:?}", user.torii.push)),
+            ("user onboarding credential", format!("{user_credential:?}")),
+        ];
+
+        let mut actual = load_root(base_table());
+        actual.torii.peer_telemetry_urls = vec![credential_url.clone()];
+        actual.torii.peer_geo.endpoint = Some(credential_url.clone());
+        actual.torii.operator_auth.tokens = vec![OPERATOR_BOOTSTRAP.to_owned()];
+        actual.torii.transport.norito_rpc.allowed_clients = vec![RPC_CANARY.to_owned()];
+        actual.torii.da_ingest.governance_metadata_key = Some([0xa7; 32]);
+        actual.torii.da_ingest.taikai_anchor = Some(actual::DaTaikaiAnchor {
+            endpoint: credential_url.clone(),
+            api_token: Some(TAIKAI_BEARER.to_owned()),
+            receipt_public_key: key_pair.public_key().clone(),
+            poll_interval: Duration::from_secs(1),
+            request_timeout: Duration::from_secs(1),
+        });
+        actual.torii.push.apns_endpoint = Some(credential_url.clone());
+        actual.torii.recipient_lookup.routes = vec![actual::ToriiRecipientLookupRoute {
+            fi_id: "hbl.sbp".to_owned(),
+            base_url: credential_url,
+            bearer_token: BANK_BEARER.to_owned(),
+        }];
+        let actual_credential = actual::AccountOnboardingCredential {
+            id: "debug_credential".parse().expect("valid credential id"),
+            scope: actual::AccountOnboardingCredentialScope::Dataspace(
+                "debug_dataspace".parse().expect("valid dataspace name"),
+            ),
+            token_hash: [0xa7; 32],
+        };
+        let actual_debug = vec![
+            ("actual Torii", format!("{:?}", actual.torii)),
+            (
+                "actual operator auth",
+                format!("{:?}", actual.torii.operator_auth),
+            ),
+            (
+                "actual Norito-RPC",
+                format!("{:?}", actual.torii.transport.norito_rpc),
+            ),
+            (
+                "actual recipient route",
+                format!("{:?}", &actual.torii.recipient_lookup.routes[0]),
+            ),
+            ("actual DA ingest", format!("{:?}", actual.torii.da_ingest)),
+            ("actual push", format!("{:?}", actual.torii.push)),
+            (
+                "actual onboarding credential",
+                format!("{actual_credential:?}"),
+            ),
+        ];
+        let actual_verifier = format!("{:?}", [0xa7_u8; 32]);
+        let secrets = [
+            BANK_BEARER,
+            OPERATOR_BOOTSTRAP,
+            RPC_CANARY,
+            TAIKAI_BEARER,
+            ONBOARDING_VERIFIER,
+            GOVERNANCE_KEY_HEX,
+            URL_PASSWORD,
+            URL_QUERY_SECRET,
+            actual_verifier.as_str(),
+        ];
+        for (subtree, debug) in user_debug.into_iter().chain(actual_debug) {
+            assert!(debug.contains("REDACTED"), "{subtree}: {debug}");
+            assert!(
+                debug.contains("configured"),
+                "{subtree} lost useful configuration-presence metadata: {debug}"
+            );
+            for secret in secrets {
+                assert!(
+                    !debug.contains(secret),
+                    "{subtree} leaked Torii credential material {secret:?}: {debug}"
+                );
+            }
         }
     }
     fn native_signer_binding_toml(
@@ -33428,7 +35594,7 @@ policy_digest_hex = "{policy_digest_hex}"
         table
     }
     #[test]
-    fn legacy_offline_enablement_and_catalog_keys_are_rejected() {
+    fn pre_release_settlement_enablement_and_catalog_keys_are_rejected() {
         for (key, value) in [
             ("enabled", Value::Boolean(false)),
             ("escrow_required", Value::Boolean(true)),
@@ -33445,7 +35611,7 @@ policy_digest_hex = "{policy_digest_hex}"
                 Value::Table(Table::from_iter([(key.into(), value)])),
             );
             let error = actual::Root::from_toml_source(TomlSource::inline(table))
-                .expect_err("retired offline enablement keys must be rejected");
+                .expect_err("retired pre-release settlement keys must be rejected");
             assert!(
                 format!("{error:?}").contains(key),
                 "unexpected error: {error:?}"
@@ -33453,10 +35619,10 @@ policy_digest_hex = "{policy_digest_hex}"
         }
     }
     #[test]
-    fn absent_offline_switch_preserves_kagemusha_command_middleware() {
+    fn kagemusha_v1_command_middleware_needs_no_feature_switch() {
         let mut table = base_table();
         let key_pair = KeyPair::try_from_seed(
-            b"iroha:config:test:offline-independent-command-service".to_vec(),
+            b"iroha:config:test:kagemusha-command-service".to_vec(),
             Algorithm::Ed25519,
         )
         .expect("fixture seed derives command-service keypair");
@@ -33468,24 +35634,26 @@ policy_digest_hex = "{policy_digest_hex}"
             .and_then(Value::as_table_mut)
             .expect("torii table");
         torii.insert(
-            "kagemusha_commands".into(),
+            "kagemusha_v1_commands".into(),
             Value::Table(Table::from_iter([
-                ("private_key".into(), Value::String(private_key)),
-                ("minimum_xor_balance".into(), Value::String("1".into())),
-                ("max_tx_value".into(), Value::String("1000000000".into())),
+                ("redemption_private_key".into(), Value::String(private_key)),
+                (
+                    "redemption_minimum_xor_balance".into(),
+                    Value::String("1".into()),
+                ),
                 (
                     "operation_registry_max_entries".into(),
                     Value::Integer(4096),
                 ),
                 (
                     "operation_registry_max_bytes".into(),
-                    Value::Integer(524_288),
+                    Value::Integer(593_920),
                 ),
             ])),
         );
         let actual = actual::Root::from_toml_source(TomlSource::inline(table))
-            .expect("offline-independent command middleware must remain configured");
-        assert!(actual.torii.kagemusha_commands.is_some());
+            .expect("KAGEMUSHA command middleware must remain configured");
+        assert!(actual.torii.kagemusha_v1_commands.is_some());
     }
     #[test]
     fn zk_prover_scan_budget_must_fit_one_maximum_body() {
@@ -33525,14 +35693,15 @@ policy_digest_hex = "{policy_digest_hex}"
     include!("user/zk_attachment_retention_tests.rs");
     include!("user/query_fanout_memory_tests.rs");
     include!("user/app_routed_read_body_timeout_tests.rs");
+    include!("user/torii_api_connect_exactness_tests.rs");
     include!("user/operator_signature_body_timeout_tests.rs");
     include!("user/verified_source_ingress_tests.rs");
     include!("user/iso_bridge_store_memory_tests.rs");
     #[test]
-    fn kagemusha_commands_reject_redundant_enabled_switch() {
+    fn kagemusha_v1_commands_reject_redundant_enabled_switch() {
         let mut table = base_table();
         let key_pair = KeyPair::try_from_seed(
-            b"iroha:config:test:kagemusha-enabled-retired".to_vec(),
+            b"iroha:config:test:kagemusha-v1-enabled-retired".to_vec(),
             Algorithm::Ed25519,
         )
         .expect("fixture seed derives command-service keypair");
@@ -33544,18 +35713,20 @@ policy_digest_hex = "{policy_digest_hex}"
             .and_then(Value::as_table_mut)
             .expect("torii table");
         torii.insert(
-            "kagemusha_commands".into(),
+            "kagemusha_v1_commands".into(),
             Value::Table(Table::from_iter([
-                ("private_key".into(), Value::String(private_key)),
-                ("minimum_xor_balance".into(), Value::String("1".into())),
-                ("max_tx_value".into(), Value::String("1000000000".into())),
+                ("redemption_private_key".into(), Value::String(private_key)),
+                (
+                    "redemption_minimum_xor_balance".into(),
+                    Value::String("1".into()),
+                ),
                 (
                     "operation_registry_max_entries".into(),
                     Value::Integer(4096),
                 ),
                 (
                     "operation_registry_max_bytes".into(),
-                    Value::Integer(524_288),
+                    Value::Integer(593_920),
                 ),
                 ("enabled".into(), Value::Boolean(false)),
             ])),
@@ -33570,24 +35741,27 @@ policy_digest_hex = "{policy_digest_hex}"
         );
     }
     #[test]
-    fn enabled_kagemusha_commands_keep_malformed_subordinates_strict() {
+    fn enabled_kagemusha_v1_commands_keep_malformed_subordinates_strict() {
         let mut table = base_table();
         let torii = table
             .get_mut("torii")
             .and_then(Value::as_table_mut)
             .expect("torii table");
         torii.insert(
-            "kagemusha_commands".into(),
+            "kagemusha_v1_commands".into(),
             Value::Table(Table::from_iter([
-                ("private_key".into(), Value::Integer(7)),
-                ("minimum_xor_balance".into(), Value::Array(Vec::new())),
+                ("redemption_private_key".into(), Value::Integer(7)),
+                (
+                    "redemption_minimum_xor_balance".into(),
+                    Value::Array(Vec::new()),
+                ),
             ])),
         );
         let _ = actual::Root::from_toml_source(TomlSource::inline(table))
             .expect_err("enabled command service must validate subordinate types");
     }
     #[test]
-    fn absent_offline_switch_does_not_mask_malformed_settlement_parent() {
+    fn absence_of_pre_release_switch_does_not_mask_malformed_settlement_parent() {
         let mut table = base_table();
         table.insert(
             "settlement".into(),
@@ -34571,9 +36745,9 @@ policy_digest_hex = "{policy_digest_hex}"
         let sorafs: Table = toml::from_str(
             r#"
 [discovery.publish]
-gateway_base_url = "https://taira.sora.org/"
+gateway_base_url = "https://taira.sora.org"
 pin_torii_urls = [
-  "https://taira-validator-1.sora.org/",
+  "https://taira-validator-1.sora.org",
   "https://taira-validator-2.sora.org",
 ]
 "#,
@@ -34583,14 +36757,18 @@ pin_torii_urls = [
         let actual = load_root(table);
         let publish = actual.torii.sorafs_discovery.publish;
         assert_eq!(
-            publish.gateway_base_url.as_deref(),
+            publish.gateway_base_url.as_ref().map(|url| url.as_str()),
             Some("https://taira.sora.org")
         );
         assert_eq!(
-            publish.pin_torii_urls,
-            vec![
-                "https://taira-validator-1.sora.org".to_string(),
-                "https://taira-validator-2.sora.org".to_string()
+            publish
+                .pin_torii_urls
+                .iter()
+                .map(|url| url.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "https://taira-validator-1.sora.org",
+                "https://taira-validator-2.sora.org"
             ]
         );
     }
@@ -34970,7 +37148,7 @@ enabled = true
 moderation_screening_enabled = true
 moderation_screening_authority_bundle_path = "/etc/iroha/sorafs-screening-authority.to"
 moderation_screening_authority_bundle_digest_hex = "{}"
-moderation_quarantine_key_provider_handle = "kms://moderation/quarantine/primary"
+moderation_quarantine_key_provider_handle = "software://sorafs/moderation/quarantine/primary"
 moderation_quarantine_key_provider_revision = 7
 moderation_quarantine_key_provider_policy_digest_hex = "{}"
 
@@ -34996,7 +37174,7 @@ moderation_quarantine_key_provider_policy_digest_hex = "{}"
                 .moderation_quarantine_key_provider
                 .as_ref()
                 .map(|binding| binding.handle.as_str()),
-            Some("kms://moderation/quarantine/primary")
+            Some("software://sorafs/moderation/quarantine/primary")
         );
         assert_eq!(
             storage
@@ -35056,7 +37234,7 @@ enabled = true
 moderation_screening_enabled = true
 moderation_screening_authority_bundle_path = "/etc/iroha/sorafs-screening-authority.to"
 moderation_screening_authority_bundle_digest_hex = "{}"
-moderation_quarantine_key_provider_handle = "kms://moderation/quarantine/test"
+moderation_quarantine_key_provider_handle = "software://sorafs/moderation/quarantine/test"
 moderation_quarantine_key_provider_revision = 0
 moderation_quarantine_key_provider_policy_digest_hex = "{}"
 "#,
@@ -35066,7 +37244,7 @@ moderation_quarantine_key_provider_policy_digest_hex = "{}"
             r#"
 [storage]
 enabled = true
-moderation_quarantine_key_provider_handle = "kms://moderation/quarantine/primary"
+moderation_quarantine_key_provider_handle = "software://sorafs/moderation/quarantine/primary"
 "#
             .to_owned(),
         ] {
@@ -36798,11 +38976,23 @@ max_bytes_per_minute = 1048576
         }
     }
     #[test]
-    #[should_panic(expected = "sponsor payer requires fee_program_id")]
     fn soracloud_runtime_sponsor_payer_requires_exact_program() {
-        let _ = load_root(table_with_soracloud_runtime(
-            "[submission]\nfee_payer = \"sponsor\"\n",
-        ));
+        let table = table_with_soracloud_runtime("[submission]\nfee_payer = \"sponsor\"\n");
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            actual::Root::from_toml_source(TomlSource::inline(table))
+        }));
+        let error = result
+            .expect("missing sponsor fields must produce diagnostics without unwinding")
+            .expect_err("a sponsor payer without its exact program must fail closed");
+        let report = format!("{error:?}");
+        assert!(
+            report.contains("sponsor payer requires fee_program_id"),
+            "{report}"
+        );
+        assert!(
+            report.contains("sponsor payer requires fee_program_revision"),
+            "{report}"
+        );
     }
     #[test]
     fn soracloud_runtime_sponsor_payer_parses_exact_program_revision() {
@@ -36835,10 +39025,58 @@ max_bytes_per_minute = 1048576
         let table = table_with_soracloud_runtime(&format!(
             "[submission]\nfee_payer = \"sponsor\"\nfee_program_id = \" {sponsor}/runtime\"\nfee_program_revision = 7\n"
         ));
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| load_root(table)));
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            actual::Root::from_toml_source(TomlSource::inline(table))
+        }));
+        let error = result
+            .expect("noncanonical sponsor program literals must not unwind")
+            .expect_err("noncanonical sponsor program literals must fail closed");
+        let report = format!("{error:?}");
         assert!(
-            result.is_err(),
-            "noncanonical sponsor program literals must fail closed"
+            report.contains("invalid soracloud_runtime.submission.fee_program_id"),
+            "{report}"
+        );
+    }
+    #[test]
+    fn soracloud_runtime_sponsor_field_errors_accumulate_without_unwinding() {
+        let table = table_with_soracloud_runtime(
+            "[submission]\nfee_payer = \"sponsor\"\nfee_program_id = \"not-a-program\"\nfee_program_revision = 0\n",
+        );
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            actual::Root::from_toml_source(TomlSource::inline(table))
+        }));
+        let error = result
+            .expect("invalid sponsor fields must produce diagnostics without unwinding")
+            .expect_err("invalid sponsor fields must fail closed");
+        let report = format!("{error:?}");
+        assert!(
+            report.contains("invalid soracloud_runtime.submission.fee_program_id"),
+            "{report}"
+        );
+        assert!(
+            report.contains("fee_program_revision must be greater than zero"),
+            "{report}"
+        );
+    }
+    #[test]
+    fn soracloud_runtime_authority_payer_rejects_sponsor_fields_without_unwinding() {
+        let table = table_with_soracloud_runtime(
+            "[submission]\nfee_payer = \"authority\"\nfee_program_id = \"not-a-program\"\nfee_program_revision = 7\n",
+        );
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            actual::Root::from_toml_source(TomlSource::inline(table))
+        }));
+        let error = result
+            .expect("authority payer field errors must produce diagnostics without unwinding")
+            .expect_err("authority payer must reject sponsor-only fields");
+        let report = format!("{error:?}");
+        assert!(
+            report.contains("fee_program_id is only valid when fee_payer = `sponsor`"),
+            "{report}"
+        );
+        assert!(
+            report.contains("fee_program_revision is only valid when fee_payer = `sponsor`"),
+            "{report}"
         );
     }
     #[test]
@@ -37147,8 +39385,45 @@ max_bytes_per_minute = 262144
     include!("user/runtime_tail_tests.rs");
 }
 #[cfg(test)]
-#[path = "user/settlement_offline_tests.rs"]
-mod settlement_offline_tests;
+#[path = "user/kagemusha_v1_settlement_tests.rs"]
+mod kagemusha_v1_settlement_tests;
 #[cfg(test)]
 #[path = "user/settlement_router_tests.rs"]
 mod settlement_router_tests;
+
+#[cfg(test)]
+mod merge_authority_geometry_tests {
+    use super::*;
+
+    #[test]
+    fn nexus_rejects_unmergeable_aggregate_committee_geometry() {
+        for (lane_count, allowed) in [(190_u32, true), (191_u32, false)] {
+            let mut config = Nexus::default();
+            config.lane_count = NonZeroU32::new(lane_count).unwrap();
+            config.lane_catalog = (0..lane_count)
+                .map(|index| LaneDescriptor {
+                    index: Some(index),
+                    alias: Some(format!("geometry-{index}")),
+                    ..LaneDescriptor::default()
+                })
+                .collect();
+            config.dataspace_catalog = vec![DataSpaceDescriptor {
+                id: Some(0),
+                alias: Some(defaults::nexus::DEFAULT_DATASPACE_ALIAS.to_owned()),
+                fault_tolerance: Some(42),
+                ..DataSpaceDescriptor::default()
+            }];
+            config.staking.max_validators = NonZeroU32::new(127).unwrap();
+            let mut emitter = Emitter::new();
+            let parsed = config.parse(&mut emitter);
+            let diagnostics = emitter.into_result();
+            if allowed {
+                assert!(parsed.is_some(), "admissible geometry: {diagnostics:?}");
+                assert!(diagnostics.is_ok());
+            } else {
+                assert!(parsed.is_none());
+                assert!(format!("{diagnostics:?}").contains("merge authority geometry reserves"));
+            }
+        }
+    }
+}

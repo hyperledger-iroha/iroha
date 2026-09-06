@@ -894,8 +894,8 @@ fn transcript_and_authenticated_commitment_arrays_move_with_both_handoff_owners_
         .split_once("impl RnsNativeCompletedQpcsNumericOpeningHandoffV2<'_> {")
         .expect("completed handoff implementation")
         .1
-        .split_once("impl<'proof> RnsNativeQpcsNumericOpeningHandoffV2<'proof> {")
-        .expect("live implementation follows completed implementation")
+        .split_once("fn map_direct_numeric_error_v2(")
+        .expect("numeric error mapping follows completed implementation")
         .0;
     assert!(!completed_impl.contains("self.transcript"));
     assert!(!completed_impl.contains("self.equation_commitment_digests"));

@@ -968,9 +968,10 @@ validator before quorum calculation, so malformed versions, members, weights,
 ordering, or thresholds cannot become publication authority. The verifier
 rejects a zero trusted time or any requested future-clock allowance above the
 fixed 30-second V1 maximum; a caller cannot widen that protocol bound. The
-client constructs every payload field and an injected HSM/KMS or threshold
+client constructs every payload field and an injected qualified signing
 provider returns only approvals, which the client verifies before building a
-request. It owns the authorization timestamp, maintains a non-regressing clock
+request. Any deployment-owned provider must implement that same boundary. The client owns the authorization timestamp,
+maintains a non-regressing clock
 floor shared by its clones, resamples after the external signer returns, and
 rejects an authorization whose lifetime was consumed during signing. The
 platform `KeyPair` adapter remains single-key only. Seed ingress carries small
@@ -1025,15 +1026,15 @@ backend traits. The service, rather than the signer, constructs the exact
 bounded receipt payload and expiry after staging. An injected signing-provider
 trait returns only controller approvals; the service assembles and verifies the
 receipt against the exact binding and trusted time before journal commit. This
-boundary admits HSM, KMS, or threshold collection implementations without
-giving them authority to substitute receipt fields. The in-process `KeyPair`
+boundary admits deployment-owned collection implementations without giving them authority to
+substitute receipt fields. The in-process `KeyPair`
 implementation is explicitly a software adapter for focused tests and
 controlled development deployments. Private request objects carry no
 caller-supplied time. The service samples its injected fail-closed,
 non-regressing trusted clock at authorization admission, again after CAR
 staging to set receipt issuance and expiry, and after approvals return before
 commit. An authorization that was live when atomically admitted need not remain
-live during backend or HSM work, but a receipt whose lifetime is consumed by
+live during signing-provider work, but a receipt whose lifetime is consumed by
 signing is aborted and never cached. The injected production clock must retain
 a rollback-resistant time floor across service restarts; the core also rejects
 regression within one process. Service construction also requires the
@@ -1046,12 +1047,13 @@ Stock `irohad` opens no listener for these routes. An injecting launcher supplie
 a one-shot deployment factory. After trusted startup replay and SoraFS node
 construction, `irohad` passes that factory the exact genesis-derived `NetworkId` and
 live finalized-state, transaction-queue, and SoraFS handles. The factory must
-assemble the service core, crash-safe journal, concrete HSM/KMS signing provider,
-SoraFS backends, and qualified private HTTPS/TLS ingress; its runner then joins
+assemble the service core, crash-safe journal, qualified deployment-selected
+signing provider, SoraFS backends, and qualified private HTTPS/TLS ingress; its runner then joins
 the daemon supervisor. TLS material and backend credentials never enter
 argv, project files, publication journals, Torii, or the daemon-private runtime
 provider broker. Hostname binding to deployment-signed provider adverts and
-the concrete HSM/storage adapters remain deployment qualification gates.
+the concrete signer/storage adapters remain deployment qualification gates.
+Provider implementation details remain deployment-owned.
 The stock tree now supplies the read-only authoritative finalized
 archive-registration reader described above, bound to the factory context's
 exact `NetworkId` and `Arc<State>`. It still does not supply the effectful
@@ -1288,7 +1290,7 @@ independence does not require its bytes to differ from another policy digest.
 An unchanged qualified signer must return the same canonical,
 controller-key-sorted approval set for an exact retry, so timeout recovery
 cannot choose another otherwise-valid multisig subset. This is a contract for
-a deployment signer, not a stock software HSM/KMS implementation. A private
+a deployment signer, not a stock concrete custody implementation. A private
 daemon wrapper now pins the exact configured handle/revision/adapter-policy
 digest, genesis-derived `NetworkId`, and local provider ID. It also reads the
 finalized `State::provider_owners()` authority before and after the external
@@ -1454,11 +1456,11 @@ The remaining deployment dependencies are:
    the local two-slot adapter, and bind it to a qualified combined slot-57
    provider for the separate sealed time/head namespaces and immutable
    checkpoint blobs;
-2. provide and qualify the real approval-only HSM/KMS or threshold signer
-   adapter, including replay stability, timeout, revocation, and controller
+2. provide and qualify the deployment-selected approval-only signer adapter,
+   including replay stability, timeout, revocation, and controller
    policy changes. Storage completion, the pre-completion claim or receipt,
    and publisher-supplied registration evidence alone never authorize an
-   attestation;
+   attestation. Every signing implementation must satisfy the same provider contract;
 3. qualify the adapter's bounded initialization and header-bound composite
    lease plus its Linux/macOS durability, corruption, capacity,
    concurrent-resume, cancellation, and crash-at-every-transition behavior.

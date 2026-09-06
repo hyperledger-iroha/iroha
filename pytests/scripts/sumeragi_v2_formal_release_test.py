@@ -235,7 +235,7 @@ esac
     env["TLAPM_BIN"] = str(tools["tlapm"])
     env["TLA2TOOLS_JAR"] = str(tools["tla2tools.jar"])
     external_root = Path(
-        tempfile.mkdtemp(prefix="iroha-formal-release-test-", dir="/private/tmp")
+        tempfile.mkdtemp(prefix="iroha-formal-release-test-", dir=Path("/tmp").resolve())
     )
     _EXTERNAL_ROOTS.append(external_root)
     target = external_root / "target"

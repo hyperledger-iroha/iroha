@@ -65,6 +65,7 @@ use iroha_data_model::{
         consensus::{
             LaneBlockCommitment, LaneBlockProposalV1, LaneSettlementReceipt,
             NativeAmxAttestationQcV2, NativeAmxLegRecordV2, NativeAmxPhase, NativeAmxReceipt,
+            ValidatorIndex,
         },
         *,
     },
@@ -93,7 +94,7 @@ use iroha_data_model::{
 use iroha_primitives::numeric::Numeric;
 use iroha_primitives::{numeric::Quantity, small::SmallVec};
 #[cfg(feature = "telemetry")]
-use iroha_telemetry::metrics::NexusLaneTeuBuckets;
+use iroha_torii_shared::status::{NexusLaneTeuBuckets, SchedulerLayerWidthBuckets};
 #[cfg(feature = "telemetry")]
 use ivm::ProgramMetadata;
 use mv::storage::StorageReadOnly;
@@ -280,8 +281,12 @@ const fn uses_live_vm_overlay_scheduler(executable: &Executable) -> bool {
 }
 /// Return whether the executable must run once against the scheduler's live state.
 #[must_use]
-const fn uses_live_batch_scheduler(executable: &Executable) -> bool {
+fn uses_live_batch_scheduler(executable: &Executable) -> bool {
     matches!(executable, Executable::Batch(_))
+        || matches!(
+            crate::state::standalone_governance_ballot_instruction_v1(executable),
+            Ok(Some(_)) | Err(_)
+        )
 }
 fn missing_authority_requires_rejection(
     state_tx: &crate::state::StateTransaction<'_, '_>,
@@ -299,23 +304,29 @@ fn validate_block_transaction_admission(
     state_tx: &mut crate::state::StateTransaction<'_, '_>,
     tx: &SignedTransaction,
     routing: crate::queue::RoutingDecision,
+    entrypoint_index: usize,
 ) -> Result<crate::tx::StatefulAdmission, TransactionRejectionReason> {
+    let governance_ballot_binding = crate::state::standalone_governance_ballot_instruction_v1(
+        tx.instructions(),
+    )
+    .map_err(|message| {
+        TransactionRejectionReason::Validation(iroha_data_model::ValidationFail::NotPermitted(
+            message.to_owned(),
+        ))
+    })?;
     let privacy_intent_binding = crate::privacy::signed_privacy_transaction_intent_binding_v1(tx)
         .map_err(TransactionRejectionReason::Validation)?;
     let private_settlement_carrier_binding =
         crate::private_settlement::carrier::signed_private_settlement_carrier_binding_v1(tx)
             .map_err(TransactionRejectionReason::Validation)?;
-    let canary_wire_identity =
-        crate::smartcontracts::isi::offline::signed_kagemusha_taira_canary_wire_identity_v1(tx)
-            .map_err(TransactionRejectionReason::Validation)?;
-    let lifecycle_entrypoint =
-        crate::smartcontracts::isi::offline::signed_lifecycle_entrypoint_context(tx)
-            .map_err(TransactionRejectionReason::Validation)?;
     state_tx.bind_privacy_transaction_intent_v1(privacy_intent_binding);
     state_tx.bind_private_settlement_carrier_v1(private_settlement_carrier_binding);
-    state_tx.kagemusha_taira_canary_external_entrypoint = true;
-    state_tx.kagemusha_taira_canary_wire_identity = canary_wire_identity;
-    state_tx.kagemusha_release_lifecycle_entrypoint = lifecycle_entrypoint;
+    state_tx.bind_governance_ballot_entrypoint_v1(governance_ballot_binding);
+    state_tx.current_entrypoint_index = Some(u64::try_from(entrypoint_index).map_err(|_| {
+        TransactionRejectionReason::Validation(iroha_data_model::ValidationFail::InternalError(
+            "ordinary phase index exceeds u64".to_owned(),
+        ))
+    })?);
     StateBlock::validate_stateful_admission(tx, state_tx, Some(routing))
 }
 fn commit_stateful_admission_sequence(
@@ -414,6 +425,40 @@ mod overlay_error_tests {
         let instructions = Executable::Instructions(Vec::<InstructionBox>::new().into());
         assert!(!uses_live_batch_scheduler(&instructions));
     }
+    #[test]
+    fn governance_ballot_requires_an_exact_standalone_direct_entrypoint() {
+        let ballot = InstructionBox::from(iroha_data_model::isi::governance::CastZkBallot {
+            election_id: "referendum.v1".to_owned(),
+            proof_b64: "AA==".to_owned(),
+            public_inputs_json: "{}".to_owned(),
+        });
+        let instructions = Executable::Instructions(vec![ballot.clone()].into());
+        assert!(uses_live_batch_scheduler(&instructions));
+        assert_eq!(
+            crate::state::standalone_governance_ballot_instruction_v1(&instructions),
+            Ok(Some(ballot.clone()))
+        );
+
+        let singleton_batch =
+            Executable::Batch(vec![ExecutableBatchItem::Instruction(ballot.clone())].into());
+        assert_eq!(
+            crate::state::standalone_governance_ballot_instruction_v1(&singleton_batch),
+            Ok(Some(ballot.clone()))
+        );
+
+        let mixed = Executable::Instructions(
+            vec![
+                ballot,
+                InstructionBox::from(iroha_data_model::isi::Log::new(
+                    iroha_data_model::level::Level::INFO,
+                    "must not follow a ballot".to_owned(),
+                )),
+            ]
+            .into(),
+        );
+        assert!(uses_live_batch_scheduler(&mixed));
+        assert!(crate::state::standalone_governance_ballot_instruction_v1(&mixed).is_err());
+    }
 }
 #[cfg(feature = "telemetry")]
 const PIPELINE_LAYER_WIDTH_THRESHOLDS: [u64; 8] = [1, 2, 4, 8, 16, 32, 64, 128];
@@ -467,7 +512,6 @@ impl core::ops::Deref for VerifiedV2FinalityArtifact {
 #[cfg(feature = "telemetry")]
 use crate::telemetry::{
     DataspacePipelineSummary, DataspaceTeuGaugeUpdate, LanePipelineSummary, LaneTeuGaugeUpdate,
-    SchedulerLayerWidthBuckets,
 };
 use crate::{
     da::{
@@ -698,7 +742,7 @@ fn consensus_pop_matches_lane_authority(
             },
         );
     }
-    crate::state::live_consensus_key_pop_for_peer(world, peer, height)
+    crate::state::live_consensus_key_pop_for_peer_on_lane(world, peer, height, lane_id)
         .is_none_or(|live_pop| live_pop == presented_pop)
 }
 impl<T: StateReadOnly> NativeAmxAuthorityContext for T {
@@ -1709,7 +1753,10 @@ fn record_lane_settlement_metrics(
 #[cfg(feature = "telemetry")]
 use crate::queue::{LaneSchedulingLimits, QueueLimits};
 use crate::{
-    executor::{charge_fees_for_applied_overlay, charge_fees_for_rejected_live_batch},
+    executor::{
+        charge_fees_for_applied_overlay, charge_fees_for_precharged_overlay,
+        charge_fees_for_rejected_live_batch, precharge_gas_for_applied_overlay,
+    },
     kura::{
         PipelineDagSnapshot, PipelineRecoverySidecar, PipelineSidecarEnqueueResult,
         PipelineTxSnapshot,
@@ -3999,7 +4046,7 @@ pub(crate) mod valid {
     use super::event::map_sig_err_to_reason;
     use super::{event::map_block_err_to_reason, *};
     use crate::smartcontracts::ivm::cache::IvmCache;
-    use crate::state::{StateBlock, storage_transactions::TransactionsReadOnly};
+    use crate::state::{StateBlock, StateTransaction, storage_transactions::TransactionsReadOnly};
     use crate::sumeragi::network_topology::Role;
     #[cfg(test)]
     use crate::{
@@ -4007,7 +4054,7 @@ pub(crate) mod valid {
             SoracloudOrderedMailboxExecutionRequest, SoracloudOrderedMailboxExecutionResult,
             SoracloudRuntimeExecutionError,
         },
-        state::{StateReadOnly, StateTransaction},
+        state::StateReadOnly,
     };
     use commit::CommittedBlock;
     #[cfg(test)]
@@ -4022,6 +4069,67 @@ pub(crate) mod valid {
     use iroha_logger::warn;
     use iroha_primitives::time::TimeSource;
     use std::{num::NonZeroUsize, time::Instant};
+    #[derive(Clone, Copy)]
+    struct ConfidentialWorkV1 {
+        operations: u32,
+        verify_calls: u32,
+        proof_bytes: u64,
+        gas: u64,
+    }
+    impl ConfidentialWorkV1 {
+        fn capture(state_tx: &StateTransaction<'_, '_>) -> Self {
+            Self {
+                operations: state_tx.zk_confidential_ops_in_tx,
+                verify_calls: state_tx.zk_verify_calls_in_tx,
+                proof_bytes: state_tx.zk_proof_bytes_in_tx,
+                gas: state_tx.confidential_gas_used_in_tx,
+            }
+        }
+        fn account(self, state_block: &mut StateBlock<'_>) {
+            state_block.account_confidential_work_v1(
+                self.operations,
+                self.verify_calls,
+                self.proof_bytes,
+                self.gas,
+            );
+        }
+    }
+    fn account_transaction_gas(state_block: &mut StateBlock<'_>, gas_used: u64) {
+        if gas_used > 0 {
+            state_block.gas_used_in_block = state_block.gas_used_in_block.saturating_add(gas_used);
+        }
+    }
+    fn instruction_mutates_trigger_lifecycle(instruction: &InstructionBox) -> bool {
+        let any = instruction.as_any();
+        any.downcast_ref::<iroha_data_model::isi::RegisterBox>()
+            .is_some_and(|register| {
+                matches!(register, iroha_data_model::isi::RegisterBox::Trigger(_))
+            })
+            || any
+                .downcast_ref::<iroha_data_model::isi::UnregisterBox>()
+                .is_some_and(|unregister| {
+                    matches!(unregister, iroha_data_model::isi::UnregisterBox::Trigger(_))
+                })
+            || any
+                .downcast_ref::<iroha_data_model::isi::MintBox>()
+                .is_some_and(|mint| {
+                    matches!(mint, iroha_data_model::isi::MintBox::TriggerRepetitions(_))
+                })
+            || any
+                .downcast_ref::<iroha_data_model::isi::BurnBox>()
+                .is_some_and(|burn| {
+                    matches!(burn, iroha_data_model::isi::BurnBox::TriggerRepetitions(_))
+                })
+            || any
+                .downcast_ref::<iroha_data_model::isi::SetKeyValueBox>()
+                .is_some_and(|set| matches!(set, iroha_data_model::isi::SetKeyValueBox::Trigger(_)))
+            || any
+                .downcast_ref::<iroha_data_model::isi::RemoveKeyValueBox>()
+                .is_some_and(|remove| {
+                    matches!(remove, iroha_data_model::isi::RemoveKeyValueBox::Trigger(_))
+                })
+            || any.is::<iroha_data_model::isi::ExecuteTrigger>()
+    }
     fn charge_rejected_overlay_fees(
         state_block_mut: &mut StateBlock<'_>,
         tx: &iroha_data_model::transaction::SignedTransaction,
@@ -4030,6 +4138,7 @@ pub(crate) mod valid {
         lane_id: LaneId,
         dataspace_id: DataSpaceId,
         rejection_reason: &TransactionRejectionReason,
+        attempted_gas_used: u64,
     ) -> Result<(), TransactionRejectionReason> {
         if matches!(
             rejection_reason,
@@ -4045,10 +4154,147 @@ pub(crate) mod valid {
         fee_tx.world.current_dataspace_id = Some(dataspace_id);
         fee_tx.tx_call_hash = Some(iroha_crypto::Hash::from(tx.hash_as_entrypoint()));
         fee_tx.current_tx_hash = Some(tx.hash());
-        charge_fees_for_applied_overlay(&mut fee_tx, authority, tx, overlay)
+        let fee_result = charge_fees_for_applied_overlay(&mut fee_tx, authority, tx, overlay)
+            .map_err(TransactionRejectionReason::Validation);
+        let replay_gas_used = fee_tx.last_tx_gas_used;
+        match &fee_result {
+            Ok(()) => fee_tx.apply(),
+            Err(_) => drop(fee_tx),
+        }
+        let gas_used = if attempted_gas_used > 0 {
+            attempted_gas_used
+        } else {
+            replay_gas_used
+        };
+        account_rejected_live_batch_gas(state_block_mut, gas_used, rejection_reason);
+        fee_result
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn execute_prepared_overlay_attempt(
+        state_block: &mut StateBlock<'_>,
+        tx: &SignedTransaction,
+        authority: &AccountId,
+        overlay: &TxOverlay,
+        entrypoint_hash: HashOf<TransactionEntrypoint>,
+        signed_hash: HashOf<SignedTransaction>,
+        routing: crate::queue::RoutingDecision,
+        chunk_size: usize,
+        is_genesis: bool,
+        entrypoint_index: usize,
+    ) -> TransactionResultInner {
+        let mut state_tx = state_block.transaction();
+        state_tx.current_lane_id = Some(routing.lane_id);
+        state_tx.current_dataspace_id = Some(routing.dataspace_id);
+        state_tx.world.current_dataspace_id = Some(routing.dataspace_id);
+        state_tx.tx_call_hash = Some(iroha_crypto::Hash::from(entrypoint_hash));
+        state_tx.current_tx_hash = Some(signed_hash);
+        let contract_deployment_bootstrap =
+            crate::executor::ContractDeploymentSelfBootstrapAuthorization::derive(
+                &state_tx.world,
+                authority,
+                tx,
+            );
+        if missing_authority_requires_rejection(
+            &state_tx,
+            tx,
+            authority,
+            overlay.instruction_count(),
+            is_genesis,
+        ) {
+            return Err(TransactionRejectionReason::AccountDoesNotExist(
+                iroha_data_model::query::error::FindError::Account(authority.clone()),
+            ));
+        }
+        let admission =
+            validate_block_transaction_admission(&mut state_tx, tx, routing, entrypoint_index)?;
+        precharge_gas_for_applied_overlay(&mut state_tx, tx, overlay)
             .map_err(TransactionRejectionReason::Validation)?;
-        fee_tx.apply();
-        Ok(())
+        let confidential_gas =
+            crate::gas::sum_confidential_gas_costs(overlay.instruction_slice().iter());
+        state_tx.record_confidential_gas_delta(confidential_gas);
+        if let Err(error) = overlay.apply_signed_transaction_with_chunk(
+            &mut state_tx,
+            authority,
+            chunk_size,
+            contract_deployment_bootstrap.as_ref(),
+        ) {
+            let rejection_reason = TransactionRejectionReason::Validation(error);
+            let gas_used = state_tx.last_tx_gas_used;
+            let confidential_work = ConfidentialWorkV1::capture(&state_tx);
+            drop(state_tx);
+            confidential_work.account(state_block);
+            return match charge_rejected_overlay_fees(
+                state_block,
+                tx,
+                authority,
+                overlay,
+                routing.lane_id,
+                routing.dataspace_id,
+                &rejection_reason,
+                gas_used,
+            ) {
+                Ok(()) => Err(rejection_reason),
+                Err(error) => Err(error),
+            };
+        }
+        if let Err(error) =
+            charge_fees_for_precharged_overlay(&mut state_tx, authority, tx, overlay)
+        {
+            let rejection_reason = TransactionRejectionReason::Validation(error);
+            let gas_used = state_tx.last_tx_gas_used;
+            let confidential_work = ConfidentialWorkV1::capture(&state_tx);
+            drop(state_tx);
+            confidential_work.account(state_block);
+            account_rejected_live_batch_gas(state_block, gas_used, &rejection_reason);
+            return Err(rejection_reason);
+        }
+        let trigger_sequence = match state_tx.execute_data_triggers_dfs(authority) {
+            Ok(trigger_sequence) => trigger_sequence,
+            Err(error) => {
+                let gas_used = state_tx.last_tx_gas_used;
+                let confidential_work = ConfidentialWorkV1::capture(&state_tx);
+                drop(state_tx);
+                confidential_work.account(state_block);
+                return match charge_rejected_overlay_fees(
+                    state_block,
+                    tx,
+                    authority,
+                    overlay,
+                    routing.lane_id,
+                    routing.dataspace_id,
+                    &error,
+                    gas_used,
+                ) {
+                    Ok(()) => Err(error),
+                    Err(fee_error) => Err(fee_error),
+                };
+            }
+        };
+        if let Err(error) = commit_stateful_admission_sequence(&mut state_tx, &admission) {
+            let gas_used = state_tx.last_tx_gas_used;
+            let confidential_work = ConfidentialWorkV1::capture(&state_tx);
+            drop(state_tx);
+            confidential_work.account(state_block);
+            return match charge_rejected_overlay_fees(
+                state_block,
+                tx,
+                authority,
+                overlay,
+                routing.lane_id,
+                routing.dataspace_id,
+                &error,
+                gas_used,
+            ) {
+                Ok(()) => Err(error),
+                Err(fee_error) => Err(fee_error),
+            };
+        }
+        let gas_used = state_tx.last_tx_gas_used;
+        let confidential_work = ConfidentialWorkV1::capture(&state_tx);
+        state_tx.apply();
+        account_transaction_gas(state_block, gas_used);
+        confidential_work.account(state_block);
+        Ok(trigger_sequence)
     }
     fn charge_rejected_live_batch_fees(
         state_block_mut: &mut StateBlock<'_>,
@@ -4059,7 +4305,7 @@ pub(crate) mod valid {
         dataspace_id: DataSpaceId,
         rejection_reason: &TransactionRejectionReason,
     ) -> Result<(), TransactionRejectionReason> {
-        if !rejected_live_batch_gas_is_accountable(gas_used, rejection_reason) {
+        if !rejected_live_batch_fees_are_chargeable(gas_used, rejection_reason) {
             return Ok(());
         }
         let mut fee_tx = state_block_mut.transaction();
@@ -4073,7 +4319,18 @@ pub(crate) mod valid {
         fee_tx.apply();
         Ok(())
     }
-    fn rejected_live_batch_gas_is_accountable(
+    pub(super) fn rejected_live_batch_fees_are_chargeable(
+        gas_used: u64,
+        rejection_reason: &TransactionRejectionReason,
+    ) -> bool {
+        rejected_live_batch_gas_is_accountable(gas_used, rejection_reason)
+            && !matches!(
+                rejection_reason,
+                TransactionRejectionReason::Validation(error)
+                    if crate::executor::is_live_batch_overlay_limit_rejection(error)
+            )
+    }
+    pub(super) fn rejected_live_batch_gas_is_accountable(
         gas_used: u64,
         rejection_reason: &TransactionRejectionReason,
     ) -> bool {
@@ -6300,6 +6557,29 @@ pub(crate) mod valid {
             }
             Ok(())
         }
+        fn validate_npos_soft_fork_composition(
+            block: &SignedBlock,
+            soft_fork: bool,
+        ) -> Result<(), BlockValidationError> {
+            if soft_fork && block.npos_consensus_effects().is_some() {
+                return Err(Self::npos_effects_error(
+                    "soft-fork replacement cannot safely apply NPoS finality effects",
+                ));
+            }
+            Ok(())
+        }
+        fn validate_npos_merge_composition(
+            block: &SignedBlock,
+            reference: &CertifiedMergeLedgerReference,
+        ) -> Result<(), BlockValidationError> {
+            if block.npos_consensus_effects().is_some() && reference.execution_batch_hash.is_some()
+            {
+                return Err(Self::execution_context_error(
+                    "a carrier cannot mix NPoS finality effects with a certified merge execution batch",
+                ));
+            }
+            Ok(())
+        }
         fn new_unverified(block: SignedBlock) -> Self {
             Self {
                 block,
@@ -6456,7 +6736,7 @@ pub(crate) mod valid {
         }
         fn verify_signer_set(
             topology: &Topology,
-            signers: &BTreeSet<crate::sumeragi::consensus::ValidatorIndex>,
+            signers: &BTreeSet<ValidatorIndex>,
             allow_quorum_bypass: bool,
         ) -> Result<(), SignatureVerificationError> {
             let roster_len = topology.as_ref().len();
@@ -7141,9 +7421,74 @@ pub(crate) mod valid {
             state: &'state State,
             soft_fork: bool,
             authoritative_mode: Option<iroha_data_model::block::consensus_v2::ConsensusMode>,
+            authenticated_height_context: Option<
+                &iroha_data_model::block::consensus_v2::HeightContext,
+            >,
         ) -> Result<Box<StateBlock<'state>>, BlockValidationError> {
+            Self::validate_npos_soft_fork_composition(block, soft_fork)?;
+            crate::smartcontracts::ivm::active_runtime_abi_hash(
+                &state.world_view(),
+                block.header().height().get(),
+            )
+            .map_err(|error| {
+                Self::execution_context_error(format!(
+                    "persisted active runtime ABI is incompatible with this node: {error:?}"
+                ))
+            })?;
+            let prepared_npos = if let Some(effects) = block.npos_consensus_effects() {
+                let context = authenticated_height_context.ok_or_else(|| {
+                    Self::npos_effects_error(
+                        "NPoS finality effects require the authenticated height context",
+                    )
+                })?;
+                let roster = context
+                    .roster
+                    .iter()
+                    .map(|entry| entry.validator.clone())
+                    .collect::<Vec<_>>();
+                let height = block.header().height().get();
+                let prune_keys =
+                    crate::sumeragi::evidence::v2_committed_evidence_prune_keys_from_state(
+                        state,
+                        height,
+                        effects.v2_evidence_admissions.len(),
+                    );
+                let expected_anchor = block.header().prev_block_hash().map(|block_hash| {
+                    iroha_data_model::consensus::GlobalThresholdBeaconChainAnchorV1 {
+                        height: height.saturating_sub(1),
+                        block_hash,
+                    }
+                });
+                Some((effects, prune_keys, expected_anchor, roster))
+            } else {
+                None
+            };
+            let apply_npos = |state_block: &mut StateBlock<'_>| {
+                let Some((effects, prune_keys, expected_anchor, roster)) = &prepared_npos else {
+                    return Ok(());
+                };
+                state_block
+                    .apply_pristine_npos_consensus_effects(
+                        effects,
+                        prune_keys,
+                        expected_anchor.clone(),
+                        roster,
+                        block.header().height().get(),
+                        block.header().view_change_index(),
+                        block.header().creation_time_ms,
+                    )
+                    .map(|_| ())
+                    .map_err(|error| {
+                        Self::npos_effects_error(format!(
+                            "NPoS consensus effects are not applicable to pristine parent state: {error}"
+                        ))
+                    })
+            };
             let execution_context = block.execution_context();
             let merge_reference = execution_context.and_then(|bundle| bundle.merge_entry.as_ref());
+            if let Some(reference) = merge_reference {
+                Self::validate_npos_merge_composition(block, reference)?;
+            }
             let queue_plan_admissions = execution_context
                 .map(|bundle| bundle.queue_plan_admissions())
                 .unwrap_or_default();
@@ -7159,11 +7504,15 @@ pub(crate) mod valid {
                     ));
                 }
                 return state
-                    .block_with_queue_plan_admissions(block.header(), queue_plan_admissions)
-                    .map_err(|error| {
-                        Self::execution_context_error(format!(
-                            "QueuePlan admission controls could not be staged: {error}"
-                        ))
+                    .block_with_pristine_stage(block.header(), |state_block| {
+                        state_block
+                            .stage_queue_plan_admissions_for_carrier(queue_plan_admissions)
+                            .map_err(|error| {
+                                Self::execution_context_error(format!(
+                                    "QueuePlan admission controls could not be staged: {error}"
+                                ))
+                            })?;
+                        apply_npos(state_block)
                     })
                     .map(Box::new);
             }
@@ -7179,22 +7528,40 @@ pub(crate) mod valid {
                     )
                 })?;
                 return state
-                    .block_with_certified_merge_reference(block.header(), reference, frozen_mode)
-                    .map(Box::new)
-                    .map_err(|error| match error {
-                        crate::state::MergeLedgerCommitError::MissingCertifiedMergeSidecar {
-                            entry_hash,
-                        } => BlockValidationError::MissingCertifiedMergeSidecar { entry_hash },
-                        other => Self::execution_context_error(format!(
-                            "certified merge entry could not be staged: {other}"
-                        )),
-                    });
+                    .block_with_pristine_stage(block.header(), |state_block| {
+                        state_block
+                            .stage_certified_merge_reference(reference, frozen_mode)
+                            .map_err(|error| {
+                                match error {
+                                crate::state::MergeLedgerCommitError::MissingCertifiedMergeSidecar {
+                                    entry_hash,
+                                } => BlockValidationError::MissingCertifiedMergeSidecar {
+                                    entry_hash,
+                                },
+                                other => Self::execution_context_error(format!(
+                                    "certified merge entry could not be staged: {other}"
+                                )),
+                            }
+                            })?;
+                        if prepared_npos.is_some()
+                            && state_block
+                                .staged_merge_entry()
+                                .is_some_and(|entry| entry.execution_batch.is_some())
+                        {
+                            return Err(Self::execution_context_error(
+                                "a carrier cannot mix NPoS finality effects with a certified merge execution batch",
+                            ));
+                        }
+                        apply_npos(state_block)
+                    })
+                    .map(Box::new);
             }
-            Ok(Box::new(if soft_fork {
-                state.block_and_revert(block.header())
+            let state_block = if soft_fork {
+                state.block_and_revert_with_pristine_stage(block.header(), apply_npos)
             } else {
-                state.block(block.header())
-            }))
+                state.block_with_pristine_stage(block.header(), apply_npos)
+            }?;
+            Ok(Box::new(state_block))
         }
         fn validate_staged_execution_controls(
             block: &SignedBlock,
@@ -7392,9 +7759,15 @@ pub(crate) mod valid {
                 }
             };
             let prepared_txs = Self::prepare_external_transactions(&block);
-            let committed_heights = {
+            let (committed_heights, committed_carrier_heights) = {
                 let transactions_view = state.transactions.view();
-                Self::committed_heights_for_prepared_transactions(&prepared_txs, &transactions_view)
+                (
+                    Self::committed_heights_for_prepared_transactions(
+                        &prepared_txs,
+                        &transactions_view,
+                    ),
+                    Self::committed_heights_for_entrypoint_carriers(&block, &transactions_view),
+                )
             };
             let cache_cap = static_data.pipeline_cfg.stateless_cache_cap;
             let cache_enabled = cache_cap > 0 && !block.header().is_genesis();
@@ -7420,6 +7793,7 @@ pub(crate) mod valid {
                 genesis_account,
                 &static_data,
                 &committed_heights,
+                &committed_carrier_heights,
                 &prepared_txs,
                 metrics,
             ) {
@@ -7485,7 +7859,11 @@ pub(crate) mod valid {
                         .creation_time()
                         .as_millis()
                         .saturating_sub(max_clock_drift_ms);
-                    cache.insert_ok(prepared.metadata.signed_hash, expires_at_ms, not_before_ms);
+                    cache.insert_ok(
+                        prepared.metadata.stateless_cache_key,
+                        expires_at_ms,
+                        not_before_ms,
+                    );
                 }
             }
             if let Some(timings) = timings.as_deref_mut() {
@@ -7514,6 +7892,9 @@ pub(crate) mod valid {
                 state,
                 soft_fork,
                 Some(validation_profile.authoritative_consensus_mode()),
+                validation_profile
+                    .v2_context()
+                    .and_then(SumeragiV2ValidationContext::authenticated_height_context),
             ) {
                 Ok(state_block) => state_block,
                 Err(error) => {
@@ -8191,12 +8572,11 @@ pub(crate) mod valid {
                 #[cfg(not(feature = "telemetry"))]
                 None,
             );
-            let expected_actions =
-                applier
-                    .derive_npos_penalty_actions(block_height)
-                    .map_err(|err| {
-                        Self::npos_effects_error(format!("failed to derive NPoS effects: {err}"))
-                    })?;
+            let expected_actions = applier
+                .derive_npos_penalty_actions(&block.header())
+                .map_err(|err| {
+                    Self::npos_effects_error(format!("failed to derive NPoS effects: {err}"))
+                })?;
             let actual_actions = actual_effects
                 .map(|effects| effects.penalty_actions.as_slice())
                 .unwrap_or(&[]);
@@ -8224,14 +8604,15 @@ pub(crate) mod valid {
                 iroha_data_model::governance::types::BeaconSessionId::for_network_v1(
                     &context.network_id,
                 );
-            let parliament_requested = world.parliament_attempts().iter().any(|(_, attempt)| {
-                attempt.requires_beacon_pulse_at(logical_beacon_id, context.height)
-            });
+            let parliament_requested = world
+                .parliament_required_beacon_pulse_slots
+                .get(&(logical_beacon_id, context.height))
+                .is_some_and(|attempts| !attempts.is_empty());
             let pulse_requested = pulse_required_for_successor || parliament_requested;
             let Some(pulse) = pulse else {
-                return if pulse_required_for_successor {
+                return if pulse_requested {
                     Err(Self::npos_effects_error(
-                        "NPoS pre-boundary block is missing its finalized global beacon pulse",
+                        "block is missing a finalized global beacon pulse requested by committed pre-state",
                     ))
                 } else {
                     Ok(())
@@ -8251,9 +8632,11 @@ pub(crate) mod valid {
                     "global beacon pulse differs from the authenticated block height, fixed protocol round, or network",
                 ));
             }
-            if world.parliament_attempts().iter().any(|(_, attempt)| {
-                attempt.classifies_beacon_pulse_unavailable_at(logical_beacon_id, pulse.height)
-            }) {
+            if world
+                .parliament_unavailable_beacon_pulse_slots
+                .get(&(logical_beacon_id, pulse.height))
+                .is_some_and(|attempts| !attempts.is_empty())
+            {
                 return Err(Self::npos_effects_error(
                     "global beacon pulse arrives after Parliament terminally classified its slot as unavailable",
                 ));
@@ -8281,11 +8664,11 @@ pub(crate) mod valid {
             }
             if world
                 .global_beacon_pulse_slots
-                .get(&(pulse.network_id, pulse.height))
+                .get(&(logical_beacon_id, pulse.height))
                 .is_some()
             {
                 return Err(Self::npos_effects_error(
-                    "global beacon pulse replays a network-height slot already in committed state",
+                    "global beacon pulse replays a logical-beacon-height slot already in committed state",
                 ));
             }
             let active_session = world
@@ -8426,6 +8809,7 @@ pub(crate) mod valid {
                 return Ok(());
             };
             Self::validate_merge_reference_execution_projection(reference)?;
+            Self::validate_npos_merge_composition(block, reference)?;
             if block.header().is_genesis() {
                 return Err(Self::execution_context_error(
                     "genesis block cannot carry a certified merge entry",
@@ -9320,14 +9704,16 @@ pub(crate) mod valid {
                 }
                 exact_current_slot = true;
             }
-            if let Some(artifact) =
-                state
-                    .kura()
-                    .latest_lane_block_artifact_matching(descriptor.lane_id, |artifact| {
-                        artifact.ownership.dataspace_id == descriptor.dataspace_id
-                            && artifact.ownership.lane_incarnation == descriptor.lane_incarnation
-                            && artifact.ownership.proposal_height <= descriptor.proposal_height
-                    })
+            if let Some(artifact) = state
+                .kura()
+                .latest_lane_block_artifact_matching(descriptor.lane_id, |artifact| {
+                    artifact.ownership.dataspace_id == descriptor.dataspace_id
+                        && artifact.ownership.lane_incarnation == descriptor.lane_incarnation
+                        && artifact.ownership.proposal_height <= descriptor.proposal_height
+                })
+                .map_err(|error| {
+                    slot_error(&format!("canonical lane frontier is unreadable: {error}"))
+                })?
             {
                 let artifact_height = artifact.ownership.lane_block_height;
                 if artifact_height > lane_block_height {
@@ -9467,9 +9853,47 @@ pub(crate) mod valid {
                 }
             }
             let mut previous_order = None;
-            let mut seen_routes = BTreeSet::new();
-            let mut seen_slots = BTreeSet::new();
-            let mut seen_proposals = BTreeSet::new();
+            // Ordinary and autonomous anchors are two encodings of the same
+            // lane route/slot namespace. Seed the autonomous duplicate sets
+            // with every already-validated ordinary ownership so one carrier
+            // cannot smuggle both execution roles for a route or slot.
+            let mut seen_routes = bundle
+                .lane_payload_ownerships
+                .iter()
+                .map(|ownership| {
+                    (
+                        ownership.lane_id,
+                        ownership.dataspace_id,
+                        ownership.lane_incarnation,
+                    )
+                })
+                .collect::<BTreeSet<_>>();
+            let mut seen_slots = bundle
+                .lane_payload_ownerships
+                .iter()
+                .map(|ownership| {
+                    (
+                        ownership.lane_id,
+                        ownership.dataspace_id,
+                        ownership.lane_incarnation,
+                        ownership.lane_block_height,
+                        ownership.lane_block_view,
+                    )
+                })
+                .collect::<BTreeSet<_>>();
+            let mut seen_proposals = bundle
+                .lane_payload_ownerships
+                .iter()
+                .map(|ownership| {
+                    native_amx_coordinator_proposal_from_ownership(ownership)
+                        .map(|proposal| proposal.proposal_hash)
+                        .map_err(|error| {
+                            Self::execution_context_error(format!(
+                                "ordinary lane ownership cannot seed the shared proposal namespace: {error}"
+                            ))
+                        })
+                })
+                .collect::<Result<BTreeSet<_>, _>>()?;
             let mut seen_descriptors = BTreeSet::new();
             let mut seen_payloads = BTreeSet::new();
             let mut seen_reservations = BTreeSet::new();
@@ -10121,6 +10545,16 @@ pub(crate) mod valid {
                 .map(|prepared| transactions.get(&prepared.metadata.entrypoint_hash))
                 .collect()
         }
+        fn committed_heights_for_entrypoint_carriers(
+            block: &SignedBlock,
+            transactions: &impl TransactionsReadOnly,
+        ) -> Vec<Option<NonZeroUsize>> {
+            block
+                .external_entrypoints_slice()
+                .iter()
+                .map(|entrypoint| transactions.get(&entrypoint.hash()))
+                .collect()
+        }
         fn signed_transaction_from_entrypoint(
             entrypoint: &TransactionEntrypoint,
         ) -> Option<&SignedTransaction> {
@@ -10481,6 +10915,7 @@ pub(crate) mod valid {
             genesis_account: &AccountId,
             static_data: &StaticValidationData,
             committed_heights: &[Option<NonZeroUsize>],
+            committed_carrier_heights: &[Option<NonZeroUsize>],
             prepared_txs: &[PreparedBlockTransaction],
             _metrics: MetricsRef<'_>,
         ) -> Result<(), BlockValidationError> {
@@ -10498,6 +10933,16 @@ pub(crate) mod valid {
             );
             if committed_heights.len() != prepared_txs.len() {
                 return Err(BlockValidationError::MerkleRootMismatch);
+            }
+            if committed_carrier_heights.len() != block.external_entrypoint_count() {
+                return Err(BlockValidationError::MerkleRootMismatch);
+            }
+            if committed_carrier_heights.iter().any(|committed_height| {
+                committed_height
+                    .as_ref()
+                    .is_some_and(|height| height.get() < expected_block_height)
+            }) {
+                return Err(BlockValidationError::HasCommittedTransactions);
             }
             let signed_txs = Self::collect_external_signed_transactions(block);
             debug_assert_eq!(
@@ -10841,6 +11286,10 @@ pub(crate) mod valid {
                 &prepared_txs,
                 crate::state::StateReadOnlyWithTransactions::transactions(state),
             );
+            let committed_carrier_heights = Self::committed_heights_for_entrypoint_carriers(
+                block,
+                crate::state::StateReadOnlyWithTransactions::transactions(state),
+            );
             let cache_cap = static_data.pipeline_cfg.stateless_cache_cap;
             let cache_enabled = cache_cap > 0 && !block.header().is_genesis();
             let max_clock_drift_ms = static_data.max_clock_drift.as_millis();
@@ -10864,6 +11313,7 @@ pub(crate) mod valid {
                 genesis_account,
                 &static_data,
                 &committed_heights,
+                &committed_carrier_heights,
                 &prepared_txs,
                 metrics,
             )?;
@@ -10887,7 +11337,11 @@ pub(crate) mod valid {
                         .creation_time()
                         .as_millis()
                         .saturating_sub(max_clock_drift_ms);
-                    cache.insert_ok(prepared.metadata.signed_hash, expires_at_ms, not_before_ms);
+                    cache.insert_ok(
+                        prepared.metadata.stateless_cache_key,
+                        expires_at_ms,
+                        not_before_ms,
+                    );
                 }
             }
             Ok(())
@@ -11484,7 +11938,13 @@ pub(crate) mod valid {
                 Self::validate_sccp_commitment_root(block)?;
             }
             state_block
-                .stage_canonical_carrier_membership(block.entrypoint_hashes(), block_height)
+                .stage_canonical_carrier_membership(
+                    crate::tx::canonical_carrier_membership_hashes(
+                        state_block,
+                        block.external_entrypoints_slice(),
+                    ),
+                    block_height,
+                )
                 .map_err(|error| {
                     Self::execution_context_error(format!(
                         "failed to stage canonical carrier membership: {error}"
@@ -12434,7 +12894,7 @@ pub(crate) mod valid {
                         .as_millis()
                         .saturating_sub(max_clock_drift_ms);
                     cache.insert_ok(
-                        prepared_txs[idx].metadata.signed_hash,
+                        prepared_txs[idx].metadata.stateless_cache_key,
                         expires_at_ms,
                         not_before_ms,
                     );
@@ -12795,6 +13255,16 @@ pub(crate) mod valid {
                     )
                 })
                 .collect();
+            let block_gas_metering_required = state_block.gas_limit_per_block != 0;
+            let transaction_postprocessing_required: Vec<bool> = txs
+                .iter()
+                .zip(&fee_postprocessing_required)
+                .map(|(tx, fee_required)| {
+                    *fee_required
+                        || block_gas_metering_required
+                        || crate::executor::transaction_gas_limit(tx).is_some()
+                })
+                .collect();
             let data_triggers_enabled =
                 state_block
                     .world
@@ -12807,6 +13277,52 @@ pub(crate) mod valid {
                                 action.metadata(),
                             )
                     });
+            let candidate_mutates_trigger_lifecycle = txs.iter().enumerate().any(|(idx, tx)| {
+                if stateless_rejections[idx].is_some() {
+                    return false;
+                }
+                if tx
+                    .instructions()
+                    .explicit_instructions()
+                    .any(instruction_mutates_trigger_lifecycle)
+                {
+                    return true;
+                }
+                match &prepared_overlays[idx] {
+                    Ok(PreparedBlockExecution::Overlay(prepared)) => {
+                        prepared
+                            .overlay
+                            .instruction_slice()
+                            .iter()
+                            .any(instruction_mutates_trigger_lifecycle)
+                            // An opaque overlay rebuilt against live state can materialize a
+                            // different instruction set. Fence the whole candidate whenever that
+                            // rebuild remains possible, even if the block-start overlay contained
+                            // no trigger lifecycle effect.
+                            || (uses_live_vm_overlay_scheduler(tx.instructions())
+                                && (prepared.force_live_rebuild
+                                    || prepared.durable_state_reads.is_some()
+                                    || is_quarantine[idx]))
+                    }
+                    // A live mixed batch can materialize trigger effects through an opaque
+                    // contract call. Explicit-only batches were scanned above and need no
+                    // candidate-wide serialization fence.
+                    Ok(PreparedBlockExecution::LiveBatch) => matches!(
+                        tx.instructions(),
+                        Executable::Batch(items)
+                            if items.iter().any(|item| matches!(
+                                item,
+                                iroha_data_model::transaction::executable::ExecutableBatchItem::ContractCall(_)
+                            ))
+                    ),
+                    Err(error) => {
+                        uses_live_vm_overlay_scheduler(tx.instructions())
+                            && error.may_change_with_live_state()
+                    }
+                }
+            });
+            let detached_sequential_required =
+                data_triggers_enabled || candidate_mutates_trigger_lifecycle;
             #[cfg(feature = "telemetry")]
             let t_access_start = Instant::now();
             let access_start = timings.as_ref().map(|_| Instant::now());
@@ -12865,7 +13381,7 @@ pub(crate) mod valid {
                 access_sources.push(source);
             }
             for (idx, set) in access.iter_mut().enumerate() {
-                if fee_postprocessing_required[idx] {
+                if detached_sequential_required || fee_postprocessing_required[idx] {
                     set.add_write(GLOBAL_WILDCARD_KEY.to_owned());
                 }
             }
@@ -13096,21 +13612,8 @@ pub(crate) mod valid {
                         key_count: count,
                     },
                 );
-                let mut sidecar =
+                let sidecar =
                     PipelineRecoverySidecar::new(height, block_hash, dag_snapshot, txs_sidecar);
-                #[cfg(feature = "zk-preverify")]
-                {
-                    let proofs = crate::zk::collect_trace_proofs_for_height(height);
-                    if !proofs.is_empty() {
-                        iroha_logger::debug!(
-                            height,
-                            count = proofs.len(),
-                            "attaching {} trace proof digests to pipeline sidecar",
-                            proofs.len()
-                        );
-                        sidecar.proofs = proofs;
-                    }
-                }
                 match state_block.kura().enqueue_pipeline_metadata(sidecar) {
                     PipelineSidecarEnqueueResult::Enqueued { .. } => {}
                     PipelineSidecarEnqueueResult::RejectedQueueFull { cap } => {
@@ -13490,6 +13993,7 @@ pub(crate) mod valid {
                 debug_assert!(uses_live_batch_scheduler(tx.instructions()));
                 let authority = tx.authority().clone();
                 let executable_items = match tx.instructions() {
+                    Executable::Instructions(items) => items.len(),
                     Executable::Batch(items) => items.len(),
                     _ => 0,
                 };
@@ -13516,6 +14020,7 @@ pub(crate) mod valid {
                     &mut state_tx,
                     tx,
                     routing_decisions[idx],
+                    idx,
                 )?;
                 let executor = state_tx.world.executor.clone();
                 let mut ivm_cache = overlay_caches[0].lock();
@@ -13529,7 +14034,27 @@ pub(crate) mod valid {
                 if let Err(error) = execution_result {
                     let rejection_reason = TransactionRejectionReason::Validation(error);
                     let gas_used = state_tx.last_tx_gas_used;
+                    let rejected_confidential_work = (
+                        state_tx.zk_confidential_ops_in_tx,
+                        state_tx.zk_verify_calls_in_tx,
+                        state_tx.zk_proof_bytes_in_tx,
+                        state_tx.confidential_gas_used_in_tx,
+                    );
+                    let governance_penalties =
+                        state_tx.take_deferred_governance_ballot_penalties_v1();
                     drop(state_tx);
+                    state_block_mut.account_confidential_work_v1(
+                        rejected_confidential_work.0,
+                        rejected_confidential_work.1,
+                        rejected_confidential_work.2,
+                        rejected_confidential_work.3,
+                    );
+                    state_block_mut.apply_rejected_governance_ballot_penalties_v1(
+                        tx,
+                        governance_penalties,
+                        Some(routing_decisions[idx]),
+                        Some(u64::try_from(idx).unwrap_or(u64::MAX)),
+                    )?;
                     let fee_result = charge_rejected_live_batch_fees(
                         state_block_mut,
                         tx,
@@ -13549,7 +14074,27 @@ pub(crate) mod valid {
                     Ok(sequence) => sequence,
                     Err(rejection_reason) => {
                         let gas_used = state_tx.last_tx_gas_used;
+                        let rejected_confidential_work = (
+                            state_tx.zk_confidential_ops_in_tx,
+                            state_tx.zk_verify_calls_in_tx,
+                            state_tx.zk_proof_bytes_in_tx,
+                            state_tx.confidential_gas_used_in_tx,
+                        );
+                        let governance_penalties =
+                            state_tx.take_deferred_governance_ballot_penalties_v1();
                         drop(state_tx);
+                        state_block_mut.account_confidential_work_v1(
+                            rejected_confidential_work.0,
+                            rejected_confidential_work.1,
+                            rejected_confidential_work.2,
+                            rejected_confidential_work.3,
+                        );
+                        state_block_mut.apply_rejected_governance_ballot_penalties_v1(
+                            tx,
+                            governance_penalties,
+                            Some(routing_decisions[idx]),
+                            Some(u64::try_from(idx).unwrap_or(u64::MAX)),
+                        )?;
                         let fee_result = charge_rejected_live_batch_fees(
                             state_block_mut,
                             tx,
@@ -13570,13 +14115,64 @@ pub(crate) mod valid {
                         };
                     }
                 };
-                commit_stateful_admission_sequence(&mut state_tx, &admission)?;
+                if let Err(rejection_reason) =
+                    commit_stateful_admission_sequence(&mut state_tx, &admission)
+                {
+                    let gas_used = state_tx.last_tx_gas_used;
+                    let rejected_confidential_work = (
+                        state_tx.zk_confidential_ops_in_tx,
+                        state_tx.zk_verify_calls_in_tx,
+                        state_tx.zk_proof_bytes_in_tx,
+                        state_tx.confidential_gas_used_in_tx,
+                    );
+                    let governance_penalties =
+                        state_tx.take_deferred_governance_ballot_penalties_v1();
+                    drop(state_tx);
+                    state_block_mut.account_confidential_work_v1(
+                        rejected_confidential_work.0,
+                        rejected_confidential_work.1,
+                        rejected_confidential_work.2,
+                        rejected_confidential_work.3,
+                    );
+                    state_block_mut.apply_rejected_governance_ballot_penalties_v1(
+                        tx,
+                        governance_penalties,
+                        Some(routing_decisions[idx]),
+                        Some(u64::try_from(idx).unwrap_or(u64::MAX)),
+                    )?;
+                    let fee_result = charge_rejected_live_batch_fees(
+                        state_block_mut,
+                        tx,
+                        &authority,
+                        gas_used,
+                        routing_decisions[idx].lane_id,
+                        routing_decisions[idx].dataspace_id,
+                        &rejection_reason,
+                    );
+                    account_rejected_live_batch_gas(state_block_mut, gas_used, &rejection_reason);
+                    return match fee_result {
+                        Ok(()) => Err(rejection_reason),
+                        Err(fee_error) => Err(fee_error),
+                    };
+                }
                 let gas_used = state_tx.last_tx_gas_used;
+                let confidential_work = (
+                    state_tx.zk_confidential_ops_in_tx,
+                    state_tx.zk_verify_calls_in_tx,
+                    state_tx.zk_proof_bytes_in_tx,
+                    state_tx.confidential_gas_used_in_tx,
+                );
                 state_tx.apply();
                 if gas_used > 0 {
                     state_block_mut.gas_used_in_block =
                         state_block_mut.gas_used_in_block.saturating_add(gas_used);
                 }
+                state_block_mut.account_confidential_work_v1(
+                    confidential_work.0,
+                    confidential_work.1,
+                    confidential_work.2,
+                    confidential_work.3,
+                );
                 Ok(trigger_sequence)
             };
             if let Some(start) = apply_setup_start {
@@ -13894,6 +14490,9 @@ pub(crate) mod valid {
                             })
                     };
                     let eval_detached = |p: &PreparedEntry| {
+                        if detached_sequential_required {
+                            return (p.idx, None, Some(DetachedFallbackReason::DurableState));
+                        }
                         if let Some(Some(Ok(ovl))) = overlays.get(p.idx) {
                             if matches!(
                                 &*state_block.world.executor,
@@ -14005,9 +14604,9 @@ pub(crate) mod valid {
                                             None,
                                             Some(DetachedFallbackReason::UnsupportedInstruction),
                                         )
-                                    } else if fee_postprocessing_required[p.idx]
-                                        && (data_triggers_enabled
-                                            || !delta.supports_detached_fee_postprocessing())
+                                    } else if detached_sequential_required
+                                        || (transaction_postprocessing_required[p.idx]
+                                            && !delta.supports_detached_fee_postprocessing())
                                     {
                                         (
                                             p.idx,
@@ -14138,99 +14737,19 @@ pub(crate) mod valid {
                             }
                             let chunk_size =
                                 state_block_mut.pipeline.overlay_chunk_instructions.max(1);
-                            let mut state_tx = state_block_mut.transaction();
-                            state_tx.current_lane_id = Some(routing_decisions[idx].lane_id);
-                            state_tx.current_dataspace_id =
-                                Some(routing_decisions[idx].dataspace_id);
-                            state_tx.world.current_dataspace_id =
-                                Some(routing_decisions[idx].dataspace_id);
                             let authority = tx.authority().clone();
-                            state_tx.tx_call_hash = Some(iroha_crypto::Hash::from(hash));
-                            state_tx.current_tx_hash = Some(prepared_txs[idx].metadata.signed_hash);
-                            let contract_deployment_bootstrap =
-                                crate::executor::ContractDeploymentSelfBootstrapAuthorization::derive(
-                                    &state_tx.world,
-                                    &authority,
-                                    tx,
-                                );
-                            if missing_authority_requires_rejection(
-                                &state_tx,
+                            let result = execute_prepared_overlay_attempt(
+                                state_block_mut,
                                 tx,
                                 &authority,
-                                overlay.instruction_count(),
-                                block.header().is_genesis(),
-                            ) {
-                                return Err(TransactionRejectionReason::AccountDoesNotExist(
-                                    iroha_data_model::query::error::FindError::Account(
-                                        authority.clone(),
-                                    ),
-                                ));
-                            }
-                            let admission = validate_block_transaction_admission(
-                                &mut state_tx,
-                                tx,
+                                overlay.as_ref(),
+                                hash,
+                                prepared_txs[idx].metadata.signed_hash,
                                 routing_decisions[idx],
-                            )?;
-                            let result = match overlay.apply_signed_transaction_with_chunk(
-                                &mut state_tx,
-                                &authority,
                                 chunk_size,
-                                contract_deployment_bootstrap.as_ref(),
-                            ) {
-                                Err(e) => {
-                                    let rejection_reason =
-                                        TransactionRejectionReason::Validation(e);
-                                    drop(state_tx);
-                                    match charge_rejected_overlay_fees(
-                                        state_block_mut,
-                                        tx,
-                                        &authority,
-                                        overlay.as_ref(),
-                                        routing_decisions[idx].lane_id,
-                                        routing_decisions[idx].dataspace_id,
-                                        &rejection_reason,
-                                    ) {
-                                        Ok(()) => Err(rejection_reason),
-                                        Err(err) => Err(err),
-                                    }
-                                }
-                                Ok(()) => {
-                                    if let Err(err) = charge_fees_for_applied_overlay(
-                                        &mut state_tx,
-                                        &authority,
-                                        tx,
-                                        overlay.as_ref(),
-                                    ) {
-                                        Err(TransactionRejectionReason::Validation(err))
-                                    } else {
-                                        match state_tx.execute_data_triggers_dfs(&authority) {
-                                            Err(err) => {
-                                                drop(state_tx);
-                                                match charge_rejected_overlay_fees(
-                                                    state_block_mut,
-                                                    tx,
-                                                    &authority,
-                                                    overlay.as_ref(),
-                                                    routing_decisions[idx].lane_id,
-                                                    routing_decisions[idx].dataspace_id,
-                                                    &err,
-                                                ) {
-                                                    Ok(()) => Err(err),
-                                                    Err(fee_err) => Err(fee_err),
-                                                }
-                                            }
-                                            Ok(trigger_sequence) => {
-                                                commit_stateful_admission_sequence(
-                                                    &mut state_tx,
-                                                    &admission,
-                                                )?;
-                                                state_tx.apply();
-                                                Ok(trigger_sequence)
-                                            }
-                                        }
-                                    }
-                                }
-                            };
+                                block.header().is_genesis(),
+                                idx,
+                            );
                             if let Err(reason) = &result {
                                 iroha_logger::debug!(
                                     tx=%hash,
@@ -14263,7 +14782,8 @@ pub(crate) mod valid {
                     let simple_transfer_batch = !prepared.is_empty() && {
                         let precheck_tx = state_block.transaction();
                         prepared.iter().all(|p| {
-                            !fee_postprocessing_required[p.idx]
+                            !detached_sequential_required
+                                && !transaction_postprocessing_required[p.idx]
                                 && !crate::validation_fee::transaction_has_validation_fee_metadata(
                                     txs[p.idx],
                                 )
@@ -14293,6 +14813,7 @@ pub(crate) mod valid {
                             }
                             let mut state_tx = state_block.transaction();
                             let mut batch_successes = 0usize;
+                            let mut batch_gas_used = 0u64;
                             let mut aborts: Vec<(usize, &'static str)> = Vec::new();
                             for p in prepared_chunk {
                                 let tx = txs[p.idx];
@@ -14334,6 +14855,7 @@ pub(crate) mod valid {
                                     &mut state_tx,
                                     tx,
                                     routing_decisions[p.idx],
+                                    p.idx,
                                 ) {
                                     Ok(admission) => admission,
                                     Err(reason) => {
@@ -14349,6 +14871,13 @@ pub(crate) mod valid {
                                         continue;
                                     }
                                 };
+                                let overlay = overlays[p.idx]
+                                    .as_ref()
+                                    .expect("detached delta requires an overlay")
+                                    .as_ref()
+                                    .expect("accepted detached delta requires a valid overlay");
+                                let gas_used =
+                                    crate::gas::meter_instructions(overlay.instruction_slice());
                                 let result = match deltas.get(p.idx) {
                                     Some(Some(Ok(delta))) => delta
                                         .merge_numeric_transfer_batch_into_transaction(
@@ -14376,10 +14905,17 @@ pub(crate) mod valid {
                                             &mut state_tx,
                                             &admission,
                                         ) {
+                                            if rejected_live_batch_gas_is_accountable(
+                                                gas_used, &reason,
+                                            ) {
+                                                batch_gas_used =
+                                                    batch_gas_used.saturating_add(gas_used);
+                                            }
                                             aborts.push((p.idx, "commit"));
                                             record_result(p.idx, Err(reason));
                                             continue;
                                         }
+                                        batch_gas_used = batch_gas_used.saturating_add(gas_used);
                                         batch_successes = batch_successes.saturating_add(1);
                                         record_result(p.idx, Ok(trigger_sequence));
                                         let lane_id = routing_decisions[p.idx].lane_id;
@@ -14395,6 +14931,11 @@ pub(crate) mod valid {
                                         }
                                     }
                                     Err(reason) => {
+                                        if rejected_live_batch_gas_is_accountable(gas_used, &reason)
+                                        {
+                                            batch_gas_used =
+                                                batch_gas_used.saturating_add(gas_used);
+                                        }
                                         aborts.push((p.idx, "commit"));
                                         record_result(p.idx, Err(reason));
                                         if debug_trace_tx_eval {
@@ -14412,11 +14953,17 @@ pub(crate) mod valid {
                                 // active when it was recorded. Clear the overlay hash so apply()
                                 // flushes batched transcripts into their per-transaction buckets.
                                 state_tx.tx_call_hash = None;
+                                let confidential_work = ConfidentialWorkV1::capture(&state_tx);
                                 state_tx.apply();
+                                account_transaction_gas(state_block, batch_gas_used);
+                                confidential_work.account(state_block);
                                 state_block
                                     .add_committed_fragments(batch_successes.saturating_sub(1));
                             } else {
+                                let confidential_work = ConfidentialWorkV1::capture(&state_tx);
                                 drop(state_tx);
+                                account_transaction_gas(state_block, batch_gas_used);
+                                confidential_work.account(state_block);
                             }
                             for (idx, stage) in aborts {
                                 record_amx_abort(state_block, idx, stage);
@@ -14481,6 +15028,7 @@ pub(crate) mod valid {
                                         &mut state_tx,
                                         tx,
                                         routing_decisions[p.idx],
+                                        p.idx,
                                     ) {
                                         Ok(admission) => admission,
                                         Err(reason) => {
@@ -14497,41 +15045,58 @@ pub(crate) mod valid {
                                             continue;
                                         }
                                     };
-                                    let single_transfer_result = if fee_postprocessing_required
-                                        [p.idx]
-                                    {
-                                        delta
-                                            .merge_single_transfer_effects_into_transaction(
+                                    let overlay = overlays[p.idx]
+                                        .as_ref()
+                                        .expect("detached delta requires an overlay")
+                                        .as_ref()
+                                        .expect("accepted detached delta requires a valid overlay");
+                                    if transaction_postprocessing_required[p.idx] {
+                                        if let Err(error) = precharge_gas_for_applied_overlay(
+                                            &mut state_tx,
+                                            tx,
+                                            overlay.as_ref(),
+                                        ) {
+                                            drop(state_tx);
+                                            record_amx_abort(state_block, p.idx, "commit");
+                                            record_result(
+                                                p.idx,
+                                                Err(TransactionRejectionReason::Validation(error)),
+                                            );
+                                            continue;
+                                        }
+                                    } else {
+                                        state_tx.last_tx_gas_used = crate::gas::meter_instructions(
+                                            overlay.instruction_slice(),
+                                        );
+                                    }
+                                    let single_transfer_result =
+                                        if transaction_postprocessing_required[p.idx] {
+                                            delta
+                                                .merge_single_transfer_effects_into_transaction(
+                                                    &mut state_tx,
+                                                    &p.authority,
+                                                )
+                                                .map(|result| {
+                                                    result.and_then(|()| {
+                                                        charge_fees_for_precharged_overlay(
+                                                            &mut state_tx,
+                                                            &p.authority,
+                                                            tx,
+                                                            overlay.as_ref(),
+                                                        )
+                                                        .map_err(
+                                                            TransactionRejectionReason::Validation,
+                                                        )?;
+                                                        state_tx
+                                                            .execute_data_triggers_dfs(&p.authority)
+                                                    })
+                                                })
+                                        } else {
+                                            delta.merge_single_transfer_into_transaction(
                                                 &mut state_tx,
                                                 &p.authority,
                                             )
-                                            .map(|result| {
-                                                result.and_then(|()| {
-                                                    let overlay = overlays[p.idx]
-                                                        .as_ref()
-                                                        .expect(
-                                                            "detached delta requires an overlay",
-                                                        )
-                                                        .as_ref()
-                                                        .map_err(map_overlay_error)?;
-                                                    charge_fees_for_applied_overlay(
-                                                        &mut state_tx,
-                                                        &p.authority,
-                                                        tx,
-                                                        overlay.as_ref(),
-                                                    )
-                                                    .map_err(
-                                                        TransactionRejectionReason::Validation,
-                                                    )?;
-                                                    state_tx.execute_data_triggers_dfs(&p.authority)
-                                                })
-                                            })
-                                    } else {
-                                        delta.merge_single_transfer_into_transaction(
-                                            &mut state_tx,
-                                            &p.authority,
-                                        )
-                                    };
+                                        };
                                     if let Some(result) = single_transfer_result {
                                         match result {
                                             Ok(trigger_sequence) => {
@@ -14541,12 +15106,37 @@ pub(crate) mod valid {
                                                         &admission,
                                                     )
                                                 {
+                                                    let gas_used = state_tx.last_tx_gas_used;
+                                                    let confidential_work =
+                                                        ConfidentialWorkV1::capture(&state_tx);
                                                     drop(state_tx);
+                                                    confidential_work.account(state_block);
+                                                    let fee_result = charge_rejected_overlay_fees(
+                                                        state_block,
+                                                        tx,
+                                                        &p.authority,
+                                                        overlay.as_ref(),
+                                                        routing_decisions[p.idx].lane_id,
+                                                        routing_decisions[p.idx].dataspace_id,
+                                                        &reason,
+                                                        gas_used,
+                                                    );
                                                     record_amx_abort(state_block, p.idx, "commit");
-                                                    record_result(p.idx, Err(reason));
+                                                    record_result(
+                                                        p.idx,
+                                                        match fee_result {
+                                                            Ok(()) => Err(reason),
+                                                            Err(fee_error) => Err(fee_error),
+                                                        },
+                                                    );
                                                     continue;
                                                 }
+                                                let gas_used = state_tx.last_tx_gas_used;
+                                                let confidential_work =
+                                                    ConfidentialWorkV1::capture(&state_tx);
                                                 state_tx.apply();
+                                                account_transaction_gas(state_block, gas_used);
+                                                confidential_work.account(state_block);
                                                 record_result(p.idx, Ok(trigger_sequence));
                                                 let lane_id = routing_decisions[p.idx].lane_id;
                                                 let summary =
@@ -14562,7 +15152,11 @@ pub(crate) mod valid {
                                                 }
                                             }
                                             Err(reason) => {
+                                                let gas_used = state_tx.last_tx_gas_used;
+                                                let confidential_work =
+                                                    ConfidentialWorkV1::capture(&state_tx);
                                                 drop(state_tx);
+                                                confidential_work.account(state_block);
                                                 record_amx_abort(state_block, p.idx, "commit");
                                                 match reason {
                                                     TransactionRejectionReason::Validation(_) => {
@@ -14574,6 +15168,11 @@ pub(crate) mod valid {
                                                         record_result(p.idx, result);
                                                     }
                                                     other => {
+                                                        account_rejected_live_batch_gas(
+                                                            state_block,
+                                                            gas_used,
+                                                            &other,
+                                                        );
                                                         record_result(p.idx, Err(other));
                                                     }
                                                 }
@@ -14583,7 +15182,9 @@ pub(crate) mod valid {
                                     }
                                     // A malformed detached delta cannot be produced by the
                                     // evaluator, but preserve a deterministic sequential fallback.
+                                    let confidential_work = ConfidentialWorkV1::capture(&state_tx);
                                     drop(state_tx);
+                                    confidential_work.account(state_block);
                                     let result = apply_overlay_sequential(
                                         state_block,
                                         &mut lane_summaries,
@@ -14712,117 +15313,18 @@ pub(crate) mod valid {
                         }
                         let chunk_size = state_block.pipeline.overlay_chunk_instructions.max(1);
                         let authority = tx.authority().clone();
-                        let result = {
-                            let mut state_tx = state_block.transaction();
-                            state_tx.current_lane_id = Some(routing_decisions[idx].lane_id);
-                            state_tx.current_dataspace_id =
-                                Some(routing_decisions[idx].dataspace_id);
-                            state_tx.world.current_dataspace_id =
-                                Some(routing_decisions[idx].dataspace_id);
-                            state_tx.tx_call_hash = Some(iroha_crypto::Hash::from(hash));
-                            state_tx.current_tx_hash = Some(prepared_txs[idx].metadata.signed_hash);
-                            let contract_deployment_bootstrap =
-                                crate::executor::ContractDeploymentSelfBootstrapAuthorization::derive(
-                                    &state_tx.world,
-                                    &authority,
-                                    tx,
-                                );
-                            let missing_authority = missing_authority_requires_rejection(
-                                &state_tx,
-                                tx,
-                                &authority,
-                                overlay.instruction_count(),
-                                block.header().is_genesis(),
-                            );
-                            if missing_authority {
-                                Err(
-                                    iroha_data_model::transaction::error::TransactionRejectionReason::AccountDoesNotExist(
-                                        iroha_data_model::query::error::FindError::Account(authority.clone()),
-                                    ),
-                                )
-                            } else {
-                                let admission = validate_block_transaction_admission(
-                                    &mut state_tx,
-                                    tx,
-                                    routing_decisions[idx],
-                                );
-                                if let Err(reason) = admission {
-                                    Err(reason)
-                                } else {
-                                    let admission =
-                                        admission.expect("admission result checked above");
-                                    match overlay.apply_signed_transaction_with_chunk(
-                                        &mut state_tx,
-                                        &authority,
-                                        chunk_size,
-                                        contract_deployment_bootstrap.as_ref(),
-                                    ) {
-                                        Err(e) => {
-                                            let rejection_reason =
-                                                TransactionRejectionReason::Validation(e);
-                                            drop(state_tx);
-                                            match charge_rejected_overlay_fees(
-                                                state_block,
-                                                tx,
-                                                &authority,
-                                                overlay.as_ref(),
-                                                routing_decisions[idx].lane_id,
-                                                routing_decisions[idx].dataspace_id,
-                                                &rejection_reason,
-                                            ) {
-                                                Ok(()) => Err(rejection_reason),
-                                                Err(err) => Err(err),
-                                            }
-                                        }
-                                        Ok(()) => {
-                                            if let Err(err) = charge_fees_for_applied_overlay(
-                                                &mut state_tx,
-                                                &authority,
-                                                tx,
-                                                overlay.as_ref(),
-                                            ) {
-                                                Err(
-                                                    iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
-                                                        err,
-                                                    ),
-                                                )
-                                            } else {
-                                                match state_tx.execute_data_triggers_dfs(&authority)
-                                                {
-                                                    Err(err) => {
-                                                        drop(state_tx);
-                                                        match charge_rejected_overlay_fees(
-                                                            state_block,
-                                                            tx,
-                                                            &authority,
-                                                            overlay.as_ref(),
-                                                            routing_decisions[idx].lane_id,
-                                                            routing_decisions[idx].dataspace_id,
-                                                            &err,
-                                                        ) {
-                                                            Ok(()) => Err(err),
-                                                            Err(fee_err) => Err(fee_err),
-                                                        }
-                                                    }
-                                                    Ok(trigger_sequence) => {
-                                                        match commit_stateful_admission_sequence(
-                                                            &mut state_tx,
-                                                            &admission,
-                                                        ) {
-                                                            Ok(()) => {
-                                                                state_tx.apply();
-                                                                Ok(trigger_sequence)
-                                                            }
-                                                            Err(reason) => Err(reason),
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        };
+                        let result = execute_prepared_overlay_attempt(
+                            state_block,
+                            tx,
+                            &authority,
+                            overlay.as_ref(),
+                            hash,
+                            prepared_txs[idx].metadata.signed_hash,
+                            routing_decisions[idx],
+                            chunk_size,
+                            block.header().is_genesis(),
+                            idx,
+                        );
                         if matches!(
                             result,
                             Err(
@@ -14915,114 +15417,18 @@ pub(crate) mod valid {
                     }
                     let chunk_size = state_block.pipeline.overlay_chunk_instructions.max(1);
                     let authority = tx.authority().clone();
-                    let result = {
-                        let mut state_tx = state_block.transaction();
-                        state_tx.current_lane_id = Some(routing_decisions[idx].lane_id);
-                        state_tx.current_dataspace_id = Some(routing_decisions[idx].dataspace_id);
-                        state_tx.world.current_dataspace_id =
-                            Some(routing_decisions[idx].dataspace_id);
-                        state_tx.tx_call_hash = Some(iroha_crypto::Hash::from(hash));
-                        state_tx.current_tx_hash = Some(prepared_txs[idx].metadata.signed_hash);
-                        let contract_deployment_bootstrap =
-                            crate::executor::ContractDeploymentSelfBootstrapAuthorization::derive(
-                                &state_tx.world,
-                                &authority,
-                                tx,
-                            );
-                        let missing_authority = missing_authority_requires_rejection(
-                            &state_tx,
-                            tx,
-                            &authority,
-                            overlay.instruction_count(),
-                            block.header().is_genesis(),
-                        );
-                        if missing_authority {
-                            Err(
-                                iroha_data_model::transaction::error::TransactionRejectionReason::AccountDoesNotExist(
-                                    iroha_data_model::query::error::FindError::Account(authority.clone()),
-                                ),
-                            )
-                        } else {
-                            let admission = validate_block_transaction_admission(
-                                &mut state_tx,
-                                tx,
-                                routing_decisions[idx],
-                            );
-                            if let Err(reason) = admission {
-                                Err(reason)
-                            } else {
-                                let admission = admission.expect("admission result checked above");
-                                match overlay.apply_signed_transaction_with_chunk(
-                                    &mut state_tx,
-                                    &authority,
-                                    chunk_size,
-                                    contract_deployment_bootstrap.as_ref(),
-                                ) {
-                                    Err(e) => {
-                                        let rejection_reason =
-                                            TransactionRejectionReason::Validation(e);
-                                        drop(state_tx);
-                                        match charge_rejected_overlay_fees(
-                                            state_block,
-                                            tx,
-                                            &authority,
-                                            overlay.as_ref(),
-                                            routing_decisions[idx].lane_id,
-                                            routing_decisions[idx].dataspace_id,
-                                            &rejection_reason,
-                                        ) {
-                                            Ok(()) => Err(rejection_reason),
-                                            Err(err) => Err(err),
-                                        }
-                                    }
-                                    Ok(()) => {
-                                        if let Err(err) = charge_fees_for_applied_overlay(
-                                            &mut state_tx,
-                                            &authority,
-                                            tx,
-                                            overlay.as_ref(),
-                                        ) {
-                                            Err(
-                                                iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
-                                                    err,
-                                                ),
-                                            )
-                                        } else {
-                                            match state_tx.execute_data_triggers_dfs(&authority) {
-                                                Err(err) => {
-                                                    drop(state_tx);
-                                                    match charge_rejected_overlay_fees(
-                                                        state_block,
-                                                        tx,
-                                                        &authority,
-                                                        overlay.as_ref(),
-                                                        routing_decisions[idx].lane_id,
-                                                        routing_decisions[idx].dataspace_id,
-                                                        &err,
-                                                    ) {
-                                                        Ok(()) => Err(err),
-                                                        Err(fee_err) => Err(fee_err),
-                                                    }
-                                                }
-                                                Ok(trigger_sequence) => {
-                                                    match commit_stateful_admission_sequence(
-                                                        &mut state_tx,
-                                                        &admission,
-                                                    ) {
-                                                        Ok(()) => {
-                                                            state_tx.apply();
-                                                            Ok(trigger_sequence)
-                                                        }
-                                                        Err(reason) => Err(reason),
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    };
+                    let result = execute_prepared_overlay_attempt(
+                        state_block,
+                        tx,
+                        &authority,
+                        overlay.as_ref(),
+                        hash,
+                        prepared_txs[idx].metadata.signed_hash,
+                        routing_decisions[idx],
+                        chunk_size,
+                        block.header().is_genesis(),
+                        idx,
+                    );
                     if matches!(
                         result,
                         Err(
@@ -15474,7 +15880,13 @@ pub(crate) mod valid {
                 timings.execution_tx_apply_other_ms = apply_ms.saturating_sub(known_apply_ms);
             }
             state_block
-                .stage_canonical_carrier_membership(block.entrypoint_hashes(), block_height)
+                .stage_canonical_carrier_membership(
+                    crate::tx::canonical_carrier_membership_hashes(
+                        state_block,
+                        block.external_entrypoints_slice(),
+                    ),
+                    block_height,
+                )
                 .map_err(|error| {
                     Self::execution_context_error(format!(
                         "failed to stage canonical carrier membership: {error}"
@@ -15671,7 +16083,7 @@ pub(crate) mod valid {
         pub fn commit_with_signers(
             self,
             topology: &Topology,
-            signers: &BTreeSet<crate::sumeragi::consensus::ValidatorIndex>,
+            signers: &BTreeSet<ValidatorIndex>,
             allow_quorum_bypass: bool,
         ) -> WithCommittedBlockEvents {
             let validation = (|| -> Result<(), SignatureVerificationError> {
@@ -15870,6 +16282,7 @@ pub(crate) mod valid {
             isi::{InstructionBox, Log, error::Mismatch},
             merge::MergeQuorumCertificate,
             metadata::Metadata,
+            name::Name,
             nexus::{
                 AxtPolicyBinding, AxtPolicyEntry, AxtPolicySnapshot, DataSpaceCatalog, DataSpaceId,
                 DataSpaceMetadata, LaneCatalog, LaneConfig, LaneId,
@@ -16089,12 +16502,22 @@ pub(crate) mod valid {
                     power: 1,
                 })
                 .collect::<Vec<_>>();
+            let mint_finality_roster = crate::kagemusha_v1_test_fixtures::mint_finality_roster(
+                state.network_id,
+                0,
+                &roster,
+            );
+            let mint_finality_epoch_id = mint_finality_roster
+                .finality_epoch_id()
+                .expect("cache fixture mint-finality roster is canonical");
             let genesis_parameters = wire::SumeragiV2GenesisContextParameters::recommended();
             let parent_context = wire::HeightContext {
                 network_id: state.network_id,
                 protocol_version: wire::PROTOCOL_VERSION,
                 height: 1,
                 epoch: 0,
+                kagemusha_mint_finality_epoch_id: mint_finality_epoch_id,
+                kagemusha_mint_finality_epoch_roster: mint_finality_roster,
                 epoch_end_height: u64::MAX,
                 next_epoch_snapshot: None,
                 mode: wire::ConsensusMode::Permissioned,
@@ -16126,15 +16549,16 @@ pub(crate) mod valid {
             let parent_wire = parent
                 .encode_wire()
                 .expect("cache fixture parent has canonical executed bytes");
-            let execution_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
-                Hash::new(b"cache fixture parent state"),
-                Hash::new(b"cache fixture post state"),
-                Hash::new(b"cache fixture ordinary writes"),
-                u64::try_from(parent_wire.len()).expect("cache fixture parent length fits u64"),
-                parent
-                    .executed_block_wire_hash()
-                    .expect("cache fixture parent has a result-bearing wire hash"),
-            );
+            let execution_commitment =
+                wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+                    Hash::new(b"cache fixture parent state"),
+                    Hash::new(b"cache fixture post state"),
+                    Hash::new(b"cache fixture ordinary writes"),
+                    u64::try_from(parent_wire.len()).expect("cache fixture parent length fits u64"),
+                    parent
+                        .executed_block_wire_hash()
+                        .expect("cache fixture parent has a result-bearing wire hash"),
+                );
             let vote = wire::Vote {
                 round,
                 proposal_round: round,
@@ -16199,7 +16623,7 @@ pub(crate) mod valid {
                 )
                 .with_instructions([Log::new(Level::INFO, "cacheable".to_owned())])
                 .sign(signer.private_key());
-                let $tx_hash = tx.hash();
+                let $tx_hash = crate::tx::StatelessValidationCacheKey::new(&tx);
                 let $accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
             };
         }
@@ -16454,7 +16878,7 @@ pub(crate) mod valid {
                 .expect("settlement-only reference is admissible at the projection boundary");
             let mut partial = settlement.clone();
             partial.entrypoint_count = Some(1);
-            let mut full = settlement;
+            let mut full = settlement.clone();
             full.execution_batch_hash = Some(Hash::new(b"execution-batch"));
             full.entrypoint_count = Some(1);
             full.entrypoint_merkle_root = Some(HashOf::from_untyped_unchecked(Hash::new(
@@ -16473,6 +16897,19 @@ pub(crate) mod valid {
             ));
             ValidBlock::validate_merge_reference_execution_projection(&full)
                 .expect("complete execution projection is admissible");
+            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let mut npos_block =
+                npos_effects_block(leader.private_key(), 2, Some(npos_marker_effects(2)));
+            assert!(matches!(
+                ValidBlock::validate_npos_merge_composition(&npos_block, &full),
+                Err(BlockValidationError::ExecutionContextInvalid(reason))
+                    if reason.contains("cannot mix NPoS finality effects")
+            ));
+            ValidBlock::validate_npos_merge_composition(&npos_block, &settlement)
+                .expect("control-only merge certificates carry no independent execution write-set");
+            npos_block.set_npos_consensus_effects(None);
+            ValidBlock::validate_npos_merge_composition(&npos_block, &full)
+                .expect("an execution merge is admissible when the carrier has no NPoS effects");
             for invalid_count in [0, MAX_MERGE_EXECUTION_ENTRYPOINTS as u64 + 1] {
                 let mut invalid = full.clone();
                 invalid.entrypoint_count = Some(invalid_count);
@@ -16521,6 +16958,10 @@ pub(crate) mod valid {
                     },
                 )
                 .collect::<Vec<_>>();
+            let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
+                crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
+                    network_id, 7, &roster,
+                );
             let height_context = iroha_data_model::block::consensus_v2::HeightContext {
                 network_id,
                 protocol_version: iroha_data_model::block::consensus_v2::PROTOCOL_VERSION,
@@ -16541,6 +16982,8 @@ pub(crate) mod valid {
                 quorum: iroha_data_model::block::consensus_v2::DualQuorum::from_roster(&roster)
                     .expect("equal-vote fixture has a canonical quorum"),
                 roster,
+                kagemusha_mint_finality_epoch_id,
+                kagemusha_mint_finality_epoch_roster,
                 nexus_amx_context_hash: Hash::new(b"equal-vote-merge-nexus-context"),
                 execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
                 da_layout: iroha_data_model::block::consensus_v2::DataAvailabilityLayout {
@@ -16612,7 +17055,8 @@ pub(crate) mod valid {
         include!("block/exact_quorum_cardinality_tests.rs");
         #[test]
         fn merge_reference_accepts_distinct_merge_epoch_with_equal_vote_quorum() {
-            let (state, block, bundle, profile) = equal_vote_merge_reference_fixture(&[0, 1, 3]);
+            let (state, mut block, bundle, profile) =
+                equal_vote_merge_reference_fixture(&[0, 1, 3]);
             ValidBlock::validate_execution_context_merge_reference(
                 &block,
                 state.network_id_ref(),
@@ -16620,6 +17064,15 @@ pub(crate) mod valid {
                 &profile,
             )
             .expect("an independently contiguous merge epoch with three signers satisfies quorum");
+            let block_height = block.header().height().get();
+            block.set_npos_consensus_effects(Some(npos_marker_effects(block_height)));
+            ValidBlock::validate_execution_context_merge_reference(
+                &block,
+                state.network_id_ref(),
+                &bundle,
+                &profile,
+            )
+            .expect("control-only merge certification composes with NPoS finality effects");
         }
         struct AutonomousAnchorFixture {
             state: State,
@@ -16638,7 +17091,7 @@ pub(crate) mod valid {
             let validator_keys = core::iter::repeat_with(|| {
                 crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal)
             })
-            .take(2)
+            .take(4)
             .collect::<Vec<_>>();
             let topology = test_topology_with_keys(&validator_keys);
             let mut world = World::new();
@@ -16653,6 +17106,7 @@ pub(crate) mod valid {
                 );
             }
             let state = State::new_for_testing(world, Arc::clone(&kura), query);
+            install_test_lane_manifests_for_keypairs(&state, &validator_keys);
             let leader = &validator_keys[0];
             let _prev_hash =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 1);
@@ -16887,7 +17341,7 @@ pub(crate) mod valid {
                 .as_ref()
                 .iter()
                 .position(|peer| peer != &payload.producer)
-                .expect("two-validator fixture has a global leader distinct from lane author");
+                .expect("four-validator fixture has a global leader distinct from lane author");
             context.view_zero_leader =
                 u32::try_from(global_leader_index).expect("fixture global leader index fits u32");
             let profile = ConsensusValidationProfile::SumeragiV2 {
@@ -16956,7 +17410,7 @@ pub(crate) mod valid {
         #[test]
         fn autonomous_anchor_predecessor_accepts_exact_hash_only_snapshot_artifact() {
             let (state, kura, topology, time_source, leader) = lane_payload_context_fixture();
-            let predecessor = signed_lane_payload_context_block(
+            let mut predecessor = signed_lane_payload_context_block(
                 &state,
                 &topology,
                 &leader,
@@ -16965,6 +17419,17 @@ pub(crate) mod valid {
                 1,
                 None,
             );
+            let predecessor_entrypoint_hashes = predecessor
+                .external_entrypoints_cloned()
+                .map(|entrypoint| entrypoint.hash())
+                .collect::<Vec<_>>();
+            predecessor
+                .set_transaction_results(
+                    Vec::new(),
+                    &predecessor_entrypoint_hashes,
+                    vec![Ok(DataTriggerSequence::default())],
+                )
+                .expect("attach the canonical predecessor result and AXT policy snapshot");
             let predecessor_descriptor_hash = predecessor
                 .execution_context()
                 .and_then(|bundle| bundle.lane_payload_ownerships.first())
@@ -17045,6 +17510,51 @@ pub(crate) mod valid {
                 BlockValidationError::ExecutionContextInvalid(message)
                     if message.contains("strict canonical")
             ));
+        }
+        #[test]
+        fn autonomous_anchor_admission_rejects_cross_kind_route_alias() {
+            let fixture = autonomous_anchor_fixture(None, 0);
+            let epoch = fixture
+                .profile
+                .v2_context()
+                .expect("fixture v2 context")
+                .epoch;
+            let payload = crate::lane_consensus::decode_autonomous_lane_payload_envelope(
+                &fixture.bundle.autonomous_lane_payloads[0],
+                fixture.state.network_id,
+                epoch,
+            )
+            .expect("fixture autonomous payload decodes");
+            let descriptor = &payload.origin_proposal.descriptor;
+            let ordinary = sample_lane_payload_ownership_for_context_at_slot(
+                descriptor.proposal_height,
+                fixture.block.header().view_change_index(),
+                descriptor.lane_id,
+                descriptor.dataspace_id,
+                descriptor.lane_incarnation,
+                descriptor
+                    .lane_block_height
+                    .checked_add(1)
+                    .expect("fixture lane height has a successor"),
+                0,
+                vec![0],
+                vec![Hash::new(b"cross-kind ordinary entrypoint")],
+                &descriptor.validator_set,
+            );
+            let mut bundle = fixture.bundle.clone();
+            bundle.lane_payload_ownerships.push(ordinary);
+            let error = validate_autonomous_anchor_fixture(&fixture, &fixture.block, &bundle)
+                .expect_err(
+                    "ordinary and autonomous anchors must not share one lane route even at different slots",
+                );
+            assert!(
+                matches!(
+                    &error,
+                BlockValidationError::ExecutionContextInvalid(message)
+                    if message.contains("duplicates a route, slot, proposal")
+                ),
+                "unexpected cross-kind route-alias error: {error:?}"
+            );
         }
         #[test]
         fn autonomous_anchor_admission_rejects_oversized_and_stale_artifacts() {
@@ -17294,7 +17804,6 @@ pub(crate) mod valid {
                 pop,
                 activation_height,
                 expiry_height,
-                hsm: None,
                 replaces: None,
                 status,
             };
@@ -18103,8 +18612,13 @@ pub(crate) mod valid {
                     },
                 )
                 .collect::<Vec<_>>();
+            let network_id = crate::sumeragi::synthetic_network_id("v2-artifact-bound-commit");
+            let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
+                crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
+                    network_id, 0, &roster,
+                );
             let context = iroha_data_model::block::consensus_v2::HeightContext {
-                network_id: crate::sumeragi::synthetic_network_id("v2-artifact-bound-commit"),
+                network_id,
                 protocol_version: iroha_data_model::block::consensus_v2::PROTOCOL_VERSION,
                 height: signed.header().height().get(),
                 epoch: 0,
@@ -18116,6 +18630,8 @@ pub(crate) mod valid {
                 quorum: iroha_data_model::block::consensus_v2::DualQuorum::from_roster(&roster)
                     .expect("fixture quorum"),
                 roster,
+                kagemusha_mint_finality_epoch_id,
+                kagemusha_mint_finality_epoch_roster,
                 nexus_amx_context_hash: Hash::new(b"v2 artifact-bound commit context"),
                 execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
                 da_layout: iroha_data_model::block::consensus_v2::DataAvailabilityLayout {
@@ -18141,7 +18657,7 @@ pub(crate) mod valid {
                 view: signed.header().view_change_index(),
             };
             let execution =
-                iroha_data_model::block::consensus_v2::ExecutionCommitment::without_topups_or_merge_carrier(
+                iroha_data_model::block::consensus_v2::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
                     Hash::new(b"artifact-bound parent state"),
                     Hash::new(b"artifact-bound post state"),
                     Hash::new(b"artifact-bound ordinary writes"),
@@ -18560,7 +19076,6 @@ pub(crate) mod valid {
                 pop: None,
                 activation_height: 1,
                 expiry_height: None,
-                hsm: None,
                 replaces: None,
                 status: ConsensusKeyStatus::Active,
             };
@@ -18782,6 +19297,10 @@ pub(crate) mod valid {
                     &transactions_view,
                 )
             };
+            let committed_carrier_heights = {
+                let transactions_view = state.transactions.view();
+                ValidBlock::committed_heights_for_entrypoint_carriers(&signed, &transactions_view)
+            };
             #[cfg(feature = "telemetry")]
             let metrics = Some(&state.telemetry);
             #[cfg(not(feature = "telemetry"))]
@@ -18792,6 +19311,7 @@ pub(crate) mod valid {
                 &ALICE_ID,
                 &static_data,
                 &committed_heights,
+                &committed_carrier_heights,
                 &prepared_txs,
                 metrics,
             )
@@ -18808,6 +19328,31 @@ pub(crate) mod valid {
             let mut block: SignedBlock = valid.into();
             block.set_npos_consensus_effects(effects);
             block
+        }
+        fn npos_marker_effects(height: u64) -> NposConsensusEffects {
+            NposConsensusEffects {
+                penalty_actions: vec![
+                    iroha_data_model::consensus::NposPenaltyAction::MarkConsensusEvidenceApplied(
+                        iroha_data_model::consensus::NposMarkConsensusEvidenceAppliedAction {
+                            evidence_key: iroha_crypto::Hash::new([0xA5]),
+                            height,
+                        },
+                    ),
+                ],
+                ..NposConsensusEffects::default()
+            }
+        }
+        #[test]
+        fn soft_fork_replacement_rejects_npos_effects_before_overlay_construction() {
+            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let block = npos_effects_block(leader.private_key(), 2, Some(npos_marker_effects(2)));
+            assert!(matches!(
+                ValidBlock::validate_npos_soft_fork_composition(&block, true),
+                Err(BlockValidationError::NposEffectsInvalid(reason))
+                    if reason.contains("soft-fork replacement")
+            ));
+            ValidBlock::validate_npos_soft_fork_composition(&block, false)
+                .expect("ordinary parent-preserving execution may apply NPoS effects");
         }
         #[test]
         fn validation_profiles_always_carry_an_explicit_consensus_mode() {
@@ -18839,6 +19384,51 @@ pub(crate) mod valid {
                 None,
             )
             .expect("permissioned validation must not derive NPoS-only penalties");
+        }
+        #[test]
+        fn committed_parliament_request_rejects_candidate_without_pulse() {
+            setup_stateless_cache_state!(kura, state, leader_private, topology, validator_keys);
+            let mut context = authenticated_permissioned_successor_context(&state, &validator_keys);
+            context.height = 12;
+            let roster = context
+                .roster
+                .iter()
+                .map(|entry| entry.validator.clone())
+                .collect::<Vec<_>>();
+            let (_attempt_id, _request_ids, attempt) =
+                crate::beacon::tests::pending_batched_sortition_attempt(
+                    &context.network_id,
+                    &roster,
+                    context.height,
+                );
+            {
+                let mut block = state.world.block();
+                {
+                    let mut transaction = block.transaction_without_telemetry(
+                        iroha_config::parameters::actual::LaneConfig::default(),
+                        0,
+                    );
+                    transaction
+                        .put_parliament_attempt(attempt)
+                        .expect("persist the committed Parliament pulse request and its indexes");
+                    transaction.apply();
+                }
+                block.commit();
+            }
+            let candidate = npos_effects_block(&leader_private, context.height, None);
+            let error = ValidBlock::validate_npos_effects_with_state(
+                &candidate,
+                &state,
+                Some(iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned),
+                Some(&context),
+            )
+            .expect_err("a committed Parliament pulse request must reject omission");
+            assert!(matches!(
+                error,
+                BlockValidationError::NposEffectsInvalid(message)
+                    if message.contains("requested by committed pre-state")
+            ));
+            drop((kura, topology));
         }
         #[test]
         fn consensus_mode_effects_npos_still_requires_signed_parameters() {
@@ -18901,6 +19491,10 @@ pub(crate) mod valid {
                     &transactions_view,
                 )
             };
+            let committed_carrier_heights = {
+                let transactions_view = state.transactions.view();
+                ValidBlock::committed_heights_for_entrypoint_carriers(&signed, &transactions_view)
+            };
             #[cfg(feature = "telemetry")]
             let metrics = Some(&state.telemetry);
             #[cfg(not(feature = "telemetry"))]
@@ -18911,6 +19505,7 @@ pub(crate) mod valid {
                 &ALICE_ID,
                 &static_data,
                 &committed_heights,
+                &committed_carrier_heights,
                 &prepared_txs,
                 metrics,
             )
@@ -18962,6 +19557,10 @@ pub(crate) mod valid {
                     &transactions_view,
                 )
             };
+            let committed_carrier_heights = {
+                let transactions_view = state.transactions.view();
+                ValidBlock::committed_heights_for_entrypoint_carriers(&signed, &transactions_view)
+            };
             #[cfg(feature = "telemetry")]
             let metrics = Some(&state.telemetry);
             #[cfg(not(feature = "telemetry"))]
@@ -18972,11 +19571,84 @@ pub(crate) mod valid {
                 &ALICE_ID,
                 &static_data,
                 &committed_heights,
+                &committed_carrier_heights,
                 &prepared_txs,
                 metrics,
             )
             .expect_err("duplicate signed transaction hash should be rejected");
             assert!(matches!(err, BlockValidationError::DuplicateTransactions));
+        }
+        #[test]
+        fn validate_static_snapshot_rejects_replayed_sealed_signed_identity() {
+            setup_single_leader_world!(kura, query, key_pairs, topology, leader, world);
+            let state = State::new_for_testing(world, Arc::clone(&kura), query);
+            let prev_hash =
+                commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 1);
+            let (authority, signer) = gen_account_in("sealed-replay-static");
+            let (_, reveal) = crate::block::tests::sealed_set_key_entrypoints(
+                state.network_id,
+                &authority,
+                &signer,
+                1,
+                9,
+                Name::from_str("sealed_replay_static").expect("metadata key"),
+            );
+            let TransactionEntrypoint::SealedReveal(sealed_reveal) = &reveal else {
+                unreachable!("fixture creates a sealed reveal")
+            };
+            state.record_committed_entrypoints_for_tests(
+                [sealed_reveal.signed_transaction().hash_as_entrypoint()],
+                NonZeroUsize::new(1).expect("non-zero height"),
+            );
+            let accepted = AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(reveal));
+            let (time_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
+            time_handle.advance(Duration::from_millis(1));
+            let candidate = BlockBuilder::new_with_time_source(vec![accepted], time_source.clone())
+                .chain_with_parent_hash(0, 1, prev_hash);
+            let signed: SignedBlock = with_current_state_da_sidecars(candidate, &state)
+                .sign(leader.private_key())
+                .unpack(|_| {})
+                .into();
+            let static_data = {
+                let view = state.query_view();
+                validate_static_current_test_block!(&signed, &topology, &view, &time_source)
+                    .expect("static state-dependent validation should succeed")
+            };
+            let prepared_txs = ValidBlock::prepare_external_transactions(&signed);
+            let (committed_heights, committed_carrier_heights) = {
+                let transactions_view = state.transactions.view();
+                (
+                    ValidBlock::committed_heights_for_prepared_transactions(
+                        &prepared_txs,
+                        &transactions_view,
+                    ),
+                    ValidBlock::committed_heights_for_entrypoint_carriers(
+                        &signed,
+                        &transactions_view,
+                    ),
+                )
+            };
+            assert!(committed_heights[0].is_some());
+            assert!(committed_carrier_heights[0].is_none());
+            #[cfg(feature = "telemetry")]
+            let metrics = Some(&state.telemetry);
+            #[cfg(not(feature = "telemetry"))]
+            let metrics = ();
+            let error = ValidBlock::validate_static_with_snapshot(
+                &signed,
+                state.network_id_ref(),
+                &ALICE_ID,
+                &static_data,
+                &committed_heights,
+                &committed_carrier_heights,
+                &prepared_txs,
+                metrics,
+            )
+            .expect_err("the enclosed signed intent must be rejected as already committed");
+            assert!(matches!(
+                error,
+                BlockValidationError::HasCommittedTransactions
+            ));
         }
         #[test]
         fn execution_context_header_rejects_unsupported_bundle_version() {
@@ -22396,8 +23068,13 @@ pub(crate) mod valid {
                     power: 1,
                 })
                 .collect::<Vec<_>>();
+            let network_id = *state.network_id_ref();
+            let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
+                crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
+                    network_id, 0, &roster,
+                );
             let context = consensus_v2::HeightContext {
-                network_id: state.network_id_ref().clone(),
+                network_id,
                 protocol_version: consensus_v2::PROTOCOL_VERSION,
                 height: 3,
                 epoch: 0,
@@ -22408,6 +23085,8 @@ pub(crate) mod valid {
                 snapshot_bootstrap: Some(anchor),
                 quorum: consensus_v2::DualQuorum::from_roster(&roster).expect("fixture quorum"),
                 roster,
+                kagemusha_mint_finality_epoch_id,
+                kagemusha_mint_finality_epoch_roster,
                 nexus_amx_context_hash: Hash::new(b"snapshot validation Nexus/AMX"),
                 execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
                 da_layout: consensus_v2::DataAvailabilityLayout {
@@ -22787,7 +23466,7 @@ pub(crate) mod valid {
             topology: Topology,
             block_time_source: TimeSource,
             block: SignedBlock,
-            signed_hash: HashOf<SignedTransaction>,
+            stateless_cache_key: crate::tx::StatelessValidationCacheKey,
         }
         #[allow(clippy::too_many_arguments)]
         fn queue_plan_ttl_fixture(
@@ -22873,7 +23552,7 @@ pub(crate) mod valid {
                 let (forged_authority, _) = gen_account_in(&format!("{label}-forged"));
                 signed = signed.with_authority(forged_authority);
             }
-            let signed_hash = signed.hash();
+            let stateless_cache_key = crate::tx::StatelessValidationCacheKey::new(&signed);
             let entrypoint = TransactionEntrypoint::External(signed.clone());
             let routing_plan = crate::queue::RoutingPlan::single(
                 crate::queue::RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
@@ -22982,7 +23661,7 @@ pub(crate) mod valid {
                 topology,
                 block_time_source,
                 block,
-                signed_hash,
+                stateless_cache_key,
             }
         }
         fn validate_queue_plan_ttl_fixture(
@@ -23030,7 +23709,7 @@ pub(crate) mod valid {
                     .state
                     .stateless_validation_cache()
                     .lock()
-                    .contains_key(&fixture.signed_hash),
+                    .contains_key(&fixture.stateless_cache_key),
                 "rejected QueuePlan authority must not become a generic cache entry"
             );
         }
@@ -23255,7 +23934,7 @@ pub(crate) mod valid {
             .unpack(|_| {})
             .expect("valid block should warm stateless cache");
             let invalid_tx = valid_tx.with_authority(other_authority);
-            let invalid_hash = invalid_tx.hash();
+            let invalid_hash = crate::tx::StatelessValidationCacheKey::new(&invalid_tx);
             let invalid_accepted = AcceptedTransaction::new_unchecked(Cow::Owned(invalid_tx));
             let (_invalid_block_handle, invalid_block_time_source) =
                 TimeSource::new_mock(Duration::from_millis(20));
@@ -23833,24 +24512,56 @@ pub(crate) mod valid {
                 kura::Kura, query::store::LiveQueryStore, sumeragi::network_topology::Topology,
             };
             use iroha_data_model::{
-                block::consensus_v2::ConsensusMode,
+                block::consensus_v2::{
+                    ConsensusMode, SumeragiV2GenesisContextParameters, ValidatorPower,
+                },
                 parameter::{Parameter, system::SumeragiParameter},
                 peer::PeerId,
                 prelude::*,
             };
-            use iroha_genesis::GenesisBuilder;
+            use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry};
             iroha_genesis::init_instruction_registry();
             let chain_id = ChainId::from("00000000-0000-0000-0000-000000000001");
             let genesis_keypair = crate::block::checked_keypair();
             let genesis_account = AccountId::new(genesis_keypair.public_key().clone());
+            let mut topology = (0..4)
+                .map(|_| {
+                    let validator = crate::block::checked_keypair_with_algorithm(
+                        iroha_crypto::Algorithm::BlsNormal,
+                    );
+                    let pop = iroha_crypto::bls_normal_pop_prove(validator.private_key())
+                        .expect("derive genesis side-effect fixture validator PoP");
+                    GenesisTopologyEntry::new(PeerId::new(validator.public_key().clone()), pop)
+                })
+                .collect::<Vec<_>>();
+            topology.sort_by(|left, right| left.peer.cmp(&right.peer));
+            let roster = topology
+                .iter()
+                .map(|entry| ValidatorPower {
+                    validator: entry.peer.clone(),
+                    power: 1,
+                })
+                .collect::<Vec<_>>();
+            let mint_finality =
+                crate::kagemusha_v1_test_fixtures::mint_finality_genesis_parameters(&roster);
             let manifest = GenesisBuilder::new_without_executor(chain_id.clone(), ".")
+                .with_sumeragi_v2_context_parameters(
+                    SumeragiV2GenesisContextParameters::recommended(),
+                )
+                .with_kagemusha_mint_finality_genesis_parameters(mint_finality)
                 .append_parameter(Parameter::Sumeragi(SumeragiParameter::MaxClockDriftMs(100)))
                 .next_transaction()
                 .append_parameter(Parameter::Sumeragi(SumeragiParameter::MaxClockDriftMs(333)))
-                .build_raw();
+                .set_topology(topology)
+                .build_raw()
+                .expect("ordered genesis parameters form one valid raw transaction");
             let genesis = manifest
                 .build_and_sign(&genesis_keypair)
                 .expect("ordered genesis parameters should build");
+            let topology = Topology::new(
+                crate::sumeragi::signed_genesis_voting_peers(&genesis)
+                    .expect("signed genesis must expose its exact voting roster"),
+            );
             let genesis_domain =
                 Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&genesis_account);
             let genesis_account_model =
@@ -23866,7 +24577,6 @@ pub(crate) mod valid {
                 &state,
                 std::slice::from_ref(&genesis_keypair),
             );
-            let topology = Topology::new(vec![PeerId::new(genesis_keypair.public_key().clone())]);
             let genesis_block = with_current_state_confidential_features(
                 genesis.0,
                 &state,
@@ -27338,12 +28048,9 @@ fn dedup_sorted_usize_smallvec(parents: &mut iroha_primitives::small::SmallVec<[
 }
 #[cfg(feature = "simd")]
 mod simd_parent_dedup {
-    use core::simd::{LaneCount, Simd, SimdPartialEq, SupportedLaneCount};
     const LANES: usize = 8;
-    pub(super) fn dedup_sorted_slice(slice: &mut [usize]) -> Option<usize>
-    where
-        LaneCount<LANES>: SupportedLaneCount,
-    {
+
+    pub(super) fn dedup_sorted_slice(slice: &mut [usize]) -> Option<usize> {
         if slice.len() <= 1 {
             return Some(slice.len());
         }
@@ -27351,21 +28058,18 @@ mod simd_parent_dedup {
         let mut prev = slice[0];
         let mut idx = 1usize;
         while idx + LANES <= slice.len() {
-            let chunk = Simd::<usize, LANES>::from_slice(&slice[idx..idx + LANES]);
-            let mut prev_arr = [prev; LANES];
-            prev_arr[1..].copy_from_slice(&slice[idx..idx + LANES - 1]);
-            let mask = chunk.simd_ne(Simd::from_array(prev_arr));
-            let mut bits = mask.to_bitmask() as u32;
-            let arr = chunk.to_array();
-            while bits != 0 {
-                let lane = bits.trailing_zeros() as usize;
-                let value = arr[lane];
-                slice[write] = value;
-                write += 1;
-                prev = value;
-                bits &= bits - 1;
+            // Snapshot each fixed-width chunk before compacting into the same
+            // slice. This keeps the kernel safe, deterministic, and suitable
+            // for stable-Rust auto-vectorization without aliasing unread data.
+            let mut chunk = [0usize; LANES];
+            chunk.copy_from_slice(&slice[idx..idx + LANES]);
+            for value in chunk {
+                if value != prev {
+                    slice[write] = value;
+                    write += 1;
+                    prev = value;
+                }
             }
-            prev = arr[LANES - 1];
             idx += LANES;
         }
         while idx < slice.len() {
@@ -27378,6 +28082,18 @@ mod simd_parent_dedup {
             idx += 1;
         }
         Some(write)
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::dedup_sorted_slice;
+
+        #[test]
+        fn fixed_width_dedup_handles_chunk_boundaries() {
+            let mut values = [1, 1, 2, 3, 3, 3, 4, 5, 5, 6, 7, 7, 8, 9, 9, 10, 10];
+            let len = dedup_sorted_slice(&mut values).expect("fixed-width path is available");
+            assert_eq!(&values[..len], &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+        }
     }
 }
 /// Build a conflict graph from access sets using an incremental O(n + E) algorithm.
@@ -29169,6 +29885,191 @@ mod tests {
         install_test_lane_manifests(&state);
         state
     }
+    #[test]
+    fn rejected_prepared_overlay_carries_confidential_work_into_block_budget() {
+        let chain_id = ChainId::from("rejected-overlay-confidential-budget");
+        let (authority, keypair) = gen_account_in("wonderland");
+        let mut state = state_with_transaction_policy(&chain_id, &authority, false, false);
+        let mut zk = state.zk.clone();
+        zk.max_confidential_ops_per_block = 1;
+        zk.max_verify_calls_per_block = 1;
+        zk.max_verify_calls_per_tx = 2;
+        zk.max_proof_bytes_block = 1_000_000;
+        zk.max_proof_size_bytes = 1_000_000;
+        state
+            .set_zk(zk)
+            .expect("empty SCCP state accepts focused confidential limits");
+
+        let fixture =
+            crate::zk::test_utils::halo2_fixture_envelope("halo2/ipa:tiny-add", [0_u8; 32]);
+        let proof = fixture.proof_box("halo2/ipa");
+        let proof_bytes = u64::try_from(proof.bytes.len()).expect("proof length fits u64");
+        let instruction: InstructionBox = iroha_data_model::isi::zk::VerifyProof::new(
+            iroha_data_model::proof::ProofAttachment::new_ref(
+                "halo2/ipa".into(),
+                proof,
+                iroha_data_model::proof::VerifyingKeyId::new("halo2/ipa", "missing-overlay-vk"),
+            ),
+        )
+        .into();
+        let expected_confidential_gas = crate::gas::confidential_gas_cost(&instruction);
+        let transaction = TransactionBuilder::new(
+            state.network_id,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([instruction])
+        .sign(keypair.private_key());
+        let block = BlockBuilder::new(vec![AcceptedTransaction::new_unchecked(Cow::Owned(
+            transaction,
+        ))])
+        .chain(0, state.view().latest_block().as_deref())
+        .sign(keypair.private_key())
+        .unpack(|_| {});
+        let mut state_block = state.block(block.header());
+
+        let valid = block
+            .validate_and_record_transactions(&mut state_block)
+            .unpack(|_| {});
+        let results = valid
+            .as_ref()
+            .entrypoint_results()
+            .map(|(_, _, result)| result.0.clone())
+            .collect::<Vec<_>>();
+        assert!(
+            matches!(results.as_slice(), [Err(_)]),
+            "missing verifying key must reject after attempting its proof: {results:?}"
+        );
+        assert_eq!(state_block.zk_confidential_ops_in_block, 1);
+        assert_eq!(state_block.zk_verify_calls_in_block, 1);
+        assert_eq!(state_block.zk_proof_bytes_in_block, proof_bytes);
+        assert_eq!(
+            state_block.confidential_gas_used_in_block,
+            expected_confidential_gas
+        );
+
+        let mut next = state_block.transaction();
+        let error = next
+            .register_confidential_proof(1)
+            .expect_err("the rejected overlay must exhaust the one-operation block budget");
+        assert!(error.to_string().contains("per block exceeded"));
+    }
+    #[test]
+    fn ordinary_prepared_overlay_block_cap_prevents_post_cap_execution() {
+        for parallel_apply in [false, true] {
+            let chain_id =
+                ChainId::try_from(format!("ordinary-overlay-parent-gas-{parallel_apply}"))
+                    .expect("canonical test chain id");
+            let (authority, keypair) = gen_account_in("wonderland");
+            let mut state = state_with_transaction_policy(&chain_id, &authority, false, false);
+            let mut pipeline = state.pipeline.clone();
+            pipeline.parallel_apply = parallel_apply;
+            pipeline.parallel_overlay = true;
+            pipeline.workers = 2;
+            state.set_pipeline(pipeline);
+            let instruction =
+                InstructionBox::from(Log::new(Level::INFO, "meter ordinary overlay".into()));
+            let expected_gas = crate::gas::meter_instructions(core::slice::from_ref(&instruction));
+            assert!(expected_gas > 0, "the fixture must consume gas");
+            let accepted = [0_u64, 1_u64, 2_u64]
+                .into_iter()
+                .map(|creation_time_ms| {
+                    let mut builder = TransactionBuilder::new(
+                        state.network_id,
+                        authority.clone(),
+                        iroha_data_model::transaction::FeePaymentIntent::authority(
+                            Vec::new(),
+                            None,
+                        ),
+                    );
+                    builder.set_creation_time(Duration::from_millis(creation_time_ms));
+                    let transaction = builder
+                        .with_instructions([instruction.clone()])
+                        .sign(keypair.private_key());
+                    AcceptedTransaction::new_unchecked(Cow::Owned(transaction))
+                })
+                .collect::<Vec<_>>();
+            let previous = previous_block_at_height(1);
+            let block = BlockBuilder::new(accepted)
+                .chain(1, Some(&previous))
+                .sign(keypair.private_key())
+                .unpack(|_| {});
+            let mut state_block = state.block(block.header());
+            state_block.gas_limit_per_block = expected_gas;
+
+            let valid = block
+                .validate_and_record_transactions(&mut state_block)
+                .unpack(|_| {});
+            let results = valid
+                .as_ref()
+                .entrypoint_results()
+                .map(|(_, _, result)| result.0.clone())
+                .collect::<Vec<_>>();
+            assert_eq!(
+                results.iter().filter(|result| result.is_ok()).count(),
+                1,
+                "exactly one overlay must fit with parallel_apply={parallel_apply}: {results:?}"
+            );
+            assert_eq!(
+                results
+                    .iter()
+                    .filter(|result| matches!(
+                        result,
+                        Err(TransactionRejectionReason::Validation(
+                            ValidationFail::NotPermitted(message)
+                        )) if message.contains("block gas limit exceeded")
+                    ))
+                    .count(),
+                2,
+                "every overlay after the cap must fail before execution with parallel_apply={parallel_apply}: {results:?}"
+            );
+            assert_eq!(
+                state_block.gas_used_in_block, expected_gas,
+                "the rejected overlay must fail its base-gas reservation before executing work"
+            );
+        }
+    }
+    #[test]
+    fn rejected_prepared_overlay_accounts_full_gas_exactly_once() {
+        let chain_id = ChainId::from("rejected-overlay-exact-gas");
+        let (authority, keypair) = gen_account_in("wonderland");
+        let (missing_account, _) = gen_account_in("missing");
+        let state = state_with_transaction_policy(&chain_id, &authority, false, false);
+        let instruction = InstructionBox::from(SetKeyValue::account(
+            missing_account,
+            "rejected_overlay_marker".parse().expect("metadata key"),
+            Json::new("must roll back"),
+        ));
+        let expected_gas = crate::gas::meter_instructions(core::slice::from_ref(&instruction));
+        assert!(expected_gas > 0, "the fixture must consume gas");
+        let transaction = TransactionBuilder::new(
+            state.network_id,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([instruction])
+        .sign(keypair.private_key());
+        let previous = previous_block_at_height(1);
+        let block = BlockBuilder::new(vec![AcceptedTransaction::new_unchecked(Cow::Owned(
+            transaction,
+        ))])
+        .chain(1, Some(&previous))
+        .sign(keypair.private_key())
+        .unpack(|_| {});
+        let mut state_block = state.block(block.header());
+        state_block.gas_limit_per_block = expected_gas.saturating_mul(4);
+
+        let valid = block
+            .validate_and_record_transactions(&mut state_block)
+            .unpack(|_| {});
+        let results = valid
+            .as_ref()
+            .entrypoint_results()
+            .map(|(_, _, result)| result.0.clone())
+            .collect::<Vec<_>>();
+        assert!(matches!(results.as_slice(), [Err(_)]), "{results:?}");
+        assert_eq!(state_block.gas_used_in_block, expected_gas);
+    }
     fn add_pipeline_metadata_trigger(
         world: &mut World,
         authority: &AccountId,
@@ -29224,7 +30125,7 @@ mod tests {
             .map(|(_, err)| format!("{err:?}"))
             .expect("block must contain a transaction error")
     }
-    fn sealed_set_key_entrypoints(
+    pub(super) fn sealed_set_key_entrypoints(
         network_id: NetworkId,
         authority: &AccountId,
         keypair: &KeyPair,

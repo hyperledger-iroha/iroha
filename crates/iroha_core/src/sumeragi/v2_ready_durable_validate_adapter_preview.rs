@@ -706,6 +706,8 @@ struct PreparedReadyDurableValidatePersistPublication<'a> {
 pub(in crate::sumeragi) struct PreparedReadyDurableValidateBoundSignPublication<'a> {
     prepared: PreparedReadyDurableValidatePersistPublication<'a>,
     child_pending: PendingRuntimeEffectBinding,
+    #[cfg(test)]
+    crash_after_wal_append: bool,
 }
 /// Post-fsync Ready-Validate vote authority.
 ///
@@ -1160,6 +1162,8 @@ impl<'a> PreparedReadyDurableValidatePersistPublication<'a> {
         Ok(PreparedReadyDurableValidateBoundSignPublication {
             prepared: self,
             child_pending,
+            #[cfg(test)]
+            crash_after_wal_append: false,
         })
     }
 }
@@ -1207,6 +1211,8 @@ impl<'a> PreparedReadyDurableValidateBoundSignPublication<'a> {
         let Self {
             prepared,
             child_pending,
+            #[cfg(test)]
+            crash_after_wal_append,
         } = self;
         let PreparedReadyDurableValidatePersistPublication {
             _adapter: adapter,
@@ -1240,9 +1246,14 @@ impl<'a> PreparedReadyDurableValidateBoundSignPublication<'a> {
                 });
             }
         };
-        // TODO: Add a test-only crash injection immediately after this
-        // successful append receipt to exercise the restart-only ambiguous
-        // boundary without weakening the production WAL API.
+        // A crash here leaves the exact intent durable before any live Sign
+        // seal or lifecycle publication exists. Recovery must derive that
+        // continuation solely from the reopened WAL.
+        #[cfg(test)]
+        if crash_after_wal_append {
+            adapter.fail_closed = true;
+            panic!("injected Ready Validate crash after WAL append");
+        }
         let frame_sequence = receipt.sequence();
         let frame_hash = receipt.frame_hash();
         let post_wal: Result<SealedLiveWalPersistedEffectV1, AdapterError> = (|| {

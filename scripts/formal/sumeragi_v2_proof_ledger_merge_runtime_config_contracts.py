@@ -118,8 +118,8 @@ def _merge_runtime_config_production_source_fidelity_errors(
     _require_rust_source_token_sequence(
         actual_path,
         actual_source,
-        "pub const SUMERAGI_V2_CONFIG_FORMAT_VERSION: u16 = 6;",
-        "merge-runtime shared-config format version 6",
+        "pub const SUMERAGI_V2_CONFIG_FORMAT_VERSION: u16 = 7;",
+        "merge-runtime shared-config format version 7",
         errors,
     )
     _require_rust_source_token_sequence(

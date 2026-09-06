@@ -1,7 +1,7 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Torii UAID portfolio endpoint tests.
 #![cfg(feature = "app_api")]
-use axum::{Router, extract::connect_info::ConnectInfo};
+use axum::extract::connect_info::ConnectInfo;
 use http::StatusCode;
 use http_body_util::BodyExt as _;
 use iroha_core::{
@@ -42,7 +42,7 @@ async fn accounts_portfolio_endpoint_returns_snapshot() {
     let mut req = fixtures::get_request(&(format!("/v1/accounts/uaid:{uaid_hex}/portfolio")));
     req.extensions_mut()
         .insert(ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0))));
-    let resp = app.oneshot(req).await.unwrap();
+    let resp = app.router().oneshot(req).await.unwrap();
     let status = resp.status();
     let body = resp.into_body().collect().await.unwrap().to_bytes();
     assert_eq!(
@@ -68,6 +68,7 @@ async fn accounts_portfolio_endpoint_returns_snapshot() {
         observed_quantities,
         vec!["250".to_string(), "500".to_string()]
     );
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn accounts_portfolio_snapshot_matches_fixture() {
@@ -76,7 +77,7 @@ async fn accounts_portfolio_snapshot_matches_fixture() {
     let mut req = fixtures::get_request(&(format!("/v1/accounts/uaid:{uaid_hex}/portfolio")));
     req.extensions_mut()
         .insert(ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0))));
-    let resp = app.oneshot(req).await.unwrap();
+    let resp = app.router().oneshot(req).await.unwrap();
     let status = resp.status();
     let body = resp.into_body().collect().await.unwrap().to_bytes();
     assert_eq!(
@@ -92,6 +93,7 @@ async fn accounts_portfolio_snapshot_matches_fixture() {
     )))
     .expect("portfolio fixture JSON");
     assert_eq!(value, fixture);
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn accounts_portfolio_filters_by_asset_id() {
@@ -127,7 +129,7 @@ async fn accounts_portfolio_filters_by_asset_id() {
     );
     req.extensions_mut()
         .insert(ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0))));
-    let resp = app.oneshot(req).await.unwrap();
+    let resp = app.router().oneshot(req).await.unwrap();
     let status = resp.status();
     let body = resp.into_body().collect().await.unwrap().to_bytes();
     assert_eq!(
@@ -144,8 +146,11 @@ async fn accounts_portfolio_filters_by_asset_id() {
         .expect("assets array");
     assert_eq!(assets.len(), 1);
     assert_eq!(assets[0]["asset_id"], Value::from(asset_id));
+    app.shutdown().await;
 }
-fn setup_portfolio_app<SeedFn>(seed_fn: SeedFn) -> (Router, UniversalAccountId)
+fn setup_portfolio_app<SeedFn>(
+    seed_fn: SeedFn,
+) -> (iroha_torii::TestApiRouterRuntime, UniversalAccountId)
 where
     SeedFn: FnOnce(&Arc<State>) -> UniversalAccountId,
 {

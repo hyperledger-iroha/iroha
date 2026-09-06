@@ -12,6 +12,7 @@ use crate::lane_consensus::{
 #[cfg(test)]
 use crate::merge::reduce_merge_hint_roots;
 use crate::telemetry::StateTelemetry;
+use crate::zk::kagemusha_v1_recursion::KagemushaMintAuthorityCheckpointV1;
 use crate::{
     block::CommittedBlock,
     queue::{
@@ -127,18 +128,16 @@ use iroha_data_model::{
         },
         decode_framed_signed_block,
     },
-    isi::offline::{RedeemKagemushaRecursiveV4, TopUpKagemushaRecursiveV4},
+    isi::kagemusha_v1::{
+        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaFinalityTrustAnchorV1, KagemushaOperationFinalityV1,
+        KagemushaOperationKindV1, KagemushaReserveReceiptWitnessV1, KagemushaTopUpResultV1,
+    },
     kaigi::KaigiId,
     merge::{
         LaneDrainNativeFrontierEvidenceV1, MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES,
         MAX_MERGE_LEDGER_ENTRY_BYTES, MergeExecutionBatch, MergeLaneExecution, MergeLedgerEntry,
     },
     nexus::{DataSpaceId, LaneCatalog, LaneId, LaneLifecycleParameterV1},
-    offline::{
-        KAGEMUSHA_TOPUP_FINALITY_PROOF_VERSION_V2, KagemushaActiveReceiverWitnessProofV1,
-        KagemushaTopUpAnchorMerkleProofV2, KagemushaTopUpFinalityCompactQcV2,
-        KagemushaTopUpFinalityHeightContextV2, KagemushaTopUpFinalityProofV2,
-    },
     parliament_casting::{
         ParliamentTimedOvnCastingContextBindingV1,
         ParliamentTimedOvnCastingContextMembershipProofV1,
@@ -219,19 +218,19 @@ const COMMIT_MANIFESTS_DIR_NAME: &str = "commit_manifests";
 const RETAINED_BLOCKS_DIR_NAME: &str = "retained_blocks";
 const RETAINED_BLOCK_REWRITE_STAGING_DIR_NAME: &str = "retained_blocks_rewrite_staging";
 const V2_FINALITY_ARTIFACTS_DIR_NAME: &str = "v2_finality";
-const KAGEMUSHA_TOPUP_FINALITY_STAGING_DIR_NAME: &str = "kagemusha_topup_finality_staging";
-const KAGEMUSHA_TOPUP_FINALITY_SIDECARS_DIR_NAME: &str = "kagemusha_topup_finality";
-const KAGEMUSHA_ACTIVE_RECEIVER_STAGING_DIR_NAME: &str =
-    "kagemusha_active_receiver_finality_staging";
-const KAGEMUSHA_ACTIVE_RECEIVER_SIDECARS_DIR_NAME: &str = "kagemusha_active_receiver_finality";
-const MAX_KAGEMUSHA_TOPUP_FINALITY_SIDECAR_BYTES: usize = 64 * 1024;
-const MAX_KAGEMUSHA_ACTIVE_RECEIVER_SIDECAR_BYTES: usize = 2 * 1024 * 1024;
-const MAX_KAGEMUSHA_ACTIVE_RECEIVER_DECODE_TOTAL_ELEMENTS: usize = 1_000_000;
-const MAX_KAGEMUSHA_ACTIVE_RECEIVER_DECODE_ALLOCATED_BYTES: usize = 4 * 1024 * 1024;
-const MAX_KAGEMUSHA_ACTIVE_RECEIVER_DECODE_DEPTH: usize = 32;
+const KAGEMUSHA_FINALITY_STAGING_DIR_NAME: &str = "kagemusha_v1_finality_staging";
+const KAGEMUSHA_FINALITY_SIDECARS_DIR_NAME: &str = "kagemusha_v1_finality";
+const KAGEMUSHA_MINT_OUTBOX_DIR_NAME: &str = "kagemusha_v1_mint_outbox";
+const KAGEMUSHA_MINT_AUTHORITY_DIR_NAME: &str = "kagemusha_v1_mint_authority";
+const MAX_KAGEMUSHA_FINALITY_SIDECAR_BYTES: usize = 2 * 1024 * 1024;
+const MAX_KAGEMUSHA_MINT_OUTBOX_ENTRY_BYTES: usize = 4 * 1024 * 1024;
+const MAX_KAGEMUSHA_MINT_AUTHORITY_CHECKPOINT_BYTES: usize = 64 * 1024;
+const MAX_KAGEMUSHA_FINALITY_DECODE_TOTAL_ELEMENTS: usize = 1_000_000;
+const MAX_KAGEMUSHA_FINALITY_DECODE_ALLOCATED_BYTES: usize = 4 * 1024 * 1024;
+const MAX_KAGEMUSHA_FINALITY_DECODE_DEPTH: usize = 32;
 
 /// Bound corrupt local sidecars before any attacker-advertised collection allocation.
-fn kagemusha_active_receiver_decode_limits(wire_bytes: usize) -> norito::DecodeLimits {
+fn kagemusha_finality_decode_limits(wire_bytes: usize) -> norito::DecodeLimits {
     let max_sequence_elements = usize::try_from(
         iroha_data_model::parliament_casting::MAX_PARLIAMENT_CONCURRENT_CASTING_CONTEXTS_V1,
     )
@@ -245,13 +244,13 @@ fn kagemusha_active_receiver_decode_limits(wire_bytes: usize) -> norito::DecodeL
         .saturating_mul(4)
         .saturating_add(64 * 1024)
         .saturating_add(max_sequence_elements)
-        .min(MAX_KAGEMUSHA_ACTIVE_RECEIVER_DECODE_ALLOCATED_BYTES);
+        .min(MAX_KAGEMUSHA_FINALITY_DECODE_ALLOCATED_BYTES);
     norito::DecodeLimits::new(
         max_sequence_elements,
         wire_bytes,
-        MAX_KAGEMUSHA_ACTIVE_RECEIVER_DECODE_TOTAL_ELEMENTS,
+        MAX_KAGEMUSHA_FINALITY_DECODE_TOTAL_ELEMENTS,
         max_allocated_bytes,
-        MAX_KAGEMUSHA_ACTIVE_RECEIVER_DECODE_DEPTH,
+        MAX_KAGEMUSHA_FINALITY_DECODE_DEPTH,
     )
 }
 include!("kura/startup_finality_support.rs");
@@ -375,6 +374,10 @@ const LANE_BLOCK_EXECUTION_INPUTS_DATA_FILE: &str = "execution_inputs.norito";
 const LANE_BLOCK_EXECUTION_INPUTS_INDEX_FILE: &str = "execution_inputs.index";
 const AUTONOMOUS_LANE_MERGE_BUNDLES_DATA_FILE: &str = "merge_source_bundles_v1.norito";
 const AUTONOMOUS_LANE_MERGE_BUNDLES_INDEX_FILE: &str = "merge_source_bundles_v1.index";
+const CANONICAL_AUTONOMOUS_LANE_REPLICAS_DATA_FILE: &str =
+    "canonical_autonomous_replicas_v1.norito";
+const CANONICAL_AUTONOMOUS_LANE_REPLICAS_INDEX_FILE: &str =
+    "canonical_autonomous_replicas_v1.index";
 const LANE_READY_EXECUTION_INPUT_AUTHORIZATION_DOMAIN_V1: &[u8] =
     b"iroha:kura:lane-ready-execution-input-authorization:v1\0";
 const LANE_BLOCK_EXECUTION_PREFLIGHTS_DATA_FILE: &str = "execution_preflights.norito";
@@ -1587,7 +1590,6 @@ impl Kura {
             incomplete_merge_heights: BTreeSet::new(),
             incomplete_kaigi_signal_heights: BTreeSet::new(),
             heights_by_entrypoint: BTreeMap::new(),
-            heights_by_offline_operation_id: BTreeMap::new(),
             heights_by_authority: BTreeMap::new(),
             heights_by_timestamp_ms: BTreeMap::new(),
             heights_by_result_status: BTreeMap::new(),
@@ -1648,9 +1650,6 @@ impl Kura {
                 .entry(hash)
                 .or_default()
                 .insert(height);
-        }
-        for entrypoint in &entrypoints {
-            Self::insert_offline_operation_id_heights(index, height, entrypoint);
         }
         for entrypoint in &entrypoints {
             if let Some(authority) = entrypoint.authority_opt() {
@@ -1815,44 +1814,6 @@ impl Kura {
             Some(existing) => existing == locator,
         }
     }
-    fn insert_offline_operation_id_heights(
-        index: &mut TransactionEntrypointIndex,
-        height: NonZeroUsize,
-        entrypoint: &TransactionEntrypoint,
-    ) {
-        let transaction = match entrypoint {
-            TransactionEntrypoint::External(transaction) => transaction,
-            TransactionEntrypoint::SealedReveal(reveal) => reveal.signed_transaction(),
-            TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => return,
-        };
-        let transaction_authority = transaction.authority();
-        for instruction in transaction.instructions().explicit_instructions() {
-            let any = instruction.as_any();
-            let operation_id = if let Some(top_up) = any.downcast_ref::<TopUpKagemushaRecursiveV4>()
-            {
-                top_up.request.authorization.operation_id
-            } else if let Some(redeem) = any.downcast_ref::<RedeemKagemushaRecursiveV4>() {
-                redeem.request.authorization.operation_id
-            } else {
-                continue;
-            };
-            if operation_id == [0; 32] {
-                continue;
-            }
-            let key = (transaction_authority.clone(), operation_id);
-            index
-                .inventories_by_height
-                .entry(height)
-                .or_default()
-                .offline_operation_ids
-                .insert(key.clone());
-            index
-                .heights_by_offline_operation_id
-                .entry(key)
-                .or_default()
-                .insert(height);
-        }
-    }
     fn validate_merge_transaction_uniqueness(
         block: &SignedBlock,
         entry: &MergeLedgerEntry,
@@ -1910,7 +1871,6 @@ impl Kura {
         let mut canonical_merge_index = 0_usize;
         for execution in &batch.lanes {
             for (entrypoint, result) in execution.entrypoints.iter().zip(&execution.results) {
-                Self::insert_offline_operation_id_heights(index, height, entrypoint);
                 index
                     .heights_by_entrypoint
                     .entry(entrypoint.hash())
@@ -1991,11 +1951,6 @@ impl Kura {
         Self::remove_transaction_height_for_keys(
             &mut index.heights_by_entrypoint,
             inventory.entrypoint_hashes,
-            height,
-        );
-        Self::remove_transaction_height_for_keys(
-            &mut index.heights_by_offline_operation_id,
-            inventory.offline_operation_ids,
             height,
         );
         Self::remove_transaction_height_for_keys(
@@ -2764,6 +2719,12 @@ impl Kura {
             Self::reject_retired_pipeline_artifacts(&blocks_root)?;
             Self::reject_retired_rollback_intents(&blocks_root)?;
         }
+        let canonical_replica_terminal_carrier_pins =
+            if config.init_mode == InitMode::Strict && !provisional_open {
+                Self::canonical_replica_terminal_carrier_pins_for_store(&store_root, &blocks_root)?
+            } else {
+                BTreeMap::new()
+            };
         let merge_cache_capacity =
             sanitize_merge_cache_capacity(config.merge_ledger_cache_capacity);
         if let Some(preflight) = configured_primary_preflight.as_mut() {
@@ -2838,7 +2799,9 @@ impl Kura {
                     durable_height_bound = height;
                 }
                 InitMode::Strict => {
-                    block_store.recover_canonical_storage_stages()?;
+                    block_store.recover_canonical_storage_stages_with_carrier_pins(
+                        &canonical_replica_terminal_carrier_pins,
+                    )?;
                     if journal_resolved_primary {
                         block_store.require_existing_journal_bound_canonical_files()?;
                     }
@@ -2933,6 +2896,7 @@ impl Kura {
             provisional_snapshot_bootstrap
                 .as_ref()
                 .map(|bootstrap| bootstrap.hash_only_prefix_height),
+            &canonical_replica_terminal_carrier_pins,
         )?;
         if let Some(preflight) = configured_primary_preflight.as_mut() {
             Self::reverify_configured_primary_blocks_open(preflight, &blocks_root, true)?;
@@ -3238,6 +3202,7 @@ impl Kura {
                 kura.seal_completed_autonomous_lifecycle_replica_claims_on_startup()?;
                 kura.recover_retained_block_rewrite_stage_on_startup(&blocks_root)?;
                 kura.recover_lane_block_execution_input_pairs_on_startup()?;
+                kura.recover_canonical_autonomous_lane_replica_pairs_on_startup()?;
                 kura.reconcile_historical_autonomous_recovery_atomic_temps_on_startup()?;
                 let verified_finality = kura.validate_v2_finality_inventory_on_startup(true)?;
                 kura.install_v2_startup_finality_verification_inventory(verified_finality);
@@ -3304,6 +3269,15 @@ impl Kura {
             BLOCKS_IN_MEMORY,
         )
     }
+    /// Create an isolated empty Kura that exercises emergency Fast startup validation.
+    #[cfg(test)]
+    pub(crate) fn blank_kura_for_testing_in_emergency_fast_mode() -> Arc<Kura> {
+        let mut kura = Self::blank_kura_for_testing();
+        Arc::get_mut(&mut kura)
+            .expect("a fresh test Kura has one owner")
+            .auxiliary_history_deferred = true;
+        kura
+    }
     /// Return the number of FASTPQ proof snapshots awaiting persistence in tests.
     #[cfg(test)]
     pub(crate) fn fastpq_proof_queue_len_for_testing(&self) -> usize {
@@ -3321,15 +3295,6 @@ impl Kura {
         aggregate_bytes: NonZeroUsize,
     ) {
         self.pending_control_sidecar_limits.aggregate_bytes = aggregate_bytes.get();
-    }
-    /// Create an isolated test Kura whose canonical primary and lane segments match `lane_config`.
-    ///
-    /// Unlike reconciling a default test Kura after construction, this opens the
-    /// canonical block store and merge log at the requested primary paths. Tests
-    /// that exercise lifecycle changes from a non-default pre-genesis catalog
-    /// therefore do not leave an unauthenticated default-primary segment behind.
-    pub(crate) fn blank_kura_for_testing_with_lane_config(lane_config: &LaneConfig) -> Arc<Kura> {
-        Self::blank_kura_for_testing_with_lane_config_and_retention(lane_config, BLOCKS_IN_MEMORY)
     }
     /// Create an isolated Kura with a caller-selected body-retention bound.
     ///
@@ -5554,6 +5519,7 @@ impl Kura {
         }
         self.seal_completed_autonomous_lifecycle_replica_claims_on_startup()?;
         self.recover_lane_block_execution_input_pairs_on_startup()?;
+        self.recover_canonical_autonomous_lane_replica_pairs_on_startup()?;
         self.reconcile_historical_autonomous_recovery_atomic_temps_on_startup()?;
         self.rebuild_post_wsv_lane_artifact_budget_reservations_on_startup()?;
         self.rebuild_certified_bundle_capacity_reservations_on_startup()?;
@@ -5637,6 +5603,7 @@ impl Kura {
         }
         self.seal_completed_autonomous_lifecycle_replica_claims_on_startup()?;
         self.recover_lane_block_execution_input_pairs_on_startup()?;
+        self.recover_canonical_autonomous_lane_replica_pairs_on_startup()?;
         self.reconcile_historical_autonomous_recovery_atomic_temps_on_startup()?;
         self.rebuild_post_wsv_lane_artifact_budget_reservations_on_startup()?;
         self.rebuild_certified_bundle_capacity_reservations_on_startup()?;
@@ -7534,6 +7501,74 @@ impl Kura {
             file,
             metadata,
         })
+    }
+    /// Return whether a progress pair's immediate directory is durably absent
+    /// beneath an unchanged canonical parent.
+    ///
+    /// Non-owning validators legitimately have no committee-private lane
+    /// artifact directory. Read-only consumers must interpret that cold-start
+    /// state as an empty namespace without weakening the no-follow checks used
+    /// once the namespace exists. A missing, replaced, symlinked, or mutated
+    /// parent remains an error.
+    fn bound_progress_sidecar_directory_is_absent(
+        &self,
+        data_path: &Path,
+        index_path: &Path,
+    ) -> Result<bool> {
+        let sidecar_dir = data_path.parent().ok_or_else(|| {
+            Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidInput,
+                    "progress sidecar data path has no parent",
+                ),
+                data_path.to_path_buf(),
+            )
+        })?;
+        if index_path.parent() != Some(sidecar_dir) {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidInput,
+                    "progress sidecar files do not share one parent directory",
+                ),
+                index_path.to_path_buf(),
+            ));
+        }
+        let parent = sidecar_dir.parent().ok_or_else(|| {
+            Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidInput,
+                    "progress sidecar directory has no parent",
+                ),
+                sidecar_dir.to_path_buf(),
+            )
+        })?;
+        let bound_parent = Self::open_bound_progress_directory(&self.store_root, parent)?;
+        let observed = Self::canonical_sidecar_directory_for(&self.store_root, sidecar_dir)?;
+        let opened_parent = secure_file_metadata::from_file(&bound_parent.file)
+            .map_err(|error| Error::IO(error, parent.to_path_buf()))?;
+        let (current_parent_path, current_parent) =
+            Self::canonical_sidecar_directory_for(&self.store_root, parent)?.ok_or_else(|| {
+                Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        "progress sidecar parent disappeared while attesting an empty namespace",
+                    ),
+                    parent.to_path_buf(),
+                )
+            })?;
+        if current_parent_path != bound_parent.canonical_path
+            || !Self::sidecar_directory_metadata_unchanged(&bound_parent.metadata, &opened_parent)
+            || !Self::sidecar_directory_metadata_unchanged(&bound_parent.metadata, &current_parent)
+        {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "progress sidecar parent changed while attesting an empty namespace",
+                ),
+                parent.to_path_buf(),
+            ));
+        }
+        Ok(observed.is_none())
     }
     fn open_bound_progress_child_directory(
         store_root: &Path,
@@ -11412,7 +11447,57 @@ impl Kura {
     /// # Errors
     /// Returns an error when the certificate or pending-control store exceeds
     /// its bounds, or when durable no-clobber publication cannot complete.
-    pub fn persist_pending_queue_plan_admission_certificate(
+    pub(crate) fn persist_pending_queue_plan_admission_certificate(
+        &self,
+        canonical_certificate_bytes: &[u8],
+    ) -> Result<Hash> {
+        self.persist_pending_queue_plan_admission_certificate_inner(canonical_certificate_bytes)
+    }
+    /// Persist QueuePlan evidence only while the canonical block store is at one exact height.
+    ///
+    /// Holding `canonical_chain_lock` across the height check and sidecar publication makes this
+    /// operation linearizable with the first irreversible block write. The caller must derive
+    /// `expected_durable_height` from a coherent State view while excluding State publication.
+    pub(crate) fn persist_pending_queue_plan_admission_certificate_at_exact_durable_height(
+        &self,
+        expected_durable_height: u64,
+        canonical_certificate_bytes: &[u8],
+    ) -> Result<Hash> {
+        self.ensure_canonical_storage_not_poisoned()?;
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        let actual_durable_height = self.block_store.lock().read_exact_durable_index_count()?;
+        if actual_durable_height != expected_durable_height {
+            return Err(Error::QueuePlanAdmissionDurableHeightMismatch {
+                expected_durable_height,
+                actual_durable_height,
+            });
+        }
+        self.persist_pending_queue_plan_admission_certificate_inner(canonical_certificate_bytes)
+    }
+    /// Verify the canonical block store is at one exact height without rewriting a durable
+    /// QueuePlan certificate.
+    ///
+    /// This is the O(1) retry companion to
+    /// [`Self::persist_pending_queue_plan_admission_certificate_at_exact_durable_height`]. The
+    /// caller must already own the QueuePlan admission mutation lock, which keeps the previously
+    /// authenticated sidecar from being retired while this height check linearizes with block
+    /// publication.
+    pub(crate) fn verify_pending_queue_plan_admission_durable_height(
+        &self,
+        expected_durable_height: u64,
+    ) -> Result<()> {
+        self.ensure_canonical_storage_not_poisoned()?;
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        let actual_durable_height = self.block_store.lock().read_exact_durable_index_count()?;
+        if actual_durable_height != expected_durable_height {
+            return Err(Error::QueuePlanAdmissionDurableHeightMismatch {
+                expected_durable_height,
+                actual_durable_height,
+            });
+        }
+        Ok(())
+    }
+    fn persist_pending_queue_plan_admission_certificate_inner(
         &self,
         canonical_certificate_bytes: &[u8],
     ) -> Result<Hash> {
@@ -12273,6 +12358,7 @@ impl Kura {
         mode: InitMode,
         v2_finality_floor: Option<u64>,
         provisional_hash_only_prefix: Option<usize>,
+        canonical_replica_terminal_carrier_pins: &BTreeMap<u64, HashOf<BlockHeader>>,
     ) -> Result<ChainValidation> {
         let block_index_count: usize = block_store
             .read_durable_index_count()?
@@ -12293,9 +12379,12 @@ impl Kura {
                     );
                     Kura::init_fast_mode(block_store, block_index_count, v2_finality_floor)
                 }
-                InitMode::Strict => {
-                    Kura::init_canonical_chain(block_store, block_index_count, v2_finality_floor)
-                }
+                InitMode::Strict => Kura::init_canonical_chain(
+                    block_store,
+                    block_index_count,
+                    v2_finality_floor,
+                    canonical_replica_terminal_carrier_pins,
+                ),
             }?
         };
         if chain_validation.truncated {
@@ -12462,6 +12551,7 @@ impl Kura {
         block_store: &mut BlockStore,
         block_index_count: usize,
         v2_finality_floor: Option<u64>,
+        canonical_replica_terminal_carrier_pins: &BTreeMap<u64, HashOf<BlockHeader>>,
     ) -> Result<ChainValidation, Error> {
         let mut block_indices = vec![BlockIndex::default(); block_index_count];
         block_store.read_block_indices(0, &mut block_indices)?;
@@ -12508,6 +12598,7 @@ impl Kura {
             expected_hashes.as_deref(),
             0,
             v2_finality_floor,
+            canonical_replica_terminal_carrier_pins,
         )?;
         if !hash_journal_is_exact || validation.truncated || validation.hash_mismatch {
             Self::rewrite_validated_block_hashes(
@@ -12525,8 +12616,22 @@ impl Kura {
         expected_hashes: Option<&[HashOf<BlockHeader>]>,
         mut hash_only_prefix: usize,
         v2_finality_floor: Option<u64>,
+        canonical_replica_terminal_carrier_pins: &BTreeMap<u64, HashOf<BlockHeader>>,
     ) -> Result<ChainValidation, Error> {
         let hashes_count = block_store.read_hashes_count()?;
+        let durable_height_bound = u64::try_from(block_indices.len())?;
+        if canonical_replica_terminal_carrier_pins
+            .keys()
+            .any(|height| *height == 0 || *height > durable_height_bound)
+        {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "canonical replica terminal carrier pin is outside the durable block journal",
+                ),
+                block_store.path_to_blockchain.clone(),
+            ));
+        }
         let verified_snapshot_tail = block_store
             .validated_verified_snapshot_tail(u64::try_from(block_indices.len())?, hashes_count)?;
         if let Some(marker) = verified_snapshot_tail.as_ref()
@@ -12549,7 +12654,34 @@ impl Kura {
         let mut hash_mismatch = false;
         for (idx, block) in block_indices.iter().enumerate() {
             let height = idx.saturating_add(1) as u64;
+            let required_carrier_hash = canonical_replica_terminal_carrier_pins
+                .get(&height)
+                .copied();
+            if let Some(required_carrier_hash) = required_carrier_hash {
+                let expected_carrier_hash = expected_hashes
+                    .and_then(|hashes| hashes.get(idx))
+                    .copied()
+                    .ok_or(Error::HashesFileHeightMismatch)?;
+                if expected_carrier_hash != required_carrier_hash {
+                    return Err(Error::IO(
+                        std::io::Error::new(
+                            ErrorKind::InvalidData,
+                            "canonical replica terminal carrier pin conflicts with the durable hash journal",
+                        ),
+                        block_store.da_block_path(height),
+                    ));
+                }
+            }
             if idx < hash_only_prefix {
+                if required_carrier_hash.is_some() {
+                    return Err(Error::IO(
+                        std::io::Error::new(
+                            ErrorKind::InvalidData,
+                            "canonical replica terminal carrier cannot be hash-only",
+                        ),
+                        block_store.da_block_path(height),
+                    ));
+                }
                 let expected = expected_hashes
                     .and_then(|hashes| hashes.get(idx))
                     .copied()
@@ -12571,6 +12703,15 @@ impl Kura {
                     position >= marker_start && position < marker.snapshot_height
                 })
             {
+                if required_carrier_hash.is_some() {
+                    return Err(Error::IO(
+                        std::io::Error::new(
+                            ErrorKind::InvalidData,
+                            "canonical replica terminal carrier has no complete local body",
+                        ),
+                        block_store.da_block_path(height),
+                    ));
+                }
                 let expected = expected_hashes
                     .and_then(|hashes| hashes.get(idx))
                     .copied()
@@ -12586,6 +12727,15 @@ impl Kura {
                 continue;
             }
             if block.length == 0 {
+                if required_carrier_hash.is_some() {
+                    return Err(Error::IO(
+                        std::io::Error::new(
+                            ErrorKind::InvalidData,
+                            "canonical replica terminal carrier has a zero-length block entry",
+                        ),
+                        block_store.da_block_path(height),
+                    ));
+                }
                 truncated = Some(true);
                 error!(
                     length = block.length,
@@ -12595,6 +12745,15 @@ impl Kura {
                 break;
             }
             if block.length > STRICT_INIT_MAX_BLOCK_BYTES {
+                if required_carrier_hash.is_some() {
+                    return Err(Error::IO(
+                        std::io::Error::new(
+                            ErrorKind::InvalidData,
+                            "canonical replica terminal carrier exceeds the strict block-size limit",
+                        ),
+                        block_store.da_block_path(height),
+                    ));
+                }
                 truncated = Some(true);
                 error!(
                     length = block.length,
@@ -12620,6 +12779,15 @@ impl Kura {
                     }
                 };
                 let Some(payload) = payload else {
+                    if required_carrier_hash.is_some() {
+                        return Err(Error::IO(
+                            std::io::Error::new(
+                                ErrorKind::NotFound,
+                                "canonical replica terminal carrier DA body is missing",
+                            ),
+                            block_store.da_block_path(height),
+                        ));
+                    }
                     debug!(
                         block_index = idx,
                         height,
@@ -12636,6 +12804,15 @@ impl Kura {
                     if u64::try_from(payload.len())? != block.length
                         || Hash::new(&payload) != retained_wire_hash
                     {
+                        if required_carrier_hash.is_some() {
+                            return Err(Error::IO(
+                                std::io::Error::new(
+                                    ErrorKind::InvalidData,
+                                    "canonical replica terminal carrier DA body differs from signed finality",
+                                ),
+                                block_store.da_block_path(height),
+                            ));
+                        }
                         warn!(
                             block_index = idx,
                             height,
@@ -12659,6 +12836,15 @@ impl Kura {
                             let expected = expected_evicted_hash;
                             let actual = decoded_block.hash();
                             if actual != expected {
+                                if required_carrier_hash.is_some() {
+                                    return Err(Error::IO(
+                                        std::io::Error::new(
+                                            ErrorKind::InvalidData,
+                                            "canonical replica terminal carrier DA body has the wrong block hash",
+                                        ),
+                                        block_store.da_block_path(height),
+                                    ));
+                                }
                                 warn!(
                                     expected = %expected,
                                     actual = %actual,
@@ -12682,6 +12868,17 @@ impl Kura {
                     }
                     Err(error) => {
                         let expected = expected_evicted_hash;
+                        if required_carrier_hash.is_some() {
+                            return Err(Error::IO(
+                                std::io::Error::new(
+                                    ErrorKind::InvalidData,
+                                    format!(
+                                        "canonical replica terminal carrier DA body is malformed: {error}"
+                                    ),
+                                ),
+                                block_store.da_block_path(height),
+                            ));
+                        }
                         warn!(
                             ?error,
                             block_index = idx,
@@ -12711,6 +12908,15 @@ impl Kura {
                             data_len: data_file_len,
                         })?;
                 if end > data_file_len {
+                    if required_carrier_hash.is_some() {
+                        return Err(Error::IO(
+                            std::io::Error::new(
+                                ErrorKind::InvalidData,
+                                "canonical replica terminal carrier points past the canonical data file",
+                            ),
+                            block_store.path_to_blockchain.clone(),
+                        ));
+                    }
                     truncated = Some(true);
                     error!(
                         start = block.start,
@@ -12730,6 +12936,17 @@ impl Kura {
                     Ok(()) => match decode_framed_signed_block(&block_data_buffer) {
                         Ok(decoded_block) => decoded_block,
                         Err(error) => {
+                            if required_carrier_hash.is_some() {
+                                return Err(Error::IO(
+                                    std::io::Error::new(
+                                        ErrorKind::InvalidData,
+                                        format!(
+                                            "canonical replica terminal carrier inline body is malformed: {error}"
+                                        ),
+                                    ),
+                                    block_store.path_to_blockchain.clone(),
+                                ));
+                            }
                             truncated = Some(true);
                             error!(
                                 ?error,
@@ -12740,6 +12957,20 @@ impl Kura {
                         }
                     },
                     Err(error) => {
+                        if required_carrier_hash.is_some() {
+                            let Error::IO(source, _) = error else {
+                                return Err(error);
+                            };
+                            return Err(Error::IO(
+                                std::io::Error::new(
+                                    source.kind(),
+                                    format!(
+                                        "failed to read canonical replica terminal carrier inline body: {source}"
+                                    ),
+                                ),
+                                block_store.path_to_blockchain.clone(),
+                            ));
+                        }
                         truncated = Some(true);
                         error!(
                             ?error,
@@ -12763,6 +12994,15 @@ impl Kura {
             let decoded_block_hash = decoded_block.hash();
             if let Some(expected) = expected_hashes.and_then(|hashes| hashes.get(idx)).copied() {
                 if expected != decoded_block_hash {
+                    if required_carrier_hash.is_some() {
+                        return Err(Error::IO(
+                            std::io::Error::new(
+                                ErrorKind::InvalidData,
+                                "canonical replica terminal carrier inline body has the wrong block hash",
+                            ),
+                            block_store.path_to_blockchain.clone(),
+                        ));
+                    }
                     Self::ensure_startup_rewrite_respects_v2_finality(v2_finality_floor, height)?;
                     hash_mismatch = true;
                     warn!(
@@ -12778,6 +13018,19 @@ impl Kura {
         }
         let truncated = truncated.unwrap_or(false);
         let validated_height = block_hashes.len() as u64;
+        if truncated
+            && canonical_replica_terminal_carrier_pins
+                .keys()
+                .any(|height| *height > validated_height)
+        {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "canonical chain corruption precedes a pinned canonical replica terminal carrier",
+                ),
+                block_store.path_to_blockchain.clone(),
+            ));
+        }
         if truncated {
             Self::ensure_startup_rewrite_respects_v2_finality(
                 v2_finality_floor,
@@ -12990,41 +13243,6 @@ impl Kura {
             return None;
         }
         heights
-    }
-    /// Resolve the earliest block height containing an issuer-bound offline operation.
-    ///
-    /// The outer `None` means the in-memory transaction index is partial. An inner `None`
-    /// means the complete index contains no operation with both the requested outer transaction
-    /// authority and signed operation identifier. Binding the lookup to the outer authority keeps
-    /// a rejected transaction from another authority from shadowing a Torii-issued operation.
-    /// Returning only the earliest height bounds request-time work even if invalid historical data
-    /// reused an identifier within one issuer namespace.
-    pub fn get_earliest_block_height_by_offline_operation_id(
-        &self,
-        issuer: &AccountId,
-        operation_id: [u8; 32],
-    ) -> Option<Option<NonZeroUsize>> {
-        if self.prune_recovery_is_required()
-            || self.canonical_storage_poisoned.load(Ordering::Acquire)
-        {
-            return None;
-        }
-        #[cfg(test)]
-        self.observe_canonical_read_after_prune_check_for_tests(OFFLINE_OPERATION_READER_OBSERVED);
-        let index = self.transaction_entrypoint_index.lock();
-        if self.prune_recovery_is_required() {
-            return None;
-        }
-        let height = index.complete.then(|| {
-            index
-                .heights_by_offline_operation_id
-                .get(&(issuer.clone(), operation_id))
-                .and_then(|heights| heights.first().copied())
-        });
-        if self.prune_recovery_is_required() {
-            return None;
-        }
-        height
     }
     /// Resolve block heights containing committed transactions with the given authority.
     ///
@@ -13279,30 +13497,38 @@ impl Kura {
     pub(crate) fn durable_block_payload_len_by_hash(
         &self,
         hash: HashOf<BlockHeader>,
-    ) -> Option<(u64, u64)> {
+    ) -> Result<Option<(u64, u64)>> {
         let _prune_guard = self.prune_lock.lock();
-        self.ensure_prune_recovery_not_required().ok()?;
+        self.ensure_prune_recovery_not_required()?;
         let _canonical_chain_guard = self.canonical_chain_lock.lock();
-        self.ensure_canonical_storage_not_poisoned().ok()?;
-        let height = self.block_height_index.lock().get(&hash).copied()?;
-        let height_u64 = u64::try_from(height.get()).ok()?;
+        self.ensure_canonical_storage_not_poisoned()?;
+        let Some(height) = self.block_height_index.lock().get(&hash).copied() else {
+            return Ok(None);
+        };
+        let height_u64 = u64::try_from(height.get())?;
         let mut store = self.block_store.lock();
-        let durable_count = store.read_exact_durable_index_count().ok()?;
-        if height_u64 == 0 || height_u64 > durable_count {
-            return None;
+        let durable_count = store.read_exact_durable_index_count()?;
+        if height_u64 > durable_count {
+            return Ok(None);
         }
-        let durable_hash = Self::read_durable_hash_at_height(&mut store, height_u64).ok()??;
+        let durable_hash = Self::read_durable_hash_at_height(&mut store, height_u64)?
+            .ok_or(Error::HashesFileHeightMismatch)?;
         if durable_hash != hash {
-            return None;
+            return Err(Error::CanonicalBlockWireMismatch { height: height_u64 });
         }
-        let index = store.read_block_index(height_u64.saturating_sub(1)).ok()?;
+        let index = store.read_block_index(height_u64 - 1)?;
         if index.length == 0 || index.length > STRICT_INIT_MAX_BLOCK_BYTES {
-            return None;
+            return Err(Error::CorruptedBlockLength {
+                length: index.length,
+                limit: STRICT_INIT_MAX_BLOCK_BYTES,
+            });
         }
         drop(store);
-        let (header, artifact, _) = self
-            .v2_finality_artifact_with_archive_under_prune_and_canonical_guards(height_u64)
-            .ok()??;
+        let Some((header, artifact, _)) =
+            self.v2_finality_artifact_with_archive_under_prune_and_canonical_guards(height_u64)?
+        else {
+            return Ok(None);
+        };
         if header.hash() != hash
             || artifact
                 .commit_qc
@@ -13310,9 +13536,9 @@ impl Kura {
                 .executed_block_wire_len
                 != index.length
         {
-            return None;
+            return Err(Error::CanonicalBlockWireMismatch { height: height_u64 });
         }
-        Some((height_u64, index.length))
+        Ok(Some((height_u64, index.length)))
     }
     /// Cache a canonical block body in the local sidecar store after remote rehydration.
     ///
@@ -14743,64 +14969,75 @@ impl Kura {
             highest_verified_finality_artifact,
         })
     }
-    fn kagemusha_topup_finality_staging_dir_for(blocks_dir: &Path) -> PathBuf {
-        blocks_dir.join(KAGEMUSHA_TOPUP_FINALITY_STAGING_DIR_NAME)
+    fn kagemusha_finality_staging_dir_for(blocks_dir: &Path) -> PathBuf {
+        blocks_dir.join(KAGEMUSHA_FINALITY_STAGING_DIR_NAME)
     }
-    fn kagemusha_topup_finality_staging_path_for(blocks_dir: &Path, height: u64) -> PathBuf {
-        Self::kagemusha_topup_finality_staging_dir_for(blocks_dir)
-            .join(format!("{height:020}.norito"))
+    fn kagemusha_finality_staging_path_for(blocks_dir: &Path, height: u64) -> PathBuf {
+        Self::kagemusha_finality_staging_dir_for(blocks_dir).join(format!("{height:020}.norito"))
     }
-    fn kagemusha_topup_finality_staging_dir(&self) -> PathBuf {
-        Self::kagemusha_topup_finality_staging_dir_for(&self.active_blocks_dir.lock())
+    fn kagemusha_finality_staging_dir(&self) -> PathBuf {
+        Self::kagemusha_finality_staging_dir_for(&self.active_blocks_dir.lock())
     }
-    fn kagemusha_topup_finality_staging_path(&self, height: u64) -> PathBuf {
-        Self::kagemusha_topup_finality_staging_path_for(&self.active_blocks_dir.lock(), height)
+    fn kagemusha_finality_staging_path(&self, height: u64) -> PathBuf {
+        Self::kagemusha_finality_staging_path_for(&self.active_blocks_dir.lock(), height)
     }
-    fn kagemusha_topup_finality_sidecar_dir_for(blocks_dir: &Path) -> PathBuf {
-        blocks_dir.join(KAGEMUSHA_TOPUP_FINALITY_SIDECARS_DIR_NAME)
+    fn kagemusha_finality_sidecar_dir_for(blocks_dir: &Path) -> PathBuf {
+        blocks_dir.join(KAGEMUSHA_FINALITY_SIDECARS_DIR_NAME)
     }
-    fn kagemusha_topup_finality_sidecar_path_for(blocks_dir: &Path, height: u64) -> PathBuf {
-        Self::kagemusha_topup_finality_sidecar_dir_for(blocks_dir)
-            .join(format!("{height:020}.norito"))
+    fn kagemusha_finality_sidecar_path_for(blocks_dir: &Path, height: u64) -> PathBuf {
+        Self::kagemusha_finality_sidecar_dir_for(blocks_dir).join(format!("{height:020}.norito"))
     }
-    fn kagemusha_topup_finality_sidecar_dir(&self) -> PathBuf {
-        Self::kagemusha_topup_finality_sidecar_dir_for(&self.active_blocks_dir.lock())
+    fn kagemusha_finality_sidecar_dir(&self) -> PathBuf {
+        Self::kagemusha_finality_sidecar_dir_for(&self.active_blocks_dir.lock())
     }
-    fn kagemusha_topup_finality_sidecar_path(&self, height: u64) -> PathBuf {
-        Self::kagemusha_topup_finality_sidecar_path_for(&self.active_blocks_dir.lock(), height)
+    fn kagemusha_finality_sidecar_path(&self, height: u64) -> PathBuf {
+        Self::kagemusha_finality_sidecar_path_for(&self.active_blocks_dir.lock(), height)
     }
-    fn kagemusha_active_receiver_staging_dir_for(blocks_dir: &Path) -> PathBuf {
-        blocks_dir.join(KAGEMUSHA_ACTIVE_RECEIVER_STAGING_DIR_NAME)
+    fn kagemusha_mint_outbox_dir_for(blocks_dir: &Path) -> PathBuf {
+        blocks_dir.join(KAGEMUSHA_MINT_OUTBOX_DIR_NAME)
     }
-    fn kagemusha_active_receiver_staging_path_for(blocks_dir: &Path, height: u64) -> PathBuf {
-        Self::kagemusha_active_receiver_staging_dir_for(blocks_dir)
-            .join(format!("{height:020}.norito"))
+    fn kagemusha_mint_outbox_dir(&self) -> PathBuf {
+        Self::kagemusha_mint_outbox_dir_for(&self.active_blocks_dir.lock())
     }
-    fn kagemusha_active_receiver_staging_dir(&self) -> PathBuf {
-        Self::kagemusha_active_receiver_staging_dir_for(&self.active_blocks_dir.lock())
+    fn kagemusha_mint_outbox_path_for(blocks_dir: &Path, operation_id: [u8; 32]) -> PathBuf {
+        Self::kagemusha_mint_outbox_dir_for(blocks_dir)
+            .join(format!("{}.norito", hex::encode(operation_id)))
     }
-    fn kagemusha_active_receiver_staging_path(&self, height: u64) -> PathBuf {
-        Self::kagemusha_active_receiver_staging_path_for(&self.active_blocks_dir.lock(), height)
+    fn kagemusha_mint_outbox_path(&self, operation_id: [u8; 32]) -> PathBuf {
+        Self::kagemusha_mint_outbox_path_for(&self.active_blocks_dir.lock(), operation_id)
     }
-    fn kagemusha_active_receiver_sidecar_dir_for(blocks_dir: &Path) -> PathBuf {
-        blocks_dir.join(KAGEMUSHA_ACTIVE_RECEIVER_SIDECARS_DIR_NAME)
+    fn kagemusha_mint_authority_dir_for(blocks_dir: &Path) -> PathBuf {
+        blocks_dir.join(KAGEMUSHA_MINT_AUTHORITY_DIR_NAME)
     }
-    fn kagemusha_active_receiver_sidecar_path_for(blocks_dir: &Path, height: u64) -> PathBuf {
-        Self::kagemusha_active_receiver_sidecar_dir_for(blocks_dir)
-            .join(format!("{height:020}.norito"))
+    fn kagemusha_mint_authority_dir(&self) -> PathBuf {
+        Self::kagemusha_mint_authority_dir_for(&self.active_blocks_dir.lock())
     }
-    fn kagemusha_active_receiver_sidecar_dir(&self) -> PathBuf {
-        Self::kagemusha_active_receiver_sidecar_dir_for(&self.active_blocks_dir.lock())
+    fn kagemusha_mint_authority_path_for(
+        blocks_dir: &Path,
+        release_id: [u8; 32],
+        authority_head: [u8; 32],
+    ) -> PathBuf {
+        Self::kagemusha_mint_authority_dir_for(blocks_dir).join(format!(
+            "{}-{}.norito",
+            hex::encode(release_id),
+            hex::encode(authority_head)
+        ))
     }
-    fn kagemusha_active_receiver_sidecar_path(&self, height: u64) -> PathBuf {
-        Self::kagemusha_active_receiver_sidecar_path_for(&self.active_blocks_dir.lock(), height)
+    fn kagemusha_mint_authority_path(
+        &self,
+        release_id: [u8; 32],
+        authority_head: [u8; 32],
+    ) -> PathBuf {
+        Self::kagemusha_mint_authority_path_for(
+            &self.active_blocks_dir.lock(),
+            release_id,
+            authority_head,
+        )
     }
-    fn kagemusha_finality_sidecar_dirs_for(blocks_dir: &Path) -> [PathBuf; 4] {
+    fn kagemusha_finality_sidecar_dirs_for(blocks_dir: &Path) -> [PathBuf; 2] {
         [
-            Self::kagemusha_topup_finality_staging_dir_for(blocks_dir),
-            Self::kagemusha_topup_finality_sidecar_dir_for(blocks_dir),
-            Self::kagemusha_active_receiver_staging_dir_for(blocks_dir),
-            Self::kagemusha_active_receiver_sidecar_dir_for(blocks_dir),
+            Self::kagemusha_finality_staging_dir_for(blocks_dir),
+            Self::kagemusha_finality_sidecar_dir_for(blocks_dir),
         ]
     }
     fn v2_finality_cache_hit(
@@ -15891,244 +16128,34 @@ impl Kura {
         let receipt = v2_commit_receipt(&artifact);
         Ok(Some((artifact, receipt)))
     }
-    fn staged_kagemusha_topup_finality_from_witness(
-        height: u64,
-        block_hash: HashOf<BlockHeader>,
-        witness: &ExecWitness,
-        expected: ExecutionCommitment,
-    ) -> Result<Option<StagedKagemushaTopUpFinalitySidecar>> {
-        let writes = witness
-            .writes
-            .iter()
-            .map(|entry| crate::sumeragi::smt::KvPair::new(entry.key.clone(), entry.value.clone()))
-            .collect::<Vec<_>>();
-        let commitment = crate::sumeragi::smt::build_kagemusha_topup_block_commitment(&writes)
-            .map_err(|error| Error::KagemushaTopUpFinalitySidecar(error.to_owned()))?;
-        let Some(commitment) = commitment else {
-            if expected.topup_anchor_count != 0 || expected.topup_anchor_root.is_some() {
-                return Err(Error::KagemushaTopUpFinalitySidecar(
-                    "signed execution commitment advertises top-ups absent from the witness"
-                        .to_owned(),
-                ));
-            }
-            return Ok(None);
-        };
-        if expected.ordinary_writes_root != commitment.ordinary_writes_root
-            || expected.topup_anchor_root != Some(commitment.topup_anchor_root)
-            || expected.post_state_root != commitment.post_state_root
-            || usize::try_from(expected.topup_anchor_count).ok() != Some(commitment.leaves.len())
-            || commitment.leaves.len() != commitment.proofs.len()
-        {
-            return Err(Error::KagemushaTopUpFinalitySidecar(
-                "witness-derived top-up subtree differs from the signed execution commitment"
-                    .to_owned(),
-            ));
-        }
-        let leaves = commitment
-            .leaves
-            .iter()
-            .zip(&commitment.proofs)
-            .map(|(leaf, path)| {
-                let operation_id = leaf
-                    .key
-                    .get(1..)
-                    .and_then(|bytes| <[u8; 32]>::try_from(bytes).ok())
-                    .ok_or_else(|| {
-                        Error::KagemushaTopUpFinalitySidecar(
-                            "witness top-up operation id has the wrong width".to_owned(),
-                        )
-                    })?;
-                let anchor_digest = <[u8; 32]>::try_from(leaf.value.as_slice()).map_err(|_| {
-                    Error::KagemushaTopUpFinalitySidecar(
-                        "witness top-up anchor digest has the wrong width".to_owned(),
-                    )
-                })?;
-                Ok(KagemushaTopUpFinalityLeaf {
-                    operation_id,
-                    anchor_digest,
-                    leaf_index: path.leaf_index,
-                    leaf_count: path.leaf_count,
-                    siblings: path.siblings.clone(),
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
-        Ok(Some(StagedKagemushaTopUpFinalitySidecar {
-            format: KagemushaTopUpFinalitySidecarFormat::Current,
-            version: KagemushaTopUpFinalitySidecar::VERSION,
-            height,
-            block_hash,
-            ordinary_writes_root: commitment.ordinary_writes_root,
-            topup_anchor_root: commitment.topup_anchor_root,
-            post_state_root: commitment.post_state_root,
-            leaves,
-        }))
-    }
-    fn validate_staged_kagemusha_topup_finality(
-        staged: &StagedKagemushaTopUpFinalitySidecar,
+    fn validate_staged_kagemusha_finality(
+        staged: &StagedKagemushaFinalitySidecarV1,
         artifact: &V2FinalityArtifact,
     ) -> Result<()> {
         let commitment = artifact.commit_qc.execution_commitment;
-        if staged.format != KagemushaTopUpFinalitySidecarFormat::Current
-            || staged.version != KagemushaTopUpFinalitySidecar::VERSION
-            || staged.height != artifact.height
-            || staged.block_hash != artifact.block_hash
-            || staged.ordinary_writes_root != commitment.ordinary_writes_root
-            || Some(staged.topup_anchor_root) != commitment.topup_anchor_root
-            || staged.post_state_root != commitment.post_state_root
-            || usize::try_from(commitment.topup_anchor_count).ok() != Some(staged.leaves.len())
-            || staged.leaves.is_empty()
-            || staged
-                .leaves
-                .windows(2)
-                .any(|pair| pair[0].operation_id >= pair[1].operation_id)
-        {
-            return Err(Error::KagemushaTopUpFinalitySidecar(
-                "staged top-up sidecar differs from the exact finality artifact".to_owned(),
-            ));
-        }
-        for (index, leaf) in staged.leaves.iter().enumerate() {
-            if leaf.operation_id == [0; 32]
-                || leaf.anchor_digest == [0; 32]
-                || usize::try_from(leaf.leaf_index).ok() != Some(index)
-                || usize::try_from(leaf.leaf_count).ok() != Some(staged.leaves.len())
-            {
-                return Err(Error::KagemushaTopUpFinalitySidecar(
-                    "staged top-up leaf identity or position is non-canonical".to_owned(),
-                ));
-            }
-            let mut key = Vec::with_capacity(33);
-            key.push(crate::sumeragi::smt::KAGEMUSHA_V4_TOPUP_ANCHOR_WITNESS_KEY_TAG);
-            key.extend_from_slice(&leaf.operation_id);
-            let pair = crate::sumeragi::smt::KvPair::new(key, leaf.anchor_digest);
-            let path = crate::sumeragi::smt::KagemushaTopUpMerkleProof {
-                leaf_index: leaf.leaf_index,
-                leaf_count: leaf.leaf_count,
-                siblings: leaf.siblings.clone(),
-            };
-            if !crate::sumeragi::smt::verify_kagemusha_topup_write_inclusion(
-                &pair,
-                &path,
-                staged.ordinary_writes_root,
-                staged.post_state_root,
-            ) {
-                return Err(Error::KagemushaTopUpFinalitySidecar(
-                    "staged top-up Merkle path does not match the signed post-state root"
-                        .to_owned(),
-                ));
-            }
-        }
-        Ok(())
-    }
-    fn validate_kagemusha_topup_finality_sidecar(
-        sidecar: &KagemushaTopUpFinalitySidecar,
-        artifact: &V2FinalityArtifact,
-    ) -> Result<()> {
-        let staged = StagedKagemushaTopUpFinalitySidecar {
-            format: sidecar.format,
-            version: sidecar.version,
-            height: sidecar.height,
-            block_hash: sidecar.block_hash,
-            ordinary_writes_root: sidecar.ordinary_writes_root,
-            topup_anchor_root: sidecar.topup_anchor_root,
-            post_state_root: sidecar.post_state_root,
-            leaves: sidecar.leaves.clone(),
-        };
-        Self::validate_staged_kagemusha_topup_finality(&staged, artifact)?;
-        if sidecar.finality_artifact_hash != HashOf::new(artifact) {
-            return Err(Error::KagemushaTopUpFinalitySidecar(
-                "top-up sidecar is bound to another finality artifact".to_owned(),
-            ));
-        }
-        Ok(())
-    }
-    fn decode_staged_kagemusha_topup_finality(
-        &self,
-        path: &Path,
-    ) -> Result<Option<(StagedKagemushaTopUpFinalitySidecar, StableSidecarRead)>> {
-        let directory = self.kagemusha_topup_finality_staging_dir();
-        let Some(snapshot) = self.read_regular_sidecar_snapshot(
-            path,
-            &directory,
-            MAX_KAGEMUSHA_TOPUP_FINALITY_SIDECAR_BYTES,
-        )?
-        else {
-            return Ok(None);
-        };
-        let mut cursor = snapshot.bytes.as_slice();
-        let sidecar = StagedKagemushaTopUpFinalitySidecar::decode_all(&mut cursor)
-            .map_err(Error::NoritoFrame)?;
-        if sidecar.encode() != snapshot.bytes {
-            return Err(Error::IO(
-                std::io::Error::new(
-                    ErrorKind::InvalidData,
-                    "staged top-up sidecar is not the canonical Norito encoding",
-                ),
-                path.to_path_buf(),
-            ));
-        }
-        Ok(Some((sidecar, snapshot)))
-    }
-    fn decode_kagemusha_topup_finality_sidecar(
-        &self,
-        path: &Path,
-    ) -> Result<Option<(KagemushaTopUpFinalitySidecar, StableSidecarRead)>> {
-        let directory = self.kagemusha_topup_finality_sidecar_dir();
-        let Some(snapshot) = self.read_regular_sidecar_snapshot(
-            path,
-            &directory,
-            MAX_KAGEMUSHA_TOPUP_FINALITY_SIDECAR_BYTES,
-        )?
-        else {
-            return Ok(None);
-        };
-        let mut cursor = snapshot.bytes.as_slice();
-        let sidecar =
-            KagemushaTopUpFinalitySidecar::decode_all(&mut cursor).map_err(Error::NoritoFrame)?;
-        if sidecar.encode() != snapshot.bytes {
-            return Err(Error::IO(
-                std::io::Error::new(
-                    ErrorKind::InvalidData,
-                    "final top-up sidecar is not the canonical Norito encoding",
-                ),
-                path.to_path_buf(),
-            ));
-        }
-        Ok(Some((sidecar, snapshot)))
-    }
-    fn validate_staged_kagemusha_active_receiver_finality(
-        staged: &StagedKagemushaActiveReceiverFinalitySidecarV1,
-        artifact: &V2FinalityArtifact,
-    ) -> Result<()> {
-        let commitment = artifact.commit_qc.execution_commitment;
-        let snapshot = staged
-            .witness_proof
-            .commitment()
-            .map_err(|error| Error::KagemushaActiveReceiverFinalitySidecar(error.to_owned()))?;
         let validation_fee_snapshot = staged
             .validation_fee_policy_witness
             .commitment()
-            .map_err(|error| Error::KagemushaActiveReceiverFinalitySidecar(error.to_owned()))?;
+            .map_err(|error| Error::KagemushaFinalitySidecar(error.to_owned()))?;
         let casting_snapshot = staged
             .parliament_timed_ovn_casting_witness
             .commitment()
-            .map_err(|error| Error::KagemushaActiveReceiverFinalitySidecar(error.to_owned()))?;
+            .map_err(|error| Error::KagemushaFinalitySidecar(error.to_owned()))?;
         let rebuilt_casting_snapshot =
             ParliamentTimedOvnCastingSnapshotCommitmentV1::from_ordered_bindings(
                 staged.height,
                 &staged.parliament_timed_ovn_casting_bindings,
             )
             .map_err(|error| {
-                Error::KagemushaActiveReceiverFinalitySidecar(format!(
+                Error::KagemushaFinalitySidecar(format!(
                     "invalid retained Parliament timed-OVN casting bindings: {error}"
                 ))
             })?;
-        if staged.version != KagemushaActiveReceiverFinalitySidecarV1::VERSION
+        if staged.version != KagemushaFinalitySidecarV1::VERSION
             || staged.height != artifact.height
             || staged.block_hash != artifact.block_hash
             || staged.ordinary_writes_root != commitment.ordinary_writes_root
             || staged.post_state_root != commitment.post_state_root
-            || snapshot.evaluated_height != staged.height
-            || !staged.witness_proof.verify(commitment.ordinary_writes_root)
             || validation_fee_snapshot.evaluated_height != staged.height
             || !staged
                 .validation_fee_policy_witness
@@ -16138,30 +16165,37 @@ impl Kura {
             || !staged
                 .parliament_timed_ovn_casting_witness
                 .verify(commitment.ordinary_writes_root)
+            || staged
+                .kagemusha_reserve_receipts
+                .windows(2)
+                .any(|pair| pair[0].receipt.operation_id >= pair[1].receipt.operation_id)
+            || staged
+                .kagemusha_reserve_receipts
+                .iter()
+                .any(|proof| !proof.verify(commitment.ordinary_writes_root))
         {
-            return Err(Error::KagemushaActiveReceiverFinalitySidecar(
-                "active-receiver witness stage differs from the exact finality artifact".to_owned(),
+            return Err(Error::KagemushaFinalitySidecar(
+                "Kagemusha V1 witness stage differs from the exact finality artifact".to_owned(),
             ));
         }
         commitment.validate().map_err(|error| {
-            Error::KagemushaActiveReceiverFinalitySidecar(format!(
-                "active-receiver finality execution commitment is invalid: {error}"
+            Error::KagemushaFinalitySidecar(format!(
+                "Kagemusha V1 finality execution commitment is invalid: {error}"
             ))
         })?;
         Ok(())
     }
-    fn validate_kagemusha_active_receiver_finality_sidecar(
-        sidecar: &KagemushaActiveReceiverFinalitySidecarV1,
+    fn validate_kagemusha_finality_sidecar(
+        sidecar: &KagemushaFinalitySidecarV1,
         artifact: &V2FinalityArtifact,
     ) -> Result<()> {
-        Self::validate_staged_kagemusha_active_receiver_finality(
-            &StagedKagemushaActiveReceiverFinalitySidecarV1 {
+        Self::validate_staged_kagemusha_finality(
+            &StagedKagemushaFinalitySidecarV1 {
                 version: sidecar.version,
                 height: sidecar.height,
                 block_hash: sidecar.block_hash,
                 ordinary_writes_root: sidecar.ordinary_writes_root,
                 post_state_root: sidecar.post_state_root,
-                witness_proof: sidecar.witness_proof.clone(),
                 validation_fee_policy_witness: sidecar.validation_fee_policy_witness.clone(),
                 parliament_timed_ovn_casting_witness: sidecar
                     .parliament_timed_ovn_casting_witness
@@ -16169,82 +16203,78 @@ impl Kura {
                 parliament_timed_ovn_casting_bindings: sidecar
                     .parliament_timed_ovn_casting_bindings
                     .clone(),
+                kagemusha_reserve_receipts: sidecar.kagemusha_reserve_receipts.clone(),
             },
             artifact,
         )?;
         if sidecar.finality_artifact_hash != HashOf::new(artifact) {
-            return Err(Error::KagemushaActiveReceiverFinalitySidecar(
-                "active-receiver sidecar is bound to another finality artifact".to_owned(),
+            return Err(Error::KagemushaFinalitySidecar(
+                "Kagemusha V1 sidecar is bound to another finality artifact".to_owned(),
             ));
         }
         Ok(())
     }
-    fn decode_staged_kagemusha_active_receiver_finality(
+    fn decode_staged_kagemusha_finality(
         &self,
         path: &Path,
-    ) -> Result<
-        Option<(
-            StagedKagemushaActiveReceiverFinalitySidecarV1,
-            StableSidecarRead,
-        )>,
-    > {
-        let directory = self.kagemusha_active_receiver_staging_dir();
+    ) -> Result<Option<(StagedKagemushaFinalitySidecarV1, StableSidecarRead)>> {
+        let directory = self.kagemusha_finality_staging_dir();
         let Some(snapshot) = self.read_regular_sidecar_snapshot(
             path,
             &directory,
-            MAX_KAGEMUSHA_ACTIVE_RECEIVER_SIDECAR_BYTES,
+            MAX_KAGEMUSHA_FINALITY_SIDECAR_BYTES,
         )?
         else {
             return Ok(None);
         };
         let mut cursor = snapshot.bytes.as_slice();
         let sidecar = norito::with_decode_limits(
-            kagemusha_active_receiver_decode_limits(snapshot.bytes.len()),
-            || StagedKagemushaActiveReceiverFinalitySidecarV1::decode_all(&mut cursor),
+            kagemusha_finality_decode_limits(snapshot.bytes.len()),
+            || StagedKagemushaFinalitySidecarV1::decode_all(&mut cursor),
         )
         .map_err(Error::NoritoFrame)?;
         if sidecar.encode() != snapshot.bytes {
             return Err(Error::IO(
                 std::io::Error::new(
                     ErrorKind::InvalidData,
-                    "staged active-receiver sidecar is not canonical Norito",
+                    "staged Kagemusha V1 sidecar is not canonical Norito",
                 ),
                 path.to_path_buf(),
             ));
         }
         Ok(Some((sidecar, snapshot)))
     }
-    fn decode_kagemusha_active_receiver_finality_sidecar(
+    fn decode_kagemusha_finality_sidecar(
         &self,
         path: &Path,
-    ) -> Result<Option<(KagemushaActiveReceiverFinalitySidecarV1, StableSidecarRead)>> {
-        let directory = self.kagemusha_active_receiver_sidecar_dir();
+    ) -> Result<Option<(KagemushaFinalitySidecarV1, StableSidecarRead)>> {
+        let directory = self.kagemusha_finality_sidecar_dir();
         let Some(snapshot) = self.read_regular_sidecar_snapshot(
             path,
             &directory,
-            MAX_KAGEMUSHA_ACTIVE_RECEIVER_SIDECAR_BYTES,
+            MAX_KAGEMUSHA_FINALITY_SIDECAR_BYTES,
         )?
         else {
             return Ok(None);
         };
         let mut cursor = snapshot.bytes.as_slice();
         let sidecar = norito::with_decode_limits(
-            kagemusha_active_receiver_decode_limits(snapshot.bytes.len()),
-            || KagemushaActiveReceiverFinalitySidecarV1::decode_all(&mut cursor),
+            kagemusha_finality_decode_limits(snapshot.bytes.len()),
+            || KagemushaFinalitySidecarV1::decode_all(&mut cursor),
         )
         .map_err(Error::NoritoFrame)?;
         if sidecar.encode() != snapshot.bytes {
             return Err(Error::IO(
                 std::io::Error::new(
                     ErrorKind::InvalidData,
-                    "final active-receiver sidecar is not canonical Norito",
+                    "final Kagemusha V1 sidecar is not canonical Norito",
                 ),
                 path.to_path_buf(),
             ));
         }
         Ok(Some((sidecar, snapshot)))
     }
-    fn stage_kagemusha_active_receiver_finality_sidecar(
+    pub(crate) fn stage_kagemusha_finality_sidecar(
         &self,
         height: u64,
         block_hash: HashOf<BlockHeader>,
@@ -16253,149 +16283,134 @@ impl Kura {
         parliament_timed_ovn_casting_bindings: &[ParliamentTimedOvnCastingContextBindingV1],
     ) -> Result<()> {
         self.durable_mutation_authorized()?;
-        let (witness_proof, ordinary_writes_root) =
-            crate::receiver_snapshot::active_receiver_witness_proof_v1(witness)
-                .map_err(Error::KagemushaActiveReceiverFinalitySidecar)?;
         let (validation_fee_policy_witness, validation_fee_root) =
             crate::receiver_snapshot::validation_fee_policy_witness_proof_v1(witness)
-                .map_err(Error::KagemushaActiveReceiverFinalitySidecar)?;
+                .map_err(Error::KagemushaFinalitySidecar)?;
         let (parliament_timed_ovn_casting_witness, casting_root) =
             crate::receiver_snapshot::parliament_timed_ovn_casting_witness_proof_v1(witness)
-                .map_err(Error::KagemushaActiveReceiverFinalitySidecar)?;
-        if ordinary_writes_root != expected.ordinary_writes_root
-            || validation_fee_root != ordinary_writes_root
-            || casting_root != ordinary_writes_root
-            || !witness_proof.verify(expected.ordinary_writes_root)
+                .map_err(Error::KagemushaFinalitySidecar)?;
+        let (kagemusha_reserve_receipts, kagemusha_root) =
+            crate::receiver_snapshot::kagemusha_reserve_receipt_witnesses_v1(witness)
+                .map_err(Error::KagemushaFinalitySidecar)?;
+        if validation_fee_root != expected.ordinary_writes_root
+            || casting_root != expected.ordinary_writes_root
+            || kagemusha_root != expected.ordinary_writes_root
             || !validation_fee_policy_witness.verify(expected.ordinary_writes_root)
             || !parliament_timed_ovn_casting_witness.verify(expected.ordinary_writes_root)
         {
-            return Err(Error::KagemushaActiveReceiverFinalitySidecar(
-                "witness-derived active-receiver proof differs from the signed ordinary-write root"
+            return Err(Error::KagemushaFinalitySidecar(
+                "witness-derived Kagemusha V1 proof differs from the signed ordinary-write root"
                     .to_owned(),
-            ));
-        }
-        let snapshot = witness_proof
-            .commitment()
-            .map_err(|error| Error::KagemushaActiveReceiverFinalitySidecar(error.to_owned()))?;
-        if snapshot.evaluated_height != height {
-            return Err(Error::KagemushaActiveReceiverFinalitySidecar(
-                "active-receiver snapshot height differs from its block".to_owned(),
             ));
         }
         let validation_fee_snapshot = validation_fee_policy_witness
             .commitment()
-            .map_err(|error| Error::KagemushaActiveReceiverFinalitySidecar(error.to_owned()))?;
+            .map_err(|error| Error::KagemushaFinalitySidecar(error.to_owned()))?;
         if validation_fee_snapshot.evaluated_height != height {
-            return Err(Error::KagemushaActiveReceiverFinalitySidecar(
+            return Err(Error::KagemushaFinalitySidecar(
                 "validation-fee snapshot height differs from its block".to_owned(),
             ));
         }
         let casting_snapshot = parliament_timed_ovn_casting_witness
             .commitment()
-            .map_err(|error| Error::KagemushaActiveReceiverFinalitySidecar(error.to_owned()))?;
+            .map_err(|error| Error::KagemushaFinalitySidecar(error.to_owned()))?;
         let rebuilt_casting_snapshot =
             ParliamentTimedOvnCastingSnapshotCommitmentV1::from_ordered_bindings(
                 height,
                 parliament_timed_ovn_casting_bindings,
             )
             .map_err(|error| {
-                Error::KagemushaActiveReceiverFinalitySidecar(format!(
+                Error::KagemushaFinalitySidecar(format!(
                     "invalid Parliament timed-OVN casting bindings: {error}"
                 ))
             })?;
         if casting_snapshot != rebuilt_casting_snapshot {
-            return Err(Error::KagemushaActiveReceiverFinalitySidecar(
+            return Err(Error::KagemushaFinalitySidecar(
                 "Parliament timed-OVN casting leaves differ from the synthetic snapshot".to_owned(),
             ));
         }
-        let staged = StagedKagemushaActiveReceiverFinalitySidecarV1 {
-            version: KagemushaActiveReceiverFinalitySidecarV1::VERSION,
+        let staged = StagedKagemushaFinalitySidecarV1 {
+            version: KagemushaFinalitySidecarV1::VERSION,
             height,
             block_hash,
-            ordinary_writes_root,
+            ordinary_writes_root: expected.ordinary_writes_root,
             post_state_root: expected.post_state_root,
-            witness_proof,
             validation_fee_policy_witness,
             parliament_timed_ovn_casting_witness,
             parliament_timed_ovn_casting_bindings: parliament_timed_ovn_casting_bindings.to_vec(),
+            kagemusha_reserve_receipts,
         };
         let bytes = staged.encode();
-        if bytes.len() > MAX_KAGEMUSHA_ACTIVE_RECEIVER_SIDECAR_BYTES {
-            return Err(Error::KagemushaActiveReceiverFinalitySidecarTooLarge {
+        if bytes.len() > MAX_KAGEMUSHA_FINALITY_SIDECAR_BYTES {
+            return Err(Error::KagemushaFinalitySidecarTooLarge {
                 actual: bytes.len(),
-                max: MAX_KAGEMUSHA_ACTIVE_RECEIVER_SIDECAR_BYTES,
+                max: MAX_KAGEMUSHA_FINALITY_SIDECAR_BYTES,
             });
         }
         let _guard = self.sidecar_lock.lock();
-        let directory = self.kagemusha_active_receiver_staging_dir();
+        let directory = self.kagemusha_finality_staging_dir();
         create_dir_all_with_context(&directory)?;
         if let Some(parent) = directory.parent() {
             sync_dir(parent).map_err(|error| Error::IO(error, parent.to_path_buf()))?;
         }
-        let path = self.kagemusha_active_receiver_staging_path(height);
-        if let Some((existing, identity)) =
-            self.decode_staged_kagemusha_active_receiver_finality(&path)?
-        {
+        let path = self.kagemusha_finality_staging_path(height);
+        if let Some((existing, identity)) = self.decode_staged_kagemusha_finality(&path)? {
             if existing == staged
                 && identity.bytes == bytes
                 && identity.bytes_hash == Hash::new(&bytes)
             {
                 return Ok(());
             }
-            return Err(Error::KagemushaActiveReceiverFinalitySidecar(
-                "conflicting staged active-receiver sidecar at one height".to_owned(),
+            return Err(Error::KagemushaFinalitySidecar(
+                "conflicting staged Kagemusha V1 sidecar at one height".to_owned(),
             ));
         }
         if !self.write_atomic_synced_noclobber(&path, &bytes)? {
-            let Some((existing, _)) =
-                self.decode_staged_kagemusha_active_receiver_finality(&path)?
-            else {
-                return Err(Error::KagemushaActiveReceiverFinalitySidecar(
-                    "staged active-receiver sidecar disappeared during publication".to_owned(),
+            let Some((existing, _)) = self.decode_staged_kagemusha_finality(&path)? else {
+                return Err(Error::KagemushaFinalitySidecar(
+                    "staged Kagemusha V1 sidecar disappeared during publication".to_owned(),
                 ));
             };
             if existing != staged {
-                return Err(Error::KagemushaActiveReceiverFinalitySidecar(
-                    "no-clobber race published a conflicting active-receiver stage".to_owned(),
+                return Err(Error::KagemushaFinalitySidecar(
+                    "no-clobber race published a conflicting Kagemusha V1 stage".to_owned(),
                 ));
             }
         }
-        let Some((persisted, identity)) =
-            self.decode_staged_kagemusha_active_receiver_finality(&path)?
-        else {
-            return Err(Error::KagemushaActiveReceiverFinalitySidecar(
-                "staged active-receiver sidecar disappeared after publication".to_owned(),
+        let Some((persisted, identity)) = self.decode_staged_kagemusha_finality(&path)? else {
+            return Err(Error::KagemushaFinalitySidecar(
+                "staged Kagemusha V1 sidecar disappeared after publication".to_owned(),
             ));
         };
         if persisted != staged
             || identity.bytes != bytes
             || identity.bytes_hash != Hash::new(&bytes)
         {
-            return Err(Error::KagemushaActiveReceiverFinalitySidecar(
-                "staged active-receiver sidecar changed during readback".to_owned(),
+            return Err(Error::KagemushaFinalitySidecar(
+                "staged Kagemusha V1 sidecar changed during readback".to_owned(),
             ));
         }
         Ok(())
     }
-    fn remove_exact_staged_kagemusha_active_receiver_finality(
+    fn remove_exact_staged_kagemusha_finality(
         &self,
         path: &Path,
         read_identity: &StableSidecarRead,
     ) -> Result<()> {
-        let directory = self.kagemusha_active_receiver_staging_dir();
+        let directory = self.kagemusha_finality_staging_dir();
         let Some(current) = self.regular_sidecar_metadata(path, &directory)? else {
             return Ok(());
         };
         if !Self::stable_sidecar_metadata_unchanged(&read_identity.metadata, &current) {
-            return Err(Error::KagemushaActiveReceiverFinalitySidecar(
-                "staged active-receiver sidecar changed before cleanup".to_owned(),
+            return Err(Error::KagemushaFinalitySidecar(
+                "staged Kagemusha V1 sidecar changed before cleanup".to_owned(),
             ));
         }
         std::fs::remove_file(path).map_err(|error| Error::IO(error, path.to_path_buf()))?;
         sync_dir(&directory).map_err(|error| Error::IO(error, directory))?;
         Ok(())
     }
-    fn promote_kagemusha_active_receiver_finality_sidecar(
+    pub(crate) fn promote_kagemusha_finality_sidecar(
         &self,
         artifact: &V2FinalityArtifact,
         receipt: &KuraV2CommitReceipt,
@@ -16408,124 +16423,518 @@ impl Kura {
             || receipt.certificate != artifact.commit_qc.as_ref()
             || receipt.artifact_hash != HashOf::new(artifact)
         {
-            return Err(Error::KagemushaActiveReceiverFinalitySidecar(
-                "finality receipt does not identify the active-receiver artifact".to_owned(),
+            return Err(Error::KagemushaFinalitySidecar(
+                "finality receipt does not identify the Kagemusha V1 artifact".to_owned(),
             ));
         }
         let durable = self.v2_finality_artifact(artifact.height)?.ok_or_else(|| {
-            Error::KagemushaActiveReceiverFinalitySidecar(
-                "active-receiver promotion has no durable finality artifact".to_owned(),
+            Error::KagemushaFinalitySidecar(
+                "Kagemusha V1 promotion has no durable finality artifact".to_owned(),
             )
         })?;
         if durable != *artifact || HashOf::new(&durable) != receipt.artifact_hash {
-            return Err(Error::KagemushaActiveReceiverFinalitySidecar(
-                "durable finality differs from active-receiver promotion receipt".to_owned(),
+            return Err(Error::KagemushaFinalitySidecar(
+                "durable finality differs from Kagemusha V1 promotion receipt".to_owned(),
             ));
         }
         let _guard = self.sidecar_lock.lock();
-        let final_path = self.kagemusha_active_receiver_sidecar_path(artifact.height);
-        let staged_path = self.kagemusha_active_receiver_staging_path(artifact.height);
-        if let Some((existing, _)) =
-            self.decode_kagemusha_active_receiver_finality_sidecar(&final_path)?
-        {
-            Self::validate_kagemusha_active_receiver_finality_sidecar(&existing, artifact)?;
-            if let Some((staged, identity)) =
-                self.decode_staged_kagemusha_active_receiver_finality(&staged_path)?
-            {
-                Self::validate_staged_kagemusha_active_receiver_finality(&staged, artifact)?;
-                self.remove_exact_staged_kagemusha_active_receiver_finality(
-                    &staged_path,
-                    &identity,
-                )?;
+        let final_path = self.kagemusha_finality_sidecar_path(artifact.height);
+        let staged_path = self.kagemusha_finality_staging_path(artifact.height);
+        if let Some((existing, _)) = self.decode_kagemusha_finality_sidecar(&final_path)? {
+            Self::validate_kagemusha_finality_sidecar(&existing, artifact)?;
+            if let Some((staged, identity)) = self.decode_staged_kagemusha_finality(&staged_path)? {
+                Self::validate_staged_kagemusha_finality(&staged, artifact)?;
+                self.remove_exact_staged_kagemusha_finality(&staged_path, &identity)?;
             }
             return Ok(());
         }
         let Some((staged, staged_identity)) =
-            self.decode_staged_kagemusha_active_receiver_finality(&staged_path)?
+            self.decode_staged_kagemusha_finality(&staged_path)?
         else {
-            return Err(Error::KagemushaActiveReceiverFinalitySidecar(
-                "finality is durable but its active-receiver witness stage is missing".to_owned(),
+            return Err(Error::KagemushaFinalitySidecar(
+                "finality is durable but its Kagemusha V1 witness stage is missing".to_owned(),
             ));
         };
-        Self::validate_staged_kagemusha_active_receiver_finality(&staged, artifact)?;
-        let final_sidecar = KagemushaActiveReceiverFinalitySidecarV1 {
+        Self::validate_staged_kagemusha_finality(&staged, artifact)?;
+        let final_sidecar = KagemushaFinalitySidecarV1 {
             version: staged.version,
             height: staged.height,
             block_hash: staged.block_hash,
             ordinary_writes_root: staged.ordinary_writes_root,
             post_state_root: staged.post_state_root,
             finality_artifact_hash: receipt.artifact_hash,
-            witness_proof: staged.witness_proof,
             validation_fee_policy_witness: staged.validation_fee_policy_witness,
             parliament_timed_ovn_casting_witness: staged.parliament_timed_ovn_casting_witness,
             parliament_timed_ovn_casting_bindings: staged.parliament_timed_ovn_casting_bindings,
+            kagemusha_reserve_receipts: staged.kagemusha_reserve_receipts,
         };
-        Self::validate_kagemusha_active_receiver_finality_sidecar(&final_sidecar, artifact)?;
+        Self::validate_kagemusha_finality_sidecar(&final_sidecar, artifact)?;
         let bytes = final_sidecar.encode();
-        if bytes.len() > MAX_KAGEMUSHA_ACTIVE_RECEIVER_SIDECAR_BYTES {
-            return Err(Error::KagemushaActiveReceiverFinalitySidecarTooLarge {
+        if bytes.len() > MAX_KAGEMUSHA_FINALITY_SIDECAR_BYTES {
+            return Err(Error::KagemushaFinalitySidecarTooLarge {
                 actual: bytes.len(),
-                max: MAX_KAGEMUSHA_ACTIVE_RECEIVER_SIDECAR_BYTES,
+                max: MAX_KAGEMUSHA_FINALITY_SIDECAR_BYTES,
             });
         }
-        let directory = self.kagemusha_active_receiver_sidecar_dir();
+        let directory = self.kagemusha_finality_sidecar_dir();
         create_dir_all_with_context(&directory)?;
         if let Some(parent) = directory.parent() {
             sync_dir(parent).map_err(|error| Error::IO(error, parent.to_path_buf()))?;
         }
         if !self.write_atomic_synced_noclobber(&final_path, &bytes)? {
-            let Some((existing, _)) =
-                self.decode_kagemusha_active_receiver_finality_sidecar(&final_path)?
-            else {
-                return Err(Error::KagemushaActiveReceiverFinalitySidecar(
-                    "final active-receiver sidecar disappeared during publication".to_owned(),
+            let Some((existing, _)) = self.decode_kagemusha_finality_sidecar(&final_path)? else {
+                return Err(Error::KagemushaFinalitySidecar(
+                    "final Kagemusha V1 sidecar disappeared during publication".to_owned(),
                 ));
             };
             if existing != final_sidecar {
-                return Err(Error::KagemushaActiveReceiverFinalitySidecar(
-                    "no-clobber race published a conflicting active-receiver sidecar".to_owned(),
+                return Err(Error::KagemushaFinalitySidecar(
+                    "no-clobber race published a conflicting Kagemusha V1 sidecar".to_owned(),
                 ));
             }
         }
-        let Some((persisted, identity)) =
-            self.decode_kagemusha_active_receiver_finality_sidecar(&final_path)?
+        let Some((persisted, identity)) = self.decode_kagemusha_finality_sidecar(&final_path)?
         else {
-            return Err(Error::KagemushaActiveReceiverFinalitySidecar(
-                "final active-receiver sidecar disappeared after publication".to_owned(),
+            return Err(Error::KagemushaFinalitySidecar(
+                "final Kagemusha V1 sidecar disappeared after publication".to_owned(),
             ));
         };
         if persisted != final_sidecar
             || identity.bytes != bytes
             || identity.bytes_hash != Hash::new(&bytes)
         {
-            return Err(Error::KagemushaActiveReceiverFinalitySidecar(
-                "final active-receiver sidecar changed during readback".to_owned(),
+            return Err(Error::KagemushaFinalitySidecar(
+                "final Kagemusha V1 sidecar changed during readback".to_owned(),
             ));
         }
-        self.remove_exact_staged_kagemusha_active_receiver_finality(
-            &staged_path,
-            &staged_identity,
-        )?;
+        self.remove_exact_staged_kagemusha_finality(&staged_path, &staged_identity)?;
         Ok(())
     }
-    /// Return the finalized fixed-key receiver snapshot witness proof for one block.
-    pub fn kagemusha_active_receiver_witness_proof_v1(
+    /// Return one finalized Kagemusha V1 reserve receipt and its exact consensus proof.
+    ///
+    /// A missing operation returns `None`; a missing, malformed, or finality-mismatched
+    /// sidecar fails closed.
+    pub fn kagemusha_operation_finality_v1(
         &self,
         height: u64,
-    ) -> Result<Option<KagemushaActiveReceiverWitnessProofV1>> {
+        operation_id: [u8; 32],
+    ) -> Result<Option<KagemushaOperationFinalityV1>> {
         let Some(artifact) = self.v2_finality_artifact(height)? else {
             return Ok(None);
         };
         let _guard = self.sidecar_lock.lock();
-        let path = self.kagemusha_active_receiver_sidecar_path(height);
-        let Some((sidecar, _)) = self.decode_kagemusha_active_receiver_finality_sidecar(&path)?
-        else {
-            return Err(Error::KagemushaActiveReceiverFinalitySidecar(
-                "finality artifact has no active-receiver witness sidecar".to_owned(),
+        let path = self.kagemusha_finality_sidecar_path(height);
+        let Some((sidecar, _)) = self.decode_kagemusha_finality_sidecar(&path)? else {
+            return Err(Error::KagemushaFinalitySidecar(
+                "finality artifact has no Kagemusha V1 receipt sidecar".to_owned(),
             ));
         };
-        Self::validate_kagemusha_active_receiver_finality_sidecar(&sidecar, &artifact)?;
-        Ok(Some(sidecar.witness_proof))
+        Self::validate_kagemusha_finality_sidecar(&sidecar, &artifact)?;
+        let Ok(index) = sidecar
+            .kagemusha_reserve_receipts
+            .binary_search_by_key(&operation_id, |proof| proof.receipt.operation_id)
+        else {
+            return Ok(None);
+        };
+        let reserve_receipt_witness = sidecar.kagemusha_reserve_receipts[index].clone();
+        let top_up_membership_witness = if reserve_receipt_witness.receipt.kind
+            == KagemushaOperationKindV1::TopUp
+        {
+            let leaves = sidecar
+                .kagemusha_reserve_receipts
+                .iter()
+                .filter(|witness| witness.receipt.kind == KagemushaOperationKindV1::TopUp)
+                .map(|witness| {
+                    crate::zk::kagemusha_v1_recursion::kagemusha_top_up_leaf_from_receipt_v1(
+                        &witness.receipt,
+                    )
+                })
+                .collect::<core::result::Result<Vec<_>, _>>()
+                .map_err(|error| {
+                    Error::KagemushaFinalitySidecar(format!(
+                        "failed to reconstruct the canonical Kagemusha V1 top-up leaves: {error}"
+                    ))
+                })?;
+            let tree = crate::zk::kagemusha_v1_recursion::KagemushaMintFinalityTreeV1::new(leaves)
+                .map_err(|error| {
+                    Error::KagemushaFinalitySidecar(format!(
+                        "failed to reconstruct the canonical Kagemusha V1 top-up tree: {error}"
+                    ))
+                })?;
+            if tree.leaf_count()
+                != artifact
+                    .commit_qc
+                    .execution_commitment
+                    .kagemusha_top_up_count
+                || Some(tree.execution_root())
+                    != artifact
+                        .commit_qc
+                        .execution_commitment
+                        .kagemusha_top_up_root
+            {
+                return Err(Error::KagemushaFinalitySidecar(
+                    "reconstructed Kagemusha V1 top-up tree differs from the finalized execution commitment"
+                        .to_owned(),
+                ));
+            }
+            let witness = tree.witness(operation_id).map_err(|error| {
+                Error::KagemushaFinalitySidecar(format!(
+                    "failed to reconstruct the Kagemusha V1 top-up membership path: {error}"
+                ))
+            })?;
+            crate::zk::kagemusha_v1_recursion::verify_kagemusha_top_up_membership_v1(
+                &witness,
+                tree.leaf_count(),
+            )
+            .map_err(|error| {
+                Error::KagemushaFinalitySidecar(format!(
+                    "reconstructed Kagemusha V1 top-up membership path is invalid: {error}"
+                ))
+            })?;
+            Some(witness)
+        } else {
+            None
+        };
+        let finality = KagemushaOperationFinalityV1 {
+            version: KAGEMUSHA_CHAIN_VERSION_V1,
+            finality_artifact: artifact,
+            reserve_receipt_witness,
+            top_up_membership_witness,
+        };
+        let trust_anchor = KagemushaFinalityTrustAnchorV1 {
+            network_id: finality.finality_artifact.height_context.network_id,
+            block_height: finality.finality_artifact.height,
+            height_context_id: finality.finality_artifact.context_id(),
+        };
+        finality.validate_against(&trust_anchor).map_err(|error| {
+            Error::KagemushaFinalitySidecar(format!(
+                "Kagemusha V1 finality proof failed canonical Kura validation: {error}"
+            ))
+        })?;
+        Ok(Some(finality))
+    }
+
+    /// Return the canonically ordered top-up operation identifiers finalized at one height.
+    pub(crate) fn kagemusha_top_up_operation_ids_v1(&self, height: u64) -> Result<Vec<[u8; 32]>> {
+        let Some(artifact) = self.v2_finality_artifact(height)? else {
+            return Err(Error::KagemushaFinalitySidecar(
+                "top-up inventory has no durable finality artifact".to_owned(),
+            ));
+        };
+        let _guard = self.sidecar_lock.lock();
+        let path = self.kagemusha_finality_sidecar_path(height);
+        let Some((sidecar, _)) = self.decode_kagemusha_finality_sidecar(&path)? else {
+            return Err(Error::KagemushaFinalitySidecar(
+                "top-up inventory has no final Kagemusha V1 sidecar".to_owned(),
+            ));
+        };
+        Self::validate_kagemusha_finality_sidecar(&sidecar, &artifact)?;
+        Ok(sidecar
+            .kagemusha_reserve_receipts
+            .iter()
+            .filter(|witness| witness.receipt.kind == KagemushaOperationKindV1::TopUp)
+            .map(|witness| witness.receipt.operation_id)
+            .collect())
+    }
+
+    fn decode_kagemusha_mint_authority_checkpoint_v1(
+        &self,
+        path: &Path,
+    ) -> Result<Option<(KagemushaMintAuthorityCheckpointEntryV1, StableSidecarRead)>> {
+        let directory = self.kagemusha_mint_authority_dir();
+        let Some(snapshot) = self.read_regular_sidecar_snapshot(
+            path,
+            &directory,
+            MAX_KAGEMUSHA_MINT_AUTHORITY_CHECKPOINT_BYTES,
+        )?
+        else {
+            return Ok(None);
+        };
+        let mut cursor = snapshot.bytes.as_slice();
+        let entry = KagemushaMintAuthorityCheckpointEntryV1::decode_all(&mut cursor)
+            .map_err(Error::NoritoFrame)?;
+        if entry.encode() != snapshot.bytes {
+            return Err(Error::KagemushaMintOutbox(
+                "mint-authority checkpoint is not canonical Norito".to_owned(),
+            ));
+        }
+        Ok(Some((entry, snapshot)))
+    }
+
+    fn validate_kagemusha_mint_authority_checkpoint_v1(
+        entry: &KagemushaMintAuthorityCheckpointEntryV1,
+    ) -> Result<()> {
+        entry
+            .checkpoint
+            .validate_shape()
+            .map_err(Error::KagemushaMintOutbox)?;
+        if entry.version != KAGEMUSHA_CHAIN_VERSION_V1
+            || entry.release_id == [0; 32]
+            || entry.authority_head == [0; 32]
+            || entry.release_id != entry.checkpoint.release_id
+            || entry.authority_head != entry.checkpoint.authority_head
+            || entry.checkpoint_wire_hash != Hash::new(entry.checkpoint.encode())
+        {
+            return Err(Error::KagemushaMintOutbox(
+                "mint-authority checkpoint identity or content digest is invalid".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Persist one recursively proved bootstrap or rotation authority checkpoint.
+    ///
+    /// Kura authenticates the immutable bytes and path identity. Monetary authority is granted
+    /// only after the release runtime recursively verifies the loaded proof again.
+    pub(crate) fn store_kagemusha_mint_authority_checkpoint_v1(
+        &self,
+        checkpoint: &KagemushaMintAuthorityCheckpointV1,
+    ) -> Result<()> {
+        self.durable_mutation_authorized()?;
+        let entry = KagemushaMintAuthorityCheckpointEntryV1 {
+            version: KAGEMUSHA_CHAIN_VERSION_V1,
+            release_id: checkpoint.release_id,
+            authority_head: checkpoint.authority_head,
+            checkpoint: checkpoint.clone(),
+            checkpoint_wire_hash: Hash::new(checkpoint.encode()),
+        };
+        Self::validate_kagemusha_mint_authority_checkpoint_v1(&entry)?;
+        let bytes = entry.encode();
+        if bytes.len() > MAX_KAGEMUSHA_MINT_AUTHORITY_CHECKPOINT_BYTES {
+            return Err(Error::KagemushaMintOutboxTooLarge {
+                actual: bytes.len(),
+                max: MAX_KAGEMUSHA_MINT_AUTHORITY_CHECKPOINT_BYTES,
+            });
+        }
+        let directory = self.kagemusha_mint_authority_dir();
+        let path = self.kagemusha_mint_authority_path(entry.release_id, entry.authority_head);
+        let _guard = self.sidecar_lock.lock();
+        create_dir_all_with_context(&directory)?;
+        if let Some(parent) = directory.parent() {
+            sync_dir(parent).map_err(|error| Error::IO(error, parent.to_path_buf()))?;
+        }
+        if let Some((existing, _)) = self.decode_kagemusha_mint_authority_checkpoint_v1(&path)? {
+            return if existing == entry {
+                Ok(())
+            } else {
+                Err(Error::KagemushaMintOutbox(
+                    "authority head already owns different checkpoint bytes".to_owned(),
+                ))
+            };
+        }
+        if !self.write_atomic_synced_noclobber(&path, &bytes)? {
+            let Some((existing, _)) = self.decode_kagemusha_mint_authority_checkpoint_v1(&path)?
+            else {
+                return Err(Error::KagemushaMintOutbox(
+                    "mint-authority checkpoint disappeared during publication".to_owned(),
+                ));
+            };
+            if existing != entry {
+                return Err(Error::KagemushaMintOutbox(
+                    "no-clobber race published different mint-authority bytes".to_owned(),
+                ));
+            }
+        }
+        let Some((persisted, identity)) =
+            self.decode_kagemusha_mint_authority_checkpoint_v1(&path)?
+        else {
+            return Err(Error::KagemushaMintOutbox(
+                "mint-authority checkpoint disappeared after publication".to_owned(),
+            ));
+        };
+        if persisted != entry || identity.bytes != bytes || identity.bytes_hash != Hash::new(&bytes)
+        {
+            return Err(Error::KagemushaMintOutbox(
+                "mint-authority checkpoint changed during durable readback".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Load an immutable authority checkpoint for one authenticated release and roster head.
+    pub(crate) fn kagemusha_mint_authority_checkpoint_v1(
+        &self,
+        release_id: [u8; 32],
+        authority_head: [u8; 32],
+    ) -> Result<Option<KagemushaMintAuthorityCheckpointV1>> {
+        if release_id == [0; 32] || authority_head == [0; 32] {
+            return Err(Error::KagemushaMintOutbox(
+                "mint-authority checkpoint lookup identity is zero".to_owned(),
+            ));
+        }
+        let path = self.kagemusha_mint_authority_path(release_id, authority_head);
+        let entry = {
+            let _guard = self.sidecar_lock.lock();
+            self.decode_kagemusha_mint_authority_checkpoint_v1(&path)?
+                .map(|(entry, _)| entry)
+        };
+        let Some(entry) = entry else {
+            return Ok(None);
+        };
+        if entry.release_id != release_id || entry.authority_head != authority_head {
+            return Err(Error::KagemushaMintOutbox(
+                "mint-authority checkpoint path differs from its identity".to_owned(),
+            ));
+        }
+        Self::validate_kagemusha_mint_authority_checkpoint_v1(&entry)?;
+        Ok(Some(entry.checkpoint))
+    }
+
+    fn decode_kagemusha_mint_outbox_entry_v1(
+        &self,
+        path: &Path,
+    ) -> Result<Option<(KagemushaMintOutboxEntryV1, StableSidecarRead)>> {
+        let directory = self.kagemusha_mint_outbox_dir();
+        let Some(snapshot) = self.read_regular_sidecar_snapshot(
+            path,
+            &directory,
+            MAX_KAGEMUSHA_MINT_OUTBOX_ENTRY_BYTES,
+        )?
+        else {
+            return Ok(None);
+        };
+        let mut cursor = snapshot.bytes.as_slice();
+        let entry =
+            KagemushaMintOutboxEntryV1::decode_all(&mut cursor).map_err(Error::NoritoFrame)?;
+        if entry.encode() != snapshot.bytes {
+            return Err(Error::KagemushaMintOutbox(
+                "mint outbox entry is not canonical Norito".to_owned(),
+            ));
+        }
+        Ok(Some((entry, snapshot)))
+    }
+    fn validate_kagemusha_mint_outbox_entry_v1(
+        &self,
+        entry: &KagemushaMintOutboxEntryV1,
+    ) -> Result<()> {
+        if entry.version != KAGEMUSHA_CHAIN_VERSION_V1
+            || entry.operation_id == [0; 32]
+            || entry.result.request.operation_id != entry.operation_id
+            || entry.result_wire_hash != Hash::new(entry.result.encode())
+            || entry.finality_artifact_hash != HashOf::new(&entry.result.finality.finality_artifact)
+        {
+            return Err(Error::KagemushaMintOutbox(
+                "mint outbox identity or content digest is invalid".to_owned(),
+            ));
+        }
+        let height = entry.result.finality.finality_artifact.height;
+        let Some(canonical_finality) =
+            self.kagemusha_operation_finality_v1(height, entry.operation_id)?
+        else {
+            return Err(Error::KagemushaMintOutbox(
+                "mint outbox entry has no canonical reserve-receipt finality proof".to_owned(),
+            ));
+        };
+        if canonical_finality != entry.result.finality {
+            return Err(Error::KagemushaMintOutbox(
+                "mint outbox finality differs from canonical Kura evidence".to_owned(),
+            ));
+        }
+        let anchor = KagemushaFinalityTrustAnchorV1 {
+            network_id: canonical_finality
+                .finality_artifact
+                .height_context
+                .network_id,
+            block_height: canonical_finality.finality_artifact.height,
+            height_context_id: canonical_finality.finality_artifact.context_id(),
+        };
+        entry.result.validate_against(&anchor).map_err(|error| {
+            Error::KagemushaMintOutbox(format!(
+                "mint outbox result failed canonical finality validation: {error}"
+            ))
+        })
+    }
+    /// Persist one fully proved mint result as an immutable, content-checked Kura outbox entry.
+    ///
+    /// The caller must hold Kura's durable-mutation authority. The result is accepted only
+    /// after its finality and receipt witness exactly match canonical Kura evidence.
+    pub fn store_kagemusha_mint_outbox_entry_v1(
+        &self,
+        result: &KagemushaTopUpResultV1,
+    ) -> Result<()> {
+        self.durable_mutation_authorized()?;
+        let entry = KagemushaMintOutboxEntryV1 {
+            version: KAGEMUSHA_CHAIN_VERSION_V1,
+            operation_id: result.request.operation_id,
+            result: result.clone(),
+            result_wire_hash: Hash::new(result.encode()),
+            finality_artifact_hash: HashOf::new(&result.finality.finality_artifact),
+        };
+        self.validate_kagemusha_mint_outbox_entry_v1(&entry)?;
+        let bytes = entry.encode();
+        if bytes.len() > MAX_KAGEMUSHA_MINT_OUTBOX_ENTRY_BYTES {
+            return Err(Error::KagemushaMintOutboxTooLarge {
+                actual: bytes.len(),
+                max: MAX_KAGEMUSHA_MINT_OUTBOX_ENTRY_BYTES,
+            });
+        }
+        let directory = self.kagemusha_mint_outbox_dir();
+        let path = self.kagemusha_mint_outbox_path(entry.operation_id);
+        let _guard = self.sidecar_lock.lock();
+        create_dir_all_with_context(&directory)?;
+        if let Some(parent) = directory.parent() {
+            sync_dir(parent).map_err(|error| Error::IO(error, parent.to_path_buf()))?;
+        }
+        if let Some((existing, _)) = self.decode_kagemusha_mint_outbox_entry_v1(&path)? {
+            return if existing == entry {
+                Ok(())
+            } else {
+                Err(Error::KagemushaMintOutbox(
+                    "operation id already owns different mint outbox bytes".to_owned(),
+                ))
+            };
+        }
+        if !self.write_atomic_synced_noclobber(&path, &bytes)? {
+            let Some((existing, _)) = self.decode_kagemusha_mint_outbox_entry_v1(&path)? else {
+                return Err(Error::KagemushaMintOutbox(
+                    "mint outbox entry disappeared during publication".to_owned(),
+                ));
+            };
+            if existing != entry {
+                return Err(Error::KagemushaMintOutbox(
+                    "no-clobber race published different mint outbox bytes".to_owned(),
+                ));
+            }
+        }
+        let Some((persisted, identity)) = self.decode_kagemusha_mint_outbox_entry_v1(&path)? else {
+            return Err(Error::KagemushaMintOutbox(
+                "mint outbox entry disappeared after publication".to_owned(),
+            ));
+        };
+        if persisted != entry || identity.bytes != bytes || identity.bytes_hash != Hash::new(&bytes)
+        {
+            return Err(Error::KagemushaMintOutbox(
+                "mint outbox entry changed during durable readback".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+    /// Load one fully proved mint result from the immutable Kura outbox.
+    pub fn kagemusha_mint_outbox_entry_v1(
+        &self,
+        operation_id: [u8; 32],
+    ) -> Result<Option<KagemushaTopUpResultV1>> {
+        if operation_id == [0; 32] {
+            return Err(Error::KagemushaMintOutbox(
+                "mint outbox operation id is zero".to_owned(),
+            ));
+        }
+        let path = self.kagemusha_mint_outbox_path(operation_id);
+        let entry = {
+            let _guard = self.sidecar_lock.lock();
+            self.decode_kagemusha_mint_outbox_entry_v1(&path)?
+                .map(|(entry, _)| entry)
+        };
+        let Some(entry) = entry else {
+            return Ok(None);
+        };
+        if entry.operation_id != operation_id {
+            return Err(Error::KagemushaMintOutbox(
+                "mint outbox path does not match its operation id".to_owned(),
+            ));
+        }
+        self.validate_kagemusha_mint_outbox_entry_v1(&entry)?;
+        Ok(Some(entry.result))
     }
     /// Return the finalized fixed-key validation-fee registry witness proof for one block.
     pub fn validation_fee_policy_witness_proof_v1(
@@ -16536,14 +16945,13 @@ impl Kura {
             return Ok(None);
         };
         let _guard = self.sidecar_lock.lock();
-        let path = self.kagemusha_active_receiver_sidecar_path(height);
-        let Some((sidecar, _)) = self.decode_kagemusha_active_receiver_finality_sidecar(&path)?
-        else {
-            return Err(Error::KagemushaActiveReceiverFinalitySidecar(
+        let path = self.kagemusha_finality_sidecar_path(height);
+        let Some((sidecar, _)) = self.decode_kagemusha_finality_sidecar(&path)? else {
+            return Err(Error::KagemushaFinalitySidecar(
                 "finality artifact has no validation-fee witness sidecar".to_owned(),
             ));
         };
-        Self::validate_kagemusha_active_receiver_finality_sidecar(&sidecar, &artifact)?;
+        Self::validate_kagemusha_finality_sidecar(&sidecar, &artifact)?;
         Ok(Some(sidecar.validation_fee_policy_witness))
     }
     /// Return the finalized fixed-write Parliament timed-OVN casting snapshot proof.
@@ -16555,14 +16963,13 @@ impl Kura {
             return Ok(None);
         };
         let _guard = self.sidecar_lock.lock();
-        let path = self.kagemusha_active_receiver_sidecar_path(height);
-        let Some((sidecar, _)) = self.decode_kagemusha_active_receiver_finality_sidecar(&path)?
-        else {
-            return Err(Error::KagemushaActiveReceiverFinalitySidecar(
+        let path = self.kagemusha_finality_sidecar_path(height);
+        let Some((sidecar, _)) = self.decode_kagemusha_finality_sidecar(&path)? else {
+            return Err(Error::KagemushaFinalitySidecar(
                 "finality artifact has no Parliament timed-OVN casting witness sidecar".to_owned(),
             ));
         };
-        Self::validate_kagemusha_active_receiver_finality_sidecar(&sidecar, &artifact)?;
+        Self::validate_kagemusha_finality_sidecar(&sidecar, &artifact)?;
         Ok(Some(sidecar.parliament_timed_ovn_casting_witness))
     }
     /// Return the stable finalized Parliament timed-OVN root-and-count commitment.
@@ -16572,9 +16979,9 @@ impl Kura {
     ) -> Result<Option<ParliamentTimedOvnCastingSnapshotCommitmentV1>> {
         self.parliament_timed_ovn_casting_witness_proof_v1(height)?
             .map(|proof| {
-                proof.commitment().map_err(|error| {
-                    Error::KagemushaActiveReceiverFinalitySidecar(error.to_owned())
-                })
+                proof
+                    .commitment()
+                    .map_err(|error| Error::KagemushaFinalitySidecar(error.to_owned()))
             })
             .transpose()
     }
@@ -16588,14 +16995,13 @@ impl Kura {
             return Ok(None);
         };
         let _guard = self.sidecar_lock.lock();
-        let path = self.kagemusha_active_receiver_sidecar_path(height);
-        let Some((sidecar, _)) = self.decode_kagemusha_active_receiver_finality_sidecar(&path)?
-        else {
-            return Err(Error::KagemushaActiveReceiverFinalitySidecar(
+        let path = self.kagemusha_finality_sidecar_path(height);
+        let Some((sidecar, _)) = self.decode_kagemusha_finality_sidecar(&path)? else {
+            return Err(Error::KagemushaFinalitySidecar(
                 "finality artifact has no Parliament timed-OVN casting witness sidecar".to_owned(),
             ));
         };
-        Self::validate_kagemusha_active_receiver_finality_sidecar(&sidecar, &artifact)?;
+        Self::validate_kagemusha_finality_sidecar(&sidecar, &artifact)?;
         let Ok(index) = sidecar
             .parliament_timed_ovn_casting_bindings
             .binary_search_by_key(&ballot_attempt_id, |binding| binding.ballot_attempt_id)
@@ -16609,13 +17015,13 @@ impl Kura {
                 .map(HashOf::new),
         );
         let leaf_index = u32::try_from(index).map_err(|_| {
-            Error::KagemushaActiveReceiverFinalitySidecar(
+            Error::KagemushaFinalitySidecar(
                 "Parliament timed-OVN casting leaf index exceeds u32".to_owned(),
             )
         })?;
         let membership_proof = ParliamentTimedOvnCastingContextMembershipProofV1::new(
             tree.get_proof(leaf_index).ok_or_else(|| {
-                Error::KagemushaActiveReceiverFinalitySidecar(
+                Error::KagemushaFinalitySidecar(
                     "Parliament timed-OVN casting membership proof is unavailable".to_owned(),
                 )
             })?,
@@ -16626,329 +17032,10 @@ impl Kura {
             membership_proof,
         };
         if !proof.verify(artifact.commit_qc.execution_commitment.ordinary_writes_root) {
-            return Err(Error::KagemushaActiveReceiverFinalitySidecar(
+            return Err(Error::KagemushaFinalitySidecar(
                 "constructed Parliament timed-OVN casting proof failed verification".to_owned(),
             ));
         }
-        Ok(Some(proof))
-    }
-    /// Durably stage the bounded top-up leaf/path projection before WSV commit.
-    ///
-    /// A block without top-ups creates no file. An existing exact stage is an
-    /// idempotent retry; a conflicting stage at the same height fails closed.
-    pub(crate) fn stage_kagemusha_topup_finality_sidecar(
-        &self,
-        height: u64,
-        block_hash: HashOf<BlockHeader>,
-        witness: &ExecWitness,
-        expected: ExecutionCommitment,
-        parliament_timed_ovn_casting_bindings: &[ParliamentTimedOvnCastingContextBindingV1],
-    ) -> Result<()> {
-        self.stage_kagemusha_active_receiver_finality_sidecar(
-            height,
-            block_hash,
-            witness,
-            expected,
-            parliament_timed_ovn_casting_bindings,
-        )?;
-        self.durable_mutation_authorized()?;
-        let Some(staged) = Self::staged_kagemusha_topup_finality_from_witness(
-            height, block_hash, witness, expected,
-        )?
-        else {
-            return Ok(());
-        };
-        let bytes = staged.encode();
-        if bytes.len() > MAX_KAGEMUSHA_TOPUP_FINALITY_SIDECAR_BYTES {
-            return Err(Error::KagemushaTopUpFinalitySidecarTooLarge {
-                actual: bytes.len(),
-                max: MAX_KAGEMUSHA_TOPUP_FINALITY_SIDECAR_BYTES,
-            });
-        }
-        let _guard = self.sidecar_lock.lock();
-        let directory = self.kagemusha_topup_finality_staging_dir();
-        create_dir_all_with_context(&directory)?;
-        if let Some(parent) = directory.parent() {
-            sync_dir(parent).map_err(|error| Error::IO(error, parent.to_path_buf()))?;
-        }
-        let path = self.kagemusha_topup_finality_staging_path(height);
-        if let Some((existing, identity)) = self.decode_staged_kagemusha_topup_finality(&path)? {
-            if existing == staged
-                && identity.bytes == bytes
-                && identity.bytes_hash == Hash::new(&bytes)
-            {
-                return Ok(());
-            }
-            return Err(Error::KagemushaTopUpFinalitySidecar(
-                "conflicting staged top-up sidecar at one height".to_owned(),
-            ));
-        }
-        if !self.write_atomic_synced_noclobber(&path, &bytes)? {
-            let Some((existing, _)) = self.decode_staged_kagemusha_topup_finality(&path)? else {
-                return Err(Error::KagemushaTopUpFinalitySidecar(
-                    "staged top-up sidecar appeared and disappeared during no-clobber publication"
-                        .to_owned(),
-                ));
-            };
-            if existing != staged {
-                return Err(Error::KagemushaTopUpFinalitySidecar(
-                    "no-clobber race published a conflicting staged top-up sidecar".to_owned(),
-                ));
-            }
-        }
-        let Some((persisted, persisted_identity)) =
-            self.decode_staged_kagemusha_topup_finality(&path)?
-        else {
-            return Err(Error::KagemushaTopUpFinalitySidecar(
-                "staged top-up sidecar disappeared after publication".to_owned(),
-            ));
-        };
-        if persisted != staged
-            || persisted_identity.bytes != bytes
-            || persisted_identity.bytes_hash != Hash::new(&bytes)
-        {
-            return Err(Error::KagemushaTopUpFinalitySidecar(
-                "staged top-up sidecar changed during publication readback".to_owned(),
-            ));
-        }
-        Ok(())
-    }
-    fn remove_exact_staged_kagemusha_topup_finality(
-        &self,
-        path: &Path,
-        read_identity: &StableSidecarRead,
-    ) -> Result<()> {
-        let directory = self.kagemusha_topup_finality_staging_dir();
-        let Some(current) = self.regular_sidecar_metadata(path, &directory)? else {
-            return Ok(());
-        };
-        if !Self::stable_sidecar_metadata_unchanged(&read_identity.metadata, &current) {
-            return Err(Error::KagemushaTopUpFinalitySidecar(
-                "staged top-up sidecar changed before cleanup".to_owned(),
-            ));
-        }
-        std::fs::remove_file(path).map_err(|error| Error::IO(error, path.to_path_buf()))?;
-        sync_dir(&directory).map_err(|error| Error::IO(error, directory))?;
-        Ok(())
-    }
-    /// Promote a witness-derived stage only after the exact finality artifact is durable.
-    pub(crate) fn promote_kagemusha_topup_finality_sidecar(
-        &self,
-        artifact: &V2FinalityArtifact,
-        receipt: &KuraV2CommitReceipt,
-    ) -> Result<()> {
-        self.promote_kagemusha_active_receiver_finality_sidecar(artifact, receipt)?;
-        self.durable_mutation_authorized()?;
-        if receipt.height != artifact.height
-            || receipt.block_hash != artifact.block_hash
-            || receipt.context_id != artifact.context_id()
-            || receipt.subject != artifact.subject
-            || receipt.certificate != artifact.commit_qc.as_ref()
-            || receipt.artifact_hash != HashOf::new(artifact)
-        {
-            return Err(Error::KagemushaTopUpFinalitySidecar(
-                "finality receipt does not identify the supplied artifact".to_owned(),
-            ));
-        }
-        let _guard = self.sidecar_lock.lock();
-        let finality_path = self.v2_finality_artifact_path(artifact.height);
-        let finality_directory = self.v2_finality_artifact_dir();
-        let Some((durable_record, finality_identity)) =
-            self.decode_v2_finality_record_at(&finality_path, &finality_directory)?
-        else {
-            return Err(Error::KagemushaTopUpFinalitySidecar(
-                "finality receipt has no matching durable artifact".to_owned(),
-            ));
-        };
-        let durable_artifact = &durable_record.artifact;
-        if durable_artifact != artifact || HashOf::new(durable_artifact) != receipt.artifact_hash {
-            return Err(Error::KagemushaTopUpFinalitySidecar(
-                "durable finality artifact differs from the promotion receipt".to_owned(),
-            ));
-        }
-        let block_height = NonZeroUsize::new(usize::try_from(artifact.height)?).ok_or(
-            Error::V2FinalityCanonicalHeaderUnavailable {
-                height: artifact.height,
-            },
-        )?;
-        let canonical_hash = self.get_durable_block_hash(block_height).ok_or(
-            Error::V2FinalityCanonicalHeaderUnavailable {
-                height: artifact.height,
-            },
-        )?;
-        Self::validate_v2_finality_record_at(
-            &finality_path,
-            artifact.height,
-            canonical_hash,
-            &durable_record,
-        )?;
-        self.verify_v2_finality_artifact_at(
-            &finality_path,
-            &finality_directory,
-            durable_artifact,
-            &finality_identity,
-        )?;
-        if artifact.commit_qc.execution_commitment.topup_anchor_count == 0 {
-            for (path, directory, kind) in [
-                (
-                    self.kagemusha_topup_finality_staging_path(artifact.height),
-                    self.kagemusha_topup_finality_staging_dir(),
-                    "staged",
-                ),
-                (
-                    self.kagemusha_topup_finality_sidecar_path(artifact.height),
-                    self.kagemusha_topup_finality_sidecar_dir(),
-                    "finalized",
-                ),
-            ] {
-                if self.regular_sidecar_metadata(&path, &directory)?.is_some() {
-                    return Err(Error::KagemushaTopUpFinalitySidecar(format!(
-                        "non-top-up finality artifact has a conflicting {kind} top-up sidecar"
-                    )));
-                }
-            }
-            return Ok(());
-        }
-        let final_path = self.kagemusha_topup_finality_sidecar_path(artifact.height);
-        let staged_path = self.kagemusha_topup_finality_staging_path(artifact.height);
-        if let Some((existing, _)) = self.decode_kagemusha_topup_finality_sidecar(&final_path)? {
-            Self::validate_kagemusha_topup_finality_sidecar(&existing, artifact)?;
-            if let Some((staged, identity)) =
-                self.decode_staged_kagemusha_topup_finality(&staged_path)?
-            {
-                Self::validate_staged_kagemusha_topup_finality(&staged, artifact)?;
-                self.remove_exact_staged_kagemusha_topup_finality(&staged_path, &identity)?;
-            }
-            return Ok(());
-        }
-        let Some((staged, staged_identity)) =
-            self.decode_staged_kagemusha_topup_finality(&staged_path)?
-        else {
-            return Err(Error::KagemushaTopUpFinalitySidecar(
-                "top-up finality artifact is durable but its pre-commit witness stage is missing"
-                    .to_owned(),
-            ));
-        };
-        Self::validate_staged_kagemusha_topup_finality(&staged, artifact)?;
-        let final_sidecar = KagemushaTopUpFinalitySidecar {
-            format: staged.format,
-            version: staged.version,
-            height: staged.height,
-            block_hash: staged.block_hash,
-            ordinary_writes_root: staged.ordinary_writes_root,
-            topup_anchor_root: staged.topup_anchor_root,
-            post_state_root: staged.post_state_root,
-            finality_artifact_hash: receipt.artifact_hash,
-            leaves: staged.leaves,
-        };
-        Self::validate_kagemusha_topup_finality_sidecar(&final_sidecar, artifact)?;
-        let bytes = final_sidecar.encode();
-        if bytes.len() > MAX_KAGEMUSHA_TOPUP_FINALITY_SIDECAR_BYTES {
-            return Err(Error::KagemushaTopUpFinalitySidecarTooLarge {
-                actual: bytes.len(),
-                max: MAX_KAGEMUSHA_TOPUP_FINALITY_SIDECAR_BYTES,
-            });
-        }
-        let directory = self.kagemusha_topup_finality_sidecar_dir();
-        create_dir_all_with_context(&directory)?;
-        if let Some(parent) = directory.parent() {
-            sync_dir(parent).map_err(|error| Error::IO(error, parent.to_path_buf()))?;
-        }
-        if !self.write_atomic_synced_noclobber(&final_path, &bytes)? {
-            let Some((existing, _)) = self.decode_kagemusha_topup_finality_sidecar(&final_path)?
-            else {
-                return Err(Error::KagemushaTopUpFinalitySidecar(
-                    "final top-up sidecar appeared and disappeared during no-clobber publication"
-                        .to_owned(),
-                ));
-            };
-            if existing != final_sidecar {
-                return Err(Error::KagemushaTopUpFinalitySidecar(
-                    "no-clobber race published a conflicting final top-up sidecar".to_owned(),
-                ));
-            }
-        }
-        let Some((persisted, persisted_identity)) =
-            self.decode_kagemusha_topup_finality_sidecar(&final_path)?
-        else {
-            return Err(Error::KagemushaTopUpFinalitySidecar(
-                "final top-up sidecar disappeared after publication".to_owned(),
-            ));
-        };
-        Self::validate_kagemusha_topup_finality_sidecar(&persisted, artifact)?;
-        if persisted != final_sidecar
-            || persisted_identity.bytes != bytes
-            || persisted_identity.bytes_hash != Hash::new(&bytes)
-        {
-            return Err(Error::KagemushaTopUpFinalitySidecar(
-                "final top-up sidecar changed during publication readback".to_owned(),
-            ));
-        }
-        self.remove_exact_staged_kagemusha_topup_finality(&staged_path, &staged_identity)?;
-        Ok(())
-    }
-    /// Build a compact peer proof from an exact verified finality artifact and
-    /// its independently durable witness-derived leaf/path sidecar.
-    pub fn kagemusha_topup_finality_proof_v2(
-        &self,
-        height: u64,
-        operation_id: [u8; 32],
-    ) -> Result<Option<KagemushaTopUpFinalityProofV2>> {
-        let Some(artifact) = self.v2_finality_artifact(height)? else {
-            return Ok(None);
-        };
-        if artifact.commit_qc.execution_commitment.topup_anchor_count == 0 {
-            return Ok(None);
-        }
-        let _guard = self.sidecar_lock.lock();
-        let path = self.kagemusha_topup_finality_sidecar_path(height);
-        let Some((sidecar, _)) = self.decode_kagemusha_topup_finality_sidecar(&path)? else {
-            return Err(Error::KagemushaTopUpFinalitySidecar(
-                "finality artifact advertises top-ups but its durable leaf/path sidecar is missing"
-                    .to_owned(),
-            ));
-        };
-        Self::validate_kagemusha_topup_finality_sidecar(&sidecar, &artifact)?;
-        let Some(leaf) = sidecar.leaf_for_operation(&operation_id) else {
-            return Ok(None);
-        };
-        let context = &artifact.height_context;
-        let proof = KagemushaTopUpFinalityProofV2 {
-            version: KAGEMUSHA_TOPUP_FINALITY_PROOF_VERSION_V2,
-            anchor: iroha_data_model::offline::KagemushaRecursiveSpendTopUpAnchorRefV2 {
-                topup_operation_id: leaf.operation_id,
-                anchor_digest: leaf.anchor_digest,
-            },
-            commit_qc: KagemushaTopUpFinalityCompactQcV2 {
-                height_context: KagemushaTopUpFinalityHeightContextV2 {
-                    context_id: context.id(),
-                    network_id: context.network_id,
-                    protocol_version: context.protocol_version,
-                    height: context.height,
-                    epoch: context.epoch,
-                    epoch_end_height: context.epoch_end_height,
-                    next_epoch_snapshot: context.next_epoch_snapshot.clone(),
-                    mode: context.mode,
-                    parent_commit_qc: context.parent_commit_qc.clone(),
-                    snapshot_bootstrap: context.snapshot_bootstrap,
-                    nexus_amx_context_hash: context.nexus_amx_context_hash,
-                    execution_policy_hash: context.execution_policy_hash,
-                    da_layout: context.da_layout,
-                    leader_seed: context.leader_seed,
-                },
-                certificate: artifact.commit_qc.clone(),
-            },
-            anchor_path: KagemushaTopUpAnchorMerkleProofV2 {
-                leaf_index: leaf.leaf_index,
-                leaf_count: leaf.leaf_count,
-                siblings: leaf.siblings.iter().copied().map(Into::into).collect(),
-            },
-        };
-        proof.validate_structure().map_err(|error| {
-            Error::KagemushaTopUpFinalitySidecar(format!(
-                "durable top-up proof projection is invalid: {error}"
-            ))
-        })?;
         Ok(Some(proof))
     }
     /// Persist the immutable canonical WSV checkpoint for a durable block.
@@ -18085,10 +18172,10 @@ impl Kura {
             RETAINED_BLOCKS_DIR_NAME,
             RETAINED_BLOCK_REWRITE_STAGING_DIR_NAME,
             V2_FINALITY_ARTIFACTS_DIR_NAME,
-            KAGEMUSHA_TOPUP_FINALITY_STAGING_DIR_NAME,
-            KAGEMUSHA_TOPUP_FINALITY_SIDECARS_DIR_NAME,
-            KAGEMUSHA_ACTIVE_RECEIVER_STAGING_DIR_NAME,
-            KAGEMUSHA_ACTIVE_RECEIVER_SIDECARS_DIR_NAME,
+            KAGEMUSHA_FINALITY_STAGING_DIR_NAME,
+            KAGEMUSHA_FINALITY_SIDECARS_DIR_NAME,
+            KAGEMUSHA_MINT_OUTBOX_DIR_NAME,
+            KAGEMUSHA_MINT_AUTHORITY_DIR_NAME,
         ] {
             total = total.saturating_add(Self::dir_file_bytes(&blocks_dir.join(directory))?);
         }
@@ -18799,6 +18886,22 @@ impl Kura {
         self.store_block_durable(&block, merge_entry.as_ref())?;
         self.note_committed_lane_status_change();
         Ok(())
+    }
+    /// Read the exact canonical framed block bytes persisted at `height`.
+    #[cfg(test)]
+    pub(crate) fn canonical_block_wire_bytes_for_testing(
+        &self,
+        height: NonZeroUsize,
+    ) -> Result<Vec<u8>> {
+        let mut block_store = self.block_store.lock();
+        let index_position = u64::try_from(height.get().saturating_sub(1))?;
+        let index = block_store.read_block_index(index_position)?;
+        if index.is_evicted() {
+            return block_store.read_da_block_bytes(u64::try_from(height.get())?, index.length);
+        }
+        let mut bytes = vec![0_u8; usize::try_from(index.length)?];
+        block_store.read_block_data(index.start, &mut bytes)?;
+        Ok(bytes)
     }
     /// Store a block durably in Kura and persist the merge-ledger entry sealing it.
     ///
@@ -21277,10 +21380,6 @@ impl Kura {
                     .values()
                     .any(contains_pruned_height)
                 || index
-                    .heights_by_offline_operation_id
-                    .values()
-                    .any(contains_pruned_height)
-                || index
                     .heights_by_authority
                     .values()
                     .any(contains_pruned_height)
@@ -21402,7 +21501,7 @@ impl Kura {
                 Self::validate_no_numbered_sidecar_suffix(
                     &directory,
                     intent.target_height,
-                    "Kagemusha finality sidecar directory",
+                    "Kagemusha V1 finality sidecar directory",
                 )?;
             }
             self.validate_pipeline_sidecars_for_prune(intent.target_height, true)?;
@@ -21677,7 +21776,7 @@ impl Kura {
         );
         for directory in Self::kagemusha_finality_sidecar_dirs_for(&blocks_dir) {
             forward_or_stop!(
-                "Kagemusha finality sidecar suffix",
+                "Kagemusha V1 finality sidecar suffix",
                 Self::prune_commit_manifests_above_in_dir(&directory, height)
             );
         }
@@ -22642,6 +22741,7 @@ impl BlockStoreCommitMarker {
     }
 }
 include!("kura/pipeline_and_lane_artifacts.rs");
+include!("kura/canonical_autonomous_replica.rs");
 impl Kura {
     fn now_unix_secs() -> u64 {
         SystemTime::now()
@@ -25416,6 +25516,9 @@ impl Kura {
             Self::certified_lane_block_paths_for_entry(&entry, &self.store_root);
         let _sidecar_guard = self.sidecar_lock.lock();
         self.ensure_prune_recovery_not_required()?;
+        if self.bound_progress_sidecar_directory_is_absent(&data_path, &index_path)? {
+            return Ok(None);
+        }
         let frontier_read = self.read_latest_certified_lane_block_frontier_locked(&entry, false)?;
         let Some(frontier_read) = frontier_read else {
             let namespace = self.open_bound_progress_namespace(&data_path, &index_path)?;
@@ -25522,6 +25625,7 @@ impl Kura {
         self.read_certified_lane_block_artifact_read_only_under_prune_and_canonical_guards(
             lane_id,
             lane_block_height,
+            false,
         )
     }
 
@@ -25535,13 +25639,18 @@ impl Kura {
         &self,
         lane_id: LaneId,
         lane_block_height: u64,
+        attest_durability: bool,
     ) -> Result<Option<CertifiedLaneBlockArtifact>> {
         let _geometry_guard = self.lane_geometry_lock.lock();
         let entry = self.lane_storage_entry(lane_id)?;
+        self.active_lane_incarnation_marker(&entry)?;
         let (data_path, index_path) =
             Self::certified_lane_block_paths_for_entry(&entry, &self.store_root);
         let _sidecar_guard = self.sidecar_lock.lock();
         self.ensure_prune_recovery_not_required()?;
+        if self.bound_progress_sidecar_directory_is_absent(&data_path, &index_path)? {
+            return Ok(None);
+        }
         let namespace = self.open_bound_progress_namespace(&data_path, &index_path)?;
         self.ensure_bound_progress_pair_has_no_recovery_artifacts_locked(
             &namespace,
@@ -25552,13 +25661,29 @@ impl Kura {
         let mut pair = self.open_bound_progress_pair(&data_path, &index_path)?;
         let artifact = match &mut pair {
             BoundProgressPair::Absent(_) => None,
-            BoundProgressPair::Present(bound) => self
-                .read_active_certified_lane_block_artifact_from_bound_locked(
-                    &entry,
-                    lane_block_height,
-                    bound,
-                ),
+            BoundProgressPair::Present(bound) => self.read_populated_consensus_lane_slot(
+                bound,
+                lane_block_height,
+                "certified lane block",
+                |bound| {
+                    self.read_active_certified_lane_block_artifact_from_bound_locked(
+                        &entry,
+                        lane_block_height,
+                        bound,
+                    )
+                },
+            )?,
         };
+        if attest_durability
+            && artifact.is_some()
+            && let BoundProgressPair::Present(bound) = &pair
+            && !self.sync_bound_progress_sidecar(bound, "certified lane block")
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                index_path,
+                "certified lane completion durability barrier failed",
+            ));
+        }
         if let BoundProgressPair::Present(bound) = &pair
             && !self.bound_progress_sidecar_unchanged(bound)
         {
@@ -27405,7 +27530,11 @@ impl Kura {
             || context.network_id != payload.network_id
             || locked_round.context_id != context.id()
             || locked_round.height != context.height
-            || locked_round.view != hint.proposal_view
+            // The same immutable carrier may be reproposed and certified in
+            // a later view without rewriting its signed header. The custody
+            // evidence binds both values, so only a lock older than the
+            // header-origin hint is invalid here.
+            || locked_round.view < hint.proposal_view
             || locked_subject.block_hash != hint.proposal_block_hash
             || locked_subject
                 .payload_hash
@@ -27742,7 +27871,32 @@ impl Kura {
                     payload.epoch,
                 )
                 .is_ok_and(|promoted| promoted == *payload);
-        if !exact && !promotable {
+        let rebindable = !exact
+            && existing_payload
+                .origin_proposal
+                .payload_block_hint
+                .is_some()
+            && payload.origin_proposal.payload_block_hint.is_some()
+            && existing_payload
+                .rebind_global_hint_exact(
+                    payload
+                        .origin_proposal
+                        .payload_block_hint
+                        .expect("checked present"),
+                    payload.network_id,
+                    payload.epoch,
+                )
+                .is_ok_and(|rebound| rebound == *payload);
+        let rebind_authorized = Self::autonomous_payload_custody_source_authorizes_hint_rebind(
+            authorization.custody.source,
+        );
+        if rebindable && !rebind_authorized {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "autonomous carrier-hint rebind lacks protected or canonical custody",
+            ));
+        }
+        if !exact && !promotable && !rebindable {
             return Err(Self::invalid_lane_artifact_error(
                 self.store_root.clone(),
                 "authenticated payload custody conflicts with the current durable lane slot",
@@ -27918,7 +28072,11 @@ impl Kura {
         )?;
         let payload_record_matches = payload_record.as_ref().is_none_or(|record| {
             record.artifact.executable_payload == *payload
-                || Self::autonomous_lifecycle_bootstrap_is_strict_hint_promotion(record, payload)
+                || Self::autonomous_lifecycle_bootstrap_is_authorized_hint_update(
+                    record,
+                    payload,
+                    bootstrap.body.custody.source,
+                )
         });
         if !payload_record_matches {
             return Err(Self::invalid_lane_artifact_error(
@@ -27971,24 +28129,38 @@ impl Kura {
             )),
         }
     }
-    fn autonomous_lifecycle_bootstrap_is_strict_hint_promotion(
+    fn autonomous_payload_custody_source_authorizes_hint_rebind(
+        source: AutonomousLifecyclePayloadCustodySourceV1,
+    ) -> bool {
+        matches!(
+            source,
+            AutonomousLifecyclePayloadCustodySourceV1::ProtectedCarrierReceive
+                | AutonomousLifecyclePayloadCustodySourceV1::CanonicalCarrierRepair
+                | AutonomousLifecyclePayloadCustodySourceV1::CanonicalHistoricalRecoveryRecord
+        )
+    }
+    fn autonomous_lifecycle_bootstrap_is_authorized_hint_update(
         record: &AutonomousLaneBlockDurableRecord,
         payload: &LaneExecutablePayloadV1,
+        custody_source: AutonomousLifecyclePayloadCustodySourceV1,
     ) -> bool {
         let durable = &record.artifact.executable_payload;
-        record.retirement.is_none()
-            && durable.origin_proposal.payload_block_hint.is_none()
-            && payload.origin_proposal.payload_block_hint.is_some()
-            && durable
-                .attach_global_hint_exact(
-                    payload
-                        .origin_proposal
-                        .payload_block_hint
-                        .expect("checked present"),
-                    payload.network_id,
-                    payload.epoch,
-                )
-                .is_ok_and(|promoted| promoted == *payload)
+        let Some(hint) = payload.origin_proposal.payload_block_hint else {
+            return false;
+        };
+        if record.retirement.is_some()
+            || custody_source == AutonomousLifecyclePayloadCustodySourceV1::ProducerQueue
+        {
+            return false;
+        }
+        let updated = if durable.origin_proposal.payload_block_hint.is_none() {
+            durable.attach_global_hint_exact(hint, payload.network_id, payload.epoch)
+        } else if Self::autonomous_payload_custody_source_authorizes_hint_rebind(custody_source) {
+            durable.rebind_global_hint_exact(hint, payload.network_id, payload.epoch)
+        } else {
+            return false;
+        };
+        updated.is_ok_and(|updated| updated == *payload)
     }
     fn autonomous_lifecycle_bootstrap_authority_locked(
         &self,
@@ -28484,13 +28656,13 @@ impl Kura {
             .regular_sidecar_metadata(&cursor_path, parent)?
             .is_some();
         // A producer first persists hint-free Queue custody because the global
-        // carrier does not exist yet. Once that exact payload is protected by
-        // a live lock, a signed non-Queue bootstrap may promote only the
-        // advisory carrier hint while retaining the same current-generation
-        // Live cursor. Persisting the bootstrap makes this promotion
-        // restartable; every other replay around existing payload/cursor state
-        // remains forbidden.
-        let live_carrier_hint_promotion = if payload_custody && attempt_exists && cursor_exists {
+        // carrier does not exist yet. A protected or canonical higher-view
+        // carrier may also replace an earlier advisory hint for the exact same
+        // payload. The signed non-Queue bootstrap makes either update
+        // restartable while retaining the current-generation Live cursor;
+        // every other replay around existing payload/cursor state remains
+        // forbidden.
+        let live_carrier_hint_update = if payload_custody && attempt_exists && cursor_exists {
             let current = self.read_autonomous_lane_block_attempt_record_locked(
                 &entry,
                 descriptor.lane_id,
@@ -28500,19 +28672,20 @@ impl Kura {
                 executable_payload.epoch,
                 Some(pending_canonical_bytes),
             )?;
-            let strict_hint_promotion = current.as_ref().is_some_and(|record| {
-                Self::autonomous_lifecycle_bootstrap_is_strict_hint_promotion(
+            let authorized_hint_update = current.as_ref().is_some_and(|record| {
+                Self::autonomous_lifecycle_bootstrap_is_authorized_hint_update(
                     record,
                     executable_payload,
+                    bootstrap.body.custody.source,
                 )
             });
-            strict_hint_promotion
+            authorized_hint_update
                 && self.classify_autonomous_lifecycle_bootstrap_locked(&entry, &bootstrap)?
                     == AutonomousLifecycleBootstrapRecoveryStage::LiveDurable
         } else {
             false
         };
-        if (attempt_exists || cursor_exists) && !live_carrier_hint_promotion {
+        if (attempt_exists || cursor_exists) && !live_carrier_hint_update {
             return Err(Self::invalid_lane_artifact_error(
                 path,
                 "autonomous lifecycle bootstrap cannot be replayed around existing payload or cursor state",
@@ -30248,17 +30421,32 @@ impl Kura {
                             "autonomous lane proposal-height attempt already contains conflicting bytes",
                         ));
                     };
-                    let promoted_payload = existing_artifact
-                        .executable_payload
-                        .attach_global_hint_exact(hint, expected_network_id, expected_epoch)
-                        .map_err(|error| {
-                            Self::invalid_lane_artifact_error(
-                                artifact_path.clone(),
-                                format!(
-                                    "autonomous lane attempt cannot be promoted to the carrier hint: {error}"
-                                ),
-                            )
-                        })?;
+                    let existing_payload = &existing_artifact.executable_payload;
+                    let promoted_payload = if existing_payload
+                        .origin_proposal
+                        .payload_block_hint
+                        .is_none()
+                    {
+                        existing_payload.attach_global_hint_exact(
+                            hint,
+                            expected_network_id,
+                            expected_epoch,
+                        )
+                    } else {
+                        existing_payload.rebind_global_hint_exact(
+                            hint,
+                            expected_network_id,
+                            expected_epoch,
+                        )
+                    }
+                    .map_err(|error| {
+                        Self::invalid_lane_artifact_error(
+                            artifact_path.clone(),
+                            format!(
+                                "autonomous lane attempt cannot adopt the protected carrier hint: {error}"
+                            ),
+                        )
+                    })?;
                     let mut promoted_artifact = existing_artifact;
                     promoted_artifact.executable_payload = promoted_payload;
                     if promoted_artifact != *artifact {
@@ -32321,26 +32509,40 @@ impl Kura {
                 return Ok(LaneBlockAuxiliaryPersistenceOutcome::Persisted);
             }
             if existing_record.retirement.is_none()
-                && existing_payload
+                && let Some(hint) = payload.origin_proposal.payload_block_hint
+                && (existing_payload
                     .origin_proposal
                     .payload_block_hint
                     .is_none()
-                && let Some(hint) = payload.origin_proposal.payload_block_hint
+                    || mode.authorizes_global_hint_rebind())
             {
-                let promoted = existing_payload
-                    .attach_global_hint_exact(hint, expected_network_id, expected_epoch)
-                    .map_err(|error| {
-                        Self::invalid_lane_artifact_error(
-                            attempt_path.clone(),
-                            format!(
-                                "autonomous lane carrier-hint promotion is not byte exact: {error}"
-                            ),
-                        )
-                    })?;
+                let promoted = if existing_payload
+                    .origin_proposal
+                    .payload_block_hint
+                    .is_none()
+                {
+                    existing_payload.attach_global_hint_exact(
+                        hint,
+                        expected_network_id,
+                        expected_epoch,
+                    )
+                } else {
+                    existing_payload.rebind_global_hint_exact(
+                        hint,
+                        expected_network_id,
+                        expected_epoch,
+                    )
+                }
+                .map_err(|error| {
+                    Self::invalid_lane_artifact_error(
+                        attempt_path.clone(),
+                        format!("autonomous lane carrier-hint update is not byte exact: {error}"),
+                    )
+                })?;
                 if promoted != *payload {
                     return Err(Self::invalid_lane_artifact_error(
                         attempt_path,
-                        "autonomous lane carrier-hint promotion changed authenticated payload bytes",
+                        "autonomous lane carrier-hint update changed authenticated payload bytes",
                     ));
                 }
                 let state = AutonomousLaneBlockViewState::from_artifact(&existing_record.artifact);
@@ -34042,14 +34244,14 @@ impl Kura {
                                 == bootstrap.body.executable_payload
                     })
                 });
-                let payload_promotable = bootstrap.body.custody.source
-                    != AutonomousLifecyclePayloadCustodySourceV1::ProducerQueue
-                    && attempts.get(&identity.0).is_some_and(|attempts_at_height| {
+                let payload_promotable =
+                    attempts.get(&identity.0).is_some_and(|attempts_at_height| {
                         attempts_at_height.iter().any(|(pointer, record)| {
                             pointer.proposal_height == identity.1
-                                && Self::autonomous_lifecycle_bootstrap_is_strict_hint_promotion(
+                                && Self::autonomous_lifecycle_bootstrap_is_authorized_hint_update(
                                     record,
                                     &bootstrap.body.executable_payload,
+                                    bootstrap.body.custody.source,
                                 )
                         })
                     });
@@ -40071,26 +40273,24 @@ impl Kura {
         }
         block.results().nth(index).cloned()
     }
-    /// Return the highest valid lane-local block artifact known for `lane_id`.
+    /// Return the highest authenticated active lane-local artifact for `lane_id`.
     ///
-    /// Empty index entries created by sparse writes are skipped. Artifacts whose
-    /// global proposal hash no longer matches Kura's canonical block hash are
-    /// ignored.
+    /// Canonical empty sparse slots are skipped. Occupied malformed slots,
+    /// conflicting canonical anchors, and an exhausted absence scan are errors.
     #[must_use]
-    pub fn latest_lane_block_artifact(&self, lane_id: LaneId) -> Option<LaneBlockArtifact> {
+    pub fn latest_lane_block_artifact(&self, lane_id: LaneId) -> Result<Option<LaneBlockArtifact>> {
         self.latest_lane_block_artifact_matching(lane_id, |_| true)
     }
-    /// Return the highest valid lane-local block artifact for `lane_id` and `dataspace_id`.
+    /// Return the highest active lane artifact for `lane_id` and `dataspace_id`.
     ///
-    /// This scans past valid artifacts from other dataspaces, which can be left
-    /// by older lane incarnations or corrupted local state, and returns the
-    /// newest artifact that matches the active lane dataspace.
+    /// Active geometry and every occupied slot traversed are authenticated
+    /// before accepting a matching dataspace. Corruption never proves absence.
     #[must_use]
     pub fn latest_lane_block_artifact_for_dataspace(
         &self,
         lane_id: LaneId,
         dataspace_id: DataSpaceId,
-    ) -> Option<LaneBlockArtifact> {
+    ) -> Result<Option<LaneBlockArtifact>> {
         self.latest_lane_block_artifact_matching(lane_id, |artifact| {
             artifact.ownership.dataspace_id == dataspace_id
         })
@@ -40287,69 +40487,6 @@ impl Kura {
                 == Some(artifact)
         })
     }
-    /// Return the highest valid active lane artifact accepted by `accept`.
-    ///
-    /// Every indexed height consumes one scan slot, including absent,
-    /// malformed, and retired-incarnation entries. Failing to find a valid
-    /// match inside the fixed budget fails closed instead of letting sparse or
-    /// hostile history turn this consensus lookup into an unbounded walk.
-    pub(crate) fn latest_lane_block_artifact_matching<F>(
-        &self,
-        lane_id: LaneId,
-        mut accept: F,
-    ) -> Option<LaneBlockArtifact>
-    where
-        F: FnMut(&LaneBlockArtifact) -> bool,
-    {
-        if self.emergency_fast_startup_enabled() {
-            return self
-                .latest_lane_block_artifact_matching_without_sidecar_repair(lane_id, accept);
-        }
-        if self.prune_recovery_is_required() {
-            return None;
-        }
-        let _geometry_guard = self.lane_geometry_lock.lock();
-        let entry = self.lane_storage_entry(lane_id).ok()?;
-        let (data_path, index_path) = Self::lane_artifact_paths_for_entry(&entry, &self.store_root);
-        let candidates = {
-            let _guard = self.sidecar_lock.lock();
-            if self.prune_recovery_is_required() {
-                return None;
-            }
-            if !Self::recover_indexed_sidecar_artifacts(
-                &data_path,
-                &index_path,
-                "lane block artifact",
-            ) {
-                return None;
-            }
-            let heights = Self::indexed_sidecar_height_range(&index_path, "lane block artifact")?;
-            heights
-                .rev()
-                .take(CONSENSUS_SIDECAR_MATCH_SCAN_BUDGET)
-                .filter_map(|lane_block_height| {
-                    self.read_active_lane_block_artifact_from_paths_locked(
-                        &entry,
-                        lane_block_height,
-                        &data_path,
-                        &index_path,
-                        false,
-                    )
-                })
-                .collect::<Vec<_>>()
-        };
-        drop(_geometry_guard);
-        let artifact = candidates
-            .into_iter()
-            .filter_map(|artifact| self.validate_lane_block_artifact_canonical(artifact))
-            .find(|artifact| accept(artifact))?;
-        let confirmed = self.read_active_lane_block_artifact_structural(
-            lane_id,
-            artifact.ownership.lane_block_height,
-            false,
-        )?;
-        (confirmed == artifact && !self.prune_recovery_is_required()).then_some(artifact)
-    }
     fn read_active_lane_block_artifact_from_paths_locked(
         &self,
         entry: &LaneConfigEntry,
@@ -40464,6 +40601,7 @@ impl Kura {
 }
 include!("kura/autonomous_application_evidence.rs");
 include!("kura/indexed_sidecar_io.rs");
+include!("kura/consensus_storage_reads.rs");
 include!("kura/indexed_sidecar_rewrite.rs");
 include!("kura/lane_history_compaction.rs");
 impl BlockStore {
@@ -41293,11 +41431,19 @@ impl BlockStore {
     /// may change that marker, so the two stages must never be observed in the opposite
     /// order after a crash.
     fn recover_canonical_storage_stages(&mut self) -> Result<()> {
+        self.recover_canonical_storage_stages_with_carrier_pins(&BTreeMap::new())
+    }
+    fn recover_canonical_storage_stages_with_carrier_pins(
+        &mut self,
+        canonical_replica_terminal_carrier_pins: &BTreeMap<u64, HashOf<BlockHeader>>,
+    ) -> Result<()> {
         if self.path_to_blockchain.as_os_str().is_empty() {
             return Ok(());
         }
         self.recover_eviction_compaction_stage()?;
-        self.recover_da_block_rewrite_stage()
+        self.recover_da_block_rewrite_stage_with_carrier_pins(
+            canonical_replica_terminal_carrier_pins,
+        )
     }
     fn read_da_block_bytes(&self, height: u64, expected_len: u64) -> Result<Vec<u8>> {
         self.ensure_da_blocks_dir()?;
@@ -41970,7 +42116,54 @@ impl BlockStore {
         }
         Ok(())
     }
+    fn validate_da_block_rewrite_selection_for_carrier_pins(
+        &self,
+        stage: &DaBlockRewriteStageV1,
+        selected_marker: &BlockStoreCommitMarker,
+        selected_suffix: &[DaBlockRewriteImageV1],
+        canonical_replica_terminal_carrier_pins: &BTreeMap<u64, HashOf<BlockHeader>>,
+    ) -> Result<()> {
+        if canonical_replica_terminal_carrier_pins.is_empty() {
+            return Ok(());
+        }
+        let replacement_start = stage
+            .replacement
+            .first()
+            .expect("validated DA rewrite stage has a nonempty replacement")
+            .height;
+        for (&height, &required_hash) in canonical_replica_terminal_carrier_pins {
+            if height > selected_marker.count {
+                return Err(self.invalid_da_block_rewrite_stage(
+                    "selected DA rewrite state truncates a pinned canonical replica terminal carrier",
+                ));
+            }
+            if height < replacement_start {
+                continue;
+            }
+            let offset = usize::try_from(height.saturating_sub(replacement_start))?;
+            let Some(image) = selected_suffix.get(offset) else {
+                return Err(self.invalid_da_block_rewrite_stage(
+                    "selected DA rewrite state omits a pinned canonical replica terminal carrier",
+                ));
+            };
+            if image.height != height
+                || image.block_hash != required_hash
+                || image.body.as_ref().is_none_or(Vec::is_empty)
+            {
+                return Err(self.invalid_da_block_rewrite_stage(
+                    "selected DA rewrite state changes or body-strips a pinned canonical replica terminal carrier",
+                ));
+            }
+        }
+        Ok(())
+    }
     fn recover_da_block_rewrite_stage(&mut self) -> Result<()> {
+        self.recover_da_block_rewrite_stage_with_carrier_pins(&BTreeMap::new())
+    }
+    fn recover_da_block_rewrite_stage_with_carrier_pins(
+        &mut self,
+        canonical_replica_terminal_carrier_pins: &BTreeMap<u64, HashOf<BlockHeader>>,
+    ) -> Result<()> {
         let Some(stage) = self.read_da_block_rewrite_stage()? else {
             return Ok(());
         };
@@ -41990,8 +42183,20 @@ impl BlockStore {
             )
         })?;
         if marker == stage.old_marker {
+            self.validate_da_block_rewrite_selection_for_carrier_pins(
+                &stage,
+                &stage.old_marker,
+                &stage.old_suffix,
+                canonical_replica_terminal_carrier_pins,
+            )?;
             self.restore_old_da_block_rewrite_stage(&stage)?;
         } else if marker == stage.new_marker {
+            self.validate_da_block_rewrite_selection_for_carrier_pins(
+                &stage,
+                &stage.new_marker,
+                &stage.replacement,
+                canonical_replica_terminal_carrier_pins,
+            )?;
             self.promote_new_da_block_rewrite_stage(&stage)?;
             self.commit_marker_count = stage.new_marker.count;
             self.commit_marker_pending = None;
@@ -44749,6 +44954,7 @@ pub(crate) mod tests {
     include!("kura/tests/07j_certified_bundle_capacity_tests.rs");
     include!("kura/tests/07k_historical_atomic_temp_recovery_tests.rs");
     include!("kura/tests/07l_pending_canonical_capacity_tests.rs");
+    include!("kura/tests/07m_canonical_autonomous_replica_tests.rs");
     include!("kura/tests/08_lane_receipts_and_artifacts.rs");
     include!("kura/tests/08a_certified_lane_block_read_tests.rs");
     include!("kura/tests/08b_lane_history_compaction_capacity_tests.rs");

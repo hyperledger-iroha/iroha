@@ -15,9 +15,7 @@ use iroha_data_model::{
     permission::Permission,
     prelude::{AssetDefinitionId, AssetId, Grant},
 };
-use iroha_executor_data_model::permission::governance::{
-    CanManageParliament, CanSubmitGovernanceBallot,
-};
+use iroha_executor_data_model::permission::governance::CanSubmitGovernanceBallot;
 use iroha_primitives::numeric::Quantity;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use mv::storage::StorageReadOnly;
@@ -149,20 +147,6 @@ fn citizenship_gate_blocks_and_allows_governance() {
     Grant::account_permission(ballot_perm, ALICE_ID.clone())
         .execute(&ALICE_ID, &mut stx)
         .expect("grant ballot permission");
-    Grant::account_permission(Permission::from(CanManageParliament), ALICE_ID.clone())
-        .execute(&ALICE_ID, &mut stx)
-        .expect("grant parliament management permission");
-    // Council persistence should fail without a citizen bond.
-    let council_res = iroha_data_model::isi::governance::PersistCouncilForEpoch {
-        epoch: 1,
-        members: vec![ALICE_ID.clone()],
-        alternates: Vec::new(),
-    }
-    .execute(&ALICE_ID, &mut stx);
-    assert!(matches!(
-        council_res,
-        Err(iroha_data_model::isi::error::InstructionExecutionError::InvariantViolation(_))
-    ));
     // Ballot should be rejected until citizenship is bonded.
     let ballot = iroha_data_model::isi::governance::CastPlainBallot {
         referendum_id: "citizen-ref".to_string(),
@@ -187,13 +171,6 @@ fn citizenship_gate_blocks_and_allows_governance() {
     }
     .execute(&ALICE_ID, &mut stx)
     .expect("citizen bond succeeds");
-    iroha_data_model::isi::governance::PersistCouncilForEpoch {
-        epoch: 1,
-        members: vec![ALICE_ID.clone()],
-        alternates: Vec::new(),
-    }
-    .execute(&ALICE_ID, &mut stx)
-    .expect("council persists after citizen bond");
     ballot
         .execute(&ALICE_ID, &mut stx)
         .expect("ballot allowed once citizen bonded");
@@ -244,20 +221,19 @@ fn citizenship_records_persist_across_transactions() {
     assert_eq!(citizen_record.amount, Quantity::from(50_u64));
     let header_2 = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     let mut block_2 = state.block(header_2);
-    let mut stx_2 = block_2.transaction();
-    Grant::account_permission(Permission::from(CanManageParliament), ALICE_ID.clone())
-        .execute(&ALICE_ID, &mut stx_2)
-        .expect("grant parliament management permission");
-    iroha_data_model::isi::governance::PersistCouncilForEpoch {
-        epoch: 1,
-        members: vec![ALICE_ID.clone()],
-        alternates: Vec::new(),
-    }
-    .execute(&ALICE_ID, &mut stx_2)
-    .expect("persist council should succeed when citizen record persisted");
+    let stx_2 = block_2.transaction();
+    assert_eq!(
+        stx_2
+            .world
+            .citizens()
+            .get(&*ALICE_ID)
+            .expect("citizen record remains visible in the next transaction")
+            .amount,
+        Quantity::from(50_u64)
+    );
 }
 #[test]
-fn citizenship_top_up_preserves_the_original_bond_interval_and_service_state() {
+fn citizenship_top_up_preserves_the_original_bond_interval() {
     let def_id = AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal").expect("domain"),
         "xor".parse().expect("asset name"),
@@ -285,22 +261,6 @@ fn citizenship_top_up_preserves_the_original_bond_interval_and_service_state() {
         .expect("initial citizen bond block commits");
     let mut block_2 = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
     let mut stx_2 = block_2.transaction();
-    let mut serviced = stx_2
-        .world
-        .citizens()
-        .get(&*ALICE_ID)
-        .cloned()
-        .expect("persisted citizen record");
-    serviced.seats_in_epoch = 2;
-    serviced.last_epoch_seen = 7;
-    serviced.cooldown_until = 42;
-    serviced.declines_used = 1;
-    serviced.no_show_strikes = 3;
-    serviced.misconduct_strikes = 4;
-    stx_2
-        .world
-        .citizens_mut()
-        .insert(ALICE_ID.clone(), serviced);
     RegisterCitizen {
         owner: ALICE_ID.clone(),
         amount: 75_u64.into(),
@@ -320,12 +280,6 @@ fn citizenship_top_up_preserves_the_original_bond_interval_and_service_state() {
         .expect("topped-up citizen record");
     assert_eq!(retained.amount, Quantity::from(75_u64));
     assert_eq!(retained.bonded_height, 1);
-    assert_eq!(retained.seats_in_epoch, 2);
-    assert_eq!(retained.last_epoch_seen, 7);
-    assert_eq!(retained.cooldown_until, 42);
-    assert_eq!(retained.declines_used, 1);
-    assert_eq!(retained.no_show_strikes, 3);
-    assert_eq!(retained.misconduct_strikes, 4);
     assert_eq!(
         **stx_2
             .world

@@ -67,6 +67,8 @@ fn axt_framed_digest_v1<T: Encode>(domain: &[u8], value: &T) -> [u8; Hash::LENGT
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[repr(transparent)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::AxtBinding")]
 pub struct AxtBinding([u8; 32]);
 impl AxtBinding {
     /// Construct a binding from raw bytes.
@@ -89,6 +91,8 @@ impl AxtBinding {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::AxtDescriptor")]
 pub struct AxtDescriptor {
     /// List of dataspace identifiers touched by the transaction.
     pub dsids: Vec<DataSpaceId>,
@@ -99,6 +103,8 @@ pub struct AxtDescriptor {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::AxtTouchSpec")]
 pub struct AxtTouchSpec {
     /// Dataspace identifier.
     pub dsid: DataSpaceId,
@@ -111,6 +117,8 @@ pub struct AxtTouchSpec {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::TouchManifest")]
 pub struct TouchManifest {
     /// Keys read within the dataspace during execution.
     pub read: Vec<String>,
@@ -234,6 +242,8 @@ impl AxtDescriptorBuilder {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::AxtTouchFragment")]
 pub struct AxtTouchFragment {
     /// Dataspace identifier.
     pub dsid: DataSpaceId,
@@ -244,6 +254,8 @@ pub struct AxtTouchFragment {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::ProofBlob")]
 pub struct ProofBlob {
     /// Norito-encoded AXT proof envelope bytes, bounded by
     /// [`MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES`] at every proof-aware ingress.
@@ -329,6 +341,8 @@ fn fastpq_claim_type_is_supported(value: &str) -> bool {
 #[norito(decode_from_slice)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::AxtProofEnvelope")]
 pub struct AxtProofEnvelope {
     /// Dataspace the proof is intended for.
     pub dsid: DataSpaceId,
@@ -358,6 +372,8 @@ pub struct AxtProofEnvelope {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::AxtFastpqBinding")]
 pub struct AxtFastpqBinding {
     /// Canonical FASTPQ parameter set.
     pub parameter: String,
@@ -405,6 +421,8 @@ pub struct AxtFastpqBinding {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::AxtEffectBinding")]
 pub struct AxtEffectBinding {
     /// Destination dataspace/domain label when applicable.
     #[norito(required)]
@@ -441,6 +459,8 @@ pub struct AxtEffectBinding {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::AxtProofFragment")]
 pub struct AxtProofFragment {
     /// Dataspace identifier.
     pub dsid: DataSpaceId,
@@ -451,6 +471,8 @@ pub struct AxtProofFragment {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::GroupBinding")]
 pub struct GroupBinding {
     /// Domain or composability group identifier.
     pub composability_group_id: Vec<u8>,
@@ -461,6 +483,8 @@ pub struct GroupBinding {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::HandleBudget")]
 pub struct HandleBudget {
     /// Remaining allowance for the capability.
     pub remaining: Quantity,
@@ -472,6 +496,8 @@ pub struct HandleBudget {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::HandleSubject")]
 pub struct HandleSubject {
     /// Canonical I105 account identifier of the spender.
     pub account: String,
@@ -495,6 +521,8 @@ pub const AXT_ASSET_INCARNATION_DOMAIN_V1: &[u8] = b"iroha:axt:asset-incarnation
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[repr(transparent)]
 #[schema(transparent)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::AxtAssetIncarnationV1")]
 pub struct AxtAssetIncarnationV1(Hash);
 /// Failure returned while validating raw V1 asset-incarnation bytes.
 #[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
@@ -584,6 +612,8 @@ impl AxtAssetIncarnationV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::AxtFinalizedSpendAnchorV1")]
 pub struct AxtFinalizedSpendAnchorV1 {
     /// Exact genesis-derived network identity.
     pub network_id: NetworkId,
@@ -722,6 +752,8 @@ pub enum AxtFinalizedSpendAnchorValidationErrorV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::AxtHandleIssuerContextV1")]
 pub struct AxtHandleIssuerContextV1 {
     /// Exact genesis-derived network identity.
     pub network_id: NetworkId,
@@ -789,6 +821,8 @@ impl Default for AxtHandleIssuerContextV1 {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::AssetHandleIssuerPayloadV1")]
 pub struct AssetHandleIssuerPayloadV1 {
     /// Immutable admission context reconstructed by the validating host.
     pub context: AxtHandleIssuerContextV1,
@@ -825,6 +859,8 @@ pub struct AssetHandleIssuerPayloadV1 {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::AssetHandleDraft")]
 pub struct AssetHandleDraft {
     /// Exact asset definition authorized by the capability.
     pub asset_definition_id: AssetDefinitionId,
@@ -912,6 +948,8 @@ impl AssetHandleDraft {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::AssetHandle")]
 pub struct AssetHandle {
     /// Exact asset definition authorized by the issuer signature.
     pub asset_definition_id: AssetDefinitionId,
@@ -1019,6 +1057,8 @@ impl AssetHandle {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::AxtHandleBudgetKey")]
 pub struct AxtHandleBudgetKey {
     issuer_context: AxtHandleIssuerContextV1,
     asset_definition_id: AssetDefinitionId,
@@ -1129,6 +1169,8 @@ impl AxtHandleBudgetKey {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::AxtHandleBudgetRecord")]
 pub struct AxtHandleBudgetRecord {
     consumed: Quantity,
     retain_until_slot: u64,
@@ -1249,6 +1291,8 @@ impl AxtHandleBudgetRecord {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::AxtHandleCounterRecord")]
 pub struct AxtHandleCounterRecord {
     next: u64,
     authorization_generation: u64,
@@ -1478,6 +1522,8 @@ pub fn next_axt_handle_sub_nonce(
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::SpendOp")]
 pub struct SpendOp {
     /// Exact asset definition authorized by the handle and proven by FASTPQ.
     pub asset_definition_id: AssetDefinitionId,
@@ -1495,6 +1541,8 @@ pub struct SpendOp {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::RemoteSpendIntent")]
 pub struct RemoteSpendIntent {
     /// Target asset dataspace identifier.
     pub asset_dsid: DataSpaceId,
@@ -1505,6 +1553,8 @@ pub struct RemoteSpendIntent {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[repr(transparent)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::AxtSpendNonceV1")]
 pub struct AxtSpendNonceV1([u8; 32]);
 
 impl AxtSpendNonceV1 {
@@ -1548,6 +1598,8 @@ pub enum AxtSpendNonceValidationErrorV1 {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::AxtAnchoredSpendDraftV1")]
 pub struct AxtAnchoredSpendDraftV1 {
     /// Reusable issuer-authenticated capability consumed by this spend.
     pub handle: AssetHandle,
@@ -1568,6 +1620,8 @@ pub struct AxtAnchoredSpendDraftV1 {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::AxtAnchoredSpendIssuerPayloadV1")]
 pub struct AxtAnchoredSpendIssuerPayloadV1 {
     /// Exact replay identity of the reusable handle.
     pub handle_replay_key: AxtHandleReplayKey,
@@ -1595,6 +1649,8 @@ pub struct AxtAnchoredSpendIssuerPayloadV1 {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::AxtAnchoredSpendIssuerAuthorizationV1")]
 pub struct AxtAnchoredSpendIssuerAuthorizationV1 {
     /// Exact authoritative finalized source-state anchor.
     pub anchor: AxtFinalizedSpendAnchorV1,
@@ -1613,6 +1669,8 @@ pub struct AxtAnchoredSpendIssuerAuthorizationV1 {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::AxtAnchoredSpendV1")]
 pub struct AxtAnchoredSpendV1 {
     /// Exact spend facts authenticated by the issuer.
     pub draft: AxtAnchoredSpendDraftV1,
@@ -1624,6 +1682,8 @@ pub struct AxtAnchoredSpendV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::AxtAnchoredSpendReplayKeyV1")]
 pub struct AxtAnchoredSpendReplayKeyV1 {
     /// Complete committed issuer context, including network and asset incarnation.
     pub issuer_context: AxtHandleIssuerContextV1,
@@ -1847,6 +1907,8 @@ pub enum AxtAnchoredSpendValidationErrorV1 {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::AxtRemoteSpendClaimV1")]
 pub struct AxtRemoteSpendClaimV1 {
     /// Exact authenticated handle use that is allowed to consume this claim.
     ///
@@ -1927,6 +1989,8 @@ pub fn compute_remote_spend_claim_commitment_v1(statement: &AxtRemoteSpendClaimV
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::AxtHandleFragment")]
 pub struct AxtHandleFragment {
     /// Handle presented by the caller.
     pub handle: AssetHandle,
@@ -1946,6 +2010,8 @@ pub struct AxtHandleFragment {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::AxtHandleReplayKey")]
 pub struct AxtHandleReplayKey {
     /// Dataspace whose committed policy issued the handle.
     pub asset_dsid: DataSpaceId,
@@ -2034,6 +2100,8 @@ pub enum AxtHandleReplayKeyValidationError {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::AxtReplayRecord")]
 pub struct AxtReplayRecord {
     /// Redundant observational dataspace recorded with the handle use.
     ///
@@ -2143,6 +2211,8 @@ impl AxtReplayRecord {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::AxtEnvelopeRecord")]
 pub struct AxtEnvelopeRecord {
     /// Binding derived from the descriptor.
     pub binding: AxtBinding,
@@ -2163,6 +2233,8 @@ pub struct AxtEnvelopeRecord {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::AxtPolicyEntry")]
 pub struct AxtPolicyEntry {
     /// Manifest root the handle must reference.
     pub manifest_root: [u8; 32],
@@ -2179,6 +2251,8 @@ pub struct AxtPolicyEntry {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::AxtPolicyBinding")]
 pub struct AxtPolicyBinding {
     /// Dataspace identifier.
     pub dsid: DataSpaceId,
@@ -2189,6 +2263,8 @@ pub struct AxtPolicyBinding {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::AxtPolicySnapshot")]
 pub struct AxtPolicySnapshot {
     /// Hash-derived snapshot version (truncated to u64 for gauges/telemetry).
     pub version: u64,
@@ -2319,6 +2395,8 @@ impl AxtPolicySnapshot {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::AxtRejectContext")]
 pub struct AxtRejectContext {
     /// Classified reason for the rejection.
     pub reason: AxtRejectReason,
@@ -2364,6 +2442,8 @@ impl core::fmt::Display for AxtRejectContext {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "reason", content = "detail"))]
 #[repr(u8)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::AxtRejectReason")]
 pub enum AxtRejectReason {
     /// Dataspace or lane binding did not match the policy.
     Lane,
@@ -5250,3 +5330,6 @@ mod tests {
         ));
     }
 }
+
+#[cfg(test)]
+mod captured_axt_schema_tests;

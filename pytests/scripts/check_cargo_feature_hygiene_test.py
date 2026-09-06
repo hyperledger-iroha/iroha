@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import importlib.util
 from pathlib import Path
 
@@ -18,6 +19,158 @@ def test_repository_feature_hygiene() -> None:
     assert FEATURE_HYGIENE.check_repository(ROOT) == []
 
 
+def _guarded_document(package: str) -> dict:
+    manifest = ROOT / "crates" / package / "Cargo.toml"
+    return FEATURE_HYGIENE._load_toml(manifest)
+
+
+def _guarded_errors(package: str, document: dict) -> list[str]:
+    manifest = ROOT / "crates" / package / "Cargo.toml"
+    return FEATURE_HYGIENE._check_expected_features(document, manifest)
+
+
+def test_rejects_unclassified_explicit_feature_omitted_from_default() -> None:
+    document = copy.deepcopy(_guarded_document("iroha_core"))
+    document["features"]["new-portable-production-capability"] = []
+
+    errors = _guarded_errors("iroha_core", document)
+
+    assert any(
+        "Cargo feature `new-portable-production-capability` is unclassified" in error
+        for error in errors
+    )
+
+
+def test_rejects_removed_algebraic_ipa_feature() -> None:
+    for package in ("iroha_zkp_halo2", "ivm", "iroha_core", "iroha_torii"):
+        document = copy.deepcopy(_guarded_document(package))
+        document["features"]["goldilocks_backend"] = []
+        assert any(
+            "Cargo feature `goldilocks_backend` is unclassified" in error
+            for error in _guarded_errors(package, document)
+        ), package
+
+
+def test_rejects_unclassified_implicit_optional_dependency_feature() -> None:
+    document = copy.deepcopy(_guarded_document("iroha_core"))
+    document["dependencies"]["new_optional_backend"] = {
+        "version": "1",
+        "optional": True,
+    }
+
+    errors = _guarded_errors("iroha_core", document)
+
+    assert any(
+        "Cargo feature `new_optional_backend` is unclassified" in error
+        for error in errors
+    )
+
+
+def test_non_weak_optional_dependency_forward_activates_implicit_feature() -> None:
+    document = {
+        "features": {"default": ["backend/accelerated"]},
+        "dependencies": {"backend": {"version": "1", "optional": True}},
+    }
+    features = FEATURE_HYGIENE.cargo_visible_features(document)
+
+    assert FEATURE_HYGIENE.local_default_feature_closure(features) == frozenset(
+        {"default", "backend"}
+    )
+
+    document["features"]["default"] = ["backend?/accelerated"]
+    weak_features = FEATURE_HYGIENE.cargo_visible_features(document)
+    assert FEATURE_HYGIENE.local_default_feature_closure(
+        weak_features
+    ) == frozenset({"default"})
+
+
+def test_rejects_broken_portable_default_closure() -> None:
+    document = copy.deepcopy(_guarded_document("iroha_core"))
+    document["features"]["default"].remove("simd")
+
+    errors = _guarded_errors("iroha_core", document)
+
+    assert any(
+        "portable feature `simd` is not reachable from `default`" in error
+        for error in errors
+    )
+
+
+def test_rejects_exact_portable_forwarder_mutation() -> None:
+    document = copy.deepcopy(_guarded_document("iroha_core"))
+    document["features"]["gost"] = []
+
+    errors = _guarded_errors("iroha_core", document)
+
+    assert any("feature `gost` must be" in error for error in errors)
+
+
+def test_rejects_unpinned_contextual_shipping_forwarder(monkeypatch) -> None:
+    monkeypatch.delitem(
+        FEATURE_HYGIENE.EXPECTED_FEATURES["iroha_data_model"],
+        "transparent_api",
+    )
+
+    errors = _guarded_errors(
+        "iroha_data_model", _guarded_document("iroha_data_model")
+    )
+
+    assert any(
+        "contextual shipping feature `transparent_api` lacks an exact feature pin"
+        in error
+        for error in errors
+    )
+
+
+def test_rejects_contextual_shipping_forwarder_mutation() -> None:
+    document = copy.deepcopy(_guarded_document("iroha_data_model"))
+    document["features"]["transparent_api"] = []
+
+    errors = _guarded_errors("iroha_data_model", document)
+
+    assert any("feature `transparent_api` must be" in error for error in errors)
+
+
+def test_rejects_contextual_shipping_feature_reachable_from_default() -> None:
+    document = copy.deepcopy(_guarded_document("iroha_data_model"))
+    document["features"]["default"].append("transparent_api")
+
+    errors = _guarded_errors("iroha_data_model", document)
+
+    assert any(
+        "contextual shipping feature `transparent_api` is reachable from local "
+        "`default`" in error
+        for error in errors
+    )
+
+
+def test_rejects_explicit_opt_in_reachable_from_default() -> None:
+    document = copy.deepcopy(_guarded_document("iroha_core"))
+    document["features"]["default"].append("quic")
+
+    errors = _guarded_errors("iroha_core", document)
+
+    assert any(
+        "explicit opt-in feature `quic` is reachable from `default`" in error
+        for error in errors
+    )
+
+
+def test_rejects_stale_explicit_opt_in_name(monkeypatch) -> None:
+    current = FEATURE_HYGIENE.EXPLICIT_OPT_IN_FEATURES["iroha_core"]
+    monkeypatch.setitem(
+        FEATURE_HYGIENE.EXPLICIT_OPT_IN_FEATURES,
+        "iroha_core",
+        tuple(sorted((*current, "retired-opt-in"))),
+    )
+
+    errors = _guarded_errors("iroha_core", _guarded_document("iroha_core"))
+
+    assert any(
+        "stale explicit opt-in feature `retired-opt-in`" in error for error in errors
+    )
+
+
 def _member_rows(*, implicit_norito_defaults: bool = False) -> list[str]:
     rows = []
     for name in sorted(FEATURE_HYGIENE.FOUNDATIONAL_DEPENDENCIES):
@@ -32,14 +185,20 @@ def _member_rows(*, implicit_norito_defaults: bool = False) -> list[str]:
     return rows
 
 
-def _write_member(root: Path, member: str, rows: list[str]) -> None:
+def _write_member(
+    root: Path,
+    member: str,
+    rows: list[str],
+    *,
+    package_name: str | None = None,
+) -> None:
     member_root = root / member
-    member_root.mkdir(parents=True)
+    member_root.mkdir(parents=True, exist_ok=True)
     (member_root / "Cargo.toml").write_text(
         "\n".join(
             [
                 "[package]",
-                f'name = "{member_root.name}"',
+                f'name = "{package_name or member_root.name}"',
                 'version = "0.1.0"',
                 "",
                 "[dependencies]",
@@ -102,6 +261,42 @@ def test_accepts_explicit_workspace_member_feature_ownership(tmp_path: Path) -> 
     _write_fixture(tmp_path)
 
     assert FEATURE_HYGIENE.check_repository(tmp_path) == []
+
+
+def test_rejects_irohad_normal_dependency_selecting_core_quic(
+    tmp_path: Path,
+) -> None:
+    _write_fixture(tmp_path)
+    rows = _member_rows()
+    rows[rows.index("iroha_core = { workspace = true, default-features = false }")] = (
+        'iroha_core = { workspace = true, default-features = false, features = ["quic"] }'
+    )
+    _write_member(tmp_path, "crates/consumer", rows, package_name="irohad")
+
+    errors = FEATURE_HYGIENE.check_repository(tmp_path)
+
+    assert any(
+        "package `irohad` [dependencies] dependency `iroha_core` selects explicit "
+        "opt-in feature `quic`" in error
+        for error in errors
+    )
+
+
+def test_rejects_stale_nonshipping_dependency_allowlist_entry(monkeypatch) -> None:
+    current = FEATURE_HYGIENE.NONSHIPPING_EXPLICIT_OPT_IN_DEPENDENCY_ALLOWLIST
+    monkeypatch.setattr(
+        FEATURE_HYGIENE,
+        "NONSHIPPING_EXPLICIT_OPT_IN_DEPENDENCY_ALLOWLIST",
+        tuple(sorted((*current, ("irohad", "iroha_core", "quic")))),
+    )
+
+    errors = FEATURE_HYGIENE.check_repository(ROOT)
+
+    assert any(
+        "stale non-shipping explicit opt-in dependency allowlist entry "
+        "`irohad -> iroha_core/quic`" in error
+        for error in errors
+    )
 
 
 def test_workspace_members_expand_globs_deduplicate_and_respect_excludes(

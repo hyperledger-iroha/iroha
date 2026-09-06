@@ -8,6 +8,19 @@ mod tests {
     use tempfile::TempDir;
     const OWNER_A: [u8; 32] = [0xA1; 32];
     const OWNER_B: [u8; 32] = [0xB2; 32];
+    fn safety_wal_identity(
+        context: &wire::HeightContext,
+        network_id: [u8; 32],
+        key_hash: [u8; 32],
+    ) -> super::super::v2_core::WalFileIdentity {
+        super::super::v2_core::WalFileIdentity::new(
+            wire::PROTOCOL_VERSION,
+            network_id,
+            super::super::v2_core::ContextId::new(*context.id().0.as_ref()),
+            context.height,
+            key_hash,
+        )
+    }
     fn context() -> wire::HeightContext {
         context_with_roster_len(4)
     }
@@ -27,12 +40,15 @@ mod tests {
             })
             .collect::<Vec<_>>();
         roster.sort_by(|left, right| left.validator.cmp(&right.validator));
+        let network_id = NetworkId::from_genesis_hash(
+            iroha_crypto::HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+                [0x95; Hash::LENGTH],
+            )),
+        );
+        let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
+            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(network_id, 1, &roster);
         let context = wire::HeightContext {
-            network_id: NetworkId::from_genesis_hash(
-                iroha_crypto::HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
-                    [0x95; Hash::LENGTH],
-                )),
-            ),
+            network_id,
             protocol_version: wire::PROTOCOL_VERSION,
             height: 7,
             epoch: 1,
@@ -50,6 +66,8 @@ mod tests {
             }),
             quorum: wire::DualQuorum::from_roster(&roster).expect("quorum"),
             roster,
+            kagemusha_mint_finality_epoch_id,
+            kagemusha_mint_finality_epoch_roster,
             nexus_amx_context_hash: Hash::new(b"nexus"),
             execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: wire::DataAvailabilityLayout {
@@ -84,13 +102,14 @@ mod tests {
                 )),
                 payload_hash: Hash::new(b"predecessor payload"),
             },
-            execution_commitment: wire::ExecutionCommitment::without_topups_or_merge_carrier(
-                Hash::new(b"predecessor parent state"),
-                Hash::new(b"predecessor post state"),
-                Hash::new(b"predecessor ordinary writes"),
-                1,
-                Hash::new(b"predecessor wire"),
-            ),
+            execution_commitment:
+                wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+                    Hash::new(b"predecessor parent state"),
+                    Hash::new(b"predecessor post state"),
+                    Hash::new(b"predecessor ordinary writes"),
+                    1,
+                    Hash::new(b"predecessor wire"),
+                ),
             signers: vec![0, 1, 2],
             aggregate_signature: vec![0xA7; 96],
         };
@@ -243,6 +262,8 @@ mod tests {
                 phase,
                 semantic_origin: origin.clone(),
                 canonical_wire_hash: Hash::new([0x52, discriminator]),
+                vote_statement_hash: Some(Hash::new([0x53, discriminator])),
+                timeout_prepare_view: None,
             },
             slot: FairV2IngressLeaderWireSlot {
                 semantic_origin: origin,
@@ -279,6 +300,13 @@ mod tests {
                 phase,
                 semantic_origin: origin.clone(),
                 canonical_wire_hash: Hash::new(b"shared leader-wire bytes"),
+                vote_statement_hash: matches!(
+                    phase,
+                    FairV2IngressLeaderWirePhase::PrepareVote
+                        | FairV2IngressLeaderWirePhase::CommitVote
+                )
+                .then(|| Hash::new(b"shared leader-wire vote statement")),
+                timeout_prepare_view: None,
             },
             slot: FairV2IngressLeaderWireSlot {
                 semantic_origin: origin.clone(),
@@ -308,6 +336,8 @@ mod tests {
                 phase,
                 semantic_origin: origin.clone(),
                 canonical_wire_hash: Hash::new(b"durable body terminal response"),
+                vote_statement_hash: None,
+                timeout_prepare_view: None,
             },
             slot: FairV2IngressLeaderWireSlot {
                 semantic_origin: origin,
@@ -424,9 +454,7 @@ mod tests {
         let seed_wal = seed.path().join("wal").join("00000000000000000007.wal");
         let seed_safety = super::super::safety_wal::SafetyWal::open(
             &seed_wal,
-            wire::PROTOCOL_VERSION,
-            NETWORK,
-            KEY,
+            safety_wal_identity(&context, NETWORK, KEY),
         )
         .expect("open seed safety WAL");
         let seed_authority = seed_safety
@@ -450,9 +478,7 @@ mod tests {
         let target_wal = target_parent.join("00000000000000000007.wal");
         let target_safety = super::super::safety_wal::SafetyWal::open(
             &target_wal,
-            wire::PROTOCOL_VERSION,
-            NETWORK,
-            KEY,
+            safety_wal_identity(&context, NETWORK, KEY),
         )
         .expect("open target safety WAL");
         let target_authority = target_safety
@@ -569,9 +595,7 @@ mod tests {
         let wal_path = parent.join("00000000000000000007.wal");
         let wal = super::super::safety_wal::SafetyWal::open(
             &wal_path,
-            wire::PROTOCOL_VERSION,
-            [0x61; 32],
-            [0x62; 32],
+            safety_wal_identity(&context, [0x61; 32], [0x62; 32]),
         )
         .expect("open leader-wire safety WAL");
         let storage = wal

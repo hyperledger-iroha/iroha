@@ -7,18 +7,21 @@
 //! compiling a second schema builder.
 
 use iroha_torii_shared::route_catalog::{
-    CATALOGED_ROUTES, CatalogProjection, EnabledFeatures, HttpMethod as CatalogHttpMethod,
-    RouteCatalog,
+    AuthenticationPolicy, CATALOGED_ROUTES, CatalogProjection, EnabledFeatures,
+    HttpMethod as CatalogHttpMethod, RouteCatalog, RouteDescriptor,
 };
 use norito::json::{Map, Value};
-use std::{collections::BTreeSet, sync::LazyLock};
+use std::{collections::BTreeMap, sync::LazyLock};
 /// OpenAPI operation extension consumed by the MCP policy bridge.
 pub(crate) const TOOL_EFFECT_EXTENSION: &str = "x-iroha-tool-effect";
+/// OpenAPI operation extension carrying the catalog's versioned authentication contract.
+pub(crate) const ROUTE_AUTH_EXTENSION: &str = "x-iroha-route-auth";
 /// Package-local source authority for Torii's OpenAPI contract.
 const CANONICAL_OPENAPI_JSON: &str = include_str!("../assets/openapi/torii.json");
 static COMPILED_OPENAPI_SPEC: LazyLock<Value> = LazyLock::new(|| {
     let mut document: Value = norito::json::from_str(CANONICAL_OPENAPI_JSON)
         .expect("package-local Torii OpenAPI authority must be valid Norito JSON");
+    ensure_catalog_security_schemes(&mut document);
     {
         let paths = document
             .as_object_mut()
@@ -27,6 +30,7 @@ static COMPILED_OPENAPI_SPEC: LazyLock<Value> = LazyLock::new(|| {
             .expect("package-local Torii OpenAPI authority must contain a paths object");
         retain_catalog_openapi_operations(paths, crate::router::builder::compiled_route_features());
     }
+    install_kagemusha_v1_contract(&mut document);
     remove_hard_retired_schemas(&mut document);
     document
 });
@@ -38,7 +42,7 @@ fn retain_catalog_openapi_operations(paths: &mut Map, enabled_features: EnabledF
     const OPERATION_METHODS: [&str; 5] = ["get", "post", "put", "patch", "delete"];
     let projected =
         RouteCatalog::new(CATALOGED_ROUTES).project(CatalogProjection::OpenApi, enabled_features);
-    let enabled: BTreeSet<(String, &'static str)> = projected
+    let enabled: BTreeMap<(String, &'static str), &RouteDescriptor> = projected
         .iter()
         .filter_map(|route| {
             let method = match route.method() {
@@ -49,22 +53,7 @@ fn retain_catalog_openapi_operations(paths: &mut Map, enabled_features: EnabledF
                 CatalogHttpMethod::Delete => "delete",
                 CatalogHttpMethod::Any => return None,
             };
-            Some((route.path().replace("{*", "{"), method))
-        })
-        .collect();
-    let private_no_store: BTreeSet<(String, &'static str)> = projected
-        .iter()
-        .filter(|route| route.requires_private_no_store())
-        .filter_map(|route| {
-            let method = match route.method() {
-                CatalogHttpMethod::Get => "get",
-                CatalogHttpMethod::Post => "post",
-                CatalogHttpMethod::Put => "put",
-                CatalogHttpMethod::Patch => "patch",
-                CatalogHttpMethod::Delete => "delete",
-                CatalogHttpMethod::Any => return None,
-            };
-            Some((route.path().replace("{*", "{"), method))
+            Some(((route.path().replace("{*", "{"), method), *route))
         })
         .collect();
     for (path, path_item) in paths.iter_mut() {
@@ -72,18 +61,23 @@ fn retain_catalog_openapi_operations(paths: &mut Map, enabled_features: EnabledF
             continue;
         };
         for method in OPERATION_METHODS {
-            if !enabled.contains(&(path.clone(), method)) {
+            let Some(descriptor) = enabled.get(&(path.clone(), method)) else {
                 methods.remove(method);
-            }
-        }
-        for method in OPERATION_METHODS {
-            if !private_no_store.contains(&(path.clone(), method)) {
+                continue;
+            };
+            let Some(operation) = methods.get_mut(method).and_then(Value::as_object_mut) else {
+                continue;
+            };
+            operation.insert(
+                ROUTE_AUTH_EXTENSION.to_owned(),
+                route_auth_metadata(**descriptor),
+            );
+            apply_catalog_operation_contract(operation, **descriptor);
+            if !descriptor.requires_private_no_store() {
                 continue;
             }
-            let Some(responses) = methods
-                .get_mut(method)
-                .and_then(Value::as_object_mut)
-                .and_then(|operation| operation.get_mut("responses"))
+            let Some(responses) = operation
+                .get_mut("responses")
                 .and_then(Value::as_object_mut)
             else {
                 continue;
@@ -118,6 +112,520 @@ fn retain_catalog_openapi_operations(paths: &mut Map, enabled_features: EnabledF
                 .any(|method| methods.contains_key(*method))
         })
     });
+}
+fn route_auth_metadata(descriptor: RouteDescriptor) -> Value {
+    norito::json!({
+        "schemaVersion": (descriptor.auth_metadata_schema_version()),
+        "stableRouteId": (descriptor.stable_route_id()),
+        "authentication": (descriptor.authentication().as_str()),
+        "admission": (descriptor.admission().as_str())
+    })
+}
+fn apply_catalog_operation_contract(operation: &mut Map, descriptor: RouteDescriptor) {
+    if let Some(security) = standard_security_requirements(descriptor.authentication()) {
+        operation.insert("security".to_owned(), security);
+    }
+    if descriptor.method() == CatalogHttpMethod::Post
+        && descriptor.stable_route_id().starts_with("iso20022.")
+    {
+        operation.insert(
+            "requestBody".to_owned(),
+            norito::json!({
+                "content": {
+                    "application/xml": {
+                        "schema": {
+                            "$ref": "#/components/schemas/XmlText"
+                        }
+                    }
+                },
+                "required": true
+            }),
+        );
+    }
+}
+fn standard_security_requirements(authentication: AuthenticationPolicy) -> Option<Value> {
+    let canonical_single_signature = norito::json!({
+        "IrohaCanonicalAccount": [],
+        "IrohaCanonicalNonce": [],
+        "IrohaCanonicalSignature": [],
+        "IrohaCanonicalTimestampMs": []
+    });
+    let canonical_witness = norito::json!({ "IrohaCanonicalWitness": [] });
+    let operator_signature = norito::json!({
+        "IrohaOperatorPublicKey": [],
+        "IrohaOperatorTimestampMs": [],
+        "IrohaOperatorNonce": [],
+        "IrohaOperatorSignature": []
+    });
+    match authentication {
+        AuthenticationPolicy::ToriiDefault => Some(norito::json!([
+            {},
+            { "IrohaApiToken": [] }
+        ])),
+        AuthenticationPolicy::OnboardingToken => {
+            Some(norito::json!([{ "IrohaOnboardingToken": [] }]))
+        }
+        AuthenticationPolicy::CanonicalAccountSignature => Some(Value::Array(vec![
+            canonical_single_signature,
+            canonical_witness,
+        ])),
+        AuthenticationPolicy::OptionalCanonicalAccountSignature
+        | AuthenticationPolicy::ManifestConditionalContent => Some(Value::Array(vec![
+            Value::Object(Map::new()),
+            canonical_single_signature,
+            canonical_witness,
+        ])),
+        AuthenticationPolicy::OperatorSignature => Some(Value::Array(vec![operator_signature])),
+        AuthenticationPolicy::Unauthenticated => Some(Value::Array(Vec::new())),
+        AuthenticationPolicy::CanonicalSignedBody
+        | AuthenticationPolicy::IdentityBoundSignature
+        | AuthenticationPolicy::OperatorCredentialExchange
+        | AuthenticationPolicy::ProtocolHandshake
+        | AuthenticationPolicy::NestedRouteAuthentication => None,
+    }
+}
+fn ensure_catalog_security_schemes(document: &mut Value) {
+    let security_schemes = document
+        .as_object_mut()
+        .and_then(|document| document.get_mut("components"))
+        .and_then(Value::as_object_mut)
+        .and_then(|components| components.get_mut("securitySchemes"))
+        .and_then(Value::as_object_mut)
+        .expect("package-local Torii OpenAPI authority must contain component security schemes");
+    for (name, header_name, description) in [
+        (
+            "IrohaApiToken",
+            "X-API-Token",
+            "Deployment-configured Torii API token. Whether it is required is selected by node configuration.",
+        ),
+        (
+            "IrohaOnboardingToken",
+            "X-Iroha-Onboarding-Token",
+            "Dedicated single-use onboarding token.",
+        ),
+        (
+            "IrohaOperatorPublicKey",
+            "X-Iroha-Operator-Public-Key",
+            "Allow-listed exact-network operator public key bound into the request signature.",
+        ),
+        (
+            "IrohaOperatorTimestampMs",
+            "X-Iroha-Operator-Timestamp-Ms",
+            "Fresh Unix timestamp in milliseconds bound into the operator request signature.",
+        ),
+        (
+            "IrohaOperatorNonce",
+            "X-Iroha-Operator-Nonce",
+            "Fresh nonce bound into the operator request signature.",
+        ),
+        (
+            "IrohaOperatorSignature",
+            "X-Iroha-Operator-Signature",
+            "Canonical operator signature over the exact request.",
+        ),
+    ] {
+        security_schemes.insert(
+            name.to_owned(),
+            norito::json!({
+                "type": "apiKey",
+                "in": "header",
+                "name": (header_name),
+                "description": (description)
+            }),
+        );
+    }
+}
+
+/// Replace the pre-release KAGEMUSHA API projection with the sole aggregate-balance V1 contract.
+///
+/// The checked-in document is shared with release tooling, so this closed rewrite happens before
+/// feature projection is exposed by a running node. It intentionally removes every lineage,
+/// note-inventory, anchor-drawdown, hop-count, and compatibility component instead of publishing
+/// aliases for them.
+fn install_kagemusha_v1_contract(document: &mut Value) {
+    {
+        let paths = document
+            .as_object_mut()
+            .and_then(|document| document.get_mut("paths"))
+            .and_then(Value::as_object_mut)
+            .expect("package-local Torii OpenAPI authority must contain a paths object");
+
+        let readiness = kagemusha_operation_mut(paths, "/v1/kagemusha/readiness", "get");
+        readiness.insert("operationId".to_owned(), Value::from("kagemushaReadiness"));
+        readiness.insert("tags".to_owned(), norito::json!(["KAGEMUSHA"]));
+        readiness.insert(
+            "description".to_owned(),
+            Value::from(
+                "Report the sole KAGEMUSHA V1 aggregate-balance capability. The protocol has no hop, ancestry, origin, input, fan-in, or proof-depth admission limit.",
+            ),
+        );
+        set_kagemusha_response_schema(
+            readiness,
+            "200",
+            "KagemushaReadinessV1",
+            iroha_torii_shared::kagemusha_api::KAGEMUSHA_READINESS_MAX_BYTES_V1,
+            iroha_torii_shared::kagemusha_api::KAGEMUSHA_READINESS_MAX_BYTES_V1,
+        );
+
+        let top_up = kagemusha_operation_mut(paths, "/v1/kagemusha/top-up", "post");
+        top_up.insert("operationId".to_owned(), Value::from("kagemushaTopUp"));
+        top_up.insert("tags".to_owned(), norito::json!(["KAGEMUSHA"]));
+        set_kagemusha_idempotency_key_parameter(top_up);
+        top_up.insert(
+            "description".to_owned(),
+            Value::from(
+                "Submit one canonical versioned payer-signed `SignedTransaction` containing exactly one native `iroha.kagemusha.v1.top_up` instruction. The transaction must target this network, bind `QueuePlanSynced` admission, and name the embedded payer as its authority. Torii verifies and queues the original transaction unchanged; it never rebuilds or signs it. The HTTP body uses the configured `torii.max_content_len` transaction-ingress limit: KAGEMUSHA-enabled nodes require at least 32 KiB, and the first-release Torii protocol permits at most 64,000,000 bytes. The embedded top-up request is limited to 16 KiB.",
+            ),
+        );
+        set_kagemusha_norito_request(
+            top_up,
+            iroha_torii_shared::kagemusha_api::KAGEMUSHA_TOP_UP_SIGNED_TRANSACTION_SCHEMA_NAME_V1,
+            None,
+        );
+        set_kagemusha_response_schema(
+            top_up,
+            "202",
+            "KagemushaOperationStatusV1",
+            iroha_torii_shared::kagemusha_api::KAGEMUSHA_OPERATION_STATUS_MAX_BYTES_V1,
+            iroha_torii_shared::kagemusha_api::KAGEMUSHA_OPERATION_STATUS_JSON_MAX_BYTES_V1,
+        );
+        install_kagemusha_terminal_replay_response(top_up);
+        set_kagemusha_operation_location_header(top_up);
+
+        let redeem = kagemusha_operation_mut(paths, "/v1/kagemusha/redeem", "post");
+        redeem.insert("operationId".to_owned(), Value::from("kagemushaRedeem"));
+        redeem.insert("tags".to_owned(), norito::json!(["KAGEMUSHA"]));
+        set_kagemusha_idempotency_key_parameter(redeem);
+        redeem.insert(
+            "description".to_owned(),
+            Value::from(
+                "Verify one full or partial aggregate-balance redemption voucher, consume its terminal nullifier, debit the pooled reserve, and credit the beneficiary atomically.",
+            ),
+        );
+        set_kagemusha_norito_request(
+            redeem,
+            iroha_torii_shared::kagemusha_api::KAGEMUSHA_REDEMPTION_REQUEST_SCHEMA_NAME_V1,
+            Some(iroha_torii_shared::kagemusha_api::KAGEMUSHA_REDEMPTION_REQUEST_MAX_BYTES_V1),
+        );
+        set_kagemusha_response_schema(
+            redeem,
+            "202",
+            "KagemushaOperationStatusV1",
+            iroha_torii_shared::kagemusha_api::KAGEMUSHA_OPERATION_STATUS_MAX_BYTES_V1,
+            iroha_torii_shared::kagemusha_api::KAGEMUSHA_OPERATION_STATUS_JSON_MAX_BYTES_V1,
+        );
+        install_kagemusha_terminal_replay_response(redeem);
+        set_kagemusha_operation_location_header(redeem);
+
+        let status =
+            kagemusha_operation_mut(paths, "/v1/kagemusha/operations/{operation_id}", "get");
+        status.insert(
+            "operationId".to_owned(),
+            Value::from("kagemushaOperationStatus"),
+        );
+        status.insert("tags".to_owned(), norito::json!(["KAGEMUSHA"]));
+        set_kagemusha_operation_id_path_parameter(status);
+        status.insert(
+            "description".to_owned(),
+            Value::from(
+                "Return one idempotent KAGEMUSHA V1 reserve operation. Applied results carry consensus finality and an exact ordinary-write receipt witness; clients authenticate them against an independently pinned context.",
+            ),
+        );
+        set_kagemusha_response_schema(
+            status,
+            "200",
+            "KagemushaOperationStatusV1",
+            iroha_torii_shared::kagemusha_api::KAGEMUSHA_OPERATION_STATUS_MAX_BYTES_V1,
+            iroha_torii_shared::kagemusha_api::KAGEMUSHA_OPERATION_STATUS_JSON_MAX_BYTES_V1,
+        );
+    }
+
+    let tags = document
+        .as_object_mut()
+        .and_then(|document| document.get_mut("tags"))
+        .and_then(Value::as_array_mut)
+        .expect("package-local Torii OpenAPI authority must contain top-level tags");
+    let mut kagemusha_tag_count = 0_usize;
+    for tag in tags.iter_mut().filter_map(Value::as_object_mut) {
+        let is_kagemusha = tag
+            .get("name")
+            .and_then(Value::as_str)
+            .is_some_and(|name| name.eq_ignore_ascii_case("KAGEMUSHA"));
+        if is_kagemusha {
+            kagemusha_tag_count += 1;
+            tag.insert("name".to_owned(), Value::from("KAGEMUSHA"));
+        }
+    }
+    assert_eq!(
+        kagemusha_tag_count, 1,
+        "package-local Torii OpenAPI authority must declare exactly one KAGEMUSHA tag"
+    );
+
+    let schemas = document
+        .as_object_mut()
+        .and_then(|document| document.get_mut("components"))
+        .and_then(Value::as_object_mut)
+        .and_then(|components| components.get_mut("schemas"))
+        .and_then(Value::as_object_mut)
+        .expect("package-local Torii OpenAPI authority must contain component schemas");
+    schemas.insert(
+        "KagemushaBytes32V1".to_owned(),
+        norito::json!({
+            "description": "Exactly 32 unsigned bytes.",
+            "type": "array",
+            "minItems": 32,
+            "maxItems": 32,
+            "items": { "type": "integer", "minimum": 0, "maximum": 255 }
+        }),
+    );
+    schemas.insert(
+        "KagemushaReadinessV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["kagemusha_handoff_capability", "wire_version", "device_lifecycle_version", "ready"],
+            "properties": {
+                "kagemusha_handoff_capability": { "type": "string", "const": "kagemusha_handoff_v1" },
+                "wire_version": { "type": "integer", "const": 1 },
+                "device_lifecycle_version": { "type": "integer", "const": 1 },
+                "ready": { "type": "boolean" }
+            }
+        }),
+    );
+    schemas.insert(
+        "KagemushaOperationKindV1".to_owned(),
+        norito::json!({ "type": "string", "enum": ["top_up", "redemption"] }),
+    );
+    schemas.insert(
+        "KagemushaOperationStateV1".to_owned(),
+        norito::json!({ "type": "string", "enum": ["pending", "applied", "rejected"] }),
+    );
+    schemas.insert(
+        "KagemushaOperationRejectionCodeV1".to_owned(),
+        norito::json!({
+            "type": "string",
+            "enum": [
+                "invalid_request", "unauthorized", "insufficient_online_balance",
+                "invalid_proof", "hardware_policy_rejected", "identity_conflict",
+                "reserve_underflow", "arithmetic_overflow", "internal_failure"
+            ]
+        }),
+    );
+    schemas.insert(
+        "KagemushaOperationRejectionV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["code", "detail_digest"],
+            "properties": {
+                "code": { "$ref": "#/components/schemas/KagemushaOperationRejectionCodeV1" },
+                "detail_digest": { "$ref": "#/components/schemas/KagemushaBytes32V1" }
+            }
+        }),
+    );
+    schemas.insert(
+        "KagemushaOperationResultV1".to_owned(),
+        norito::json!({
+            "description": "A constant-shape top-up or redemption result carrying its exact request, pooled-reserve receipt, consensus finality, and—only for top-up—the byte-identical mint credit.",
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["kind", "result"],
+            "properties": {
+                "kind": { "$ref": "#/components/schemas/KagemushaOperationKindV1" },
+                "result": {
+                    "description": "The canonical typed KagemushaTopUpResultV1 or KagemushaRedemptionResultV1 value.",
+                    "type": "string",
+                    "format": "byte"
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "KagemushaOperationStatusV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["version", "operation_id", "kind", "state", "result", "rejection"],
+            "properties": {
+                "version": { "type": "integer", "const": 1 },
+                "operation_id": { "$ref": "#/components/schemas/KagemushaBytes32V1" },
+                "kind": { "$ref": "#/components/schemas/KagemushaOperationKindV1" },
+                "state": { "$ref": "#/components/schemas/KagemushaOperationStateV1" },
+                "result": {
+                    "oneOf": [
+                        { "$ref": "#/components/schemas/KagemushaOperationResultV1" },
+                        { "type": "null" }
+                    ]
+                },
+                "rejection": {
+                    "oneOf": [
+                        { "$ref": "#/components/schemas/KagemushaOperationRejectionV1" },
+                        { "type": "null" }
+                    ]
+                }
+            }
+        }),
+    );
+}
+
+const KAGEMUSHA_NONZERO_OPERATION_ID_PATTERN_V1: &str = "^(?!0{64}$)[0-9a-f]{64}$";
+const KAGEMUSHA_OPERATION_LOCATION_PATTERN_V1: &str =
+    "^/v1/kagemusha/operations/(?!0{64}$)[0-9a-f]{64}$";
+
+fn set_kagemusha_idempotency_key_parameter(operation: &mut Map) {
+    operation.insert(
+        "parameters".to_owned(),
+        norito::json!([{
+            "description": "Exact lowercase hexadecimal form of the request's nonzero 32-byte operation ID. Reusing an ID with the same canonical operation payload is idempotent; binding it to any different payload conflicts.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+                "type": "string",
+                "minLength": 64,
+                "maxLength": 64,
+                "pattern": KAGEMUSHA_NONZERO_OPERATION_ID_PATTERN_V1
+            }
+        }]),
+    );
+}
+
+fn set_kagemusha_operation_id_path_parameter(operation: &mut Map) {
+    operation.insert(
+        "parameters".to_owned(),
+        norito::json!([{
+            "description": "Exact lowercase hexadecimal form of one nonzero 32-byte KAGEMUSHA V1 operation ID.",
+            "in": "path",
+            "name": "operation_id",
+            "required": true,
+            "schema": {
+                "type": "string",
+                "minLength": 64,
+                "maxLength": 64,
+                "pattern": KAGEMUSHA_NONZERO_OPERATION_ID_PATTERN_V1
+            }
+        }]),
+    );
+}
+
+fn set_kagemusha_operation_location_header(operation: &mut Map) {
+    let responses = operation
+        .get_mut("responses")
+        .and_then(Value::as_object_mut)
+        .expect("KAGEMUSHA V1 operation must expose responses");
+    for status in ["200", "202"] {
+        let schema = responses
+            .get_mut(status)
+            .and_then(Value::as_object_mut)
+            .and_then(|response| response.get_mut("headers"))
+            .and_then(Value::as_object_mut)
+            .and_then(|headers| headers.get_mut("Location"))
+            .and_then(Value::as_object_mut)
+            .and_then(|location| location.get_mut("schema"))
+            .and_then(Value::as_object_mut)
+            .unwrap_or_else(|| {
+                panic!("KAGEMUSHA V1 submission response {status} must expose a Location schema")
+            });
+        schema.insert(
+            "pattern".to_owned(),
+            Value::from(KAGEMUSHA_OPERATION_LOCATION_PATTERN_V1),
+        );
+    }
+}
+
+fn install_kagemusha_terminal_replay_response(operation: &mut Map) {
+    let responses = operation
+        .get_mut("responses")
+        .and_then(Value::as_object_mut)
+        .expect("KAGEMUSHA V1 operation must expose responses");
+    let mut response = responses
+        .get("202")
+        .cloned()
+        .expect("KAGEMUSHA V1 submission must expose an accepted response");
+    let response_object = response
+        .as_object_mut()
+        .expect("KAGEMUSHA V1 accepted response must be an object");
+    response_object.insert(
+        "description".to_owned(),
+        Value::from("An exact replay resolved to the operation's terminal status."),
+    );
+    response_object
+        .get_mut("headers")
+        .and_then(Value::as_object_mut)
+        .expect("KAGEMUSHA V1 accepted response must expose headers")
+        .remove("Retry-After");
+    responses.insert("200".to_owned(), response);
+}
+
+fn kagemusha_operation_mut<'a>(paths: &'a mut Map, path: &str, method: &str) -> &'a mut Map {
+    paths
+        .get_mut(path)
+        .and_then(Value::as_object_mut)
+        .and_then(|path_item| path_item.get_mut(method))
+        .and_then(Value::as_object_mut)
+        .unwrap_or_else(|| panic!("cataloged KAGEMUSHA V1 operation {method} {path} is missing"))
+}
+
+fn set_kagemusha_norito_request(
+    operation: &mut Map,
+    schema_name: &str,
+    maximum_bytes: Option<usize>,
+) {
+    let mut schema = Map::new();
+    schema.insert("type".to_owned(), Value::from("string"));
+    schema.insert("format".to_owned(), Value::from("binary"));
+    schema.insert("x-iroha-norito-schema".to_owned(), Value::from(schema_name));
+    if let Some(maximum_bytes) = maximum_bytes {
+        schema.insert(
+            "x-iroha-max-bytes".to_owned(),
+            Value::from(maximum_bytes as u64),
+        );
+    }
+    operation.insert(
+        "requestBody".to_owned(),
+        norito::json!({
+            "required": true,
+            "content": {
+                "application/x-norito": {
+                    "schema": (Value::Object(schema))
+                }
+            }
+        }),
+    );
+}
+
+fn set_kagemusha_response_schema(
+    operation: &mut Map,
+    status: &str,
+    component: &str,
+    maximum_norito_bytes: usize,
+    maximum_json_bytes: usize,
+) {
+    let response = operation
+        .get_mut("responses")
+        .and_then(Value::as_object_mut)
+        .and_then(|responses| responses.get_mut(status))
+        .and_then(Value::as_object_mut)
+        .unwrap_or_else(|| panic!("KAGEMUSHA V1 response {status} is missing"));
+    let content = response
+        .entry("content".to_owned())
+        .or_insert_with(|| Value::Object(Map::new()))
+        .as_object_mut()
+        .expect("KAGEMUSHA V1 response content must be an object");
+    for (media_type, maximum_bytes) in [
+        ("application/json", maximum_json_bytes),
+        ("application/x-norito", maximum_norito_bytes),
+    ] {
+        content.insert(
+            media_type.to_owned(),
+            norito::json!({
+                "schema": {
+                    "$ref": (format!("#/components/schemas/{component}")),
+                    "x-iroha-max-bytes": (maximum_bytes as u64)
+                }
+            }),
+        );
+    }
 }
 fn remove_hard_retired_schemas(document: &mut Value) {
     let schemas = document
@@ -157,11 +665,11 @@ fn remove_hard_retired_schemas(document: &mut Value) {
         "SoraHfPlacementRecordV1",
         "SoraModelHostViolationKindV1",
         "SoraModelHostViolationEvidenceRecordV1",
-        "OfflineReadiness",
-        "OfflineReadinessBlocker",
-        "OfflineActiveTransferVerifier",
-        "OfflineActiveTopUpShieldVerifier",
-        "OfflineAuthenticatedArtifactSet",
+        "KagemushaReadiness",
+        "KagemushaReadinessBlocker",
+        "KagemushaActiveTransferVerifier",
+        "KagemushaActiveTopUpShieldVerifier",
+        "KagemushaAuthenticatedArtifactSet",
     ] {
         schemas.remove(schema);
     }
@@ -199,7 +707,7 @@ mod tests {
         uri,
     };
     use sorafs_node::evidence_viewer::EVIDENCE_VIEWER_MAX_OPAQUE_TOKEN_BYTES_V1;
-    use std::collections::{BTreeSet, VecDeque};
+    use std::collections::{BTreeMap, BTreeSet, VecDeque};
     const GOVERNANCE_HASH_LITERAL_PATTERN: &str =
         "^(?:[bB][lL][aA][kK][eE]2[bB]32:)?(?:0[xX])?[0-9a-fA-F]{64}$";
     const GOVERNANCE_LOWER_HEX32_PATTERN: &str = "^[0-9a-f]{64}$";
@@ -217,28 +725,28 @@ mod tests {
         "18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]|",
         "1844674407370955161[0-4]|18446744073709551615)$"
     );
-    const OFFLINE_COMMAND_COMMON_BAD_REQUEST_REJECT_CODES: &[&str] = &[
+    const KAGEMUSHA_COMMAND_COMMON_BAD_REQUEST_REJECT_CODES: &[&str] = &[
         "idempotency_key_invalid",
         "idempotency_key_missing",
         "operation_id_invalid",
-        "offline_amount_exceeds_limit",
-        "offline_asset_not_found",
-        "offline_asset_scale_invalid",
-        "offline_asset_scale_mismatch",
-        "offline_authorization_invalid",
-        "offline_wrong_network",
+        "kagemusha_asset_not_found",
+        "kagemusha_asset_scale_invalid",
+        "kagemusha_asset_scale_mismatch",
+        "kagemusha_authorization_invalid",
+        "kagemusha_hardware_authorization_invalid",
+        "kagemusha_wrong_network",
     ];
-    const OFFLINE_TOP_UP_BAD_REQUEST_REJECT_CODES: &[&str] = &[
-        "offline_top_up_invalid",
-        "offline_confidential_state_unavailable",
-        "offline_topup_shield_verifier_unavailable",
-        "offline_topup_shield_verifier_mismatch",
-        "offline_confidential_state_invalid",
-        "offline_topup_tree_full",
-        "offline_topup_state_conflict",
-        "offline_topup_snapshot_stale",
+    const KAGEMUSHA_TOP_UP_BAD_REQUEST_REJECT_CODES: &[&str] = &[
+        "kagemusha_top_up_invalid",
+        "kagemusha_confidential_state_unavailable",
+        "kagemusha_topup_shield_verifier_unavailable",
+        "kagemusha_topup_shield_verifier_mismatch",
+        "kagemusha_confidential_state_invalid",
+        "kagemusha_topup_tree_full",
+        "kagemusha_topup_state_conflict",
+        "kagemusha_topup_snapshot_stale",
     ];
-    const OFFLINE_REDEEM_BAD_REQUEST_REJECT_CODES: &[&str] = &["offline_redeem_invalid"];
+    const KAGEMUSHA_REDEEM_BAD_REQUEST_REJECT_CODES: &[&str] = &["kagemusha_redeem_invalid"];
     const TRANSACTION_ACCEPTANCE_BAD_REQUEST_REJECT_CODES: &[&str] = &[
         "transaction_rejected",
         "PRTRY:NTS_UNHEALTHY",
@@ -250,6 +758,7 @@ mod tests {
         "PRTRY:TX_SIGNATURE_UNKNOWN_SIGNER",
         "PRTRY:TX_SIGNATURE_INSUFFICIENT",
         "ED07",
+        "PRTRY:KAGEMUSHA_V1_OPERATION_CARRIER_REJECTED",
         "PRTRY:ROUTE_UNRESOLVED",
     ];
     const TRANSACTION_SUBMISSION_FORBIDDEN_REJECT_CODES: &[&str] = &[
@@ -257,58 +766,74 @@ mod tests {
         "PRTRY:QUEUE_LANE_COMPLIANCE_DENIED",
         "PRTRY:QUEUE_LANE_PRIVACY_PROOF_REJECTED",
         "PRTRY:NEXUS_FEE_ADMISSION_REJECTED",
-        "PRTRY:CONFIDENTIAL_POLICY_REJECTED",
     ];
-    const TRANSACTION_SUBMISSION_CONFLICT_REJECT_CODES: &[&str] =
-        &["PRTRY:ALREADY_COMMITTED", "PRTRY:ALREADY_ENQUEUED"];
+    const TRANSACTION_SUBMISSION_CONFLICT_REJECT_CODES: &[&str] = &[
+        "PRTRY:ALREADY_COMMITTED",
+        "PRTRY:ALREADY_ENQUEUED",
+        "PRTRY:KAGEMUSHA_V1_OPERATION_ID_CONFLICT",
+    ];
     const TRANSACTION_SUBMISSION_RATE_LIMIT_REJECT_CODES: &[&str] = &[
         "PRTRY:QUEUE_FULL",
         "PRTRY:QUEUE_LATENCY",
         "PRTRY:QUEUE_RATE",
     ];
-    const TRANSACTION_SUBMISSION_UNAVAILABLE_REJECT_CODES: &[&str] =
-        &["transaction_admission_worker_failed", "route_unavailable"];
-    const OFFLINE_COMMAND_FORBIDDEN_REJECT_CODES: &[&str] = &[
-        "offline_auth_header_unsupported",
+    const TRANSACTION_SUBMISSION_UNAVAILABLE_REJECT_CODES: &[&str] = &[
+        "transaction_admission_worker_failed",
+        "route_unavailable",
+        "PRTRY:QUEUE_PLAN_JOURNAL_UNAVAILABLE",
+        "PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN",
+        "PRTRY:KAGEMUSHA_V1_OPERATION_INDEX_INCONSISTENT",
+    ];
+    const KAGEMUSHA_COMMAND_FORBIDDEN_REJECT_CODES: &[&str] = &[
+        "kagemusha_auth_header_unsupported",
         "PRTRY:QUEUE_GOVERNANCE_REJECTED",
         "PRTRY:QUEUE_LANE_COMPLIANCE_DENIED",
         "PRTRY:QUEUE_LANE_PRIVACY_PROOF_REJECTED",
         "PRTRY:NEXUS_FEE_ADMISSION_REJECTED",
-        "PRTRY:CONFIDENTIAL_POLICY_REJECTED",
     ];
-    const OFFLINE_COMMAND_CONFLICT_REJECT_CODES: &[&str] = &[
+    const KAGEMUSHA_COMMAND_CONFLICT_REJECT_CODES: &[&str] = &[
         "idempotency_key_conflict",
         "operation_id_conflict",
+        "kagemusha_operation_retry_exhausted",
         "PRTRY:ALREADY_COMMITTED",
         "PRTRY:ALREADY_ENQUEUED",
+        "PRTRY:KAGEMUSHA_V1_OPERATION_ID_CONFLICT",
     ];
-    const OFFLINE_COMMAND_RATE_LIMIT_REJECT_CODES: &[&str] = &[
+    const KAGEMUSHA_COMMAND_RATE_LIMIT_REJECT_CODES: &[&str] = &[
         "PRTRY:QUEUE_FULL",
         "PRTRY:QUEUE_LATENCY",
         "PRTRY:QUEUE_RATE",
     ];
-    const OFFLINE_COMMAND_UNAVAILABLE_REJECT_CODES: &[&str] = &[
-        "offline_service_unavailable",
-        "offline_not_ready",
-        "offline_operation_capacity_exhausted",
-        "offline_operation_admission_inconsistent",
-        "offline_operation_index_unavailable",
-        "offline_operation_history_unavailable",
-        "offline_operation_index_inconsistent",
+    const KAGEMUSHA_COMMAND_UNAVAILABLE_REJECT_CODES: &[&str] = &[
+        "kagemusha_service_unavailable",
+        "kagemusha_not_ready",
+        "kagemusha_command_authority_not_ready",
+        "kagemusha_command_fee_asset_not_ready",
+        "kagemusha_command_authority_unfunded",
+        "kagemusha_command_body_admission_saturated",
+        "kagemusha_command_memory_admission_saturated",
+        "kagemusha_command_admission_configuration_invalid",
+        "kagemusha_operation_capacity_exhausted",
+        "kagemusha_operation_admission_inconsistent",
+        "kagemusha_operation_pending_unavailable",
+        "kagemusha_operation_history_unavailable",
+        "kagemusha_operation_evidence_inconsistent",
+        "kagemusha_recursive_release_invalid",
+        "kagemusha_recursive_release_outside_issuance_window",
     ];
-    const OFFLINE_OPERATION_STATUS_UNAVAILABLE_REJECT_CODES: &[&str] = &[
-        "offline_service_unavailable",
-        "offline_operation_index_unavailable",
-        "offline_operation_history_unavailable",
-        "offline_operation_index_inconsistent",
-        "offline_topup_finality_proof_unavailable",
+    const KAGEMUSHA_OPERATION_STATUS_UNAVAILABLE_REJECT_CODES: &[&str] = &[
+        "kagemusha_service_unavailable",
+        "kagemusha_operation_pending_unavailable",
+        "kagemusha_operation_history_unavailable",
+        "kagemusha_operation_evidence_inconsistent",
+        "kagemusha_topup_finality_proof_unavailable",
     ];
-    fn offline_command_bad_request_reject_codes(operation_id: &str) -> Vec<&'static str> {
-        let mut codes = OFFLINE_COMMAND_COMMON_BAD_REQUEST_REJECT_CODES.to_vec();
+    fn kagemusha_command_bad_request_reject_codes(operation_id: &str) -> Vec<&'static str> {
+        let mut codes = KAGEMUSHA_COMMAND_COMMON_BAD_REQUEST_REJECT_CODES.to_vec();
         match operation_id {
-            "offlineTopUp" => codes.extend_from_slice(OFFLINE_TOP_UP_BAD_REQUEST_REJECT_CODES),
-            "offlineRedeem" => codes.extend_from_slice(OFFLINE_REDEEM_BAD_REQUEST_REJECT_CODES),
-            _ => panic!("unexpected offline command operation id"),
+            "kagemushaTopUp" => codes.extend_from_slice(KAGEMUSHA_TOP_UP_BAD_REQUEST_REJECT_CODES),
+            "kagemushaRedeem" => codes.extend_from_slice(KAGEMUSHA_REDEEM_BAD_REQUEST_REJECT_CODES),
+            _ => panic!("unexpected KAGEMUSHA command operation id"),
         }
         codes.extend_from_slice(TRANSACTION_ACCEPTANCE_BAD_REQUEST_REJECT_CODES);
         codes
@@ -357,17 +882,44 @@ mod tests {
                 .filter(|(name, _)| name.starts_with("Subscription")),
         );
     }
-    const OFFLINE_TYPED_SCHEMA_ROOTS: [&str; 8] = [
-        "OfflineTopUpRequest",
-        "OfflineRedeemRequest",
-        "OfflineStatus",
-        "OfflineOperationReference",
-        "OfflineOperationStatus",
-        "OfflineTopUpResult",
-        "OfflineRedeemResult",
-        "ErrorEnvelope",
-    ];
+    const COMPONENT_REF_PREFIX: &str = "#/components/";
     const COMPONENT_SCHEMA_REF_PREFIX: &str = "#/components/schemas/";
+    #[derive(Clone, Copy)]
+    enum ComponentRefContext {
+        Document,
+        Components,
+        SchemaMap,
+        Schema,
+        HeaderMap,
+        Header,
+    }
+    impl ComponentRefContext {
+        fn child(self, key: &str) -> Self {
+            match self {
+                Self::Schema | Self::SchemaMap => Self::Schema,
+                Self::HeaderMap => Self::Header,
+                Self::Components => match key {
+                    "schemas" => Self::SchemaMap,
+                    "headers" => Self::HeaderMap,
+                    _ => Self::Document,
+                },
+                Self::Document if key == "components" => Self::Components,
+                Self::Document if key == "headers" => Self::HeaderMap,
+                Self::Document | Self::Header if key == "schema" || key.ends_with("-schema") => {
+                    Self::Schema
+                }
+                Self::Document => Self::Document,
+                Self::Header => Self::Header,
+            }
+        }
+        fn expected_component(self) -> Option<&'static str> {
+            match self {
+                Self::Schema => Some("schemas"),
+                Self::Header => Some("headers"),
+                _ => None,
+            }
+        }
+    }
     fn documented_reject_codes<'a>(responses: &'a Map, status: &str) -> Vec<&'a str> {
         responses
             .get(status)
@@ -394,12 +946,16 @@ mod tests {
             .is_some_and(|headers| headers.contains_key("x-iroha-reject-code"))
     }
     fn component_schemas(document: &Value) -> &Map {
+        component_collections(document)
+            .get("schemas")
+            .and_then(Value::as_object)
+            .expect("component schemas")
+    }
+    fn component_collections(document: &Value) -> &Map {
         document
             .get("components")
             .and_then(Value::as_object)
-            .and_then(|components| components.get("schemas"))
-            .and_then(Value::as_object)
-            .expect("component schemas")
+            .expect("OpenAPI components")
     }
     fn openapi_operation<'a>(document: &'a Value, path: &str, method: &str) -> &'a Map {
         document
@@ -662,19 +1218,21 @@ mod tests {
             _ => {}
         }
     }
-    fn assert_component_schema_refs_resolve(
+    fn assert_component_refs_resolve(
         value: &Value,
-        schemas: &Map,
+        components: &Map,
         location: &str,
+        context: ComponentRefContext,
         reference_count: &mut usize,
     ) {
         match value {
             Value::Array(values) => {
                 for (index, value) in values.iter().enumerate() {
-                    assert_component_schema_refs_resolve(
+                    assert_component_refs_resolve(
                         value,
-                        schemas,
+                        components,
                         &format!("{location}[{index}]"),
+                        context,
                         reference_count,
                     );
                 }
@@ -687,30 +1245,51 @@ mod tests {
                         let reference = value.as_str().unwrap_or_else(|| {
                             panic!("OpenAPI $ref at {child_location} must be a string")
                         });
-                        let schema_name = reference
-                            .strip_prefix(COMPONENT_SCHEMA_REF_PREFIX)
+                        let component_path = reference
+                            .strip_prefix(COMPONENT_REF_PREFIX)
                             .unwrap_or_else(|| {
                                 panic!(
-                                    "OpenAPI $ref at {child_location} must target a local component schema: {reference}"
+                                    "OpenAPI $ref at {child_location} must target a local component root: {reference}"
+                                )
+                            });
+                        let mut segments = component_path.split('/');
+                        let kind = segments.next().unwrap_or_default();
+                        let name = segments.next().unwrap_or_default();
+                        assert!(
+                            !kind.is_empty() && !name.is_empty(),
+                            "OpenAPI $ref at {child_location} has no component kind or name"
+                        );
+                        assert!(
+                            segments.next().is_none(),
+                            "OpenAPI $ref at {child_location} must not target a nested component path: {reference}"
+                        );
+                        let expected_kind = context.expected_component().unwrap_or_else(|| {
+                            panic!(
+                                "OpenAPI $ref at {child_location} is not permitted at this location: {reference}"
+                            )
+                        });
+                        assert_eq!(
+                            kind, expected_kind,
+                            "OpenAPI $ref at {child_location} targets {kind}, but this location requires {expected_kind}"
+                        );
+                        let collection = components
+                            .get(kind)
+                            .and_then(Value::as_object)
+                            .unwrap_or_else(|| {
+                                panic!(
+                                    "OpenAPI $ref at {child_location} targets missing component collection {kind}"
                                 )
                             });
                         assert!(
-                            !schema_name.is_empty(),
-                            "OpenAPI $ref at {child_location} has no component schema name"
-                        );
-                        assert!(
-                            !schema_name.contains('/'),
-                            "OpenAPI $ref at {child_location} must not target a nested schema path: {reference}"
-                        );
-                        assert!(
-                            schemas.contains_key(schema_name),
-                            "OpenAPI $ref at {child_location} targets missing component schema {schema_name}"
+                            collection.contains_key(name),
+                            "OpenAPI $ref at {child_location} targets missing component {kind}/{name}"
                         );
                     }
-                    assert_component_schema_refs_resolve(
+                    assert_component_refs_resolve(
                         value,
-                        schemas,
+                        components,
                         &child_location,
+                        context.child(key),
                         reference_count,
                     );
                 }
@@ -832,7 +1411,7 @@ mod tests {
                     let component = reference
                         .strip_prefix(COMPONENT_SCHEMA_REF_PREFIX)
                         .unwrap_or_else(|| {
-                            panic!("Offline schema has a non-component reference: {reference}")
+                            panic!("KAGEMUSHA schema has a non-component reference: {reference}")
                         });
                     refs.insert(component.to_owned());
                 }
@@ -843,10 +1422,10 @@ mod tests {
             _ => {}
         }
     }
-    fn reachable_offline_components(schemas: &Map) -> BTreeSet<String> {
-        let mut pending = OFFLINE_TYPED_SCHEMA_ROOTS
-            .into_iter()
-            .map(str::to_owned)
+    fn reachable_component_graph(schemas: &Map, roots: &[&str]) -> BTreeSet<String> {
+        let mut pending = roots
+            .iter()
+            .map(|name| (*name).to_owned())
             .collect::<VecDeque<_>>();
         let mut reachable = BTreeSet::new();
         while let Some(name) = pending.pop_front() {
@@ -855,22 +1434,14 @@ mod tests {
             }
             let schema = schemas
                 .get(&name)
-                .unwrap_or_else(|| panic!("Offline component reference does not resolve: {name}"));
+                .unwrap_or_else(|| panic!("component reference does not resolve: {name}"));
             let mut refs = BTreeSet::new();
             collect_component_refs(schema, &mut refs);
             for referenced in refs {
                 assert!(
                     schemas.contains_key(&referenced),
-                    "Offline component {name} references missing component {referenced}"
+                    "component {name} references missing component {referenced}"
                 );
-                // The top-up finality projection intentionally reuses the
-                // already-public Sumeragi consensus contracts. Treat those
-                // shared schemas as terminal dependencies so the Offline
-                // first-release naming guard continues to prohibit internal
-                // Kagemusha/wire-version component names of its own.
-                if is_shared_sumeragi_consensus_component(&referenced) {
-                    continue;
-                }
                 if !reachable.contains(&referenced) {
                     pending.push_back(referenced);
                 }
@@ -878,64 +1449,24 @@ mod tests {
         }
         reachable
     }
-    fn is_shared_sumeragi_consensus_component(name: &str) -> bool {
-        matches!(
-            name,
-            "SumeragiV2HeightContextId"
-                | "SumeragiV2FinalizedNextEpochSnapshot"
-                | "SumeragiV2ConsensusMode"
-                | "SumeragiV2CommitQuorumCertificate"
-                | "SumeragiV2SnapshotBootstrapAnchor"
-                | "SumeragiV2DataAvailabilityLayout"
-                | "SumeragiV2Bytes32"
-        )
-    }
-    fn assert_no_internal_offline_name(value: &Value, component: &str) {
-        match value {
-            Value::String(text) => {
-                assert!(
-                    !text.contains("Kagemusha")
-                        && !text.contains("V1")
-                        && !text.contains("V2")
-                        && !text.contains("V3"),
-                    "Offline component {component} exposes an internal name: {text}"
-                );
-            }
-            Value::Array(values) => {
-                for value in values {
-                    assert_no_internal_offline_name(value, component);
-                }
-            }
-            Value::Object(object) => {
-                for (key, value) in object {
-                    if key == "$ref"
-                        && value
-                            .as_str()
-                            .and_then(|reference| {
-                                reference.strip_prefix(COMPONENT_SCHEMA_REF_PREFIX)
-                            })
-                            .is_some_and(is_shared_sumeragi_consensus_component)
-                    {
-                        continue;
-                    }
-                    assert_no_internal_offline_name(value, component);
-                }
-            }
-            _ => {}
-        }
-    }
     #[test]
-    fn openapi_authorities_have_only_resolvable_component_schema_refs() {
+    fn openapi_authorities_have_only_resolvable_component_refs() {
         for (label, document) in [
             ("package-local", canonical_document()),
             ("compiled", generate_spec()),
         ] {
-            let schemas = component_schemas(&document);
+            let components = component_collections(&document);
             let mut reference_count = 0;
-            assert_component_schema_refs_resolve(&document, schemas, "$", &mut reference_count);
+            assert_component_refs_resolve(
+                &document,
+                components,
+                "$",
+                ComponentRefContext::Document,
+                &mut reference_count,
+            );
             assert!(
                 reference_count > 0,
-                "{label} OpenAPI document unexpectedly contains no schema references"
+                "{label} OpenAPI document unexpectedly contains no component references"
             );
         }
     }
@@ -949,6 +1480,47 @@ mod tests {
             CANONICAL_OPENAPI_JSON.as_bytes(),
             "package-local OpenAPI authority must use canonical pretty Norito JSON bytes"
         );
+    }
+    #[test]
+    fn standalone_ballot_drafts_publish_one_exact_success_and_standard_bad_request() {
+        let document = canonical_document();
+        let schemas = component_schemas(&document);
+        assert_strict_object_schema(
+            schemas,
+            "GovernanceBallotDraftResponseV1",
+            &["drafted", "tx_instructions"],
+            &[],
+        );
+        let response = component_properties(schemas, "GovernanceBallotDraftResponseV1");
+        assert_eq!(response["drafted"]["const"].as_bool(), Some(true));
+        assert_eq!(response["tx_instructions"]["minItems"].as_u64(), Some(1));
+        assert_eq!(response["tx_instructions"]["maxItems"].as_u64(), Some(1));
+        assert_eq!(
+            response["tx_instructions"]["items"]["$ref"].as_str(),
+            Some("#/components/schemas/GovernanceBallotInstructionDraftV1")
+        );
+        assert_strict_object_schema(
+            schemas,
+            "GovernanceBallotInstructionDraftV1",
+            &["wire_id", "payload_hex"],
+            &[],
+        );
+
+        for path in [
+            "/v1/gov/ballots/plain",
+            "/v1/gov/ballots/zk-v1",
+            "/v1/gov/ballots/zk-v1/ballot-proof",
+        ] {
+            let operation = openapi_operation(&document, path, "post");
+            assert_eq!(
+                operation_response_schema_ref(operation, "200", path),
+                "#/components/schemas/GovernanceBallotDraftResponseV1"
+            );
+            assert_eq!(
+                operation_response_schema_ref(operation, "400", path),
+                "#/components/schemas/ErrorEnvelope"
+            );
+        }
     }
     #[test]
     fn account_onboarding_current_state_openapi_is_one_closed_v1_observation() {
@@ -2013,22 +2585,11 @@ mod tests {
             );
         }
     }
-    #[cfg(all(
-        feature = "node-api",
-        feature = "ws_integration_tests",
-        feature = "telemetry",
-        feature = "profiling",
-        feature = "schema",
-        feature = "zk-verify-batch"
-    ))]
     #[test]
-    fn checked_openapi_assets_match_and_compiled_projection_matches_served_bytes() {
-        let generated = norito::json::to_string_pretty(&generate_spec())
-            .expect("serialize compiled release Torii OpenAPI");
+    fn checked_openapi_assets_match_package_authority() {
         let latest = include_str!("../../../artifacts/openapi/torii.json");
         let current = include_str!("../../../artifacts/openapi/versions/current/torii.json");
         let package = CANONICAL_OPENAPI_JSON;
-        let served = compiled_spec_json();
         assert_eq!(
             latest.as_bytes(),
             current.as_bytes(),
@@ -2039,6 +2600,97 @@ mod tests {
             package.as_bytes(),
             "release/package authority drift"
         );
+    }
+    #[test]
+    fn public_lane_staking_schema_closes_status_variants_and_unbond_cutoff() {
+        let document = canonical_document();
+        let schemas = component_schemas(&document);
+        let status = schemas["PublicLaneValidatorStatus"]
+            .as_object()
+            .expect("public-lane validator status schema");
+        assert_eq!(
+            status
+                .get("discriminator")
+                .and_then(Value::as_object)
+                .and_then(|value| value.get("propertyName"))
+                .and_then(Value::as_str),
+            Some("type")
+        );
+        let variants = status
+            .get("oneOf")
+            .and_then(Value::as_array)
+            .expect("closed public-lane validator status variants");
+        let expected = BTreeMap::from([
+            ("Active", BTreeSet::from(["type"])),
+            ("Exited", BTreeSet::from(["type"])),
+            ("Exiting", BTreeSet::from(["releases_at_ms", "type"])),
+            (
+                "PendingActivation",
+                BTreeSet::from(["activates_at_height", "type"]),
+            ),
+            ("Slashed", BTreeSet::from(["slash_id", "type"])),
+        ]);
+        let mut observed = BTreeMap::new();
+        for variant in variants {
+            let variant = variant.as_object().expect("status variant object");
+            assert_eq!(variant.get("type").and_then(Value::as_str), Some("object"));
+            assert_eq!(
+                variant.get("additionalProperties").and_then(Value::as_bool),
+                Some(false)
+            );
+            let properties = variant
+                .get("properties")
+                .and_then(Value::as_object)
+                .expect("status variant properties");
+            let tag = properties["type"]
+                .get("const")
+                .and_then(Value::as_str)
+                .expect("status variant discriminator constant");
+            let property_names = properties
+                .keys()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>();
+            let required = variant
+                .get("required")
+                .and_then(Value::as_array)
+                .expect("status variant required fields")
+                .iter()
+                .map(|field| field.as_str().expect("required field name"))
+                .collect::<BTreeSet<_>>();
+            assert_eq!(required, property_names, "{tag} payload must be exact");
+            assert!(observed.insert(tag, property_names).is_none());
+        }
+        assert_eq!(observed, expected);
+
+        let unbonding = schemas["PublicLaneUnbonding"]
+            .as_object()
+            .expect("public-lane unbonding schema");
+        let properties = unbonding["properties"]
+            .as_object()
+            .expect("public-lane unbonding properties");
+        assert!(properties.contains_key("slashable_through_height"));
+        assert!(!properties.contains_key("scheduled_at_height"));
+        assert!(
+            unbonding["required"]
+                .as_array()
+                .expect("public-lane unbonding required fields")
+                .iter()
+                .any(|field| field.as_str() == Some("slashable_through_height"))
+        );
+    }
+    #[cfg(all(
+        feature = "node-api",
+        feature = "ws_integration_tests",
+        feature = "telemetry",
+        feature = "profiling",
+        feature = "schema",
+        feature = "zk-verify-batch"
+    ))]
+    #[test]
+    fn compiled_projection_matches_served_bytes() {
+        let generated = norito::json::to_string_pretty(&generate_spec())
+            .expect("serialize compiled release Torii OpenAPI");
+        let served = compiled_spec_json();
         assert_eq!(
             generated.as_bytes(),
             served.as_bytes(),
@@ -2274,13 +2926,13 @@ mod tests {
             );
         }
         assert_eq!(
-            property_ref(schemas, "OfflineUnshieldPublicInputs", "network_tag"),
-            "#/components/schemas/OfflineFixed32Bytes"
+            property_ref(schemas, "KagemushaUnshieldPublicInputs", "network_tag"),
+            "#/components/schemas/KagemushaFixed32Bytes"
         );
         assert!(
-            !schemas["OfflineUnshieldPublicInputs"]["properties"]
+            !schemas["KagemushaUnshieldPublicInputs"]["properties"]
                 .as_object()
-                .expect("OfflineUnshieldPublicInputs properties")
+                .expect("KagemushaUnshieldPublicInputs properties")
                 .contains_key("chain_tag")
         );
         for name in openapi_contract_strings(
@@ -2591,6 +3243,185 @@ mod tests {
         }
     }
     #[test]
+    fn operator_credential_management_contract_is_closed_and_two_factor() {
+        const INVENTORY_PATH: &str = "/v1/operator/auth/credentials";
+        const DELETE_PATH: &str = "/v1/operator/auth/credentials/{credential_id}";
+        let document = generate_spec();
+        let schemas = component_schemas(&document);
+        let inventory = openapi_operation(&document, INVENTORY_PATH, "get");
+        let deletion = openapi_operation(&document, DELETE_PATH, "delete");
+
+        for (operation, stable_route_id) in [
+            (inventory, "operator.authentication.credentials"),
+            (deletion, "operator.authentication.credential_delete"),
+        ] {
+            assert_eq!(
+                operation_header_requirements(operation),
+                [
+                    "X-Iroha-Operator-Public-Key",
+                    "X-Iroha-Operator-Timestamp-Ms",
+                    "X-Iroha-Operator-Nonce",
+                    "X-Iroha-Operator-Signature",
+                    "X-Iroha-Operator-Session",
+                ]
+                .into_iter()
+                .map(|name| (name.to_owned(), true))
+                .collect::<Vec<_>>()
+            );
+            let session_parameter = operation["parameters"]
+                .as_array()
+                .expect("credential-management parameters")
+                .iter()
+                .find(|parameter| {
+                    parameter.get("name").and_then(Value::as_str)
+                        == Some("X-Iroha-Operator-Session")
+                })
+                .expect("operator session header parameter");
+            assert_eq!(session_parameter["schema"]["minLength"].as_u64(), Some(43));
+            assert_eq!(session_parameter["schema"]["maxLength"].as_u64(), Some(43));
+            assert_eq!(
+                session_parameter["schema"]["pattern"].as_str(),
+                Some("^[A-Za-z0-9_-]{43}$")
+            );
+            let security = operation
+                .get("security")
+                .and_then(Value::as_array)
+                .expect("operator credential-management security requirements");
+            assert_eq!(security.len(), 1);
+            let signature_headers = security[0]
+                .as_object()
+                .expect("conjunctive operator-signature requirement")
+                .keys()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>();
+            assert_eq!(
+                signature_headers,
+                [
+                    "IrohaOperatorNonce",
+                    "IrohaOperatorPublicKey",
+                    "IrohaOperatorSignature",
+                    "IrohaOperatorTimestampMs",
+                ]
+                .into_iter()
+                .collect()
+            );
+            let route_auth = operation
+                .get(ROUTE_AUTH_EXTENSION)
+                .and_then(Value::as_object)
+                .expect("catalog route-auth metadata");
+            assert_eq!(
+                route_auth.get("stableRouteId").and_then(Value::as_str),
+                Some(stable_route_id)
+            );
+            assert_eq!(
+                route_auth.get("authentication").and_then(Value::as_str),
+                Some("operator_signature")
+            );
+            assert!(
+                operation["responses"]
+                    .as_object()
+                    .expect("credential-management responses")
+                    .values()
+                    .all(|response| {
+                        response["headers"]["Cache-Control"]["schema"]["const"].as_str()
+                            == Some("private, no-store")
+                    })
+            );
+        }
+
+        assert_eq!(
+            inventory["responses"]
+                .as_object()
+                .expect("credential inventory responses")
+                .keys()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>(),
+            ["200", "401", "403", "429", "500"].into_iter().collect()
+        );
+        assert_eq!(
+            operation_response_schema_ref(inventory, "200", INVENTORY_PATH),
+            "#/components/schemas/OperatorWebAuthnCredentialListResponse"
+        );
+        assert!(
+            inventory["responses"]["500"]["description"]
+                .as_str()
+                .is_some_and(|description| {
+                    description.contains("operator_webauthn_state_unavailable")
+                        && !description.contains("capacity")
+                })
+        );
+
+        assert_eq!(
+            deletion["responses"]
+                .as_object()
+                .expect("credential deletion responses")
+                .keys()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>(),
+            ["200", "400", "401", "403", "404", "409", "429", "500"]
+                .into_iter()
+                .collect()
+        );
+        assert_eq!(
+            operation_response_schema_ref(deletion, "200", DELETE_PATH),
+            "#/components/schemas/OperatorWebAuthnCredentialDeleteResponse"
+        );
+        for (status, code) in [
+            ("404", "operator_webauthn_credential_not_found"),
+            ("409", "operator_webauthn_last_credential"),
+        ] {
+            assert!(
+                deletion["responses"][status]["description"]
+                    .as_str()
+                    .is_some_and(|description| description.contains(code)),
+                "DELETE {DELETE_PATH} HTTP {status} must document {code}"
+            );
+        }
+        let delete_internal_error = deletion["responses"]["500"]["description"]
+            .as_str()
+            .expect("credential deletion internal-error description");
+        assert!(delete_internal_error.contains("operator_webauthn_state_unavailable"));
+        assert!(delete_internal_error.contains("operator_webauthn_persist_failed"));
+
+        assert_strict_object_schema(
+            schemas,
+            "OperatorWebAuthnCredentialListResponse",
+            &["credentials", "credentials_total"],
+            &[],
+        );
+        assert_strict_object_schema(
+            schemas,
+            "OperatorWebAuthnCredentialMetadata",
+            &["credential_id", "algorithm", "sign_count", "created_at_ms"],
+            &[],
+        );
+        assert_strict_object_schema(
+            schemas,
+            "OperatorWebAuthnCredentialDeleteResponse",
+            &["status", "credential_id", "credentials_total"],
+            &[],
+        );
+        let metadata_properties = schemas["OperatorWebAuthnCredentialMetadata"]["properties"]
+            .as_object()
+            .expect("credential metadata properties");
+        assert!(!metadata_properties.contains_key("public_key"));
+        assert!(!metadata_properties.contains_key("verification_key"));
+        assert_eq!(
+            schemas["OperatorWebAuthnAlgorithm"]["enum"]
+                .as_array()
+                .expect("credential algorithms"),
+            &[Value::from("es256"), Value::from("ed25519")]
+        );
+        assert_eq!(
+            schemas["OperatorWebAuthnCredentialId"]["minLength"].as_u64(),
+            Some(1)
+        );
+        assert_eq!(
+            schemas["OperatorWebAuthnCredentialId"]["maxLength"].as_u64(),
+            Some(1366)
+        );
+    }
+    #[test]
     fn musubi_provider_bundle_attestation_and_exact_release_contract_is_static() {
         const PROVIDER_ATTESTATION_WIRE_ID: &str =
             "iroha.musubi.v1.provider_bundle_attestation.register";
@@ -2816,6 +3647,29 @@ mod tests {
                 Some(expected_operation_effect(&method, &path)),
                 "static tool effect drift for {method} {path}"
             );
+            let descriptor = RouteCatalog::new(CATALOGED_ROUTES)
+                .routes()
+                .iter()
+                .find(|descriptor| {
+                    descriptor.projections().openapi()
+                        && descriptor.path().replace("{*", "{") == path
+                        && method_name(descriptor.method()) == method
+                })
+                .unwrap_or_else(|| panic!("missing catalog descriptor for {method} {path}"));
+            assert_eq!(
+                operation.get(ROUTE_AUTH_EXTENSION),
+                Some(&route_auth_metadata(*descriptor)),
+                "static route-auth metadata drift for {method} {path}"
+            );
+            if let Some(expected_security) =
+                standard_security_requirements(descriptor.authentication())
+            {
+                assert_eq!(
+                    operation.get("security"),
+                    Some(&expected_security),
+                    "static standard security drift for {method} {path}"
+                );
+            }
         }
     }
     #[test]
@@ -3002,56 +3856,6 @@ mod tests {
                     &[
                         "components",
                         "schemas",
-                        "OfflineRecursiveOperationVector",
-                        "properties",
-                        "limbs",
-                        "maxItems",
-                    ],
-                ),
-                u64_at(
-                    &document,
-                    &[
-                        "components",
-                        "schemas",
-                        "OfflineRecursiveStateBoundary",
-                        "properties",
-                        "state_limbs",
-                        "maxItems",
-                    ],
-                ),
-                u64_at(
-                    &document,
-                    &[
-                        "components",
-                        "schemas",
-                        "OfflineRecursiveStateBoundary",
-                        "properties",
-                        "layout_version",
-                        "minimum",
-                    ],
-                ),
-            ),
-            (
-                u64::try_from(
-                    iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_OPERATION_LIMBS_V4,
-                )
-                .expect("operation limb bound"),
-                u64::try_from(
-                    iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V5,
-                )
-                .expect("state limb bound"),
-                u64::from(
-                    iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_VERSION_V5,
-                ),
-            )
-        );
-        assert_eq!(
-            (
-                u64_at(
-                    &document,
-                    &[
-                        "components",
-                        "schemas",
                         "ErrorEnvelope",
                         "properties",
                         "message",
@@ -3111,6 +3915,99 @@ mod tests {
     // Textual inclusion preserves the original OpenAPI test-module paths.
     include!("openapi/tests/sorafs_contracts.rs");
     #[test]
+    fn openapi_route_auth_metadata_matches_enabled_catalog_projection() {
+        let document = generate_spec();
+        let projected = RouteCatalog::new(CATALOGED_ROUTES).project(
+            CatalogProjection::OpenApi,
+            crate::router::builder::compiled_route_features(),
+        );
+        for descriptor in projected {
+            let method = match descriptor.method() {
+                CatalogHttpMethod::Get => "get",
+                CatalogHttpMethod::Post => "post",
+                CatalogHttpMethod::Put => "put",
+                CatalogHttpMethod::Patch => "patch",
+                CatalogHttpMethod::Delete => "delete",
+                CatalogHttpMethod::Any => {
+                    panic!("ANY protocol gateways cannot enter the OpenAPI projection")
+                }
+            };
+            let path = descriptor.path().replace("{*", "{");
+            let operation = openapi_operation(&document, &path, method);
+            assert_eq!(
+                operation.get(ROUTE_AUTH_EXTENSION),
+                Some(&route_auth_metadata(*descriptor)),
+                "{method} {path} route-auth metadata"
+            );
+        }
+    }
+    #[test]
+    fn openapi_standard_security_matches_enabled_catalog_authentication() {
+        let document = generate_spec();
+        let projected = RouteCatalog::new(CATALOGED_ROUTES).project(
+            CatalogProjection::OpenApi,
+            crate::router::builder::compiled_route_features(),
+        );
+        for descriptor in projected {
+            let method = match descriptor.method() {
+                CatalogHttpMethod::Get => "get",
+                CatalogHttpMethod::Post => "post",
+                CatalogHttpMethod::Put => "put",
+                CatalogHttpMethod::Patch => "patch",
+                CatalogHttpMethod::Delete => "delete",
+                CatalogHttpMethod::Any => {
+                    panic!("ANY protocol gateways cannot enter the OpenAPI projection")
+                }
+            };
+            let path = descriptor.path().replace("{*", "{");
+            let operation = openapi_operation(&document, &path, method);
+            if let Some(expected) = standard_security_requirements(descriptor.authentication()) {
+                assert_eq!(
+                    operation.get("security"),
+                    Some(&expected),
+                    "{method} {path} standard security"
+                );
+            }
+        }
+
+        let schemes = document
+            .get("components")
+            .and_then(|components| components.get("securitySchemes"))
+            .and_then(Value::as_object)
+            .expect("security schemes");
+        for (scheme, header) in [
+            ("IrohaOperatorPublicKey", "X-Iroha-Operator-Public-Key"),
+            ("IrohaOperatorTimestampMs", "X-Iroha-Operator-Timestamp-Ms"),
+            ("IrohaOperatorNonce", "X-Iroha-Operator-Nonce"),
+            ("IrohaOperatorSignature", "X-Iroha-Operator-Signature"),
+        ] {
+            assert_eq!(
+                schemes
+                    .get(scheme)
+                    .and_then(|value| value.get("name"))
+                    .and_then(Value::as_str),
+                Some(header),
+                "operator security scheme {scheme}"
+            );
+        }
+    }
+    #[test]
+    fn protocol_specific_bootle_bearer_security_is_preserved() {
+        let document = generate_spec();
+        for path in [
+            "/v1/privacy/bootle-lantern/issuance/authorize",
+            "/v1/privacy/bootle-lantern/issuance/issue",
+        ] {
+            assert_eq!(
+                openapi_operation(&document, path, "post").get("security"),
+                Some(&norito::json!([
+                    { "BootleLanternIssuanceBearer": [] }
+                ])),
+                "{path} must retain its protocol-specific bearer scheme"
+            );
+        }
+    }
+    #[test]
     fn openapi_operations_equal_the_enabled_catalog_projection() {
         use iroha_torii_shared::route_catalog::{
             CATALOGED_ROUTES, CatalogProjection, HttpMethod, RouteCatalog,
@@ -3156,8 +4053,8 @@ mod tests {
         ))]
         assert_eq!(
             expected.len(),
-            552,
-            "the supported full Torii documentation profile must remain exactly 552 cataloged operations"
+            553,
+            "the supported full Torii documentation profile must remain exactly 553 cataloged operations"
         );
         let spec = generate_spec();
         let paths = spec
@@ -3555,8 +4452,8 @@ mod tests {
                             .and_then(Value::as_object)
                             .unwrap_or_else(|| panic!("{variant} OpenAPI paths"));
                         assert!(
-                            paths.contains_key("/v1/offline/readiness"),
-                            "universal offline capability route missing from {variant} OpenAPI",
+                            paths.contains_key("/v1/kagemusha/readiness"),
+                            "universal KAGEMUSHA capability route missing from {variant} OpenAPI",
                         );
                     }
                 }
@@ -3566,6 +4463,56 @@ mod tests {
             std::panic::resume_unwind(payload);
         }
     }
+    #[cfg(feature = "app_api")]
+    #[test]
+    fn account_capabilities_document_exact_public_bootstrap_policy() {
+        let document = generate_spec();
+        let operation = openapi_operation(&document, "/v1/accounts/capabilities", "get");
+        assert_eq!(
+            operation["operationId"].as_str(),
+            Some("getAccountCapabilities")
+        );
+        assert!(operation.get("requestBody").is_none());
+        assert!(
+            operation["parameters"]
+                .as_array()
+                .expect("parameters")
+                .is_empty()
+        );
+        assert!(
+            operation["security"]
+                .as_array()
+                .expect("security")
+                .iter()
+                .any(|value| { value.as_object().is_some_and(Map::is_empty) })
+        );
+        let schemas = component_schemas(&document);
+        let schema = &schemas["AccountCapabilitiesV1"];
+        assert_eq!(schema["additionalProperties"].as_bool(), Some(false));
+        assert_eq!(schema["x-iroha-max-bytes"].as_u64(), Some(4096));
+        assert_eq!(
+            schema["properties"]["schema_version"]["const"].as_u64(),
+            Some(1)
+        );
+        assert_eq!(
+            schema["properties"]["default_signing"]["const"].as_str(),
+            Some("ed25519")
+        );
+        assert_eq!(
+            schema["properties"]["network_prefix"]["maximum"].as_u64(),
+            Some(65535)
+        );
+        assert_eq!(schema["required"].as_array().expect("required").len(), 5);
+        let node = openapi_operation(&document, "/v1/node/capabilities", "get");
+        assert!(
+            node["security"]
+                .as_array()
+                .expect("node security")
+                .iter()
+                .all(|value| { value.as_object().is_some_and(|object| !object.is_empty()) })
+        );
+    }
+
     #[test]
     fn generated_spec_includes_documented_paths() {
         let doc = generate_spec();
@@ -3923,38 +4870,40 @@ mod tests {
         {
             assert!(
                 paths.contains_key(path),
-                "missing final offline route {path}"
+                "missing final KAGEMUSHA route {path}"
             );
         }
         assert!(!paths.contains_key("/v1/attestation/issue"));
         let topup_post = paths
-            .get("/v1/offline/top-up")
+            .get("/v1/kagemusha/top-up")
             .and_then(Value::as_object)
             .and_then(|path| path.get("post"))
             .and_then(Value::as_object)
-            .expect("offline top-up post operation");
+            .expect("KAGEMUSHA top-up post operation");
         let topup_description = topup_post
             .get("description")
             .and_then(Value::as_str)
-            .expect("offline top-up description");
-        assert!(topup_description.contains("Norito-encoded Kagemusha OfflineTopUpRequest"));
+            .expect("KAGEMUSHA top-up description");
+        assert!(topup_description.contains("payer-signed `SignedTransaction`"));
+        assert!(topup_description.contains("configured `torii.max_content_len`"));
+        assert!(topup_description.contains("embedded top-up request is limited to 16 KiB"));
         let redeem_post = paths
-            .get("/v1/offline/redeem")
+            .get("/v1/kagemusha/redeem")
             .and_then(Value::as_object)
             .and_then(|path| path.get("post"))
             .and_then(Value::as_object)
-            .expect("offline redeem post operation");
+            .expect("KAGEMUSHA redeem post operation");
         let redeem_description = redeem_post
             .get("description")
             .and_then(Value::as_str)
-            .expect("offline redeem description");
-        assert!(redeem_description.contains("Norito-encoded Kagemusha OfflineRedeemRequest"));
+            .expect("KAGEMUSHA redeem description");
+        assert!(redeem_description.contains("redemption voucher"));
         let topup_request_content = topup_post
             .get("requestBody")
             .and_then(Value::as_object)
             .and_then(|body| body.get("content"))
             .and_then(Value::as_object)
-            .expect("Kagemusha top-up request content");
+            .expect("KAGEMUSHA V1 top-up request content");
         assert_eq!(
             topup_request_content
                 .keys()
@@ -3972,23 +4921,20 @@ mod tests {
             topup_norito_schema
                 .get("x-iroha-norito-schema")
                 .and_then(Value::as_str),
-            Some(iroha_torii_shared::offline_api::OFFLINE_TOP_UP_REQUEST_SCHEMA_NAME)
-        );
-        assert_eq!(
-            topup_norito_schema
-                .get("x-iroha-max-bytes")
-                .and_then(Value::as_u64),
             Some(
-                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_TOPUP_REQUEST_MAX_BYTES_V4
-                    as u64
+                iroha_torii_shared::kagemusha_api::KAGEMUSHA_TOP_UP_SIGNED_TRANSACTION_SCHEMA_NAME_V1
             )
+        );
+        assert!(
+            !topup_norito_schema.contains_key("x-iroha-max-bytes"),
+            "the static document must not claim one numeric value for runtime-configured transaction ingress"
         );
         let redeem_request_content = redeem_post
             .get("requestBody")
             .and_then(Value::as_object)
             .and_then(|body| body.get("content"))
             .and_then(Value::as_object)
-            .expect("Kagemusha redeem request content");
+            .expect("KAGEMUSHA V1 redeem request content");
         assert_eq!(
             redeem_request_content
                 .keys()
@@ -4006,15 +4952,14 @@ mod tests {
             redeem_norito_schema
                 .get("x-iroha-norito-schema")
                 .and_then(Value::as_str),
-            Some(iroha_torii_shared::offline_api::OFFLINE_REDEEM_REQUEST_SCHEMA_NAME)
+            Some(iroha_torii_shared::kagemusha_api::KAGEMUSHA_REDEMPTION_REQUEST_SCHEMA_NAME_V1)
         );
         assert_eq!(
             redeem_norito_schema
                 .get("x-iroha-max-bytes")
                 .and_then(Value::as_u64),
             Some(
-                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_REDEEM_REQUEST_MAX_BYTES_V4
-                    as u64
+                iroha_torii_shared::kagemusha_api::KAGEMUSHA_REDEMPTION_REQUEST_MAX_BYTES_V1 as u64
             )
         );
         let accepted = topup_post
@@ -4022,705 +4967,146 @@ mod tests {
             .and_then(Value::as_object)
             .and_then(|responses| responses.get("202"))
             .and_then(Value::as_object)
-            .expect("offline top-up accepted response");
+            .expect("KAGEMUSHA top-up accepted response");
         let accepted_headers = accepted
             .get("headers")
             .and_then(Value::as_object)
-            .expect("offline top-up accepted headers");
+            .expect("KAGEMUSHA top-up accepted headers");
         assert!(accepted_headers.contains_key("Location"));
         assert!(accepted_headers.contains_key("Retry-After"));
-    }
-    #[test]
-    fn generated_spec_documents_strict_typed_offline_request_schemas_and_states() {
-        let doc = generate_spec();
-        let schemas = doc
-            .get("components")
+        let terminal_replay = topup_post
+            .get("responses")
             .and_then(Value::as_object)
-            .and_then(|components| components.get("schemas"))
+            .and_then(|responses| responses.get("200"))
             .and_then(Value::as_object)
-            .expect("component schemas");
-        for (schema_name, norito_schema_name, expected_properties) in [
-            (
-                "OfflineTopUpRequest",
-                iroha_torii_shared::offline_api::OFFLINE_TOP_UP_REQUEST_SCHEMA_NAME,
-                openapi_contract_strings("openapi.offline_request.properties.1")
-                    .collect::<BTreeSet<_>>(),
+            .expect("KAGEMUSHA top-up terminal replay response");
+        let terminal_headers = terminal_replay
+            .get("headers")
+            .and_then(Value::as_object)
+            .expect("KAGEMUSHA top-up terminal replay headers");
+        assert!(terminal_headers.contains_key("Location"));
+        assert!(!terminal_headers.contains_key("Retry-After"));
+        assert_eq!(
+            terminal_headers["Location"]["schema"]["pattern"].as_str(),
+            Some(KAGEMUSHA_OPERATION_LOCATION_PATTERN_V1)
+        );
+        assert_eq!(
+            operation_response_schema_ref(
+                topup_post,
+                "200",
+                "/v1/kagemusha/top-up terminal replay"
             ),
-            (
-                "OfflineRedeemRequest",
-                iroha_torii_shared::offline_api::OFFLINE_REDEEM_REQUEST_SCHEMA_NAME,
-                openapi_contract_strings("openapi.offline_request.properties.2")
-                    .collect::<BTreeSet<_>>(),
-            ),
-        ] {
-            let schema = schemas
-                .get(schema_name)
-                .and_then(Value::as_object)
-                .expect("direct offline request schema");
-            assert_eq!(
-                schema.get("additionalProperties").and_then(Value::as_bool),
-                Some(false),
-                "typed request JSON must reject unknown fields"
-            );
-            assert_eq!(schema.get("type").and_then(Value::as_str), Some("object"));
-            assert!(
-                !schema.contains_key("oneOf") && !schema.contains_key("anyOf"),
-                "a direct typed request must not become an alternate union"
-            );
-            assert!(!schema.contains_key("x-iroha-norito-type"));
-            assert_eq!(
-                schema.get("x-iroha-norito-schema").and_then(Value::as_str),
-                Some(norito_schema_name)
-            );
-            let properties = schema
-                .get("properties")
-                .and_then(Value::as_object)
-                .expect("typed offline request properties");
-            assert_eq!(
-                properties
-                    .keys()
-                    .map(String::as_str)
-                    .collect::<BTreeSet<_>>(),
-                expected_properties,
-                "typed request properties must match the exact first-release inventory"
-            );
-        }
-        assert_eq!(
-            component_required(schemas, "OfflineTopUpRequest"),
-            [
-                "version",
-                "asset",
-                "amount",
-                "current_note",
-                "shield_evidence",
-                "artifact_binding",
-                "operation_id",
-                "authorization",
-            ],
-            "top-up transport fields must exactly match the authoritative V4 request"
-        );
-        assert_eq!(
-            component_required(schemas, "OfflineRedeemRequest"),
-            [
-                "version",
-                "bundle",
-                "recipient",
-                "amount",
-                "redeem_proof",
-                "redemption",
-                "block_height",
-                "operation_id",
-                "authorization",
-            ],
-            "redeem transport fields must exactly match the authoritative V4 request"
-        );
-        assert_eq!(
-            nullable_property_ref(schemas, "OfflineRedeemRequest", "offline_change"),
-            "#/components/schemas/OfflineRedeemChangeBranch"
-        );
-        assert_eq!(
-            component_required(schemas, "OfflinePeerSplitTransition"),
-            [
-                "binding_digest",
-                "branch",
-                "recipient_request_digest",
-                "operation_id",
-                "parent_max_proof_step_count",
-                "parent_max_peer_hop_count",
-            ],
-            "each recursive output statement must select its split branch"
-        );
-        assert_eq!(
-            component_required(schemas, "OfflineRedemptionChangeTransition"),
-            [
-                "binding_digest",
-                "parent_bundle_digest",
-                "operation_id",
-                "parent_proof_step_count",
-                "parent_peer_hop_count",
-            ]
-        );
-        assert_eq!(
-            component_required(schemas, "OfflineSpendStatement"),
-            [
-                "network_id",
-                "asset",
-                "asset_scale",
-                "final_root",
-                "next_zero_leaf_index",
-                "topup_anchor_refs",
-                "proof_step_count",
-                "peer_hop_count",
-                "current_note",
-                "branch_claims",
-                "artifact_binding",
-                "verifier_key_id",
-            ],
-            "the proof statement must contain the complete spendable public state"
-        );
-        assert_eq!(
-            component_required(schemas, "OfflineSpendBundle"),
-            ["statement", "operation", "recursive_proof"],
-            "an ABI-21 spendable bundle must carry its statement and exact operation row"
-        );
-        for [owner, forbidden] in openapi_contract_fixed_rows::<2>(
-            "openapi.generated_spec_documents_strict_typed_offline_request_schemas_and_states.rows.1",
-        ) {
-            assert!(
-                !schemas[owner]["properties"]
-                    .as_object()
-                    .is_some_and(|properties| properties.contains_key(forbidden)),
-                "{owner}.{forbidden} is not part of the first-release wire contract"
-            );
-        }
-        for [owner, property, minimum, maximum] in openapi_contract_fixed_rows::<4>(
-            "openapi.generated_spec_documents_strict_typed_offline_request_schemas_and_states.integer_bounds",
-        ) {
-            let expected = (
-                minimum.parse::<u64>().expect("offline integer minimum"),
-                if maximum == "kagemusha_topup_shield_tree_capacity_v2_minus_one" {
-                    iroha_data_model::offline::KAGEMUSHA_TOPUP_SHIELD_TREE_CAPACITY_V2 as u64 - 1
-                } else {
-                    maximum.parse::<u64>().expect("offline integer maximum")
-                },
-            );
-            assert_eq!(
-                property_integer_bounds(schemas, owner, property),
-                expected,
-                "{owner}.{property} must expose the exact recursive-spend bound"
-            );
-        }
-        for [owner, property] in openapi_contract_fixed_rows::<2>(
-            "openapi.generated_spec_documents_strict_typed_offline_request_schemas_and_states.rows.2",
-        ) {
-            assert_eq!(
-                property_array_bounds(schemas, owner, property),
-                (1, 2),
-                "{owner}.{property} must expose the one-or-two-input bound"
-            );
-        }
-        let capability = schemas
-            .get("OfflineStatus")
-            .and_then(Value::as_object)
-            .expect("universal offline capability schema");
-        assert_eq!(
-            capability
-                .get("additionalProperties")
-                .and_then(Value::as_bool),
-            Some(false),
-            "offline capability rejects unknown members"
-        );
-        assert_eq!(
-            component_required(schemas, "OfflineStatus"),
-            [
-                "cash_handoff_capability",
-                "required_bridge_abi_version",
-                "max_hops",
-                "ready",
-            ]
-        );
-        let capability_properties = component_properties(schemas, "OfflineStatus");
-        assert_eq!(capability_properties.len(), 4);
-        assert_eq!(
-            capability_properties["cash_handoff_capability"]["const"].as_str(),
-            Some("cash_handoff_v1")
-        );
-        assert_eq!(
-            capability_properties["required_bridge_abi_version"]["const"].as_u64(),
-            Some(23)
-        );
-        assert_eq!(capability_properties["max_hops"]["const"].as_u64(), Some(8));
-        assert_eq!(
-            capability_properties["ready"]["const"].as_bool(),
-            Some(true)
-        );
-        for retired_property in openapi_contract_strings(
-            "openapi.generated_spec_documents_strict_typed_offline_request_schemas_and_states.strings.1",
-        )
-        .chain(openapi_contract_strings(
-            "openapi.generated_spec_documents_strict_typed_offline_request_schemas_and_states.strings.2",
-        ))
-        .chain(
-            openapi_contract_strings(
-                "openapi.generated_spec_documents_strict_typed_offline_request_schemas_and_states.strings.3",
-            )
-            .filter(|property| *property != "required_bridge_abi_version"),
-        ) {
-            assert!(
-                !capability_properties.contains_key(retired_property),
-                "universal capability must not carry retired field {retired_property}"
-            );
-        }
-        for retired_component in [
-            "OfflineCapabilityStatus",
-            "OfflineReadiness",
-            "OfflineReadinessBlocker",
-            "OfflineActiveTransferVerifier",
-            "OfflineActiveTopUpShieldVerifier",
-            "OfflineAuthenticatedArtifactSet",
-        ] {
-            assert!(
-                !schemas.contains_key(retired_component),
-                "{retired_component} must be absent from the first-release schema graph"
-            );
-        }
-        assert!(schemas.contains_key("OfflineOperationReference"));
-        let status = schemas
-            .get("OfflineOperationStatus")
-            .and_then(Value::as_object)
-            .expect("offline operation status schema");
-        assert_eq!(
-            status.get("oneOf").and_then(Value::as_array).map(Vec::len),
-            Some(3)
+            "#/components/schemas/KagemushaOperationStatusV1"
         );
     }
     #[test]
-    fn generated_spec_exposes_only_the_closed_verifier_backend_registry_v1() {
-        let doc = generate_spec();
-        let schemas = component_schemas(&doc);
-        let backend = schemas
-            .get("OfflineProofBackend")
-            .and_then(Value::as_object)
-            .expect("offline proof backend schema");
-        let labels = backend
-            .get("enum")
-            .and_then(Value::as_array)
-            .expect("offline proof backend exact enum");
-        let actual = labels
-            .iter()
-            .map(|label| {
-                label
-                    .as_str()
-                    .expect("verifier-registry label must be a string")
-            })
-            .collect::<BTreeSet<_>>();
-        let expected =
-            openapi_contract_strings("openapi.offline_backend.labels").collect::<BTreeSet<_>>();
-        assert_eq!(
-            labels.len(),
-            expected.len(),
-            "registry labels must be unique"
-        );
-        assert_eq!(actual, expected);
-        for retired_or_alias in openapi_contract_strings(
-            "openapi.generated_spec_exposes_only_the_closed_verifier_backend_registry_v1.strings.1",
-        ) {
-            assert!(
-                !actual.contains(retired_or_alias),
-                "{retired_or_alias:?} must not be advertised"
-            );
-        }
-    }
-    #[test]
-    fn generated_spec_offline_typed_graph_is_closed_and_publicly_named() {
-        let doc = generate_spec();
-        let schemas = component_schemas(&doc);
-        let reachable = reachable_offline_components(schemas);
-        assert!(
-            !reachable.contains("JsonValue"),
-            "typed Offline DTOs must not regain an arbitrary JSON escape hatch"
-        );
-        assert!(
-            !reachable.contains("OfflineVerifyingKeyRecord"),
-            "chain-facing Offline DTOs must not regain the retired embedded verifier record"
-        );
-        for required in openapi_contract_strings(
-            "openapi.generated_spec_offline_typed_graph_is_closed_and_publicly_named.strings.1",
-        ) {
-            assert!(
-                reachable.contains(required),
-                "Offline typed graph does not reach {required}"
-            );
-        }
-        for name in reachable {
-            assert!(
-                !name.contains("Kagemusha")
-                    && !name.contains("V1")
-                    && !name.contains("V2")
-                    && !name.contains("V3"),
-                "Offline component exposes an internal type name: {name}"
-            );
-            assert_no_internal_offline_name(
-                schemas.get(&name).expect("reachable component exists"),
-                &name,
-            );
-        }
-    }
-    #[test]
-    fn offline_json_adapter_schemas_match_actual_norito_serializers() {
-        use iroha_crypto::{MerkleProof, privacy::LaneCommitmentId};
-        use iroha_data_model::{
-            nexus::{LanePrivacyMerkleWitness, LanePrivacyWitness},
-            offline::{
-                KagemushaRecursiveSpendBranchClaimV2, KagemushaRecursiveSpendBranchPathV2,
-                KagemushaRecursiveSpendBranchV2,
-            },
-            proof::{ProofAttachment, ProofBox, VerifyingKeyId},
-        };
-        assert_eq!(
-            norito::json::to_value(&KagemushaRecursiveSpendBranchV2::Recipient)
-                .expect("serialize spend branch"),
-            norito::json!({ "branch": "recipient", "value": null })
-        );
-        assert_eq!(
-            norito::json::to_value(&LaneCommitmentId::new(7))
-                .expect("serialize lane commitment id"),
-            norito::json!([7])
-        );
-        let branch_claim = KagemushaRecursiveSpendBranchClaimV2 {
-            path: KagemushaRecursiveSpendBranchPathV2 {
-                lineage_root: [7; 32],
-                depth: 1,
-                path_bits: [0; 8],
-            },
-            transition_tags: vec![0, 1, 2],
-        };
-        let branch_claim = norito::json::to_value(&branch_claim)
-            .expect("serialize branch claim")
-            .as_object()
-            .expect("branch claim object")
-            .clone();
-        assert_eq!(
-            branch_claim.get("transition_tags").and_then(Value::as_str),
-            Some("AAEC")
-        );
-        let path = branch_claim
-            .get("path")
-            .and_then(Value::as_object)
-            .expect("branch path object");
-        assert_eq!(
-            path.get("lineage_root")
-                .and_then(Value::as_array)
-                .map(Vec::len),
-            Some(32)
-        );
-        assert_eq!(
-            path.get("path_bits")
-                .and_then(Value::as_array)
-                .map(Vec::len),
-            Some(8)
-        );
-        let lane_witness = LanePrivacyWitness::Merkle(LanePrivacyMerkleWitness {
-            leaf: [7; 32],
-            proof: MerkleProof::from_audit_path_bytes(0, vec![[9; 32]]),
-        });
-        let lane_witness =
-            norito::json::to_value(&lane_witness).expect("serialize lane privacy witness");
-        assert_eq!(
-            lane_witness
-                .as_object()
-                .and_then(|value| value.get("kind"))
-                .and_then(Value::as_str),
-            Some("merkle")
-        );
-        assert_eq!(
-            lane_witness
-                .as_object()
-                .and_then(|value| value.get("payload"))
-                .and_then(Value::as_object)
-                .and_then(|value| value.get("leaf"))
-                .and_then(Value::as_array)
-                .map(Vec::len),
-            Some(32)
-        );
-        let attachment = ProofAttachment::new_ref(
-            "halo2/ipa".into(),
-            ProofBox::new("halo2/ipa".into(), vec![1, 2, 3]),
-            VerifyingKeyId::new("halo2/ipa", "offline-vk"),
-        );
-        let attachment = norito::json::to_value(&attachment)
-            .expect("serialize proof attachment")
-            .as_object()
-            .expect("proof attachment object")
-            .clone();
-        let proof = attachment
-            .get("proof")
-            .and_then(Value::as_object)
-            .expect("proof object");
-        assert_eq!(proof.get("bytes"), Some(&norito::json!([1, 2, 3])));
-        assert!(
-            !proof.contains_key("bytes_b64"),
-            "canonical ProofBox JSON must remain a byte array"
-        );
-    }
-    #[test]
-    fn generated_spec_matches_offline_negotiation_and_operation_lifecycle() {
-        let doc = generate_spec();
-        let paths = doc
+    fn generated_spec_exposes_only_kagemusha_v1() {
+        let document = generate_spec();
+        let paths = document
             .get("paths")
             .and_then(Value::as_object)
             .expect("paths section");
-        for [path, method] in openapi_contract_fixed_rows::<2>(
-            "openapi.generated_spec_matches_offline_negotiation_and_operation_lifecycle.rows.1",
-        ) {
-            let responses = paths
-                .get(path)
-                .and_then(Value::as_object)
-                .and_then(|item| item.get(method))
-                .and_then(Value::as_object)
-                .and_then(|operation| operation.get("responses"))
-                .and_then(Value::as_object)
-                .expect("offline operation responses");
-            let unauthorized = responses
-                .get("401")
-                .and_then(Value::as_object)
-                .expect("API-token authentication failure");
-            let challenge = unauthorized
-                .get("headers")
-                .and_then(Value::as_object)
-                .and_then(|headers| headers.get("WWW-Authenticate"))
-                .and_then(Value::as_object)
-                .and_then(|header| header.get("schema"))
-                .and_then(Value::as_object)
-                .and_then(|schema| schema.get("example"))
-                .and_then(Value::as_str);
-            assert_eq!(challenge, Some("IrohaApiToken realm=\"torii\""));
-            let not_acceptable = responses
-                .get("406")
-                .and_then(Value::as_object)
-                .expect("typed 406 response");
-            let schema_ref = not_acceptable
-                .get("content")
-                .and_then(Value::as_object)
-                .and_then(|content| content.get("application/json"))
-                .and_then(Value::as_object)
-                .and_then(|media| media.get("schema"))
-                .and_then(Value::as_object)
-                .and_then(|schema| schema.get("$ref"))
-                .and_then(Value::as_str);
-            assert_eq!(schema_ref, Some("#/components/schemas/ErrorEnvelope"));
-            for status in ["429"] {
-                let headers = responses
-                    .get(status)
-                    .and_then(Value::as_object)
-                    .and_then(|response| response.get("headers"))
-                    .and_then(Value::as_object)
-                    .unwrap_or_else(|| panic!("offline {status} response headers: {path}"));
-                for header in ["Retry-After", "Cache-Control", "Vary"] {
-                    assert!(
-                        headers.contains_key(header),
-                        "offline {status} must document {header}: {path}"
-                    );
-                }
-            }
+        let schemas = component_schemas(&document);
+        let kagemusha_tags = document
+            .get("tags")
+            .and_then(Value::as_array)
+            .expect("top-level tags")
+            .iter()
+            .filter_map(|tag| tag.get("name").and_then(Value::as_str))
+            .filter(|name| name.eq_ignore_ascii_case("KAGEMUSHA"))
+            .collect::<Vec<_>>();
+        assert_eq!(kagemusha_tags, ["KAGEMUSHA"]);
+        let retired_product = ["line", "off"].into_iter().rev().collect::<String>();
+        for suffix in ["readiness", "top-up", "redeem", "operations/{operation_id}"] {
+            let retired_path = format!("/v1/{retired_product}/{suffix}");
+            assert!(
+                !paths.contains_key(&retired_path),
+                "retired product route leaked into the first-release OpenAPI: {retired_path}"
+            );
         }
-        for path in openapi_contract_strings(
-            "openapi.generated_spec_matches_offline_negotiation_and_operation_lifecycle.strings.1",
-        ) {
-            let responses = paths
-                .get(path)
-                .and_then(Value::as_object)
-                .and_then(|item| item.values().next())
-                .and_then(Value::as_object)
-                .and_then(|operation| operation.get("responses"))
-                .and_then(Value::as_object)
-                .expect("offline operation responses");
-            let headers = responses
-                .get("503")
-                .and_then(Value::as_object)
-                .and_then(|response| response.get("headers"))
-                .and_then(Value::as_object)
-                .unwrap_or_else(|| panic!("offline 503 response headers: {path}"));
-            for header in ["Retry-After", "Cache-Control", "Vary"] {
-                assert!(
-                    headers.contains_key(header),
-                    "offline 503 must document {header}: {path}"
-                );
-            }
-        }
-        let capability_operation = paths
-            .get("/v1/offline/readiness")
-            .and_then(Value::as_object)
-            .and_then(|item| item.get("get"))
-            .and_then(Value::as_object)
-            .expect("offline capability operation");
+
         assert_eq!(
-            capability_operation
-                .get("operationId")
-                .and_then(Value::as_str),
-            Some("offlineCapability")
-        );
-        let capability_description = capability_operation
-            .get("description")
-            .and_then(Value::as_str)
-            .expect("offline capability description");
-        assert!(
-            capability_description.contains("native bridge ABI 23"),
-            "offline capability documentation must match the compiled Kagemusha bridge ABI"
-        );
-        assert!(!capability_description.contains("ABI 22"));
-        assert!(
-            capability_operation
-                .get("parameters")
+            schemas
+                .get("KagemushaReadinessV1")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("required"))
                 .and_then(Value::as_array)
-                .is_none_or(|parameters| parameters.iter().all(|parameter| {
-                    parameter
-                        .get("in")
-                        .and_then(Value::as_str)
-                        .is_some_and(|location| location != "query")
-                })),
-            "offline capability must not advertise a selector query"
+                .map(Vec::len),
+            Some(4)
         );
-        assert_eq!(
-            operation_response_schema_ref(capability_operation, "200", "/v1/offline/readiness"),
-            "#/components/schemas/OfflineStatus"
-        );
-        let capability_responses = capability_operation
-            .get("responses")
-            .and_then(Value::as_object)
-            .expect("offline capability responses");
-        for status in ["400", "404", "503"] {
-            assert!(
-                !capability_responses.contains_key(status),
-                "universal capability discovery must not document {status} backend evaluation"
-            );
-        }
+        assert!(schemas.contains_key("KagemushaOperationStatusV1"));
         assert!(
-            !response_documents_reject_code(capability_responses, "429"),
-            "generic capability ingress throttling must not advertise an application reject code"
+            schemas
+                .keys()
+                .all(|name| !name.starts_with("KagemushaRecipient"))
         );
-        let status_responses = paths
-            .get("/v1/offline/operations/{operation_id}")
-            .and_then(Value::as_object)
-            .and_then(|item| item.get("get"))
-            .and_then(Value::as_object)
-            .and_then(|operation| operation.get("responses"))
-            .and_then(Value::as_object)
-            .expect("offline operation status responses");
-        assert!(status_responses.contains_key("503"));
+
+        let readiness = paths["/v1/kagemusha/readiness"]["get"]
+            .as_object()
+            .expect("readiness operation");
         assert_eq!(
-            documented_reject_codes(status_responses, "400"),
-            ["operation_id_invalid"]
+            operation_response_schema_ref(readiness, "200", "/v1/kagemusha/readiness"),
+            "#/components/schemas/KagemushaReadinessV1"
         );
-        assert_eq!(
-            documented_reject_codes(status_responses, "404"),
-            ["offline_operation_not_found"]
+        assert!(
+            readiness["description"]
+                .as_str()
+                .is_some_and(|description| description.contains("no hop"))
         );
-        assert_eq!(
-            documented_reject_codes(status_responses, "503"),
-            OFFLINE_OPERATION_STATUS_UNAVAILABLE_REJECT_CODES
-        );
-        for status in ["429", "500"] {
-            assert!(
-                !response_documents_reject_code(status_responses, status),
-                "offline operation {status} must not claim a canonical application reject code"
-            );
-        }
-        for path in ["/v1/offline/top-up", "/v1/offline/redeem"] {
-            let responses = paths
-                .get(path)
-                .and_then(Value::as_object)
-                .and_then(|item| item.get("post"))
-                .and_then(Value::as_object)
-                .and_then(|operation| operation.get("responses"))
-                .and_then(Value::as_object)
-                .expect("offline command responses");
-            let operation_id = if path.ends_with("top-up") {
-                "offlineTopUp"
-            } else {
-                "offlineRedeem"
-            };
+
+        for (path, request_schema, request_maximum) in [
+            (
+                "/v1/kagemusha/top-up",
+                iroha_torii_shared::kagemusha_api::KAGEMUSHA_TOP_UP_SIGNED_TRANSACTION_SCHEMA_NAME_V1,
+                None,
+            ),
+            (
+                "/v1/kagemusha/redeem",
+                iroha_torii_shared::kagemusha_api::KAGEMUSHA_REDEMPTION_REQUEST_SCHEMA_NAME_V1,
+                Some(iroha_torii_shared::kagemusha_api::KAGEMUSHA_REDEMPTION_REQUEST_MAX_BYTES_V1),
+            ),
+        ] {
+            let operation = paths[path]["post"]
+                .as_object()
+                .expect("KAGEMUSHA operation");
+            let wire = &operation["requestBody"]["content"]["application/x-norito"]["schema"];
+            assert_eq!(wire["x-iroha-norito-schema"].as_str(), Some(request_schema));
             assert_eq!(
-                documented_reject_codes(responses, "400"),
-                offline_command_bad_request_reject_codes(operation_id),
-                "command HTTP 400 reject-code contract: {path}"
+                wire.get("x-iroha-max-bytes").and_then(Value::as_u64),
+                request_maximum.map(|maximum| maximum as u64)
             );
             assert_eq!(
-                documented_reject_codes(responses, "403"),
-                OFFLINE_COMMAND_FORBIDDEN_REJECT_CODES,
-                "command HTTP 403 reject-code contract: {path}"
+                operation_response_schema_ref(operation, "202", path),
+                "#/components/schemas/KagemushaOperationStatusV1"
             );
             assert_eq!(
-                documented_reject_codes(responses, "409"),
-                OFFLINE_COMMAND_CONFLICT_REJECT_CODES,
-                "command HTTP 409 reject-code contract: {path}"
+                operation_response_schema_ref(operation, "200", path),
+                "#/components/schemas/KagemushaOperationStatusV1"
             );
             assert_eq!(
-                documented_reject_codes(responses, "429"),
-                OFFLINE_COMMAND_RATE_LIMIT_REJECT_CODES,
-                "command HTTP 429 reject-code contract: {path}"
+                operation["parameters"][0]["schema"]["pattern"].as_str(),
+                Some(KAGEMUSHA_NONZERO_OPERATION_ID_PATTERN_V1)
             );
-            assert_eq!(
-                documented_reject_codes(responses, "503"),
-                OFFLINE_COMMAND_UNAVAILABLE_REJECT_CODES,
-                "command HTTP 503 reject-code contract: {path}"
-            );
-            assert!(
-                responses.contains_key("403"),
-                "signed-body command must document rejection of canonical auth headers: {path}"
-            );
-            assert!(
-                responses.contains_key("413"),
-                "offline command must document its configured body limit: {path}"
-            );
-            assert!(
-                !responses.contains_key("422"),
-                "offline command has no unprocessable-entity response path: {path}"
-            );
-            for status in ["413", "415", "500"] {
-                assert!(
-                    !response_documents_reject_code(responses, status),
-                    "offline command {status} has no canonical reject-code header: {path}"
+            for status in ["200", "202"] {
+                assert_eq!(
+                    operation["responses"][status]["headers"]["Location"]["schema"]["pattern"]
+                        .as_str(),
+                    Some(KAGEMUSHA_OPERATION_LOCATION_PATTERN_V1)
                 );
             }
+            assert!(operation["responses"]["200"]["headers"]
+                .get("Retry-After")
+                .is_none());
+            assert!(operation["responses"]["202"]["headers"]
+                .get("Retry-After")
+                .is_some());
         }
-        for path in openapi_contract_strings(
-            "openapi.generated_spec_matches_offline_negotiation_and_operation_lifecycle.strings.2",
-        ) {
-            let responses = paths
-                .get(path)
-                .and_then(Value::as_object)
-                .and_then(|item| item.get("get"))
-                .and_then(Value::as_object)
-                .and_then(|operation| operation.get("responses"))
-                .and_then(Value::as_object)
-                .expect("offline read responses");
-            assert!(
-                !responses.contains_key("403"),
-                "offline read has no authenticated authorization-denial path: {path}"
-            );
-        }
-        let schemas = doc
-            .get("components")
-            .and_then(Value::as_object)
-            .and_then(|components| components.get("schemas"))
-            .and_then(Value::as_object)
-            .expect("component schemas");
-        let reference_properties = schemas
-            .get("OfflineOperationReference")
-            .and_then(Value::as_object)
-            .and_then(|schema| schema.get("properties"))
-            .and_then(Value::as_object)
-            .expect("offline operation reference properties");
+        let status = paths["/v1/kagemusha/operations/{operation_id}"]["get"]
+            .as_object()
+            .expect("KAGEMUSHA status operation");
         assert_eq!(
-            reference_properties
-                .get("transaction_hash")
-                .and_then(Value::as_object)
-                .and_then(|schema| schema.get("$ref"))
-                .and_then(Value::as_str),
-            Some("#/components/schemas/OfflineTransactionHash")
-        );
-        assert_eq!(
-            reference_properties
-                .get("status_uri")
-                .and_then(Value::as_object)
-                .and_then(|schema| schema.get("pattern"))
-                .and_then(Value::as_str),
-            Some("^/v1/offline/operations/(?!0{64}$)[0-9a-f]{64}$")
-        );
-        assert_eq!(
-            schemas
-                .get("OfflineOperationId")
-                .and_then(Value::as_object)
-                .and_then(|schema| schema.get("pattern"))
-                .and_then(Value::as_str),
-            Some("^(?!0{64}$)[0-9a-f]{64}$")
-        );
-        assert!(
-            schemas
-                .get("OfflineOperationIdBytes")
-                .and_then(Value::as_object)
-                .is_some_and(|schema| schema.contains_key("not"))
+            status["parameters"][0]["schema"]["pattern"].as_str(),
+            Some(KAGEMUSHA_NONZERO_OPERATION_ID_PATTERN_V1)
         );
     }
     #[test]
@@ -5299,6 +5685,356 @@ mod tests {
         }
     }
     #[test]
+    fn sumeragi_evidence_audit_contract_is_closed_and_bounded() {
+        use iroha_torii_shared::sumeragi_evidence_api::{
+            SUMERAGI_EVIDENCE_COUNT_RESPONSE_MAX_BYTES,
+            SUMERAGI_EVIDENCE_COUNT_RESPONSE_SCHEMA_NAME_V1,
+            SUMERAGI_EVIDENCE_LIST_JSON_RESPONSE_MAX_BYTES,
+            SUMERAGI_EVIDENCE_LIST_NORITO_RESPONSE_MAX_BYTES,
+            SUMERAGI_EVIDENCE_LIST_WIRE_RESPONSE_SCHEMA_NAME_V1,
+        };
+
+        const LIST_PATH: &str = "/v1/sumeragi/evidence";
+        const COUNT_PATH: &str = "/v1/sumeragi/evidence/count";
+        let assert_vary_accept = |response: &Value, label: &str| {
+            let vary = &response["headers"]["Vary"];
+            assert_eq!(vary["required"].as_bool(), Some(true), "{label} Vary");
+            assert_eq!(
+                vary["schema"]["const"].as_str(),
+                Some("Accept"),
+                "{label} Vary value"
+            );
+        };
+        let assert_not_acceptable = |operation: &Map, label: &str| {
+            let response = &operation["responses"]["406"];
+            let content = response["content"]
+                .as_object()
+                .unwrap_or_else(|| panic!("{label} 406 content"));
+            assert_eq!(
+                content.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+                ["application/json"].into_iter().collect(),
+                "{label} 406 media types"
+            );
+            assert_eq!(
+                content["application/json"]["schema"]["$ref"].as_str(),
+                Some("#/components/schemas/ErrorEnvelope"),
+                "{label} 406 schema"
+            );
+            assert_vary_accept(response, label);
+            assert_eq!(
+                response["headers"]["Cache-Control"]["required"].as_bool(),
+                Some(true),
+                "{label} 406 cache policy"
+            );
+            assert_eq!(
+                response["headers"]["Cache-Control"]["schema"]["const"].as_str(),
+                Some("private, no-store"),
+                "{label} 406 cache policy value"
+            );
+        };
+        let canonical = canonical_document();
+        let compiled = generate_spec();
+        for (label, document) in [("canonical", &canonical), ("compiled", &compiled)] {
+            let list = openapi_operation(document, LIST_PATH, "get");
+            let list_description = list
+                .get("description")
+                .and_then(Value::as_str)
+                .expect("evidence-list description");
+            assert!(list_description.contains("committed"));
+            assert!(list_description.contains("node-local pending"));
+            assert_eq!(
+                operation_response_schema_ref(list, "200", LIST_PATH),
+                "#/components/schemas/SumeragiEvidenceListResponse",
+                "{label} evidence-list response"
+            );
+            let list_success = &list["responses"]["200"];
+            let list_content = list_success["content"]
+                .as_object()
+                .expect("evidence-list success content");
+            assert_eq!(
+                list_content
+                    .keys()
+                    .map(String::as_str)
+                    .collect::<BTreeSet<_>>(),
+                ["application/json", "application/x-norito"]
+                    .into_iter()
+                    .collect(),
+                "{label} evidence-list media types"
+            );
+            assert_eq!(
+                list_content["application/json"]["schema"]["x-iroha-max-bytes"].as_u64(),
+                Some(SUMERAGI_EVIDENCE_LIST_JSON_RESPONSE_MAX_BYTES as u64),
+                "{label} evidence-list JSON cap"
+            );
+            let list_norito = &list_content["application/x-norito"]["schema"];
+            assert_eq!(list_norito["type"].as_str(), Some("string"));
+            assert_eq!(list_norito["format"].as_str(), Some("binary"));
+            assert_eq!(
+                list_norito["x-iroha-norito-schema"].as_str(),
+                Some(SUMERAGI_EVIDENCE_LIST_WIRE_RESPONSE_SCHEMA_NAME_V1)
+            );
+            assert_eq!(
+                list_norito["x-iroha-max-bytes"].as_u64(),
+                Some(SUMERAGI_EVIDENCE_LIST_NORITO_RESPONSE_MAX_BYTES as u64)
+            );
+            assert!(
+                list_norito["description"]
+                    .as_str()
+                    .is_some_and(|description| description
+                        .contains("SumeragiEvidenceListWireResponse")
+                        && description.contains("Vec<EvidenceRecord>"))
+            );
+            assert_vary_accept(list_success, &format!("{label} evidence-list 200"));
+            assert_not_acceptable(list, &format!("{label} evidence-list"));
+            let parameters = list
+                .get("parameters")
+                .and_then(Value::as_array)
+                .expect("evidence-list query parameters");
+            assert_eq!(parameters.len(), 3, "{label} evidence-list parameter count");
+            let parameter = |name: &str| {
+                parameters
+                    .iter()
+                    .find(|parameter| parameter.get("name").and_then(Value::as_str) == Some(name))
+                    .and_then(Value::as_object)
+                    .unwrap_or_else(|| panic!("{label} evidence-list `{name}` parameter"))
+            };
+            let limit = parameter("limit");
+            assert_eq!(limit.get("in").and_then(Value::as_str), Some("query"));
+            let limit = limit
+                .get("schema")
+                .and_then(Value::as_object)
+                .expect("evidence-list limit schema");
+            assert_eq!(limit.get("minimum").and_then(Value::as_u64), Some(1));
+            assert_eq!(limit.get("maximum").and_then(Value::as_u64), Some(1_000));
+            assert_eq!(limit.get("default").and_then(Value::as_u64), Some(50));
+            let offset = parameter("offset")
+                .get("schema")
+                .and_then(Value::as_object)
+                .expect("evidence-list offset schema");
+            assert_eq!(offset.get("minimum").and_then(Value::as_u64), Some(0));
+            assert_eq!(offset.get("maximum").and_then(Value::as_u64), Some(10_000));
+            assert_eq!(offset.get("default").and_then(Value::as_u64), Some(0));
+            let kind = parameter("kind")
+                .get("schema")
+                .and_then(Value::as_object)
+                .expect("evidence-list kind schema");
+            assert_eq!(
+                kind.get("enum").and_then(Value::as_array),
+                Some(&vec![Value::from("SumeragiV2Equivocation")])
+            );
+            let count = openapi_operation(document, COUNT_PATH, "get");
+            let count_description = count
+                .get("description")
+                .and_then(Value::as_str)
+                .expect("evidence-count description");
+            assert!(count_description.contains("committed"));
+            assert!(count_description.contains("node-local pending"));
+            assert_eq!(
+                operation_response_schema_ref(count, "200", COUNT_PATH),
+                "#/components/schemas/SumeragiEvidenceCountResponse",
+                "{label} evidence-count response"
+            );
+            let count_success = &count["responses"]["200"];
+            let count_content = count_success["content"]
+                .as_object()
+                .expect("evidence-count success content");
+            assert_eq!(
+                count_content
+                    .keys()
+                    .map(String::as_str)
+                    .collect::<BTreeSet<_>>(),
+                ["application/json", "application/x-norito"]
+                    .into_iter()
+                    .collect(),
+                "{label} evidence-count media types"
+            );
+            assert_eq!(
+                count_content["application/json"]["schema"]["x-iroha-max-bytes"].as_u64(),
+                Some(SUMERAGI_EVIDENCE_COUNT_RESPONSE_MAX_BYTES as u64),
+                "{label} evidence-count JSON cap"
+            );
+            let count_norito = &count_content["application/x-norito"]["schema"];
+            assert_eq!(count_norito["type"].as_str(), Some("string"));
+            assert_eq!(count_norito["format"].as_str(), Some("binary"));
+            assert_eq!(
+                count_norito["x-iroha-norito-schema"].as_str(),
+                Some(SUMERAGI_EVIDENCE_COUNT_RESPONSE_SCHEMA_NAME_V1)
+            );
+            assert_eq!(
+                count_norito["x-iroha-max-bytes"].as_u64(),
+                Some(SUMERAGI_EVIDENCE_COUNT_RESPONSE_MAX_BYTES as u64)
+            );
+            assert_vary_accept(count_success, &format!("{label} evidence-count 200"));
+            assert_not_acceptable(count, &format!("{label} evidence-count"));
+        }
+
+        let schemas = component_schemas(&canonical);
+        assert_strict_object_schema(
+            schemas,
+            "SumeragiEvidenceAuditRecord",
+            &[
+                "kind",
+                "class",
+                "height",
+                "view",
+                "epoch",
+                "signer",
+                "context_id",
+                "artifact_hash_1",
+                "artifact_hash_2",
+                "recorded_height",
+                "recorded_view",
+                "recorded_ms",
+                "consensus_admitted_height",
+                "penalty_status",
+            ],
+            &[],
+        );
+        assert_strict_object_schema(
+            schemas,
+            "SumeragiEvidenceListResponse",
+            &["total", "items"],
+            &[],
+        );
+        assert_strict_object_schema(schemas, "SumeragiEvidenceCountResponse", &["count"], &[]);
+        let record = schemas
+            .get("SumeragiEvidenceAuditRecord")
+            .and_then(Value::as_object)
+            .expect("Sumeragi evidence audit schema");
+        let properties = record
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("Sumeragi evidence audit properties");
+        assert_eq!(
+            properties
+                .get("penalty_status")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("$ref"))
+                .and_then(Value::as_str),
+            Some("#/components/schemas/SumeragiEvidencePenaltyStatus")
+        );
+        assert_eq!(
+            properties
+                .get("kind")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("const"))
+                .and_then(Value::as_str),
+            Some("SumeragiV2Equivocation")
+        );
+        let classes = properties
+            .get("class")
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("enum"))
+            .and_then(Value::as_array)
+            .expect("evidence class enum")
+            .iter()
+            .map(|class| class.as_str().expect("evidence class string"))
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            classes,
+            ["proposal", "phase_vote", "timeout_vote"]
+                .into_iter()
+                .collect()
+        );
+        for hash in ["context_id", "artifact_hash_1", "artifact_hash_2"] {
+            assert_eq!(
+                properties
+                    .get(hash)
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("pattern"))
+                    .and_then(Value::as_str),
+                Some("^[0-9a-f]{64}$"),
+                "{hash} must remain canonical lowercase hex"
+            );
+        }
+        for retired in [
+            "penalty_applied",
+            "penalty_cancelled",
+            "penalty_cancelled_at_height",
+            "penalty_applied_at_height",
+            "consensus_admitted_at_height",
+        ] {
+            assert!(
+                !properties.contains_key(retired),
+                "retired evidence field `{retired}` remains documented"
+            );
+        }
+        let list_items = schemas
+            .get("SumeragiEvidenceListResponse")
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("properties"))
+            .and_then(Value::as_object)
+            .and_then(|properties| properties.get("items"))
+            .and_then(Value::as_object)
+            .expect("evidence-list items schema");
+        assert_eq!(
+            list_items.get("maxItems").and_then(Value::as_u64),
+            Some(1_000)
+        );
+        assert_eq!(
+            list_items
+                .get("items")
+                .and_then(Value::as_object)
+                .and_then(|items| items.get("$ref"))
+                .and_then(Value::as_str),
+            Some("#/components/schemas/SumeragiEvidenceAuditRecord")
+        );
+
+        let variants = schemas
+            .get("SumeragiEvidencePenaltyStatus")
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("oneOf"))
+            .and_then(Value::as_array)
+            .expect("closed evidence penalty variants");
+        assert_eq!(variants.len(), 3);
+        for status in ["pending", "applied", "cancelled"] {
+            let variant = variants
+                .iter()
+                .find(|variant| {
+                    variant
+                        .get("properties")
+                        .and_then(Value::as_object)
+                        .and_then(|properties| properties.get("status"))
+                        .and_then(Value::as_object)
+                        .and_then(|status| status.get("const"))
+                        .and_then(Value::as_str)
+                        == Some(status)
+                })
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("missing `{status}` evidence penalty variant"));
+            assert_eq!(
+                variant.get("additionalProperties"),
+                Some(&Value::Bool(false))
+            );
+            let required = variant
+                .get("required")
+                .and_then(Value::as_array)
+                .expect("penalty variant required fields")
+                .iter()
+                .map(|field| field.as_str().expect("required field"))
+                .collect::<BTreeSet<_>>();
+            assert_eq!(required, ["status", "details"].into_iter().collect());
+            let details = variant
+                .get("properties")
+                .and_then(Value::as_object)
+                .and_then(|properties| properties.get("details"))
+                .and_then(Value::as_object)
+                .expect("penalty variant details");
+            if status == "pending" {
+                assert_eq!(details.get("type").and_then(Value::as_str), Some("null"));
+            } else {
+                assert_eq!(
+                    details.get("additionalProperties"),
+                    Some(&Value::Bool(false))
+                );
+                assert_eq!(
+                    details.get("required").and_then(Value::as_array),
+                    Some(&vec![Value::from("height")])
+                );
+            }
+        }
+    }
+    #[test]
     fn retired_sumeragi_vrf_surfaces_are_absent() {
         for (surface, source) in [
             ("Torii runtime handlers", include_str!("routing.rs")),
@@ -5485,7 +6221,6 @@ mod tests {
                 "conviction_step_blocks",
                 "max_conviction",
                 "min_turnout",
-                "parliament_quorum_bps",
                 "plain_voting_enabled",
                 "validation_fee_plain_electorate_rules",
                 "validation_fee_plain_requires_explicit_finalization",
@@ -5631,9 +6366,82 @@ mod tests {
         );
     }
     #[test]
+    fn transaction_submission_503s_document_exact_outcome_unknown_identity() {
+        let document = canonical_document();
+        for path in [uri::TRANSACTION, uri::TRANSACTION_ENTRYPOINT] {
+            let operation = openapi_operation(&document, path, "post");
+            assert_eq!(
+                operation_response_schema_ref(operation, "503", path),
+                "#/components/schemas/ErrorEnvelope"
+            );
+            let unavailable = operation
+                .get("responses")
+                .and_then(Value::as_object)
+                .and_then(|responses| responses.get("503"))
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("POST {path} HTTP 503 response"));
+            let description = unavailable
+                .get("description")
+                .and_then(Value::as_str)
+                .unwrap_or_else(|| panic!("POST {path} HTTP 503 description"));
+            for required_text in [
+                "PRTRY:QUEUE_PLAN_JOURNAL_UNAVAILABLE",
+                "PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN",
+                "ErrorEnvelope.details.entrypoint_hash",
+                "ErrorEnvelope.details.tx_hash",
+                "does not fabricate queue-pressure",
+            ] {
+                assert!(
+                    description.contains(required_text),
+                    "POST {path} HTTP 503 must document {required_text}"
+                );
+            }
+            let headers = unavailable
+                .get("headers")
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("POST {path} HTTP 503 headers"));
+            for (header_name, detail_name) in [
+                ("x-iroha-entrypoint-hash", "entrypoint_hash"),
+                ("x-iroha-signed-transaction-hash", "tx_hash"),
+            ] {
+                let header = headers
+                    .get(header_name)
+                    .and_then(Value::as_object)
+                    .unwrap_or_else(|| panic!("POST {path} HTTP 503 {header_name}"));
+                let header_description = header
+                    .get("description")
+                    .and_then(Value::as_str)
+                    .unwrap_or_else(|| panic!("POST {path} HTTP 503 {header_name} description"));
+                assert!(
+                    header_description.contains(
+                        "Present exactly once only for PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN"
+                    ) && header_description.contains(detail_name),
+                    "POST {path} HTTP 503 {header_name} must document its conditional exact body binding"
+                );
+                if path == uri::TRANSACTION_ENTRYPOINT
+                    && header_name == "x-iroha-signed-transaction-hash"
+                {
+                    assert!(
+                        header_description.contains("External or SealedReveal")
+                            && header_description.contains("inner SignedTransaction"),
+                        "POST {path} HTTP 503 signed identity must be conditional on an inner signed transaction"
+                    );
+                }
+                assert_eq!(
+                    header
+                        .get("schema")
+                        .and_then(Value::as_object)
+                        .and_then(|schema| schema.get("pattern"))
+                        .and_then(Value::as_str),
+                    Some("^[0-9a-f]{64}$"),
+                    "POST {path} HTTP 503 {header_name} exact hash syntax"
+                );
+            }
+        }
+    }
+    #[test]
     fn signed_transaction_reject_code_inventory_matches_runtime_metadata() {
         use iroha_core::{queue::Error as QueueError, tx::SignatureRejectionCode};
-        use iroha_data_model::{ValidationFail, transaction::error::TransactionRejectionReason};
         let mut acceptance_codes = vec!["transaction_rejected", "PRTRY:NTS_UNHEALTHY"];
         acceptance_codes.extend(
             [
@@ -5647,21 +6455,25 @@ mod tests {
             ]
             .map(SignatureRejectionCode::as_str),
         );
-        acceptance_codes.extend(["ED07", "PRTRY:ROUTE_UNRESOLVED"]);
+        acceptance_codes.extend([
+            "ED07",
+            "PRTRY:KAGEMUSHA_V1_OPERATION_CARRIER_REJECTED",
+            "PRTRY:ROUTE_UNRESOLVED",
+        ]);
         assert_eq!(
             acceptance_codes,
             TRANSACTION_ACCEPTANCE_BAD_REQUEST_REJECT_CODES
         );
         assert_eq!(
-            &OFFLINE_COMMAND_FORBIDDEN_REJECT_CODES[1..],
+            &KAGEMUSHA_COMMAND_FORBIDDEN_REJECT_CODES[1..],
             TRANSACTION_SUBMISSION_FORBIDDEN_REJECT_CODES
         );
         assert_eq!(
-            &OFFLINE_COMMAND_CONFLICT_REJECT_CODES[2..],
+            &KAGEMUSHA_COMMAND_CONFLICT_REJECT_CODES[3..],
             TRANSACTION_SUBMISSION_CONFLICT_REJECT_CODES
         );
         assert_eq!(
-            OFFLINE_COMMAND_RATE_LIMIT_REJECT_CODES,
+            KAGEMUSHA_COMMAND_RATE_LIMIT_REJECT_CODES,
             TRANSACTION_SUBMISSION_RATE_LIMIT_REJECT_CODES
         );
         let forbidden = [
@@ -5681,10 +6493,6 @@ mod tests {
                 code: iroha_data_model::nexus::FeeRejectionCode::BeneficiaryNotEligible,
                 reason: "fee".to_owned(),
             },
-            QueueError::ConfidentialPolicyAdmissionRejected {
-                reason: TransactionRejectionReason::Validation(ValidationFail::TooComplex),
-                detail: "confidential".to_owned(),
-            },
         ];
         assert_eq!(
             forbidden
@@ -5696,7 +6504,7 @@ mod tests {
         for (errors, expected) in [
             (
                 vec![QueueError::InBlockchain, QueueError::IsInQueue],
-                TRANSACTION_SUBMISSION_CONFLICT_REJECT_CODES,
+                &TRANSACTION_SUBMISSION_CONFLICT_REJECT_CODES[..2],
             ),
             (
                 vec![
@@ -5730,6 +6538,7 @@ mod tests {
     include!("openapi/tests/iso20022_auth.rs");
     include!("openapi/tests/json_value_contract.rs");
     include!("openapi/tests/prepared_account_contracts.rs");
+    include!("openapi/tests/private_settlement_contract.rs");
     include!("openapi/tests/soracloud_lease_contracts.rs");
     include!("openapi/tests/vpn_da.rs");
 }

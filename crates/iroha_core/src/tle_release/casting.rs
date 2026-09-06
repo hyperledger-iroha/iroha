@@ -25,7 +25,7 @@ use crate::{
             rebuild_casting_registration_context_v1,
         },
     },
-    state::{StateReadOnly, WorldReadOnly as _},
+    state::{ParliamentTimedOvnCastingCandidateV1, StateReadOnly, WorldReadOnly as _},
 };
 
 /// Fixed canonical archive version for a public timed-OVN casting context.
@@ -587,12 +587,36 @@ pub(crate) fn derive_parliament_timed_ovn_casting_snapshot_v1(
     TimedOvnCastingAuthorizationErrorV1,
 > {
     let mut bindings = Vec::new();
-    for (ballot_attempt_id, lifecycle) in world.timed_ovn_evidence().iter() {
-        if let Some(binding) =
-            compact_binding_from_world_v1(world, evaluated_height, *ballot_attempt_id, lifecycle)?
+    for (
+        ballot_attempt_id,
+        governance_attempt_id,
+        valid_from_height,
+        valid_until_height_exclusive,
+    ) in world.parliament_timed_ovn_casting_candidates()
+    {
+        let candidate = ParliamentTimedOvnCastingCandidateV1 {
+            governance_attempt_id,
+            valid_from_height,
+            valid_until_height_exclusive,
+        };
+        if evaluated_height < candidate.valid_from_height
+            || evaluated_height >= candidate.valid_until_height_exclusive
         {
-            bindings.push(binding);
+            continue;
         }
+        let lifecycle = world
+            .timed_ovn_evidence()
+            .get(&ballot_attempt_id)
+            .ok_or(TimedOvnCastingAuthorizationErrorV1::MissingTimedOvnEvidence)?;
+        let binding = compact_binding_from_world_v1(
+            world,
+            evaluated_height,
+            ballot_attempt_id,
+            &candidate,
+            lifecycle,
+        )?
+        .ok_or(TimedOvnCastingAuthorizationErrorV1::BindingMismatch)?;
+        bindings.push(binding);
     }
     bindings.sort_by_key(|binding| binding.ballot_attempt_id);
     let snapshot = ParliamentTimedOvnCastingSnapshotCommitmentV1::from_ordered_bindings(
@@ -607,6 +631,7 @@ fn compact_binding_from_world_v1(
     world: &impl crate::state::WorldReadOnly,
     evaluated_height: u64,
     ballot_attempt_id: BallotAttemptId,
+    candidate: &ParliamentTimedOvnCastingCandidateV1,
     lifecycle: &TimedOvnLifecycleStateV1,
 ) -> Result<Option<ParliamentTimedOvnCastingContextBindingV1>, TimedOvnCastingAuthorizationErrorV1>
 {
@@ -620,6 +645,9 @@ fn compact_binding_from_world_v1(
     }
     let session = *lifecycle.session();
     let governance_attempt_id = GovernanceAttemptId::new(session.governance_attempt_id);
+    if candidate.governance_attempt_id != governance_attempt_id {
+        return Err(TimedOvnCastingAuthorizationErrorV1::BindingMismatch);
+    }
     let attempt = world
         .parliament_attempts()
         .get(&governance_attempt_id)
@@ -669,6 +697,25 @@ fn compact_binding_from_world_v1(
     };
     if ballot.attempt().status != expected_ballot_status {
         return Err(TimedOvnCastingAuthorizationErrorV1::PhaseBindingMismatch);
+    }
+    let (expected_valid_from_height, expected_valid_until_height_exclusive) = match phase {
+        ParliamentTimedOvnCastingPhaseV1::Registered => (
+            ballot.registered_at_height(),
+            ballot.registration_close_height(),
+        ),
+        ParliamentTimedOvnCastingPhaseV1::RegistrationClosed => (
+            ballot.registration_close_height(),
+            ballot.survivor_freeze_height(),
+        ),
+        ParliamentTimedOvnCastingPhaseV1::SurvivorsFrozen => (
+            ballot.survivor_freeze_height(),
+            ballot.commitment_close_height(),
+        ),
+    };
+    if candidate.valid_from_height != expected_valid_from_height
+        || candidate.valid_until_height_exclusive != expected_valid_until_height_exclusive
+    {
+        return Err(TimedOvnCastingAuthorizationErrorV1::BindingMismatch);
     }
     let registration_opened_at_finalized_height = lifecycle
         .registration_opened_at_finalized_height()

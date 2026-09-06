@@ -315,8 +315,8 @@ pub const SYSCALL_VRF_VERIFY_BATCH: u32 = 0x67;
 /// Return: `r10 = ptr (&NoritoBytes(VrfEpochSeedResponse)), r11 = status:u64`
 pub const SYSCALL_VRF_EPOCH_SEED: u32 = 0x7E;
 /// Hardware and proof generation helpers.
-/// Return a deterministic Norito-encoded execution-proof summary.
-pub const SYSCALL_PROVE_EXECUTION: u32 = 0xF4;
+/// Return a deterministic, self-reported Norito-encoded execution summary.
+pub const SYSCALL_EXECUTION_SUMMARY: u32 = 0xF4;
 /// Increase heap size by the number of bytes in `x10`.
 pub const SYSCALL_GROW_HEAP: u32 = 0xF5;
 /// Verify a Norito-encoded OpenVerifyEnvelope against the on-chain verifying-key registry.
@@ -932,7 +932,7 @@ pub const fn registered_syscall_access(number: u32) -> Option<SyscallAccess> {
             | SYSCALL_BLAKE2B256_HASH
             | SYSCALL_KECCAK256_HASH
             | SYSCALL_IROHA_HASH
-            | SYSCALL_PROVE_EXECUTION
+            | SYSCALL_EXECUTION_SUMMARY
             | SYSCALL_VERIFY_PROOF
             | SYSCALL_GET_MERKLE_PATH
             | SYSCALL_GET_MERKLE_COMPACT
@@ -1177,7 +1177,7 @@ const ABI_V1_SYSCALL_METADATA: &[(u32, &str)] = &[
     (SYSCALL_INPUT_PUBLISH_TLV, "INPUT_PUBLISH_TLV"),
     (SYSCALL_ALLOC, "ALLOC"),
     (SYSCALL_GET_PUBLIC_INPUT, "GET_PUBLIC_INPUT"),
-    (SYSCALL_PROVE_EXECUTION, "PROVE_EXECUTION"),
+    (SYSCALL_EXECUTION_SUMMARY, "EXECUTION_SUMMARY"),
     (SYSCALL_GROW_HEAP, "GROW_HEAP"),
     (SYSCALL_VERIFY_PROOF, "VERIFY_PROOF"),
     (SYSCALL_GET_MERKLE_PATH, "GET_MERKLE_PATH"),

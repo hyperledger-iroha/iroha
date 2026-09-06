@@ -659,35 +659,32 @@ fn main() -> Result<()> {
 mod tests {
     use super::*;
     use iroha::data_model::{ChainId, account::AccountId};
-    use iroha_config::parameters::{
-        actual::SorafsRolloutPhase,
-        defaults::{
-            sorafs::gateway::{DEFAULT_ANONYMITY_POLICY, DEFAULT_ROLLOUT_PHASE},
-            torii,
-        },
+    use iroha_config::parameters::defaults::sorafs::gateway::{
+        DEFAULT_ANONYMITY_POLICY, DEFAULT_ROLLOUT_PHASE,
     };
     use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_service_model::soranet::AnonymityPolicy;
+    use iroha_service_model::soranet::RolloutPhase;
     use sorafs_manifest::alias_cache::AliasCachePolicy;
-    use sorafs_orchestrator::AnonymityPolicy;
     use std::{cell::Cell, time::Duration};
     use url::Url;
     fn default_alias_cache_policy() -> AliasCachePolicy {
         AliasCachePolicy::new(
-            Duration::from_secs(torii::SORAFS_ALIAS_POSITIVE_TTL_SECS),
-            Duration::from_secs(torii::SORAFS_ALIAS_REFRESH_WINDOW_SECS),
-            Duration::from_secs(torii::SORAFS_ALIAS_HARD_EXPIRY_SECS),
-            Duration::from_secs(torii::SORAFS_ALIAS_NEGATIVE_TTL_SECS),
-            Duration::from_secs(torii::SORAFS_ALIAS_REVOCATION_TTL_SECS),
-            Duration::from_secs(torii::SORAFS_ALIAS_ROTATION_MAX_AGE_SECS),
-            Duration::from_secs(torii::SORAFS_ALIAS_SUCCESSOR_GRACE_SECS),
-            Duration::from_secs(torii::SORAFS_ALIAS_GOVERNANCE_GRACE_SECS),
+            Duration::from_secs(iroha_service_model::sorafs::DEFAULT_ALIAS_POSITIVE_TTL_SECS),
+            Duration::from_secs(iroha_service_model::sorafs::DEFAULT_ALIAS_REFRESH_WINDOW_SECS),
+            Duration::from_secs(iroha_service_model::sorafs::DEFAULT_ALIAS_HARD_EXPIRY_SECS),
+            Duration::from_secs(iroha_service_model::sorafs::DEFAULT_ALIAS_NEGATIVE_TTL_SECS),
+            Duration::from_secs(iroha_service_model::sorafs::DEFAULT_ALIAS_REVOCATION_TTL_SECS),
+            Duration::from_secs(iroha_service_model::sorafs::DEFAULT_ALIAS_ROTATION_MAX_AGE_SECS),
+            Duration::from_secs(iroha_service_model::sorafs::DEFAULT_ALIAS_SUCCESSOR_GRACE_SECS),
+            Duration::from_secs(iroha_service_model::sorafs::DEFAULT_ALIAS_GOVERNANCE_GRACE_SECS),
         )
     }
     fn default_anonymity_policy() -> AnonymityPolicy {
         AnonymityPolicy::parse(DEFAULT_ANONYMITY_POLICY).unwrap_or(AnonymityPolicy::GuardPq)
     }
-    fn default_rollout_phase() -> SorafsRolloutPhase {
-        SorafsRolloutPhase::parse(DEFAULT_ROLLOUT_PHASE).unwrap_or_default()
+    fn default_rollout_phase() -> RolloutPhase {
+        RolloutPhase::parse(DEFAULT_ROLLOUT_PHASE).unwrap_or_default()
     }
     fn fixture_key_pair(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)

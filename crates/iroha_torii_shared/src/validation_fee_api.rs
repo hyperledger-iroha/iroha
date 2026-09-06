@@ -852,7 +852,7 @@ pub struct ValidationFeeVerifiedParliamentProposalV1 {
     pub governance_certificate_id: String,
     /// Complete certificate required for independent structural validation.
     pub governance_certificate: GovernanceCertificateV1,
-    /// Height at which the complete certificate was finalized.
+    /// Height of the final body result, at which the certificate was atomically finalized.
     pub certified_at_height: String,
     /// Exact certified height at which enactment was due and occurred.
     pub enacted_at_height: String,
@@ -1760,7 +1760,7 @@ mod tests {
                 version: 1,
                 head_root: root(18),
             }),
-            certified_at_height: base + 1_023,
+            certified_at_height: result_height,
             enact_at_height: enacted_at_height,
         };
         let governance_certificate_id = GovernanceCertificateId::derive_v1(&governance_certificate);

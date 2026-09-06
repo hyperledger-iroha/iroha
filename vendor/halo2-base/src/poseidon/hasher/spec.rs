@@ -21,13 +21,13 @@ pub(crate) struct Poseidon128Pow5Gen<
 }
 
 impl<
-    F: PrimeField,
-    const T: usize,
-    const RATE: usize,
-    const R_F: usize,
-    const R_P: usize,
-    const SECURE_MDS: usize,
-> PoseidonSpec<F, T, RATE> for Poseidon128Pow5Gen<F, T, RATE, R_F, R_P, SECURE_MDS>
+        F: PrimeField,
+        const T: usize,
+        const RATE: usize,
+        const R_F: usize,
+        const R_P: usize,
+        const SECURE_MDS: usize,
+    > PoseidonSpec<F, T, RATE> for Poseidon128Pow5Gen<F, T, RATE, R_F, R_P, SECURE_MDS>
 {
     fn full_rounds() -> usize {
         R_F

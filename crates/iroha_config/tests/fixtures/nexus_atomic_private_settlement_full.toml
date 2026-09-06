@@ -17,5 +17,7 @@ max_proof_bytes = 8_388_608
 max_capsule_bytes = 1_048_576
 max_carrier_bytes = 4_194_304
 sidecar_retention_blocks = 1_000_000
+sidecar_max_records = 512
+sidecar_max_total_bytes = 6_442_450_944
 default_min_auditor_approvals = 1
 permitted_policy_versions = [1]

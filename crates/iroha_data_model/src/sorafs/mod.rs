@@ -9,10 +9,12 @@
 //! ISI definitions can coordinate incentives deterministically. The repair module models
 //! audit-driven repair queues that tie proof failures to remediation workflows, and the
 //! transparency module defines canonical moderation ledger payloads/proofs for public SFM-4c
-//! verifiers. The `anonymity` module defines commitment-only citizen bonds and
-//! Kagemusha-backed fixed-denomination service notes. These provide economic
-//! Sybil resistance; they are explicitly not proof of personhood.
-/// Commitment-only citizen bonds and anonymous Kagemusha service notes.
+//! verifiers. The `anonymity` module defines commitment-only citizen bonds for
+//! economic Sybil resistance; they are explicitly not proof of personhood.
+//! The `pop_registry` module retains the consensus-owned credential issuer
+//! commitments and signed root/revocation publications used by the existing
+//! moderation ledger.
+/// Commitment-only citizen bonds.
 pub mod anonymity;
 /// Capacity marketplace records (provider declarations, telemetry, fees).
 pub mod capacity;
@@ -28,6 +30,8 @@ pub mod orderbook;
 pub mod orderbook_submission;
 /// Pin registry manifest metadata and lifecycle records.
 pub mod pin_registry;
+/// Authoritative proof-of-personhood issuer and registry records.
+pub mod pop_registry;
 /// Governance-controlled pricing schedule and credit policy.
 pub mod pricing;
 /// Finalized chain-authoritative PDP and PoTR outcome projections.
@@ -42,20 +46,9 @@ pub mod transparency;
 pub mod prelude {
     pub use super::{
         anonymity::{
-            SORAFS_ANONYMOUS_CANDIDACY_PROOF_DOMAIN_V1,
-            SORAFS_ANONYMOUS_CANDIDACY_PROOF_MAX_BYTES_V1, SORAFS_ANONYMOUS_CITIZEN_SET_MIN_V1,
-            SORAFS_ANONYMOUS_JUROR_ACTION_DOMAIN_V1, SORAFS_ANONYMOUS_JUROR_CANDIDACY_VERSION_V1,
-            SORAFS_ANONYMOUS_SERVICE_ESCROW_DOMAIN_V1,
-            SORAFS_ANONYMOUS_SERVICE_NOTE_MIN_AGE_BLOCKS_V1,
-            SORAFS_ANONYMOUS_SERVICE_NOTE_POLICY_VERSION_V1,
-            SORAFS_CITIZEN_BOND_SNAPSHOT_DOMAIN_V1, SORAFS_CITIZEN_BOND_VERSION_V1,
-            SorafsAnonymousCandidacyErrorV1, SorafsAnonymousCandidacyLedgerContextV1,
-            SorafsAnonymousEscrowErrorV1, SorafsAnonymousJurorCandidacyRecordV1,
-            SorafsAnonymousJurorCandidacyV1, SorafsAnonymousServiceEscrowStateV1,
-            SorafsAnonymousServiceEscrowV1, SorafsAnonymousServiceNotePolicyV1,
-            SorafsAnonymousServiceNoteV1, SorafsCitizenBondErrorV1, SorafsCitizenBondSnapshotV1,
+            SORAFS_CITIZEN_BOND_SNAPSHOT_DOMAIN_V1, SORAFS_CITIZEN_BOND_SNAPSHOT_MIN_V1,
+            SORAFS_CITIZEN_BOND_VERSION_V1, SorafsCitizenBondErrorV1, SorafsCitizenBondSnapshotV1,
             SorafsCitizenBondStateV1, SorafsCitizenBondV1,
-            sorafs_anonymous_candidacy_proof_digest_v1,
         },
         capacity::{
             CapacityAccrual, CapacityDeclarationRecord, CapacityDisputeEvidence, CapacityDisputeId,
@@ -108,6 +101,7 @@ pub mod prelude {
             MODERATION_LEDGER_MAX_EVIDENCE_URI_BYTES_V1, MODERATION_LEDGER_MAX_EXCLUSIONS_V1,
             MODERATION_LEDGER_MAX_IDENTIFIER_BYTES_V1, MODERATION_LEDGER_MAX_NONCE_BYTES_V1,
             MODERATION_LEDGER_MAX_PANEL_SIZE_V1, MODERATION_LEDGER_MAX_PENALTY_POINTS_V1,
+            MODERATION_LEDGER_MAX_PENDING_SORTITION_ANCHORS_V1,
             MODERATION_LEDGER_MAX_REASON_BYTES_V1, MODERATION_LEDGER_MAX_TOTAL_WINDOW_MS_V1,
             MODERATION_LEDGER_MAX_WAITLIST_SIZE_V1, MODERATION_LEDGER_POLICY_DIGEST_DOMAIN_V1,
             MODERATION_LEDGER_POLICY_VERSION_V1, MODERATION_LEDGER_ROSTER_HASH_DOMAIN_V1,
@@ -129,10 +123,10 @@ pub mod prelude {
             ModerationNoShowKindV1, ModerationNoShowRecordV1, ModerationOutcomeKindV1,
             ModerationOutcomeRecordV1, ModerationPanelSelectionV1,
             ModerationPoPRegistrySnapshotError, ModerationPoPRegistrySnapshotV1,
-            ModerationRevealRecordV1, ModerationSortitionError, ModerationVoteCountsV1,
-            REPAIR_LEDGER_ACTION_DIGEST_DOMAIN_V1, REPAIR_LEDGER_APPEAL_ID_DOMAIN_V1,
-            REPAIR_LEDGER_IDEMPOTENCY_DOMAIN_V1, REPAIR_LEDGER_MAX_APPEAL_REASON_BYTES_V1,
-            REPAIR_LEDGER_MAX_CANONICAL_PAYLOAD_BYTES_V1,
+            ModerationRevealRecordV1, ModerationSortitionAnchorV1, ModerationSortitionError,
+            ModerationVoteCountsV1, REPAIR_LEDGER_ACTION_DIGEST_DOMAIN_V1,
+            REPAIR_LEDGER_APPEAL_ID_DOMAIN_V1, REPAIR_LEDGER_IDEMPOTENCY_DOMAIN_V1,
+            REPAIR_LEDGER_MAX_APPEAL_REASON_BYTES_V1, REPAIR_LEDGER_MAX_CANONICAL_PAYLOAD_BYTES_V1,
             REPAIR_LEDGER_MAX_IDEMPOTENCY_KEY_BYTES_V1, REPAIR_LEDGER_MAX_LEASE_MS_V1,
             REPAIR_LEDGER_MAX_RECEIPTS_V1, REPAIR_LEDGER_MIN_LEASE_MS_V1,
             REPAIR_LEDGER_TASK_ID_DOMAIN_V1, REPAIR_LEDGER_TASK_VERSION_V1,
@@ -172,6 +166,23 @@ pub mod prelude {
             PinManifestRecord, PinManifestSummaryV1, PinPolicy, PinResourceUsage, PinStatus,
             PinStatusKindV1, ReplicationOrderCompletionRecord, ReplicationOrderId,
             ReplicationOrderRecord, ReplicationOrderStatus, StorageClass,
+        },
+        pop_registry::{
+            POP_COMMITMENT_ROOT_PAYLOAD_MAX_BYTES_V1, POP_CREDENTIAL_COMMITMENT_BATCH_VERSION_V1,
+            POP_CREDENTIAL_COMMITMENTS_MAX_V1, POP_CREDENTIAL_LIFETIME_MAX_SECS_V1,
+            POP_CREDENTIAL_PAYLOAD_COMMITMENT_DOMAIN_V1, POP_ISSUER_ID_MAX_BYTES_V1,
+            POP_ISSUER_POLICY_DIGEST_DOMAIN_V1, POP_ISSUER_POLICY_VERSION_V1,
+            POP_PUBLICATION_CLOCK_SKEW_MAX_SECS_V1, POP_REGISTRY_AUDIT_DIGEST_DOMAIN_V1,
+            POP_REGISTRY_PAYLOAD_DIGEST_DOMAIN_V1, POP_REVOCATION_LIST_PAYLOAD_MAX_BYTES_V1,
+            POP_REVOCATION_NONCE_COMMITMENT_DOMAIN_V1, POP_REVOCATIONS_PER_PUBLICATION_MAX_V1,
+            PopCommitmentRootRecordV1, PopCredentialCommitmentBatchV1,
+            PopCredentialCommitmentBatchValidationError, PopCredentialCommitmentRecordV1,
+            PopCredentialCommitmentV1, PopCredentialCommitmentValidationError,
+            PopIssuerPolicyRecordV1, PopIssuerPolicyV1, PopIssuerPolicyValidationError,
+            PopRegistryAuditDigestRecordV1, PopRegistryAuditEventKindV1,
+            PopRegistryRevocationReasonV1, PopRegistryStatusV1, PopRevocationPublicationRecordV1,
+            PopRevocationRecordV1, pop_credential_payload_commitment_v1,
+            pop_registry_payload_digest_v1, pop_revocation_nonce_commitment_v1,
         },
         pricing::{
             CollateralPolicy, CommitmentDiscountTier, CreditMutationError, CreditPolicy,

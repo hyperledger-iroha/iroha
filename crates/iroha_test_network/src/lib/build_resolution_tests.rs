@@ -194,6 +194,7 @@ fn resolve_target_dir_prefers_test_override_and_namespaces_cargo() {
 struct ReleasePrebuiltFixture {
     _temp: tempfile::TempDir,
     repo: PathBuf,
+    artifact_root: PathBuf,
     source_manifest_sha256: String,
     cargo_lock_sha256: String,
     target: PathBuf,
@@ -272,14 +273,20 @@ fn release_manifest_text(
 }
 fn create_release_prebuilt_fixture() -> ReleasePrebuiltFixture {
     let temp = tempdir().expect("temporary release workspace");
-    let repo = temp.path().join("repo");
+    let fixture_root = temp
+        .path()
+        .canonicalize()
+        .expect("canonical temporary release workspace");
+    let repo = fixture_root.join("repo");
     fs::create_dir_all(&repo).expect("create release workspace");
+    let artifact_root = fixture_root.join("artifacts");
+    fs::create_dir(&artifact_root).expect("create external release artifact root");
+    set_mode(&artifact_root, 0o700);
     let cargo_lock = repo.join("Cargo.lock");
     fs::write(&cargo_lock, b"release-lock-v1\n").expect("write Cargo.lock");
     let cargo_lock_sha256 = lowercase_hex(&sha256(b"release-lock-v1\n"));
     let source_manifest_sha256 = "a".repeat(64);
-    let target = repo
-        .join("target")
+    let target = artifact_root
         .join(SUMERAGI_V2_RELEASE_TARGET_SUBDIR)
         .join(&source_manifest_sha256)
         .join(SUMERAGI_V2_RELEASE_PROGRAMS_SUBDIR)
@@ -310,6 +317,7 @@ fn create_release_prebuilt_fixture() -> ReleasePrebuiltFixture {
     ReleasePrebuiltFixture {
         _temp: temp,
         repo,
+        artifact_root,
         source_manifest_sha256,
         cargo_lock_sha256,
         target,
@@ -331,6 +339,7 @@ fn release_prebuilt_env(
             IROHA_RELEASE_CARGO_LOCK_SHA256_ENV,
             &fixture.cargo_lock_sha256,
         ),
+        EnvVarRestore::set(IROHA_RELEASE_ARTIFACT_ROOT_ENV, &fixture.artifact_root),
         EnvVarRestore::set(IROHA_TEST_TARGET_DIR_ENV, fixture.target.as_os_str()),
         EnvVarRestore::set(IROHA_TEST_SKIP_BUILD_ENV, "1"),
         EnvVarRestore::set(IROHA_TEST_BUILD_PROFILE_ENV, "release"),
@@ -368,6 +377,109 @@ fn release_prebuilt_manifest_and_all_program_paths_validate_exactly() {
     assert!(
         validate_release_program_candidate(&contract, ReleasePrebuiltBinary::Irohad, escaped)
             .is_err()
+    );
+}
+#[test]
+fn release_prebuilt_requires_exact_external_artifact_root() {
+    let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
+    let fixture = create_release_prebuilt_fixture();
+    let _env = release_prebuilt_env(&fixture, &fixture.manifest_sha256);
+    {
+        let _missing = EnvVarGuard::cleared(IROHA_RELEASE_ARTIFACT_ROOT_ENV);
+        let err = release_program_contract(&fixture.repo)
+            .expect_err("missing release artifact root must fail closed");
+        assert!(err.to_string().contains(IROHA_RELEASE_ARTIFACT_ROOT_ENV));
+    }
+    {
+        let _relative = EnvVarRestore::set(IROHA_RELEASE_ARTIFACT_ROOT_ENV, "artifacts");
+        let err = release_program_contract(&fixture.repo)
+            .expect_err("relative release artifact root must fail closed");
+        assert!(err.to_string().contains("absolute"));
+    }
+    let other_root = fixture
+        .artifact_root
+        .parent()
+        .expect("artifact root parent")
+        .join("other-artifacts");
+    fs::create_dir(&other_root).expect("create different external artifact root");
+    set_mode(&other_root, 0o700);
+    let _different = EnvVarRestore::set(IROHA_RELEASE_ARTIFACT_ROOT_ENV, &other_root);
+    let err = release_program_contract(&fixture.repo)
+        .expect_err("bundle outside the selected artifact root must fail closed");
+    assert!(
+        err.to_string()
+            .contains("immediate private invocation bundle")
+    );
+}
+#[cfg(unix)]
+#[test]
+fn release_prebuilt_rejects_untrusted_or_overlapping_artifact_root() {
+    let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
+    let fixture = create_release_prebuilt_fixture();
+    let _env = release_prebuilt_env(&fixture, &fixture.manifest_sha256);
+    set_mode(&fixture.artifact_root, 0o750);
+    let err = release_program_contract(&fixture.repo)
+        .expect_err("permission-unsafe release artifact root must fail closed");
+    assert!(err.to_string().contains("exact mode 0700"));
+    set_mode(&fixture.artifact_root, 0o700);
+
+    let source_root = fixture.repo.join("artifact-root");
+    fs::create_dir(&source_root).expect("create source-contained artifact root");
+    set_mode(&source_root, 0o700);
+    {
+        let _source_root = EnvVarRestore::set(IROHA_RELEASE_ARTIFACT_ROOT_ENV, &source_root);
+        let err = release_program_contract(&fixture.repo)
+            .expect_err("source-contained release artifact root must fail closed");
+        assert!(
+            err.to_string()
+                .contains("must not overlap repository source")
+        );
+    }
+    let source_ancestor = fixture
+        .artifact_root
+        .parent()
+        .expect("fixture root contains source and artifacts");
+    set_mode(source_ancestor, 0o700);
+    let _source_ancestor = EnvVarRestore::set(IROHA_RELEASE_ARTIFACT_ROOT_ENV, source_ancestor);
+    let err = release_program_contract(&fixture.repo)
+        .expect_err("source-containing release artifact root must fail closed");
+    assert!(
+        err.to_string()
+            .contains("must not overlap repository source")
+    );
+}
+#[cfg(unix)]
+#[test]
+fn release_prebuilt_rejects_symlinked_artifact_paths() {
+    use std::os::unix::fs::symlink;
+
+    let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
+    let fixture = create_release_prebuilt_fixture();
+    let _env = release_prebuilt_env(&fixture, &fixture.manifest_sha256);
+    let artifact_link = fixture
+        .artifact_root
+        .parent()
+        .expect("artifact root parent")
+        .join("artifact-link");
+    symlink(&fixture.artifact_root, &artifact_link).expect("create artifact root symlink");
+    {
+        let _linked = EnvVarRestore::set(IROHA_RELEASE_ARTIFACT_ROOT_ENV, &artifact_link);
+        let err = release_program_contract(&fixture.repo)
+            .expect_err("symlinked release artifact root must fail closed");
+        assert!(err.to_string().contains("not a symlink"));
+    }
+
+    let release_root = fixture
+        .artifact_root
+        .join(SUMERAGI_V2_RELEASE_TARGET_SUBDIR);
+    let relocated_release_root = fixture.artifact_root.join("relocated-release");
+    fs::rename(&release_root, &relocated_release_root).expect("relocate release subtree");
+    symlink(&relocated_release_root, &release_root).expect("replace release subtree with symlink");
+    let err = release_program_contract(&fixture.repo)
+        .expect_err("symlinked source-bound programs path must fail closed");
+    assert!(
+        err.to_string()
+            .contains("no symlinked or non-canonical components")
     );
 }
 #[test]

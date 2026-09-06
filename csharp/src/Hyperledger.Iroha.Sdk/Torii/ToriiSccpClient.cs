@@ -210,7 +210,7 @@ public sealed partial class ToriiClient
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
-        var body = JsonSerializer.SerializeToUtf8Bytes(request, serializerOptions);
+        var body = JsonSerializer.SerializeToUtf8Bytes(request, SerializerOptions);
         using var content = new ByteArrayContent(body);
         content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
         using var response = await SendExactSccpAsync(

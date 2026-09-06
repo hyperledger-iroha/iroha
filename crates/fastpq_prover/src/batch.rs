@@ -79,6 +79,7 @@ impl StateTransition {
 #[derive(
     Debug,
     Clone,
+    Copy,
     PartialEq,
     Eq,
     NoritoSerialize,

@@ -344,8 +344,10 @@ pub(in crate::sumeragi) fn consume_prepared_dequeued_v2_ingress(
         | BlockMessage::LaneBlockCertificate(_)
         | BlockMessage::LaneHistoricalRecoveryRequest(_)
         | BlockMessage::LaneHistoricalRecoveryResponse(_) => {
-            let _ = lane_work
-                .accept_lane_message_with_ingress_ownership(inbound, executor.current_tag().view());
+            let _ = lane_work.accept_lane_message_with_ingress_ownership(
+                inbound,
+                executor.current_tag().view(),
+            )?;
             let _ = service_historical_recovery_tick(lane_work, services)?;
             finish!(ProductionPreparedOrdinaryIngressConsumptionV1::Continue);
         }
@@ -389,6 +391,7 @@ pub(in crate::sumeragi) fn consume_prepared_dequeued_v2_ingress(
             .map_err(V2RunnerError::Service)?;
         finish!(ProductionPreparedOrdinaryIngressConsumptionV1::Continue);
     }
+    let authenticated_via = inbound.via().clone();
     let (message, sender, reply_routes) = inbound.into_message_sender_and_reply_routes();
     if !ingress_ownership.matches_reply_routes(reply_routes.as_ref()) {
         return Err(V2RunnerError::Service(
@@ -495,12 +498,6 @@ pub(in crate::sumeragi) fn consume_prepared_dequeued_v2_ingress(
                 mark_leader_wire_volatile(receiver, &ingress_ownership)?;
             }
         }
-        wire::ConsensusMessageV2Payload::PayloadManifest(manifest) => {
-            if let Err(error) = manifest.validate(executor.context()) {
-                iroha_logger::debug!(%error, "rejected standalone Sumeragi v2 manifest");
-            }
-            mark_leader_wire_volatile(receiver, &ingress_ownership)?;
-        }
         wire::ConsensusMessageV2Payload::PayloadChunk(chunk) => {
             if terminal_decision
                 && services
@@ -535,35 +532,30 @@ pub(in crate::sumeragi) fn consume_prepared_dequeued_v2_ingress(
                 finish!(ProductionPreparedOrdinaryIngressConsumptionV1::Continue);
             }
             if request.round.height < executor.context().height {
-                let response_peer = sender.clone();
                 let terminal_ownership = ingress_ownership.clone();
-                let served = serve_block_sync_while_guarded(
-                    services_output_guard.as_ref(),
-                    || block_sync_server.serve_historical_body(kura, request, &sender, local_key),
-                    |response, permit| {
-                        services.post_durable_history_response_on_reply_routes_with_permit(
-                            response_peer,
-                            reply_routes,
-                            ingress_ownership,
-                            response,
-                            permit,
-                        )
-                    },
+                let task = HistoricalBodyServeTask::from_bound_ingress(
+                    request,
+                    sender,
+                    authenticated_via,
+                    reply_routes,
+                    ingress_ownership,
                 );
-                match finalize_bound_block_sync_serve(
-                    served,
-                    || mark_leader_wire_volatile(receiver, &terminal_ownership),
-                    |error| {
-                        iroha_logger::debug!(%error, "rejected historical certified body request");
-                    },
-                )? {
-                    BoundBlockSyncServeOutcome::Posted
-                    | BoundBlockSyncServeOutcome::VolatileRemoteRejection => {}
-                    BoundBlockSyncServeOutcome::VolatileNoResponse => {
+                match task.and_then(|task| block_sync_server.try_enqueue_historical_body(task)) {
+                    Ok(HistoricalBodyServeAdmission::Queued) => {}
+                    Ok(
+                        HistoricalBodyServeAdmission::RateLimited
+                        | HistoricalBodyServeAdmission::Busy,
+                    ) => {
                         iroha_logger::debug!(
-                            "retired historical certified body request without a local response"
+                            "retired historical certified body request at the bounded worker admission gate"
                         );
+                        mark_leader_wire_volatile(receiver, &terminal_ownership)?;
                     }
+                    Err(error) if is_remote_block_sync_rejection(&error) => {
+                        iroha_logger::debug!(%error, "rejected historical certified body request");
+                        mark_leader_wire_volatile(receiver, &terminal_ownership)?;
+                    }
+                    Err(error) => return Err(error.into()),
                 }
             } else if request.round.height == executor.context().height {
                 let Some(ProductionPreparedCertifiedServeV1::Rejected(reason)) =

@@ -2173,6 +2173,34 @@ fn recovered_lifecycle_sign_dispatch_source_is_sealed_and_restart_closed() {
     assert_recovered_proposal_broadcast_and_sign_settlement_is_atomic_and_restart_closed();
 }
 
+#[test]
+fn live_terminal_height_authenticates_after_closed_drain_without_a_successor() {
+    let source = include_str!("v2_runner/lifecycle_run_inner.rs");
+    let terminal = source_region(
+        source,
+        "if rollover_ready {",
+        "let (prepared_successor, retained_merge_sidecars, cleanup) = finalize_lifecycle_height",
+    );
+    assert_source_tokens_in_order(
+        terminal,
+        &[
+            "close_runner_ingress_for_finalized_drain",
+            "DecidedLaneRecoveryIngressDrainMode::FinalizedClosedPrefix",
+            "drain_finalized_lane_relay_prefix(",
+            "ensure_closed_drained_cut()",
+            "if context.height == u64::MAX",
+            "executor.durable_finality()",
+            "authenticate_terminal_complete_tip(",
+            "activated.into_clean_shutdown(&mut active_runner)?",
+            "return Ok(HeightRunOutcome::Terminal);",
+        ],
+    );
+    assert_forbidden_source_tokens(
+        terminal,
+        &["build_verified_successor(", "finalize_lifecycle_height("],
+    );
+}
+
 include!("v2_lifecycle_launch_recovered_sign_settlement_source_tests.rs");
 include!("v2_lifecycle_launch_recovered_fetch_source_tests.rs");
 include!("v2_lifecycle_launch_certified_response_retry_source_tests.rs");

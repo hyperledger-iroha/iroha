@@ -144,7 +144,10 @@ where
         .ok_or_else(|| "proof evaluation count overflow".to_owned())?;
     let transcript_elements = commitments
         .checked_add(evaluations)
-        .and_then(|count| count.checked_add(1))
+        // The raw Halo2 IPA transcript ends with the final scalar `f`; KAGEMUSHA's
+        // augmented shape then appends the 32-byte folded SRS generator derived by
+        // `augment_halo2_ipa_proof_v1`.
+        .and_then(|count| count.checked_add(2))
         .ok_or_else(|| "augmented proof element count overflow".to_owned())?;
     let transcript_bytes = transcript_elements
         .checked_mul(32)
@@ -183,7 +186,7 @@ mod tests {
         let direct_instance_bytes = pasta_ipa_augmented_proof_bytes_v1(&with_instance, 4)
             .expect("direct-instance proof size");
 
-        assert_eq!(baseline_bytes, 640);
+        assert_eq!(baseline_bytes, 672);
         assert_eq!(direct_instance_bytes, baseline_bytes);
     }
 }

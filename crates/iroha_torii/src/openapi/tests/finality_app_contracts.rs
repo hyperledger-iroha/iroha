@@ -258,9 +258,9 @@ fn bridge_finality_v2_schemas_are_exact_closed_and_bounded() {
     let wire_len = contract_property(&schemas, "SumeragiV2ExecutionCommitment", "executed_block_wire_len");
     assert_eq!(wire_len.get("format").and_then(Value::as_str), Some("uint64"));
     assert_eq!(wire_len.get("minimum").and_then(Value::as_u64), Some(1));
-    let topups = contract_property(&schemas, "SumeragiV2ExecutionCommitment", "topup_anchor_count");
+    let topups = contract_property(&schemas, "SumeragiV2ExecutionCommitment", "kagemusha_top_up_count");
     assert_eq!(topups.get("minimum").and_then(Value::as_u64), Some(0));
-    assert_eq!(topups.get("maximum").and_then(Value::as_u64), Some(u64::from(iroha_data_model::block::consensus_v2::MAX_KAGEMUSHA_TOPUP_ANCHORS_PER_BLOCK)));
+    assert!(topups.get("maximum").is_none(), "block bytes, not a special KAGEMUSHA count cap, bound top-ups");
     let execution = contract_schema(&schemas, "SumeragiV2ExecutionCommitment");
     assert_eq!(execution.get("oneOf").and_then(Value::as_array).map(Vec::len), Some(2));
     assert_eq!(contract_property(&schemas, "SumeragiV2ExecutionCommitment", "native_amx_application_manifest_version").get("const").and_then(Value::as_u64), Some(u64::from(iroha_data_model::block::consensus_v2::NATIVE_AMX_APPLICATION_MANIFEST_VERSION)));
@@ -382,7 +382,7 @@ fn bridge_finality_schema_matches_norito_json_and_decoder_rejects_v1_fields() {
         );
     }
     assert!(execution.get("executed_block_wire_len").and_then(Value::as_u64).is_some_and(|length| length > 0));
-    assert_eq!(execution.get("topup_anchor_count").and_then(Value::as_u64), Some(0));
+    assert_eq!(execution.get("kagemusha_top_up_count").and_then(Value::as_u64), Some(0));
     assert_eq!(execution.get("native_amx_application_manifest_version").and_then(Value::as_u64), Some(u64::from(iroha_data_model::block::consensus_v2::NATIVE_AMX_APPLICATION_MANIFEST_VERSION)));
     assert_eq!(execution.get("native_amx_application_manifest_count").and_then(Value::as_u64), Some(0));
     let empty_root = norito::json::to_value(&iroha_data_model::block::consensus_v2::native_amx_application_manifest_empty_root()).expect("serialize empty root");
@@ -1021,13 +1021,56 @@ fn protected_contract_identity_openapi_is_signed_and_exact() {
         ],
     );
     let variants = contract_schema(schemas, "GovernedContractResponse").get("oneOf").and_then(Value::as_array).expect("governed variants");
-    assert_eq!(variants.len(), 2);
-    for (variant, inventory) in variants.iter().zip(["governed.found.fields", "governed.missing.fields"]) {
+    assert_eq!(variants.len(), 3);
+    for (variant, inventory) in variants.iter().zip(["governed.found.fields", "governed.inactive.fields", "governed.missing.fields"]) {
         let variant = variant.as_object().expect("governed variant");
         assert_eq!(variant.get("additionalProperties"), Some(&Value::Bool(false)));
         let expected = asset_field_set(inventory);
         assert_eq!(schema_fields(variant, "required", "governed variant").iter().filter_map(Value::as_str).collect::<BTreeSet<_>>(), expected);
         assert_eq!(variant.get("properties").and_then(Value::as_object).map(object_field_set), Some(expected));
+    }
+    for (schema, expected) in [
+        (
+            "GovernedContractLifecycleV1",
+            [
+                "version",
+                "origin",
+                "origin_account",
+                "origin_proposal_content_id_hex",
+                "origin_governance_attempt_id_hex",
+                "owner",
+                "pending_owner",
+                "parliament_delegated",
+                "active_code_hash_hex",
+                "revision",
+                "emergency_hold",
+            ]
+            .into_iter()
+            .collect::<BTreeSet<_>>(),
+        ),
+        (
+            "GovernedContractEmergencyHoldV1",
+            [
+                "incident_digest_hex",
+                "proposal_content_id_hex",
+                "governance_attempt_id_hex",
+                "reason",
+                "imposed_at_height",
+                "expires_at_height",
+            ]
+            .into_iter()
+            .collect::<BTreeSet<_>>(),
+        ),
+    ] {
+        let schema = contract_schema(schemas, schema);
+        assert_eq!(schema.get("additionalProperties"), Some(&Value::Bool(false)));
+        assert_eq!(
+            schema_fields(schema, "required", "governed lifecycle component")
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<BTreeSet<_>>(),
+            expected
+        );
     }
 }
 

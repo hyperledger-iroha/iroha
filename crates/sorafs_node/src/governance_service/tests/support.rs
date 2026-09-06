@@ -170,7 +170,7 @@ const KUBO_CONFORMANCE_VERSION_V1: &str = "0.42.0";
 const TEST_IPFS_AUTH_HANDLE: &str = "vault:governance/ipfs:primary";
 const TEST_HEAD_AUTH_HANDLE: &str = "vault:governance/head:primary";
 const TEST_CHECKPOINT_STORE_HANDLE: &str = "kms:governance/checkpoint:primary";
-const TEST_PRODUCER_SIGNER_HANDLE: &str = "hsm:governance/source-signer:primary";
+const TEST_PRODUCER_SIGNER_HANDLE: &str = "provider:governance/source-signer:primary";
 const TEST_PRODUCER_PEER_ID: &str = "12D3KooWGovernanceServiceTest";
 const TEST_AUTH_QUALIFICATION: GovernanceDagRuntimeProviderQualificationV1 =
     GovernanceDagRuntimeProviderQualificationV1::new(1, [0x81; 32]);
@@ -561,7 +561,7 @@ impl FinalRequestAuthenticator {
         expected_condition_value: HeaderValue,
     ) -> Self {
         Self {
-            signer: TestAuthenticator::new(TEST_HEAD_AUTH_HANDLE, "final-request-hsm"),
+            signer: TestAuthenticator::new(TEST_HEAD_AUTH_HANDLE, "final-request-provider"),
             expected_body_length: expected_body.len() as u64,
             expected_body_blake3: blake3_array(expected_body),
             expected_condition,
@@ -943,7 +943,7 @@ fn test_authenticator(
     handle: &str,
     authentication_scope: GovernanceDagAuthenticationScope,
 ) -> OpaqueAuthenticator {
-    let provider = Arc::new(TestAuthenticator::new(handle, "test-only-hsm"));
+    let provider = Arc::new(TestAuthenticator::new(handle, "test-only-provider"));
     OpaqueAuthenticator::try_new(
         handle,
         TEST_AUTH_QUALIFICATION,

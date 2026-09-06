@@ -54,10 +54,10 @@ fun assertWalletConfiguration(storage: WalletStorage) {
         storage.masterAddress != storage.tail.load().bridgeAddress
     ) throw SccpErrors.InvalidConfiguration;
     val replay = storage.replay.load();
-    sccpReplayValidateForestV1(replay.mintCredits.load());
-    sccpReplayValidateForestV1(replay.burnAuthorizations.load());
-    sccpReplayValidateForestV1(replay.burnLocks.load());
-    sccpReplayValidateForestV1(replay.burnRefunds.load());
+    sccpReplayValidateRuntimeForestV1(replay.mintCredits.load());
+    sccpReplayValidateRuntimeForestV1(replay.burnAuthorizations.load());
+    sccpReplayValidateRuntimeForestV1(replay.burnLocks.load());
+    sccpReplayValidateRuntimeForestV1(replay.burnRefunds.load());
     val pending = storage.pending.load();
     val walletState = storage.tail.load();
     assert (

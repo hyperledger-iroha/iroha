@@ -16,14 +16,7 @@ fn dummy_peer(port: u16) -> Peer {
 #[test]
 fn torii_operator_auth_defaults_match_expected() {
     let auth = ToriiOperatorAuth::default();
-    assert!(matches!(
-        auth.token_fallback,
-        OperatorTokenFallback::Bootstrap
-    ));
-    assert!(matches!(
-        auth.token_source,
-        OperatorTokenSource::OperatorTokens
-    ));
+    assert_eq!(auth.tokens, defaults::torii::operator_auth::tokens());
     assert_eq!(
         auth.mtls_trusted_proxy_cidrs,
         defaults::torii::operator_auth::mtls_trusted_proxy_cidrs()
@@ -170,11 +163,11 @@ fn shard_defaults_to_lane_id_when_override_is_absent() {
 #[test]
 fn sorafs_anonymity_stage_accepts_only_exact_v1_labels() {
     for (label, expected) in [
-        ("anon-guard-pq", SorafsAnonymityStage::GuardPq),
-        ("anon-majority-pq", SorafsAnonymityStage::MajorityPq),
-        ("anon-strict-pq", SorafsAnonymityStage::StrictPq),
+        ("anon-guard-pq", AnonymityPolicy::GuardPq),
+        ("anon-majority-pq", AnonymityPolicy::MajorityPq),
+        ("anon-strict-pq", AnonymityPolicy::StrictPq),
     ] {
-        assert_eq!(SorafsAnonymityStage::parse(label), Some(expected));
+        assert_eq!(AnonymityPolicy::parse(label), Some(expected));
     }
     for rejected in [
         "",
@@ -196,7 +189,7 @@ fn sorafs_anonymity_stage_accepts_only_exact_v1_labels() {
         "anon-unknown",
     ] {
         assert_eq!(
-            SorafsAnonymityStage::parse(rejected),
+            AnonymityPolicy::parse(rejected),
             None,
             "retired or noncanonical label `{rejected}` must fail"
         );
@@ -204,18 +197,18 @@ fn sorafs_anonymity_stage_accepts_only_exact_v1_labels() {
 }
 #[test]
 fn sorafs_anonymity_stage_labels_are_canonical() {
-    assert_eq!(SorafsAnonymityStage::GuardPq.label(), "anon-guard-pq");
-    assert_eq!(SorafsAnonymityStage::MajorityPq.label(), "anon-majority-pq");
-    assert_eq!(SorafsAnonymityStage::StrictPq.label(), "anon-strict-pq");
+    assert_eq!(AnonymityPolicy::GuardPq.label(), "anon-guard-pq");
+    assert_eq!(AnonymityPolicy::MajorityPq.label(), "anon-majority-pq");
+    assert_eq!(AnonymityPolicy::StrictPq.label(), "anon-strict-pq");
 }
 #[test]
 fn sorafs_rollout_phase_accepts_only_exact_v1_labels() {
     for (label, expected) in [
-        ("canary", SorafsRolloutPhase::Canary),
-        ("ramp", SorafsRolloutPhase::Ramp),
-        ("default", SorafsRolloutPhase::Default),
+        ("canary", RolloutPhase::Canary),
+        ("ramp", RolloutPhase::Ramp),
+        ("default", RolloutPhase::Default),
     ] {
-        assert_eq!(SorafsRolloutPhase::parse(label), Some(expected));
+        assert_eq!(RolloutPhase::parse(label), Some(expected));
     }
     for rejected in [
         "",
@@ -237,7 +230,7 @@ fn sorafs_rollout_phase_accepts_only_exact_v1_labels() {
         "unknown-rollout",
     ] {
         assert_eq!(
-            SorafsRolloutPhase::parse(rejected),
+            RolloutPhase::parse(rejected),
             None,
             "retired or noncanonical label `{rejected}` must fail"
         );
@@ -248,18 +241,18 @@ fn sorafs_gateway_effective_anonymity_policy_respects_phase_fallback() {
     let mut gateway = SorafsGateway::default();
     assert_eq!(
         gateway.effective_anonymity_policy(),
-        SorafsAnonymityStage::GuardPq
+        AnonymityPolicy::GuardPq
     );
     gateway.anonymity_policy = None;
-    gateway.rollout_phase = SorafsRolloutPhase::Default;
+    gateway.rollout_phase = RolloutPhase::Default;
     assert_eq!(
         gateway.effective_anonymity_policy(),
-        SorafsAnonymityStage::StrictPq
+        AnonymityPolicy::StrictPq
     );
-    gateway.anonymity_policy = Some(SorafsAnonymityStage::MajorityPq);
+    gateway.anonymity_policy = Some(AnonymityPolicy::MajorityPq);
     assert_eq!(
         gateway.effective_anonymity_policy(),
-        SorafsAnonymityStage::MajorityPq
+        AnonymityPolicy::MajorityPq
     );
 }
 include!("runtime_tail_tests.rs");

@@ -57,6 +57,7 @@ impl ParliamentAttemptStateV1 {
         if sequence > timed_ovn_policy.max_ballot_retries {
             return Err(ParliamentReducerErrorV1::BallotRetryLimitExceeded);
         }
+        self.ensure_ballot_redraw_available_v1(sequence)?;
         if self
             .ballots
             .values()
@@ -362,11 +363,11 @@ impl ParliamentAttemptStateV1 {
         Ok(())
     }
 
-    /// Freeze the canonical nonempty survivor roster before accepting any ballot.
+    /// Freeze a canonical survivor roster meeting the V1 anonymity floor.
     ///
     /// # Errors
-    /// Returns an error for replay, zero roots, wrong attempt, an empty survivor
-    /// set, or a survivor count exceeding the frozen registration.
+    /// Returns an error for replay, zero roots, wrong attempt, a sub-floor
+    /// survivor set, or a survivor count exceeding the frozen registration.
     pub fn freeze_ballot_survivors(
         &mut self,
         governance_attempt_id: GovernanceAttemptId,
@@ -392,7 +393,10 @@ impl ParliamentAttemptStateV1 {
         let registered = ballot
             .registered_voters
             .ok_or(ParliamentReducerErrorV1::ImmutableBindingMismatch)?;
-        if survivors == 0 || survivors > registered || survivors > ballot.max_corpus_entries {
+        if survivors < MIN_PARLIAMENT_HIDDEN_BALLOT_ANONYMITY_V1
+            || survivors > registered
+            || survivors > ballot.max_corpus_entries
+        {
             return Err(ParliamentReducerErrorV1::InvalidBallotCount);
         }
         let ballot = self
@@ -440,6 +444,7 @@ impl ParliamentAttemptStateV1 {
             return Err(ParliamentReducerErrorV1::AcceptedCorpusMutation);
         }
         if ballot.survivors != Some(accepted_ballots)
+            || accepted_ballots < MIN_PARLIAMENT_HIDDEN_BALLOT_ANONYMITY_V1
             || accepted_ballots > ballot.max_corpus_entries
         {
             return Err(ParliamentReducerErrorV1::InvalidBallotCount);
@@ -517,6 +522,9 @@ impl ParliamentAttemptStateV1 {
                 || ballot.attempt.status != BallotAttemptStatusV1::AwaitingRelease
                 || ballot.release_beacon_session_id != Some(release_beacon_session_id)
                 || ballot.release_height != Some(release_height)
+                || ballot
+                    .accepted_ballots
+                    .is_none_or(|accepted| accepted < MIN_PARLIAMENT_HIDDEN_BALLOT_ANONYMITY_V1)
                 || at_height > ballot.opening_deadline_height
                 || !timed_commitment_completed_in_window(ballot)
             {
@@ -569,6 +577,8 @@ impl ParliamentAttemptStateV1 {
         current_height: u64,
     ) -> Result<(), ParliamentReducerErrorV1> {
         self.ensure_active(governance_attempt_id)?;
+        let proposal_redraw_budget_exhausted =
+            self.randomness_redraws_used_v1()? == MAX_PARLIAMENT_RANDOMNESS_REDRAWS_V1;
         let ballot =
             self.ballots
                 .get(&ballot_attempt_id)
@@ -619,7 +629,7 @@ impl ParliamentAttemptStateV1 {
             .expect("body checked above")
             .instance
             .status = BodyInstanceStatusV1::NoResult;
-        if retry_budget_exhausted {
+        if retry_budget_exhausted || proposal_redraw_budget_exhausted {
             self.attempt.status = GovernanceAttemptStatusV1::Rejected;
         }
         Ok(())
@@ -634,8 +644,9 @@ impl ParliamentAttemptStateV1 {
     /// Policy Jury with a strictly sub-five-percent decisive margin dynamically
     /// requires a fresh, disjoint Confirmation Jury. Exactly five percent does
     /// not trigger confirmation. A narrow result is not committed when fewer
-    /// than two eligible fresh Confirmation candidates remain; the verified
-    /// opening instead becomes an objective terminal `NoResult`.
+    /// than the V1 anonymity floor of eligible fresh Confirmation candidates remain or when its
+    /// required fresh draw would exceed the proposal-wide redraw budget; the
+    /// verified opening instead becomes an objective terminal `NoResult`.
     ///
     /// # Errors
     /// Returns an error for replay, wrong bindings, a mutated corpus, incomplete
@@ -687,6 +698,11 @@ impl ParliamentAttemptStateV1 {
         }
         if ballot.survivors != Some(opened_survivors) {
             return Err(ParliamentReducerErrorV1::IncompleteOpening);
+        }
+        if opened_survivors < MIN_PARLIAMENT_HIDDEN_BALLOT_ANONYMITY_V1
+            || tally.accepted_ballots < MIN_PARLIAMENT_HIDDEN_BALLOT_ANONYMITY_V1
+        {
+            return Err(ParliamentReducerErrorV1::InvalidBallotCount);
         }
         let opening_height = ballot
             .opening_height
@@ -742,22 +758,7 @@ impl ParliamentAttemptStateV1 {
         tally
             .validate()
             .map_err(|_| ParliamentReducerErrorV1::InvalidTally)?;
-        let outcome = tally
-            .decision()
-            .map_err(|_| ParliamentReducerErrorV1::InvalidTally)?;
         let body_instance_id = ballot.attempt.body_instance_id;
-        let result_root = parliament_ballot_result_root_v1(
-            governance_attempt_id,
-            body_instance_id,
-            ballot_attempt_id,
-            opening_root,
-            tally,
-            outcome,
-            result_height,
-        );
-        if root_is_zero(&result_root) {
-            return Err(ParliamentReducerErrorV1::ZeroCommitmentRoot);
-        }
         let body =
             self.bodies
                 .get(&body_instance_id)
@@ -773,6 +774,28 @@ impl ParliamentAttemptStateV1 {
         {
             return Err(ParliamentReducerErrorV1::ImmutableBindingMismatch);
         }
+        let mut outcome = tally
+            .decision()
+            .map_err(|_| ParliamentReducerErrorV1::InvalidTally)?;
+        if self.attempt.risk_tier == RiskTierV1::Emergency
+            && body_role == ParliamentBody::PolicyJury
+            && outcome == ParliamentAggregateOutcomeV1::Approved
+            && tally.aye < parliament_quorum_seats_v1(tally.original_seats)
+        {
+            outcome = ParliamentAggregateOutcomeV1::Rejected;
+        }
+        let result_root = parliament_ballot_result_root_v1(
+            governance_attempt_id,
+            body_instance_id,
+            ballot_attempt_id,
+            opening_root,
+            tally,
+            outcome,
+            result_height,
+        );
+        if root_is_zero(&result_root) {
+            return Err(ParliamentReducerErrorV1::ZeroCommitmentRoot);
+        }
         let election = self
             .elections
             .get(&body.instance.election_attempt_id)
@@ -782,7 +805,8 @@ impl ParliamentAttemptStateV1 {
         if result_height <= election.attempt.request.pulse_height {
             return Err(ParliamentReducerErrorV1::InvalidCertificateHeight);
         }
-        let requires_confirmation = body_role == ParliamentBody::PolicyJury
+        let requires_confirmation = outcome == ParliamentAggregateOutcomeV1::Approved
+            && body_role == ParliamentBody::PolicyJury
             && tally
                 .requires_confirmation()
                 .map_err(|_| ParliamentReducerErrorV1::InvalidTally)?;
@@ -794,8 +818,18 @@ impl ParliamentAttemptStateV1 {
         {
             return Err(ParliamentReducerErrorV1::InvalidRequiredBodyPipeline);
         }
-        if requires_confirmation && eligible_confirmation_candidates < 2 {
-            let failure_kind = ParliamentBallotFailureKindV1::ConfirmationJuryCapacityUnavailable;
+        let confirmation_failure_kind = if requires_confirmation
+            && eligible_confirmation_candidates < MIN_PARLIAMENT_HIDDEN_BALLOT_ANONYMITY_V1
+        {
+            Some(ParliamentBallotFailureKindV1::ConfirmationJuryCapacityUnavailable)
+        } else if requires_confirmation
+            && self.randomness_redraws_used_v1()? == MAX_PARLIAMENT_RANDOMNESS_REDRAWS_V1
+        {
+            Some(ParliamentBallotFailureKindV1::RandomnessRedrawBudgetExhausted)
+        } else {
+            None
+        };
+        if let Some(failure_kind) = confirmation_failure_kind {
             let failure_root = parliament_ballot_failure_root_v1(
                 governance_attempt_id,
                 ballot_attempt_id,
@@ -906,7 +940,8 @@ impl ParliamentAttemptStateV1 {
     ///
     /// # Errors
     /// Returns an error unless every required body has a final consistent
-    /// binding and enactment is strictly later than certification.
+    /// binding, certification is atomic with the final body result, and
+    /// enactment is strictly later than certification.
     pub fn construct_certificate(
         &mut self,
         governance_attempt_id: GovernanceAttemptId,
@@ -949,6 +984,14 @@ impl ParliamentAttemptStateV1 {
                 return Err(ParliamentReducerErrorV1::CertificateBindingMismatch);
             }
             body_bindings.push(binding);
+        }
+        let final_result_height = body_bindings
+            .iter()
+            .map(|binding| binding.result_height)
+            .max()
+            .ok_or(ParliamentReducerErrorV1::IncompleteCertificate)?;
+        if certified_at_height != final_result_height {
+            return Err(ParliamentReducerErrorV1::InvalidCertificateHeight);
         }
         let certificate = GovernanceCertificateV1 {
             proposal_content_id: self.attempt.proposal_content_id,
@@ -1013,8 +1056,8 @@ impl ParliamentAttemptStateV1 {
     /// Mark a due certificate superseded by a different compare-and-set head.
     ///
     /// # Errors
-    /// Returns an error for an unchanged head, early execution, wrong attempt,
-    /// or any replay/noncertified transition.
+    /// Returns an error for an unchanged, malformed, or cross-subject head,
+    /// early execution, a wrong attempt, or any replay/noncertified transition.
     pub fn mark_superseded(
         &mut self,
         governance_attempt_id: GovernanceAttemptId,
@@ -1024,6 +1067,12 @@ impl ParliamentAttemptStateV1 {
         let certificate = self.ensure_certified_for_execution(governance_attempt_id, at_height)?;
         if observed_head == certificate.expected_head {
             return Err(ParliamentReducerErrorV1::ExpectedHeadUnchanged);
+        }
+        if !expected_head_is_valid(observed_head)
+            || expected_head_subject(observed_head)
+                != expected_head_subject(certificate.expected_head)
+        {
+            return Err(ParliamentReducerErrorV1::InvalidSupersedingHead);
         }
         self.attempt.status = GovernanceAttemptStatusV1::Superseded;
         self.terminal_height = Some(at_height);

@@ -356,21 +356,58 @@ def _safe_link_target(parts: Sequence[str], target: str) -> str:
 
 
 def _validate_restored_symlink_graph(source: Path, symlinks: Sequence[Path]) -> None:
-    """Reject link chains whose fully resolved target leaves the source tree."""
+    """Reject link chains whose fully resolved target leaves the source tree or loops."""
 
     try:
         source_root = source.resolve(strict=True)
     except (OSError, RuntimeError):
         _fail("source archive root could not be resolved safely")
+
+    targets: dict[tuple[str, ...], tuple[str, ...]] = {}
     for link in symlinks:
         try:
             metadata = link.lstat()
-            resolved = link.resolve(strict=False)
-            resolved.relative_to(source_root)
+            relative = link.relative_to(source)
+            target = os.readlink(link)
+            _safe_link_target(("source", *relative.parts), target)
         except (OSError, RuntimeError, ValueError):
             _fail("source archive symbolic-link graph escapes or loops")
         if not stat.S_ISLNK(metadata.st_mode):
             _fail("source archive symbolic link changed during graph validation")
+        targets[relative.parts] = PurePosixPath(target).parts
+
+    # Path.resolve(strict=False) is platform-dependent for cycles and can leave
+    # an unresolved loop in place. Resolve against the closed set of links we
+    # just restored instead. Re-expanding one link while resolving another is
+    # rejected as a non-canonical graph; this also bounds hostile expansion.
+    for link_parts, target_parts in targets.items():
+        resolved_parts = list(link_parts[:-1])
+        pending = list(target_parts)
+        expanded: set[tuple[str, ...]] = set()
+        while pending:
+            component = pending.pop(0)
+            if component in ("", "."):
+                continue
+            if component == "..":
+                if not resolved_parts:
+                    _fail("source archive symbolic-link graph escapes or loops")
+                resolved_parts.pop()
+                continue
+            candidate = (*resolved_parts, component)
+            nested_target = targets.get(candidate)
+            if nested_target is None:
+                resolved_parts.append(component)
+                continue
+            if candidate in expanded:
+                _fail("source archive symbolic-link graph escapes or loops")
+            expanded.add(candidate)
+            pending[0:0] = nested_target
+
+        resolved = source_root.joinpath(*resolved_parts)
+        try:
+            resolved.relative_to(source_root)
+        except ValueError:
+            _fail("source archive symbolic-link graph escapes or loops")
 
 
 def _mkdir_chain(root: Path, components: Sequence[str]) -> Path:

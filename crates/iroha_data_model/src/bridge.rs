@@ -61,11 +61,12 @@ pub use sccp_registry::{
 };
 pub use sccp_replay::{
     SCCP_REPLAY_SMT_DEPTH_V1, SCCP_REPLAY_SMT_MAGIC_V1, SCCP_REPLAY_SMT_MAX_SIBLINGS_V1,
-    SCCP_REPLAY_SMT_SHARD_COUNT_V1, SccpReplayAccumulatorError, SccpReplayAccumulatorIdV1,
-    SccpReplayActorV1, SccpReplayBoundaryV1, SccpReplayDeltaV1, SccpReplayDomainV1,
-    SccpReplayForestV1, SccpReplayPrincipalV1, SccpReplayRecordV1, SccpSparseMerkleWitnessV1,
-    SccpTonAccountV1, sccp_replay_domain_hash_v1, sccp_replay_empty_hashes_v1, sccp_replay_key_v1,
-    sccp_replay_record_digest_v1,
+    SCCP_REPLAY_SMT_SHARD_COUNT_V1, SCCP_REPLAY_WITNESS_MAX_BASE64_BYTES_V1,
+    SCCP_REPLAY_WITNESS_MAX_ENCODED_BYTES_V1, SccpReplayAccumulatorError,
+    SccpReplayAccumulatorIdV1, SccpReplayActorV1, SccpReplayBoundaryV1, SccpReplayDeltaV1,
+    SccpReplayDomainV1, SccpReplayForestV1, SccpReplayPrincipalV1, SccpReplayRecordV1,
+    SccpSparseMerkleWitnessV1, SccpTonAccountV1, sccp_replay_domain_hash_v1,
+    sccp_replay_empty_hashes_v1, sccp_replay_key_v1, sccp_replay_record_digest_v1,
 };
 pub use sccp_ton_breaker::{
     SCCP_TON_BREAKER_MAX_AGE_MS_V1, SCCP_TON_BREAKER_MAX_FUTURE_SKEW_MS_V1,
@@ -80,6 +81,8 @@ pub use sccp_ton_breaker::{
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::WrappedAssetDef")]
 pub struct WrappedAssetDef {
     /// Origin chain identifier (canonical bytes, e.g., "btc", "evm-eth").
     pub origin_chain: Vec<u8>,
@@ -93,6 +96,8 @@ pub struct WrappedAssetDef {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::BridgeReceipt")]
 pub struct BridgeReceipt {
     /// Lane identifier (e.g., "btc→iroha", "iroha↔evm").
     pub lane: LaneId,
@@ -117,6 +122,8 @@ pub struct BridgeReceipt {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(deny_unknown_fields)]
 #[norito(tag = "hash_function", content = "value")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::BridgeHashFunction")]
 pub enum BridgeHashFunction {
     /// SHA-256 (ICS-style hash-only light clients).
     Sha256,
@@ -128,6 +135,8 @@ pub enum BridgeHashFunction {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::BridgeProofRange")]
 pub struct BridgeProofRange {
     /// Inclusive start height of the batch.
     pub start_height: u64,
@@ -158,6 +167,8 @@ impl BridgeProofRange {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::BridgeIcsProof")]
 pub struct BridgeIcsProof {
     /// Exact verifier manifest commitment selected for this proof.
     pub verifier_manifest_hash: [u8; 32],
@@ -175,6 +186,8 @@ pub struct BridgeIcsProof {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::BridgeTransparentProof")]
 pub struct BridgeTransparentProof {
     /// Exact verifier manifest commitment selected for this proof.
     pub verifier_manifest_hash: [u8; 32],
@@ -194,6 +207,8 @@ pub struct BridgeTransparentProof {
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
 #[norito(tag = "backend", content = "protocol")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::BridgeNativeProofBackendV1")]
 pub enum BridgeNativeProofBackendV1 {
     /// Ethereum proof using the beacon light client and execution MPTs.
     #[codec(index = 0)]
@@ -247,6 +262,8 @@ impl BridgeNativeProofBackendV1 {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::SccpNativeTrustAnchorV1")]
 pub struct SccpNativeTrustAnchorV1 {
     /// Concrete native verifier that defines the anchor preimage and hash.
     pub backend: BridgeNativeProofBackendV1,
@@ -291,6 +308,8 @@ impl SccpNativeTrustAnchorV1 {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::BridgeNativeProtocolProofV1")]
 pub struct BridgeNativeProtocolProofV1 {
     /// Concrete native verifier selected for the encoded envelope.
     pub backend: BridgeNativeProofBackendV1,
@@ -318,6 +337,8 @@ impl BridgeNativeProtocolProofV1 {
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
 #[norito(tag = "backend", content = "family")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::BridgeSccpDestinationProofBackendV1")]
 pub enum BridgeSccpDestinationProofBackendV1 {
     /// EVM Groth16 verifier over BN254 for Ethereum and BSC destinations.
     #[codec(index = 0)]
@@ -365,6 +386,8 @@ impl BridgeSccpDestinationProofBackendV1 {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::BridgeSccpDestinationProofV1")]
 pub struct BridgeSccpDestinationProofV1 {
     /// Closed production verifier selected for the encoded artifact.
     pub backend: BridgeSccpDestinationProofBackendV1,
@@ -400,6 +423,8 @@ impl BridgeSccpDestinationProofV1 {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(deny_unknown_fields)]
 #[norito(tag = "kind", content = "payload")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::BridgeProofPayload")]
 pub enum BridgeProofPayload {
     /// ICS-23-style inclusion proof against a state root.
     #[codec(index = 0)]
@@ -463,6 +488,8 @@ impl BridgeProofPayload {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::BridgeProof")]
 pub struct BridgeProof {
     /// Height range covered by this proof.
     pub range: BridgeProofRange,
@@ -493,6 +520,8 @@ impl BridgeProof {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::BridgeProofRecord")]
 pub struct BridgeProofRecord {
     /// Recorded proof artifact.
     pub proof: BridgeProof,
@@ -517,6 +546,8 @@ pub const BRIDGE_FINALITY_ATTESTATION_SIGNATURE_DOMAIN_V1: &[u8] =
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::BridgeFinalityProof")]
 pub struct BridgeFinalityProof {
     /// Proof schema version. The first release requires [`BRIDGE_FINALITY_PROOF_VERSION_V2`].
     pub version: u8,
@@ -534,6 +565,8 @@ pub struct BridgeFinalityProof {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::BridgeFinalityAttestationBodyV1")]
 pub struct BridgeFinalityAttestationBodyV1 {
     /// Attestation schema version.
     pub version: u8,
@@ -643,6 +676,8 @@ impl BridgeFinalityAttestationBodyV1 {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::BridgeFinalityAttestationV1")]
 pub struct BridgeFinalityAttestationV1 {
     /// Complete signed statement.
     pub body: BridgeFinalityAttestationBodyV1,
@@ -729,6 +764,8 @@ pub enum BridgeFinalityAttestationValidationError {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::BridgeCommitment")]
 pub struct BridgeCommitment {
     /// Exact genesis-derived network identity to prevent cross-network replay.
     pub network_id: NetworkId,
@@ -744,6 +781,8 @@ pub struct BridgeCommitment {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::bridge::BridgeFinalityBundle")]
 pub struct BridgeFinalityBundle {
     /// Commitment binding the block hash and immutable height context.
     pub commitment: BridgeCommitment,
@@ -1140,6 +1179,33 @@ mod tests {
             Hash::new(seed.as_bytes()),
         ))
     }
+    fn mint_finality_roster(
+        network_id: NetworkId,
+        epoch: u64,
+        roster: &[wire::ValidatorPower],
+    ) -> crate::isi::kagemusha_v1::KagemushaMintFinalityEpochRosterV1 {
+        use crate::isi::kagemusha_v1::{
+            KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterV1,
+            KagemushaMintFinalityValidatorKeysV1,
+        };
+
+        KagemushaMintFinalityEpochRosterV1 {
+            version: KAGEMUSHA_CHAIN_VERSION_V1,
+            network_id,
+            epoch,
+            validators: roster
+                .iter()
+                .enumerate()
+                .map(|(index, validator)| KagemushaMintFinalityValidatorKeysV1 {
+                    validator: validator.validator.clone(),
+                    eq_proof_public_key: [u8::try_from(index + 1).expect("small fixture roster");
+                        32],
+                    ep_proof_public_key: [u8::try_from(index + 17).expect("small fixture roster");
+                        32],
+                })
+                .collect(),
+        }
+    }
     fn checked_random_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
         KeyPair::try_random_with_algorithm(algorithm).unwrap_or_else(|err| {
             panic!("{algorithm:?} bridge fixture key generation should succeed: {err}")
@@ -1270,6 +1336,11 @@ mod tests {
                     .expect("derive validator proof of possession")
             })
             .collect::<Vec<_>>();
+        let network_id = test_network_id(network_seed);
+        let current_mint_finality_roster = mint_finality_roster(network_id, 0, &roster);
+        let mint_finality_epoch_id = current_mint_finality_roster
+            .finality_epoch_id()
+            .expect("valid fixture mint-finality roster");
         let mut header = crate::block::BlockHeader::new(
             NonZeroU64::new(1).expect("non-zero height"),
             None,
@@ -1310,10 +1381,16 @@ mod tests {
                         .expect("derive next-epoch validator proof of possession")
                 })
                 .collect();
+            let next_mint_finality_roster = mint_finality_roster(network_id, 1, &next_roster);
+            let next_mint_finality_epoch_id = next_mint_finality_roster
+                .finality_epoch_id()
+                .expect("valid next-epoch fixture mint-finality roster");
             (
                 Some(
                     crate::block::consensus_v2::finality::FinalizedNextEpochSnapshot {
                         epoch: 1,
+                        kagemusha_mint_finality_epoch_id: next_mint_finality_epoch_id,
+                        kagemusha_mint_finality_epoch_roster: next_mint_finality_roster,
                         epoch_end_height: 11,
                         mode: ConsensusMode::Npos,
                         quorum: DualQuorum::from_roster(&next_roster)
@@ -1329,10 +1406,12 @@ mod tests {
             (None, None)
         };
         let context = HeightContext {
-            network_id: test_network_id(network_seed),
+            network_id,
             protocol_version: PROTOCOL_VERSION,
             height: 1,
             epoch: 0,
+            kagemusha_mint_finality_epoch_id: mint_finality_epoch_id,
+            kagemusha_mint_finality_epoch_roster: current_mint_finality_roster,
             epoch_end_height: if boundary { 1 } else { 10 },
             next_epoch_snapshot,
             mode: ConsensusMode::Npos,
@@ -1363,7 +1442,7 @@ mod tests {
             view: 0,
         };
         let execution_commitment =
-            crate::block::consensus_v2::ExecutionCommitment::without_topups_or_merge_carrier(
+            crate::block::consensus_v2::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
                 Hash::new(b"bridge v2 parent state"),
                 Hash::new(b"bridge v2 post state"),
                 Hash::new(b"bridge v2 ordinary writes"),
@@ -1426,35 +1505,53 @@ mod tests {
     }
     fn make_successor_v2_proof(parent: &V2Fixture) -> BridgeFinalityProof {
         let parent_artifact = &parent.proof.finality_artifact;
-        let (epoch, epoch_end_height, mode, roster, validator_set_pops, quorum, leader_seed) =
-            parent_artifact
-                .height_context
-                .next_epoch_snapshot
-                .as_ref()
-                .map_or_else(
-                    || {
-                        (
-                            parent_artifact.height_context.epoch,
-                            parent_artifact.height_context.epoch_end_height,
-                            parent_artifact.height_context.mode,
-                            parent_artifact.height_context.roster.clone(),
-                            parent_artifact.validator_set_pops.clone(),
-                            parent_artifact.height_context.quorum,
-                            parent_artifact.height_context.leader_seed,
-                        )
-                    },
-                    |snapshot| {
-                        (
-                            snapshot.epoch,
-                            snapshot.epoch_end_height,
-                            snapshot.mode,
-                            snapshot.roster.clone(),
-                            snapshot.validator_set_pops.clone(),
-                            snapshot.quorum,
-                            snapshot.leader_seed,
-                        )
-                    },
-                );
+        let (
+            epoch,
+            mint_finality_epoch_id,
+            mint_finality_roster,
+            epoch_end_height,
+            mode,
+            roster,
+            validator_set_pops,
+            quorum,
+            leader_seed,
+        ) = parent_artifact
+            .height_context
+            .next_epoch_snapshot
+            .as_ref()
+            .map_or_else(
+                || {
+                    (
+                        parent_artifact.height_context.epoch,
+                        parent_artifact
+                            .height_context
+                            .kagemusha_mint_finality_epoch_id,
+                        parent_artifact
+                            .height_context
+                            .kagemusha_mint_finality_epoch_roster
+                            .clone(),
+                        parent_artifact.height_context.epoch_end_height,
+                        parent_artifact.height_context.mode,
+                        parent_artifact.height_context.roster.clone(),
+                        parent_artifact.validator_set_pops.clone(),
+                        parent_artifact.height_context.quorum,
+                        parent_artifact.height_context.leader_seed,
+                    )
+                },
+                |snapshot| {
+                    (
+                        snapshot.epoch,
+                        snapshot.kagemusha_mint_finality_epoch_id,
+                        snapshot.kagemusha_mint_finality_epoch_roster.clone(),
+                        snapshot.epoch_end_height,
+                        snapshot.mode,
+                        snapshot.roster.clone(),
+                        snapshot.validator_set_pops.clone(),
+                        snapshot.quorum,
+                        snapshot.leader_seed,
+                    )
+                },
+            );
         let height = parent_artifact.height + 1;
         assert!(
             height < epoch_end_height,
@@ -1473,6 +1570,8 @@ mod tests {
             protocol_version: wire::PROTOCOL_VERSION,
             height,
             epoch,
+            kagemusha_mint_finality_epoch_id: mint_finality_epoch_id,
+            kagemusha_mint_finality_epoch_roster: mint_finality_roster,
             epoch_end_height,
             next_epoch_snapshot: None,
             mode,
@@ -1495,13 +1594,14 @@ mod tests {
             height,
             view: 0,
         };
-        let execution_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
-            Hash::new(b"bridge v2 successor parent state"),
-            Hash::new(b"bridge v2 successor post state"),
-            Hash::new(b"bridge v2 successor ordinary writes"),
-            1,
-            Hash::new(b"bridge v2 successor executed block wire"),
-        );
+        let execution_commitment =
+            wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+                Hash::new(b"bridge v2 successor parent state"),
+                Hash::new(b"bridge v2 successor post state"),
+                Hash::new(b"bridge v2 successor ordinary writes"),
+                1,
+                Hash::new(b"bridge v2 successor executed block wire"),
+            );
         let commit_qc = wire::QuorumCertificate {
             round,
             proposal_round: round,
@@ -3006,3 +3106,6 @@ mod tests {
         ));
     }
 }
+
+#[cfg(test)]
+mod captured_bridge_schema_tests;

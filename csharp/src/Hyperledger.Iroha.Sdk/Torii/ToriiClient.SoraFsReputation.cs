@@ -44,7 +44,12 @@ public sealed partial class ToriiClient
         HttpClient httpClient,
         ToriiClientOptions? options,
         SoraFsReputationTransportAssurance transportAssurance)
-        : this(baseUri, httpClient, options)
+        : this(
+            baseUri,
+            httpClient,
+            options,
+            ownsHttpClient: false,
+            injectedTransportIsOneShot: true)
     {
         if (transportAssurance
             != SoraFsReputationTransportAssurance.OneShotWithoutRedirectsRetriesOrDecompression)
@@ -308,13 +313,13 @@ public sealed partial class ToriiClient
         }
 
         var credentials = Options.CanonicalRequestCredentials!;
-        var signingContext = Options.LocalSigningContext
+        var networkId = Options.NetworkId
             ?? throw new InvalidOperationException(
-                "Authenticated SoraFS reputation requests require ToriiClientOptions.LocalSigningContext.");
+                "Authenticated SoraFS reputation requests require ToriiClientOptions.NetworkId.");
         var canonicalHeaders = CanonicalRequest.BuildHeadersForExactPath(
-            signingContext.NetworkId,
+            networkId,
             credentials.AccountId,
-            credentials.PrivateKeySeed,
+            credentials.PrivateKeySeedSpan,
             "GET",
             target.AbsolutePath,
             target.Query,

@@ -3,6 +3,8 @@
 
 package org.hyperledger.iroha.sdk.client
 
+import org.hyperledger.iroha.sdk.client.RequestSigner
+
 import java.math.BigInteger
 import java.net.URI
 import java.nio.charset.StandardCharsets
@@ -31,18 +33,45 @@ class HttpClientTransportGovernanceTest {
     @Test
     fun getGovernanceContractParsesResponse() {
         val contractAddress = "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
+        val owner = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
+        val u64Max = BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE)
         val executor = StubResponseExecutor(
             statusCode = 200,
             body = """
                 {
                   "found": true,
                   "contract_address": "$contractAddress",
+                  "contract_subject_account": "$owner",
                   "dataspace": "router",
-                  "code_hash_hex": "${"77".repeat(32)}"
+                  "active": true,
+                  "lifecycle": {
+                    "version": 1,
+                    "origin": "direct",
+                    "origin_account": "$owner",
+                    "origin_proposal_content_id_hex": null,
+                    "origin_governance_attempt_id_hex": null,
+                    "owner": "$owner",
+                    "pending_owner": "parliament",
+                    "parliament_delegated": true,
+                    "active_code_hash_hex": "${"77".repeat(32)}",
+                    "revision": $u64Max,
+                    "emergency_hold": {
+                      "incident_digest_hex": "${"11".repeat(32)}",
+                      "proposal_content_id_hex": "${"22".repeat(32)}",
+                      "governance_attempt_id_hex": "${"33".repeat(32)}",
+                      "reason": "incident response",
+                      "imposed_at_height": ${u64Max - BigInteger.ONE},
+                      "expires_at_height": $u64Max
+                    }
+                  },
+                  "emergency_hold_active": true,
+                  "code_hash_hex": "${"77".repeat(32)}",
+                  "abi_hash_hex": "${"88".repeat(32)}",
+                  "public_entrypoints": ["transfer", "view_balance"]
                 }
             """.trimIndent().toByteArray(StandardCharsets.UTF_8),
         )
-        val transport = HttpClientTransport.withExecutor(
+        val transport = HttpClientTransport(
             executor = executor,
             config = ClientConfig.builder()
                 .setBaseUri(URI.create("https://torii.example/api"))
@@ -53,7 +82,7 @@ class HttpClientTransportGovernanceTest {
         val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
         val auth = ToriiCanonicalRequestAuth(
             "alice@universal",
-            keyPair.private,
+            RequestSigner.ed25519(keyPair.private),
             1_700_000_000_100L,
             "governance-read",
         )
@@ -63,6 +92,13 @@ class HttpClientTransportGovernanceTest {
         assertEquals(contractAddress, response.contractAddress)
         assertEquals("router", response.dataspace)
         assertEquals("77".repeat(32), response.codeHashHex)
+        assertEquals(1, response.lifecycle?.version)
+        assertEquals(u64Max, response.lifecycle?.revision)
+        assertEquals("parliament", response.lifecycle?.pendingOwner)
+        assertEquals("77".repeat(32), response.lifecycle?.activeCodeHashHex)
+        assertEquals(u64Max - BigInteger.ONE, response.lifecycle?.emergencyHold?.imposedAtHeight)
+        assertEquals(u64Max, response.lifecycle?.emergencyHold?.expiresAtHeight)
+        assertEquals(listOf("transfer", "view_balance"), response.publicEntrypoints)
 
         val request = assertNotNull(executor.lastRequest)
         assertEquals("GET", request.method)
@@ -71,6 +107,58 @@ class HttpClientTransportGovernanceTest {
             request.uri.toString(),
         )
         assertTrue(request.body.isEmpty())
+    }
+
+    @Test
+    fun governanceContractResponseRejectsShapeAndCrossFieldDrift() {
+        val contractAddress = "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
+        val owner = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
+        val active = """
+            {
+              "found": true,
+              "contract_address": "$contractAddress",
+              "contract_subject_account": "$owner",
+              "dataspace": "router",
+              "active": true,
+              "lifecycle": {
+                "version": 1,
+                "origin": "direct",
+                "origin_account": "$owner",
+                "origin_proposal_content_id_hex": null,
+                "origin_governance_attempt_id_hex": null,
+                "owner": "$owner",
+                "pending_owner": null,
+                "parliament_delegated": false,
+                "active_code_hash_hex": "${"77".repeat(32)}",
+                "revision": 7,
+                "emergency_hold": null
+              },
+              "emergency_hold_active": false,
+              "code_hash_hex": "${"77".repeat(32)}",
+              "abi_hash_hex": "${"88".repeat(32)}",
+              "public_entrypoints": ["transfer", "view_balance"]
+            }
+        """.trimIndent()
+        val invalid = listOf(
+            active.replace(
+                "\"active_code_hash_hex\": \"${"77".repeat(32)}\"",
+                "\"active_code_hash_hex\": \"${"66".repeat(32)}\"",
+            ),
+            active.replace(
+                "[\"transfer\", \"view_balance\"]",
+                "[\"view_balance\", \"transfer\"]",
+            ),
+            active.replace("\"version\": 1", "\"version\": 2"),
+            active.replace("\"revision\": 7", "\"revision\": 18446744073709551616"),
+            """{"found":false,"contract_address":"$contractAddress","dataspace":"router","active":null}""",
+        )
+        for (payload in invalid) {
+            assertFailsWith<IllegalStateException> {
+                ContractJsonParser.parseGovernanceContractResponse(
+                    payload.toByteArray(StandardCharsets.UTF_8),
+                )
+            }
+        }
     }
 
     @Test
@@ -92,7 +180,7 @@ class HttpClientTransportGovernanceTest {
                 "Content-Length" to listOf(responseFrame.size.toString()),
             ),
         )
-        val transport = HttpClientTransport.withExecutor(
+        val transport = HttpClientTransport(
             executor = executor,
             config = ClientConfig.builder()
                 .setBaseUri(URI.create("https://torii.example/api"))
@@ -102,7 +190,7 @@ class HttpClientTransportGovernanceTest {
         val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
         val auth = ToriiCanonicalRequestAuth(
             "alice@universal",
-            keyPair.private,
+            RequestSigner.ed25519(keyPair.private),
             1_700_000_000_100L,
             "parliament-casting-proof",
         )
@@ -143,7 +231,7 @@ class HttpClientTransportGovernanceTest {
                 "Content-Encoding" to listOf("gzip"),
             ),
         )
-        val encodedTransport = HttpClientTransport.withExecutor(
+        val encodedTransport = HttpClientTransport(
             encodedExecutor,
             ClientConfig.builder()
                 .setBaseUri(URI.create("https://torii.example"))
@@ -166,7 +254,7 @@ class HttpClientTransportGovernanceTest {
             statusCode = 404,
             body = ByteArray(0),
         )
-        val transport = HttpClientTransport.withExecutor(
+        val transport = HttpClientTransport(
             executor,
             ClientConfig.builder()
                 .setBaseUri(URI.create("https://torii.example/api"))
@@ -176,7 +264,7 @@ class HttpClientTransportGovernanceTest {
         val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
         val auth = ToriiCanonicalRequestAuth(
             "alice@universal",
-            keyPair.private,
+            RequestSigner.ed25519(keyPair.private),
             1_700_000_000_100L,
             "parliament-casting-context",
         )
@@ -202,7 +290,7 @@ class HttpClientTransportGovernanceTest {
     fun parliamentCastingProofPagingDurablyAdvancesStaleAnchorBeyondSixtyThreeHeights() {
         val responseFrame = castingProofResponseFrame()
         val executor = SequenceResponseExecutor(responseFrame)
-        val transport = HttpClientTransport.withExecutor(
+        val transport = HttpClientTransport(
             executor,
             ClientConfig.builder()
                 .setBaseUri(URI.create("https://torii.example/api"))
@@ -210,7 +298,7 @@ class HttpClientTransportGovernanceTest {
                 .build(),
         )
         val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
-        val auth = ToriiCanonicalRequestAuth("alice@universal", keyPair.private)
+        val auth = ToriiCanonicalRequestAuth("alice@universal", RequestSigner.ed25519(keyPair.private))
         val firstContext = ByteArray(32) { 0x11 }
         val secondContext = ByteArray(32) { 0x22 }
         val terminalContext = ByteArray(32) { 0x33 }
@@ -278,7 +366,7 @@ class HttpClientTransportGovernanceTest {
     @Test
     fun parliamentCastingProofPagingRejectsNativeAdvancePastPageBound() {
         val executor = SequenceResponseExecutor(castingProofResponseFrame())
-        val transport = HttpClientTransport.withExecutor(
+        val transport = HttpClientTransport(
             executor,
             ClientConfig.builder()
                 .setBaseUri(URI.create("https://torii.example"))
@@ -292,7 +380,7 @@ class HttpClientTransportGovernanceTest {
                 "66".repeat(32),
                 7,
                 ByteArray(32) { 0x11 },
-                ToriiCanonicalRequestAuth("alice@universal", keyPair.private),
+                ToriiCanonicalRequestAuth("alice@universal", RequestSigner.ed25519(keyPair.private)),
                 ParliamentTimedOvnCastingProofPageVerifierV1 { _, _, _ ->
                     ParliamentTimedOvnCastingProofPageVerificationV1(
                         BigInteger.valueOf(71),

@@ -2,9 +2,8 @@ import Foundation
 
 /// Transport-neutral NFC V1 constants for exchanging `IPM1` messages.
 ///
-/// This protocol is intentionally independent from the ABI-21 Kagemusha bulk
-/// rail. V1 has one application identifier, one command set, and no codec
-/// negotiation or fallback.
+/// V1 has one application identifier, one command set, and no codec negotiation
+/// or fallback.
 public enum IrohaPeerNfcV1 {
     /// ISO/IEC 7816 application identifier `F0504B45504B524E464301`.
     public static let applicationIdentifierHex = "F0504B45504B524E464301"
@@ -15,7 +14,8 @@ public enum IrohaPeerNfcV1 {
     public static let sessionIDBytes = 16
     public static let hashBytes = 32
     public static let maximumChunkBytes = 4_096
-    public static let maximumMessageBytes = IrohaPeerWireMessageV1.headerBytes + 24_576
+    public static let maximumMessageBytes =
+        IrohaPeerWireMessageV1.headerBytes + KagemushaWireV1.maximumPaymentBytes
     public static let infoBytes = 98
     public static let statusBytes = 174
 
@@ -130,8 +130,7 @@ public struct IrohaPeerNfcProfilePolicyV1: Equatable, Sendable {
         self.profile = profile
     }
 
-    /// Mainline spelling retained for Kagemusha/native callers. Retail may
-    /// use the equivalent `init(profile:)` form.
+    /// Convenience spelling equivalent to `init(profile:)`.
     public static func sameProfile(
         _ profile: IrohaPeerPayloadProfile
     ) -> IrohaPeerNfcProfilePolicyV1 {
@@ -1311,7 +1310,7 @@ public struct IrohaPeerNfcReceiverSessionV1: Sendable {
         let request = try nfcDecodeMessage(
             receiveRequest,
             expectedProfile: nil,
-            expectedKind: .receiveRequest,
+            expectedKind: .request,
             limits: limits
         )
         let identity = try IrohaPeerNfcRequestIdentityV1(
@@ -1849,7 +1848,7 @@ public enum IrohaPeerNfcReaderPlanningV1 {
         let message = try nfcDecodeMessage(
             data,
             expectedProfile: info.identity.profile,
-            expectedKind: .receiveRequest,
+            expectedKind: .request,
             limits: limits
         )
         guard message.canonicalHash == info.identity.requestCanonicalHash,
@@ -1882,7 +1881,7 @@ public struct IrohaPeerNfcSenderCheckpointV1: Equatable, Sendable {
         let requestMessage = try nfcDecodeMessage(
             receiveRequest,
             expectedProfile: nil,
-            expectedKind: .receiveRequest,
+            expectedKind: .request,
             limits: limits
         )
         let effectivePolicy = profilePolicy ?? .init(profile: requestMessage.profile)

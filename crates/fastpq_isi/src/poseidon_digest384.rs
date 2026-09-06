@@ -445,10 +445,13 @@ fn reduce_wide_v1(value: u128) -> u64 {
     let high_high = i128::from(high >> 32);
     let mut accumulated = i128::from(low) + (high_low << 32) - high_low - high_high;
     let modulus = i128::from(FIELD_MODULUS);
-    while accumulated < 0 {
+    // For every u128 input, -(2^32 - 1) <= accumulated <= 2 * modulus - 2.
+    // One correction in each direction therefore suffices. Keep these bounded:
+    // unbounded subtraction loops can compile into expensive u128 division.
+    if accumulated < 0 {
         accumulated += modulus;
     }
-    while accumulated >= modulus {
+    if accumulated >= modulus {
         accumulated -= modulus;
     }
     u64::try_from(accumulated).expect("Goldilocks reduction is canonical")
@@ -905,6 +908,92 @@ fn parameter_asset_sha3_256_v1() -> [u8; 32] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wide_reduction_matches_modulo_at_limb_and_modulus_boundaries() {
+        let modulus = u128::from(FIELD_MODULUS);
+        let low_words = [
+            0,
+            1,
+            (1_u64 << 32) - 1,
+            1_u64 << 32,
+            FIELD_MODULUS - 1,
+            FIELD_MODULUS,
+            u64::MAX,
+        ];
+        let high_limbs = [0_u32, 1, u32::MAX - 1, u32::MAX];
+        for low in low_words {
+            for high_low in high_limbs {
+                for high_high in high_limbs {
+                    let value = u128::from(low)
+                        | (u128::from(high_low) << 64)
+                        | (u128::from(high_high) << 96);
+                    assert_eq!(
+                        u128::from(reduce_wide_v1(value)),
+                        value % modulus,
+                        "limb boundary {value:#034x}"
+                    );
+                }
+            }
+        }
+        for multiplier in [
+            1,
+            2,
+            FIELD_MODULUS - 1,
+            FIELD_MODULUS,
+            FIELD_MODULUS + 1,
+            u64::MAX,
+        ] {
+            let multiple = modulus * u128::from(multiplier);
+            for value in [multiple - 1, multiple, multiple + 1] {
+                assert_eq!(
+                    u128::from(reduce_wide_v1(value)),
+                    value % modulus,
+                    "modulus boundary {value:#034x}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn wide_reduction_matches_modulo_for_full_width_inputs() {
+        // Deterministic xorshift samples exercise both halves of the entire u128
+        // input domain, independent of the canonical field multiplication path.
+        let mut value = 0x6a09_e667_f3bc_c908_bb67_ae85_84ca_a73b_u128;
+        for _ in 0..65_536 {
+            value ^= value << 13;
+            value ^= value >> 7;
+            value ^= value << 17;
+            assert_eq!(
+                u128::from(reduce_wide_v1(value)),
+                value % u128::from(FIELD_MODULUS),
+                "full-width input {value:#034x}"
+            );
+        }
+    }
+
+    #[test]
+    fn multiplication_matches_modulo_for_canonical_boundaries() {
+        let values = [
+            0,
+            1,
+            2,
+            (1_u64 << 32) - 1,
+            1_u64 << 32,
+            FIELD_MODULUS / 2,
+            FIELD_MODULUS - 2,
+            FIELD_MODULUS - 1,
+        ];
+        for left in values {
+            for right in values {
+                let product = u128::from(left) * u128::from(right);
+                assert_eq!(
+                    u128::from(multiply_v1(left, right)),
+                    product % u128::from(FIELD_MODULUS)
+                );
+            }
+        }
+    }
 
     fn domain() -> GoldilocksDigestDomainV1<'static> {
         GoldilocksDigestDomainV1 {

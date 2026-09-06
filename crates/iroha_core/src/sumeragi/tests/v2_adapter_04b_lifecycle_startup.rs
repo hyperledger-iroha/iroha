@@ -344,7 +344,7 @@ fn production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout() {
             proposal_round: finality_round,
             phase: wire::GlobalPhase::Commit,
             subject: finality_subject,
-            execution_commitment: wire::ExecutionCommitment::without_topups_or_merge_carrier(
+            execution_commitment: wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
                 iroha_crypto::Hash::new(b"lifecycle retirement pre-state"),
                 iroha_crypto::Hash::new(b"lifecycle retirement post-state"),
                 iroha_crypto::Hash::new(b"lifecycle retirement writes"),
@@ -1248,10 +1248,9 @@ fn settle_terminal_fixture_runner_handoff(
     lane_work: &mut super::super::v2_lane_work::V2LaneWorkAdapter,
     output_guard: &crate::sumeragi::output_guard::ConsensusOutputGuard,
 ) {
-    let permit =
-        super::super::v2_runner::LifecycleProducerClaimDispositionV1::ApplyTerminalSettled
-            .decided_lane_recovery_permit()
-            .expect("settled Apply authorizes its exact runner handoff");
+    let permit = super::super::v2_runner::LifecycleProducerClaimDispositionV1::ApplyTerminalSettled
+        .decided_lane_recovery_permit()
+        .expect("settled Apply authorizes its exact runner handoff");
     activated
         .with_runner_runtime(
             runner,
@@ -2025,9 +2024,7 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                         executor,
                         services,
                         &mut lane_work,
-                        output_guard.as_ref(),
                         kura.as_ref(),
-                        &local_signer,
                         &mut terminal_block_sync_server,
                     )
                 },
@@ -2060,9 +2057,20 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
             );
             assert!(!output_guard.restart_required());
 
-            let ordinary_message = BlockMessage::V2(wire::ConsensusMessageV2::new(
-                wire::ConsensusMessageV2Payload::PayloadManifest(manifest.clone()),
-            ));
+            let orphan_chunk_message = || {
+                BlockMessage::V2(wire::ConsensusMessageV2::new(
+                    wire::ConsensusMessageV2Payload::PayloadChunk(wire::PayloadChunk {
+                        manifest_hash: HashOf::from_untyped_unchecked(Hash::new(
+                            b"terminal lifecycle orphan chunk",
+                        )),
+                        index: 0,
+                        bytes: Vec::new(),
+                        sender: 0,
+                        signature: vec![1],
+                    }),
+                ))
+            };
+            let ordinary_message = orphan_chunk_message();
             assert!(matches!(
                 leader_wire_ingress.try_push(
                     crate::sumeragi::InboundBlockMessage::from_authenticated_peer(
@@ -2211,9 +2219,7 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                 &mut lane_work,
                 output_guard.as_ref(),
             );
-            let batch_message = BlockMessage::V2(wire::ConsensusMessageV2::new(
-                wire::ConsensusMessageV2Payload::PayloadManifest(manifest.clone()),
-            ));
+            let batch_message = orphan_chunk_message();
             assert!(matches!(
                 leader_wire_ingress.try_push(
                     crate::sumeragi::InboundBlockMessage::from_authenticated_peer(

@@ -79,11 +79,12 @@ binding; Torii startup fails if any of them differs from that implementation
 identity.
 
 Remaining production blockers under
-`V1-BLOCK-MODERATION-VIEWER-RUNTIME-01` are deployment construction of the real
-messaging, settlement/publication, external software signer/KMS/WebAuthn, linearizable sealed-CAS
+`V1-BLOCK-MODERATION-VIEWER-RUNTIME-01` are deployment construction of qualified
+messaging, settlement/publication, signer, request-authentication, linearizable sealed-CAS
 checkpoint-store, immutable archive, and signed receipt-to-transparency
 providers; a monotonic public-head adapter; and cross-replica semantic
-operation/checkpoint fencing. The evidence viewer core and standard launcher
+operation/checkpoint fencing. Any signer/authenticator implementation must satisfy
+the same provider contract. The evidence viewer core and standard launcher
 require the qualified external checkpoint authority and treat its local file
 as a verified cache, while the orchestrator's shipped archive contract must be
 exercised against genuine immutable storage, checkpoint attestation, and
@@ -124,11 +125,13 @@ settlement/publication, and four-validator recovery scenarios.
   advancement cannot rewrite or strand an admitted appeal: every historical
   publication and audit link is revalidated from consensus state. An emergency
   registry pause intentionally freezes both new and pending moderation use until
-  governance resumes it. Sortition
-  freezes the latest committed parent hash only after registration closes,
-  rejects the appellant even when that account also holds the management
-  permission, and requires the independent operator instruction to name that
-  exact anchor. It then uses a
+  governance resumes it. A bounded, canonically ordered consensus schedule pins
+  the first committed block whose timestamp is strictly greater than each
+  registration deadline. Sortition rejects execution in that anchor block,
+  verifies the pin against committed hash history, remains stable across later
+  QueuePlan carriers, rejects the appellant even when that account also holds
+  the management permission, and requires the independent operator instruction
+  to name that exact anchor. It then uses a
   domain-separated, hardware-independent BLAKE3 score over the frozen seed and
   deterministic per-credential appeal nullifier, rejects duplicate people and
   accounts, recomputes the proposed roster, and persists the anchor plus an
@@ -230,14 +233,15 @@ case activation are submitted as typed ISIs; no direct-open ISI exists.
 
 ## Remaining Production Gates
 
-- Construct and inject the reference deployment's real messaging,
-  settlement/publication, external software signer/KMS/WebAuthn, and authenticated downstream
+- Construct and inject the reference deployment's qualified messaging,
+  settlement/publication, signer, request-authentication, and authenticated downstream
   providers through the shipped qualified boundaries. Add the signed
   receipt-to-transparency producer, cross-replica semantic operation-ID
   fencing, and predecessor-bound checkpoint CAS/single-writer ownership. Run
   the shipped signed terminal archive, signer-rotation, publication-readback,
   restart-replay, and bounded/full-history audit contracts against the genuine
-  immutable archive and checkpoint-attestation providers.
+  immutable archive and checkpoint-attestation providers. Provider
+  implementation details remain deployment-owned.
 - Deploy the existing appeal/panel transaction outbox, finalized-chain
   orchestrator, retry/reconciliation worker, supervised panel-notification
   pass, and challenge/no-show maintenance with the remaining juror portal and

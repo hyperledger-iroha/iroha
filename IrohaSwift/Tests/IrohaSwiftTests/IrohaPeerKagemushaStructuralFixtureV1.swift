@@ -1,31 +1,19 @@
 import Foundation
 @testable import IrohaSwift
 
-/// Canonical ABI-21 transport framing with an intentionally opaque body.
-/// This proves the IPM layer only; callers must not treat it as a semantically
-/// valid request/payment/acknowledgement or pass it to the typed adapter.
+/// Canonical KAGEMUSHA V1 framing with an intentionally opaque body.
+///
+/// This proves only the IPM framing layer. Typed protocol validation is tested
+/// separately by the KAGEMUSHA V1 codec suite.
 func irohaPeerKagemushaStructuralArchiveV1(
     kind: IrohaPeerWireKindV1,
     payload: Data
 ) -> Data {
     precondition(!payload.isEmpty)
-    let schema: String
-    let alignment: Int
-    switch kind {
-    case .receiveRequest:
-        schema = KagemushaRecursiveSpend.recipientReceiveOfferWireName
-        alignment = 16
-    case .payment:
-        schema = KagemushaRecursiveSpend.peerPaymentWireNameV4
-        alignment = 16
-    case .acknowledgement:
-        schema = KagemushaRecursiveSpend.acknowledgementWireName
-        alignment = 8
-    }
     return noritoEncode(
-        typeName: schema,
+        typeName: kind.requiredKagemushaCanonicalSchema,
         payload: payload,
         flags: NoritoHeader.compactLen,
-        payloadAlignment: alignment
+        payloadAlignment: kind.requiredKagemushaPayloadAlignment
     )
 }

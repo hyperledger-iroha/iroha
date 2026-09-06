@@ -22,14 +22,17 @@ use iroha_data_model::{
     ChainId, Registrable as _,
     account::{Account, AccountId},
     asset::{AssetDefinitionId, definition::AssetDefinition, id::AssetId},
-    block::consensus_v2::ConsensusMode as WireConsensusMode,
-    consensus::HsmBinding,
+    block::consensus_v2::{ConsensusMode as WireConsensusMode, SumeragiV2GenesisContextParameters},
     da::commitment::DaProofPolicyBundle,
     domain::{Domain, DomainId},
     hijiri::HijiriParametersV1,
     isi::{
         Grant, InstructionBox, Mint, SetParameter,
-        register::{Register, RegisterPeerWithPop},
+        kagemusha_v1::{
+            KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterTemplateV1,
+            KagemushaMintFinalityGenesisParametersV1,
+        },
+        register::Register,
     },
     metadata::Metadata,
     name::Name,
@@ -168,7 +171,7 @@ pub fn genesis_with_keypair(
     genesis_key_pair: KeyPair,
 ) -> GenesisBlock {
     // Always construct a deterministic, minimal built-in genesis tailored for tests.
-    // This avoids surprises from `defaults/genesis.json` contents and keeps the
+    // This avoids treating `defaults/genesis.template.json` as a runtime manifest and keeps the
     // first transaction shape predictable (e.g., single Upgrade when a sample
     // executor is available).
     init_instruction_registry();
@@ -204,6 +207,40 @@ pub fn genesis_with_keypair_and_post_topology(
         Some(iroha_core::state::default_genesis_confidential_policy_hash()),
     )
 }
+
+/// Build and sign the default genesis with post-topology instructions without
+/// pre-executing its transactions.
+///
+/// This is the internal half of the custom-`NetworkBuilder` path. The builder
+/// must pre-execute the returned block under its fully merged runtime
+/// configuration before any peer starts; direct node startup must never use
+/// this block as prepared genesis.
+pub(crate) fn genesis_unexecuted_with_keypair_and_post_topology(
+    extra_transactions: Vec<Vec<InstructionBox>>,
+    post_topology_transactions: Vec<Vec<InstructionBox>>,
+    topology: UniqueVec<PeerId>,
+    topology_entries: Vec<GenesisTopologyEntry>,
+    genesis_key_pair: KeyPair,
+) -> GenesisBlock {
+    init_instruction_registry();
+    build_minimal_genesis_unexecuted_with_post_topology(
+        extra_transactions,
+        post_topology_transactions,
+        topology,
+        topology_entries,
+        genesis_key_pair,
+        chain_id(),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        Some(iroha_core::state::default_genesis_confidential_policy_hash()),
+    )
+    .0
+}
+
 pub(crate) fn genesis_with_keypair_and_post_topology_with_policies(
     extra_transactions: Vec<Vec<InstructionBox>>,
     post_topology_transactions: Vec<Vec<InstructionBox>>,
@@ -310,6 +347,41 @@ fn decode_consensus_handshake_metadata(
         .validate()
         .map_err(|error| eyre!("invalid consensus handshake metadata: {error}"))?;
     Ok(metadata)
+}
+
+fn test_kagemusha_mint_finality_genesis_parameters(
+    topology: &UniqueVec<PeerId>,
+) -> KagemushaMintFinalityGenesisParametersV1 {
+    let mut voters = topology.iter().cloned().collect::<Vec<_>>();
+    voters.sort();
+    let validators = voters
+        .into_iter()
+        .enumerate()
+        .map(|(index, validator)| {
+            let seed_byte = 0xA0_u8.wrapping_add(
+                u8::try_from(index).expect("test-network validator index fits in one byte"),
+            );
+            iroha_core::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
+                &[seed_byte; 32],
+                0,
+                validator,
+            )
+            .expect("derive independent test-only paired-Pasta validator keys")
+        })
+        .collect();
+    let epoch_roster = KagemushaMintFinalityEpochRosterTemplateV1 {
+        version: KAGEMUSHA_CHAIN_VERSION_V1,
+        epoch: 0,
+        validators,
+    };
+    let parameters = KagemushaMintFinalityGenesisParametersV1 {
+        epoch_roster,
+        next_epoch_roster: None,
+    };
+    parameters
+        .validate()
+        .expect("test-network topology must form a canonical mint-finality template");
+    parameters
 }
 fn signed_genesis_consensus_mode(block: &GenesisBlock) -> Result<WireConsensusMode, Report> {
     let mut metadata_entries = Vec::new();
@@ -488,6 +560,35 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
     consensus_mode_override: Option<SumeragiConsensusMode>,
     confidential_policy_hash: Option<[u8; 32]>,
 ) -> (GenesisBlock, AccountId, Vec<PeerId>, KeyPair) {
+    fn append_external_genesis_transaction(
+        mut builder: GenesisBuilder,
+        instructions: Vec<InstructionBox>,
+        vk_registry_instructions: &mut Vec<InstructionBox>,
+    ) -> GenesisBuilder {
+        if instructions.is_empty() {
+            return builder;
+        }
+
+        vk_registry_instructions.extend(instructions.iter().cloned());
+        let mut transaction_instructions = Vec::with_capacity(instructions.len());
+        for instruction in instructions {
+            if let Some(set_parameter) = instruction.as_any().downcast_ref::<SetParameter>() {
+                builder = builder.append_parameter(set_parameter.inner().clone());
+            } else {
+                transaction_instructions.push(instruction);
+            }
+        }
+        if transaction_instructions.is_empty() {
+            return builder;
+        }
+
+        builder = builder.next_transaction();
+        for instruction in transaction_instructions {
+            builder = builder.append_instruction(instruction);
+        }
+        builder
+    }
+
     fn try_default_executor_path() -> Option<PathBuf> {
         if std::env::var("IROHA_TEST_PREBUILD_DEFAULT_EXECUTOR")
             .ok()
@@ -530,22 +631,41 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
         .map(decode_consensus_handshake_metadata)
         .transpose()
         .expect("test-network consensus handshake metadata must be canonical");
-    if let (Some(metadata), Some(mode_override)) =
-        (consensus_handshake_metadata, consensus_mode_override)
-    {
+    if let (Some(metadata), Some(mode_override)) = (
+        consensus_handshake_metadata.as_ref(),
+        consensus_mode_override,
+    ) {
         assert_eq!(
             metadata.mode, mode_override,
             "consensus mode override must agree with signed handshake metadata"
         );
     }
-    let consensus_mode = consensus_handshake_metadata.map_or_else(
+    let consensus_mode = consensus_handshake_metadata.as_ref().map_or_else(
         || consensus_mode_override.unwrap_or(SumeragiConsensusMode::Permissioned),
         |metadata| metadata.mode,
     );
-    if let Some(metadata) = consensus_handshake_metadata {
-        builder = builder
-            .with_block_cadence_ms(metadata.block_cadence_ms)
-            .with_sumeragi_v2_context_parameters(metadata.sumeragi_v2);
+    let (block_cadence_ms, sumeragi_v2, kagemusha_mint_finality) = consensus_handshake_metadata
+        .map_or_else(
+            || {
+                (
+                    None,
+                    SumeragiV2GenesisContextParameters::recommended(),
+                    test_kagemusha_mint_finality_genesis_parameters(&topology),
+                )
+            },
+            |metadata| {
+                (
+                    Some(metadata.block_cadence_ms),
+                    metadata.sumeragi_v2,
+                    metadata.kagemusha_mint_finality,
+                )
+            },
+        );
+    builder = builder
+        .with_sumeragi_v2_context_parameters(sumeragi_v2)
+        .with_kagemusha_mint_finality_genesis_parameters(kagemusha_mint_finality);
+    if let Some(block_cadence_ms) = block_cadence_ms {
+        builder = builder.with_block_cadence_ms(block_cadence_ms);
     }
     if let Some(crypto) = genesis_crypto {
         builder = builder.with_crypto(crypto);
@@ -774,15 +894,9 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
         ));
     }
     let mut vk_registry_instructions = Vec::new();
-    for tx_instr in extra_transactions.into_iter() {
-        if tx_instr.is_empty() {
-            continue;
-        }
-        builder = builder.next_transaction();
-        vk_registry_instructions.extend(tx_instr.iter().cloned());
-        for instruction in tx_instr {
-            builder = builder.append_instruction(instruction);
-        }
+    for tx_instr in extra_transactions {
+        builder =
+            append_external_genesis_transaction(builder, tx_instr, &mut vk_registry_instructions);
     }
     let topology_vec: Vec<PeerId> = topology.iter().cloned().collect();
     if !topology_vec.is_empty() {
@@ -806,37 +920,25 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
                 (entry.peer.public_key().clone(), pop)
             })
             .collect();
-        // Expand the topology into HSM-bound peer registrations here instead of
-        // `GenesisBuilder::set_topology`, which emits plain registrations.
-        builder = builder.next_transaction();
+        // Keep the proof-bearing topology in the raw manifest until signing. The
+        // signer validates that this exact validator set matches the independently
+        // derived KAGEMUSHA mint-finality authority before lowering the entries
+        // into `RegisterPeerWithPop` instructions.
+        let mut manifest_topology = Vec::with_capacity(topology_vec.len());
         for peer_id in &topology_vec {
             let pop_bytes = pop_map
                 .remove(peer_id.public_key())
                 .unwrap_or_else(|| panic!("missing BLS PoP for peer {}", peer_id.public_key()));
-            // Bind consensus keys to a softkey provider so genesis passes the HSM policy gate.
-            let hsm_binding = HsmBinding {
-                provider: "softkey".to_owned(),
-                key_label: peer_id.public_key().to_string(),
-                slot: None,
-            };
-            let register =
-                RegisterPeerWithPop::new(peer_id.clone(), pop_bytes).with_hsm(hsm_binding);
-            let instruction = InstructionBox::from(register);
-            builder = builder.append_instruction(instruction);
+            manifest_topology.push(GenesisTopologyEntry::new(peer_id.clone(), pop_bytes));
         }
         if let Some((dangling_pk, _)) = pop_map.into_iter().next() {
             panic!("topology entry present for peer {dangling_pk} that is absent from topology");
         }
+        builder = builder.next_transaction().set_topology(manifest_topology);
     }
-    for tx_instr in post_topology_transactions.into_iter() {
-        if tx_instr.is_empty() {
-            continue;
-        }
-        builder = builder.next_transaction();
-        vk_registry_instructions.extend(tx_instr.iter().cloned());
-        for instruction in tx_instr {
-            builder = builder.append_instruction(instruction);
-        }
+    for tx_instr in post_topology_transactions {
+        builder =
+            append_external_genesis_transaction(builder, tx_instr, &mut vk_registry_instructions);
     }
     let vk_set_hash = iroha_genesis::compute_genesis_vk_set_hash(vk_registry_instructions.iter())
         .expect("compute genesis verifying key set hash");
@@ -853,7 +955,10 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
         HijiriParametersV1::first_release_genesis().into_custom_parameter(),
     ));
     builder = builder.append_parameter(conf_param);
-    let raw_genesis = builder.build_raw().with_consensus_mode(consensus_mode);
+    let raw_genesis = builder
+        .build_raw()
+        .expect("build canonical test-network genesis manifest")
+        .with_consensus_mode(consensus_mode);
     let block = raw_genesis
         .build_and_sign_with_da_proof_policies_and_confidential_policy_hash(
             &genesis_key_pair,
@@ -1061,12 +1166,6 @@ pub(crate) fn preexecute_genesis_with_runtime_config(
         state.set_gov(config.gov.clone());
         state.content = config.content.clone();
         state.set_settlement(config.settlement.clone());
-        state.set_kagemusha_release_catalog(
-            iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4::from_offline_config(
-                &config.settlement.offline,
-            )
-            .map_err(|error| eyre!("load Kagemusha catalog for genesis pre-execution: {error}"))?,
-        );
     }
     if let Some(zk_config) = runtime_config.map(|config| &config.zk).or(zk_config) {
         state.set_zk(zk_config.clone()).map_err(Report::from)?;
@@ -1331,9 +1430,7 @@ mod tests {
     use super::*;
     use iroha_core::state::StateReadOnly;
     use iroha_crypto::{Algorithm, KeyPair};
-    use iroha_data_model::{
-        asset::AssetDefinition, domain::Domain, parameter::system::SumeragiParameters,
-    };
+    use iroha_data_model::{asset::AssetDefinition, domain::Domain};
     use norito::codec::Decode;
     #[test]
     fn base_config_enables_confidential_verification() {
@@ -1418,6 +1515,46 @@ mod tests {
             vec![HijiriParametersV1::first_release_genesis()],
             "test-network genesis must seed exactly one neutral first-release Hijiri snapshot"
         );
+    }
+    #[test]
+    fn parameter_only_addition_does_not_create_empty_genesis_transaction() {
+        init_instruction_registry();
+        let parameter = Parameter::Block(
+            iroha_data_model::parameter::system::BlockParameter::MaxTransactions(
+                std::num::NonZeroU64::new(17).expect("non-zero test transaction limit"),
+            ),
+        );
+        let (baseline, _, _, _) = build_minimal_genesis_unexecuted(
+            Vec::new(),
+            UniqueVec::new(),
+            Vec::new(),
+            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
+        );
+        let (with_parameter, _, _, _) = build_minimal_genesis_unexecuted(
+            vec![vec![InstructionBox::from(SetParameter::new(
+                parameter.clone(),
+            ))]],
+            UniqueVec::new(),
+            Vec::new(),
+            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
+        );
+
+        assert_eq!(
+            with_parameter.0.external_transactions().count(),
+            baseline.0.external_transactions().count(),
+            "routing a parameter into the authoritative snapshot must not leave an empty transaction"
+        );
+        assert!(with_parameter.0.external_transactions().any(|transaction| {
+            let Executable::Instructions(instructions) = transaction.instructions() else {
+                return false;
+            };
+            instructions.iter().any(|instruction| {
+                instruction
+                    .as_any()
+                    .downcast_ref::<SetParameter>()
+                    .is_some_and(|set_parameter| set_parameter.inner() == &parameter)
+            })
+        }));
     }
     #[test]
     fn genesis_allows_wonderland_assets_from_genesis_authority() {
@@ -1659,10 +1796,6 @@ mod tests {
     #[test]
     fn populate_genesis_results_executes_without_fallback() {
         init_instruction_registry();
-        assert!(
-            !SumeragiParameters::default().key_require_hsm,
-            "defaults no longer require HSM bindings; test peers rely on softkey bindings only when enabled explicitly"
-        );
         let bls = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
         let peer_id = PeerId::new(bls.public_key().clone());
         let topology = [peer_id.clone()]
@@ -1690,7 +1823,7 @@ mod tests {
         .expect("genesis pre-execution should succeed");
         assert!(
             executed.results().all(|result| result.as_ref().is_ok()),
-            "pre-executed genesis should not carry errors when HSM bindings are optional"
+            "pre-executed genesis should not carry errors for valid proof-bearing peers"
         );
     }
     #[test]
@@ -2054,7 +2187,6 @@ mod tests {
         );
         let block = genesis(Vec::new(), topology, vec![entry]);
         let mut register_pop = 0;
-        let mut hsm_bound = 0;
         for tx in block.0.external_transactions() {
             match tx.instructions() {
                 Executable::Instructions(isi) => {
@@ -2063,9 +2195,6 @@ mod tests {
                             instr.as_any().downcast_ref::<RegisterBox>()
                         {
                             register_pop += 1;
-                            if isi.hsm.is_some() {
-                                hsm_bound += 1;
-                            }
                         }
                     }
                 }
@@ -2078,10 +2207,6 @@ mod tests {
         assert_eq!(
             register_pop, 1,
             "exactly one RegisterPeerWithPop instruction expected"
-        );
-        assert_eq!(
-            hsm_bound, register_pop,
-            "consensus peers in genesis must carry softkey HSM bindings"
         );
     }
     #[test]

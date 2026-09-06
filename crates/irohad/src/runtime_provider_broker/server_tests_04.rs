@@ -2362,7 +2362,7 @@ impl ParliamentTlePartialReleaseSignerBrokerBackendV1 for TestParliamentTleBroke
 
 #[test]
 fn consensus_signer_broker_startup_is_exact_and_fail_closed() {
-    let handle = "hsm://iroha/consensus-signers/primary";
+    let handle = "provider://iroha/consensus-signers/primary";
     let revision = 7;
     let digest = [0xA7; 32];
     let qualification = ConsensusSignerProviderQualificationV1::new(revision, digest, false);
@@ -2397,7 +2397,7 @@ fn consensus_signer_broker_startup_is_exact_and_fail_closed() {
     .expect("exact beacon signer backend qualifies");
     for backend in [
         TestGlobalBeaconBrokerBackendV1 {
-            handle: "hsm://iroha/consensus-signers/substituted",
+            handle: "provider://iroha/consensus-signers/substituted",
             qualification,
         },
         TestGlobalBeaconBrokerBackendV1 {

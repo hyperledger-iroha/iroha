@@ -86,11 +86,13 @@ fn latest_lane_block_artifact_for_dataspace_skips_newer_foreign_dataspace() {
     );
     let latest_any = kura
         .latest_lane_block_artifact(lane_id)
+        .expect("read canonical lane frontier")
         .expect("latest lane artifact");
     assert_eq!(latest_any.ownership.dataspace_id, lane_entry.dataspace_id);
     assert_eq!(latest_any.ownership.lane_block_height, 2);
     let latest_active = kura
         .latest_lane_block_artifact_for_dataspace(lane_id, lane_entry.dataspace_id)
+        .expect("read canonical lane frontier")
         .expect("latest active-dataspace lane artifact");
     assert_eq!(
         latest_active.ownership.dataspace_id,
@@ -177,7 +179,7 @@ fn lane_block_artifact_read_rejects_replay_material_mismatch() {
     );
 }
 #[test]
-fn latest_lane_block_artifact_skips_replay_material_mismatch() {
+fn latest_lane_block_artifact_rejects_replay_material_mismatch() {
     let (temp_dir, config, lane_config) = two_lane_storage_fixture();
     let lane_id = LaneId::from(1);
     let lane_entry = lane_config.entry(lane_id).expect("lane entry");
@@ -219,12 +221,9 @@ fn latest_lane_block_artifact_skips_replay_material_mismatch() {
         ),
         "overwrite later lane artifact with forged replay material"
     );
-    let latest = kura
-        .latest_lane_block_artifact(lane_id)
-        .expect("latest valid lane block artifact");
-    assert_eq!(
-        latest.ownership.lane_block_height, 1,
-        "latest artifact scan must skip corrupt newer replay material"
+    assert!(
+        kura.latest_lane_block_artifact(lane_id).is_err(),
+        "corrupt occupied replay material cannot authorize an older frontier"
     );
 }
 #[test]
@@ -2397,6 +2396,173 @@ fn terminal_frontier_compaction_retains_every_later_pending_slot() {
     }
 }
 #[test]
+fn terminal_frontier_compaction_retains_sparse_required_evidence() {
+    let temp_dir = TempDir::new().expect("temporary sidecar directory");
+    let data_path = temp_dir.path().join("terminal-required.norito");
+    let index_path = temp_dir.path().join("terminal-required.index");
+    for height in 1_u64..=600 {
+        let payload =
+            norito::to_bytes(&DummySidecar { height }).expect("encode dummy lane history");
+        assert!(Kura::append_indexed_sidecar(
+            &data_path,
+            &index_path,
+            height,
+            &payload,
+            "dummy required terminal history",
+            FsyncMode::Always,
+            None,
+        ));
+    }
+    let required_heights = BTreeSet::from([7_u64, 400]);
+    assert!(
+        Kura::prune_indexed_sidecars_through_terminal_frontier_with_required_heights(
+            &data_path,
+            &index_path,
+            550,
+            NonZeroUsize::new(32).expect("non-zero terminal retention"),
+            &required_heights,
+            "dummy required terminal history",
+        )
+    );
+    let mut index = std::fs::File::open(&index_path).expect("open required terminal index");
+    let index_len = index
+        .metadata()
+        .expect("required terminal index metadata")
+        .len();
+    let layout = SidecarIndexLayout::read_from(&mut index, index_len)
+        .expect("decode required terminal index layout");
+    assert_eq!(layout.base_height, 7);
+    assert_eq!(layout.entry_count, 594);
+    for height in [7_u64, 400, 519, 550, 551, 600] {
+        assert_eq!(
+            Kura::read_indexed_sidecar_from_paths(
+                height,
+                &data_path,
+                &index_path,
+                norito::decode_from_bytes::<DummySidecar>,
+                "dummy required terminal history",
+            ),
+            Some(DummySidecar { height }),
+            "required evidence and the policy window must survive compaction",
+        );
+    }
+    for height in [6_u64, 8, 399, 401, 518] {
+        assert!(
+            Kura::read_indexed_sidecar_from_paths::<DummySidecar, _>(
+                height,
+                &data_path,
+                &index_path,
+                norito::decode_from_bytes::<DummySidecar>,
+                "dummy required terminal history",
+            )
+            .is_none(),
+            "an unrequired height outside the policy window must be pruned",
+        );
+    }
+}
+#[test]
+fn terminal_frontier_compaction_missing_required_evidence_is_byte_exact() {
+    let temp_dir = TempDir::new().expect("temporary sidecar directory");
+    let data_path = temp_dir.path().join("terminal-required-missing.norito");
+    let index_path = temp_dir.path().join("terminal-required-missing.index");
+    for height in 1_u64..=10 {
+        let payload =
+            norito::to_bytes(&DummySidecar { height }).expect("encode dummy lane history");
+        assert!(Kura::append_indexed_sidecar(
+            &data_path,
+            &index_path,
+            height,
+            &payload,
+            "dummy missing required terminal history",
+            FsyncMode::Always,
+            None,
+        ));
+    }
+    let original_data = fs::read(&data_path).expect("read original required data");
+    let original_index = fs::read(&index_path).expect("read original required index");
+    assert!(
+        !Kura::prune_indexed_sidecars_through_terminal_frontier_with_required_heights(
+            &data_path,
+            &index_path,
+            10,
+            NonZeroUsize::new(1).expect("non-zero terminal retention"),
+            &BTreeSet::from([11_u64]),
+            "dummy missing required terminal history",
+        ),
+        "compaction must fail before replacing a pair that lacks required evidence",
+    );
+    assert_eq!(
+        fs::read(&data_path).expect("read preserved required data"),
+        original_data,
+    );
+    assert_eq!(
+        fs::read(&index_path).expect("read preserved required index"),
+        original_index,
+    );
+    assert!(!data_path.with_extension("norito.tmp").exists());
+    assert!(!index_path.with_extension("index.tmp").exists());
+}
+#[test]
+fn terminal_evidence_recovery_rejects_temp_pair_that_omits_required_height() {
+    let temp_dir = TempDir::new().expect("temporary sidecar directory");
+    let data_path = temp_dir.path().join("terminal-required-recovery.norito");
+    let index_path = temp_dir.path().join("terminal-required-recovery.index");
+    for height in 1_u64..=3 {
+        let payload =
+            norito::to_bytes(&DummySidecar { height }).expect("encode dummy lane history");
+        assert!(Kura::append_indexed_sidecar(
+            &data_path,
+            &index_path,
+            height,
+            &payload,
+            "dummy required recovery history",
+            FsyncMode::Always,
+            None,
+        ));
+    }
+    let original_data = fs::read(&data_path).expect("read original recovery data");
+    let original_index = fs::read(&index_path).expect("read original recovery index");
+    let retained_payload =
+        norito::to_bytes(&DummySidecar { height: 3 }).expect("encode temp retained payload");
+    let temp_data_path = data_path.with_extension("norito.tmp");
+    let temp_index_path = index_path.with_extension("index.tmp");
+    fs::write(&temp_data_path, &retained_payload).expect("write compacted temp data");
+    let mut temp_index = std::fs::File::create(&temp_index_path).expect("create compacted index");
+    temp_index
+        .write_all(&SidecarIndexLayout::base_header(3))
+        .expect("write compacted index header");
+    temp_index
+        .write_all(
+            &SidecarIndexEntry {
+                offset: 0,
+                len: u64::try_from(retained_payload.len()).expect("payload length fits u64"),
+            }
+            .to_bytes(),
+        )
+        .expect("write compacted index entry");
+    temp_index.flush().expect("flush compacted index");
+    temp_index.sync_data().expect("sync compacted index");
+
+    assert!(
+        !Kura::recover_indexed_sidecar_artifacts_with_required_heights(
+            &data_path,
+            &index_path,
+            &BTreeSet::from([1_u64]),
+            "dummy required recovery history",
+        ),
+        "recovery must not promote a crash temp that omits required evidence",
+    );
+    assert_eq!(
+        fs::read(&data_path).expect("read unchanged recovery data"),
+        original_data,
+    );
+    assert_eq!(
+        fs::read(&index_path).expect("read unchanged recovery index"),
+        original_index,
+    );
+    assert!(temp_data_path.exists() && temp_index_path.exists());
+}
+#[test]
 fn terminal_frontier_compaction_fails_before_replacing_malformed_pending_slot() {
     let temp_dir = TempDir::new().expect("temporary sidecar directory");
     let data_path = temp_dir.path().join("terminal-malformed.norito");
@@ -2491,4 +2657,138 @@ fn terminal_auxiliary_cleanup_resumes_after_each_mutation_budget() {
         "a later pass must finish the remaining terminal namespace"
     );
     assert!(paths.iter().all(|path| !path.exists()));
+}
+
+#[test]
+fn consensus_lane_frontier_distinguishes_empty_storage_from_corrupt_occupied_slots() {
+    for corrupt_index in [false, true] {
+        let (temp_dir, config, lane_config) = two_lane_storage_fixture();
+        let lane_id = LaneId::from(1);
+        let lane = lane_config.entry(lane_id).expect("configured lane");
+        let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
+        assert!(
+            kura.latest_lane_block_artifact(lane_id)
+                .expect("empty active lane")
+                .is_none()
+        );
+        assert!(
+            kura.read_lane_block_artifact_read_only(lane_id, 1)
+                .expect("empty exact active lane slot")
+                .is_none()
+        );
+        let block = dummy_block_with_lane_payload_ownership(lane_id, lane.dataspace_id, 1);
+        kura.store_block(block)
+            .expect("persist canonical lane carrier");
+        assert!(
+            kura.latest_lane_block_artifact(lane_id)
+                .expect("canonical occupied lane")
+                .is_some()
+        );
+        assert!(
+            kura.read_lane_block_artifact_read_only(lane_id, 1)
+                .expect("canonical exact active lane slot")
+                .is_some()
+        );
+        let (data_path, index_path) = Kura::lane_artifact_paths_for_entry(lane, temp_dir.path());
+        if corrupt_index {
+            let mut bytes = fs::read(&index_path).expect("read index");
+            let slot = usize::try_from(INDEXED_SIDECAR_BASE_HEADER_SIZE_U64).expect("slot offset");
+            bytes[slot..slot + 8].copy_from_slice(&1u64.to_le_bytes());
+            bytes[slot + 8..slot + PIPELINE_INDEX_ENTRY_SIZE].fill(0);
+            fs::write(&index_path, bytes).expect("persist malformed vacant slot");
+        } else {
+            fs::write(&data_path, b"corrupt occupied lane ownership")
+                .expect("damage indexed payload");
+        }
+        let before = (
+            fs::read(&data_path).expect("data evidence"),
+            fs::read(&index_path).expect("index evidence"),
+        );
+        assert!(kura.latest_lane_block_artifact(lane_id).is_err());
+        assert!(kura.read_lane_block_artifact_read_only(lane_id, 1).is_err());
+        assert_eq!(
+            (
+                fs::read(&data_path).expect("data after read"),
+                fs::read(&index_path).expect("index after read")
+            ),
+            before
+        );
+    }
+}
+
+#[test]
+fn consensus_lane_frontier_budget_and_concurrent_writer_state_cannot_prove_absence() {
+    let (temp_dir, config, lane_config) = two_lane_storage_fixture();
+    let lane_id = LaneId::from(1);
+    let lane = lane_config.entry(lane_id).expect("configured lane");
+    let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
+    let block = dummy_block_with_lane_payload_ownership(lane_id, lane.dataspace_id, 1);
+    kura.store_block(block)
+        .expect("persist canonical lane carrier");
+    let (_, index_path) = Kura::lane_artifact_paths_for_entry(lane, temp_dir.path());
+    let index = fs::OpenOptions::new()
+        .write(true)
+        .open(&index_path)
+        .expect("open sparse index");
+    let budget = u64::try_from(CONSENSUS_SIDECAR_MATCH_SCAN_BUDGET).expect("fixed scan budget");
+    index
+        .set_len(INDEXED_SIDECAR_BASE_HEADER_SIZE_U64 + budget * PIPELINE_INDEX_ENTRY_SIZE_U64)
+        .expect("extend sparse index");
+    assert_eq!(
+        kura.latest_lane_block_artifact(lane_id)
+            .expect("exact bounded scan")
+            .expect("retained occupied slot")
+            .ownership
+            .lane_block_height,
+        1
+    );
+    index
+        .set_len(
+            INDEXED_SIDECAR_BASE_HEADER_SIZE_U64 + (budget + 1) * PIPELINE_INDEX_ENTRY_SIZE_U64,
+        )
+        .expect("exceed scan budget");
+    assert!(kura.latest_lane_block_artifact(lane_id).is_err());
+    index
+        .set_len(INDEXED_SIDECAR_BASE_HEADER_SIZE_U64 + PIPELINE_INDEX_ENTRY_SIZE_U64)
+        .expect("restore explicit fixture frontier");
+    let temp_path = index_path.with_extension("index.tmp");
+    assert!(
+        kura.latest_lane_block_artifact_matching(lane_id, |_| {
+            fs::write(&temp_path, b"unresolved writer recovery")
+                .expect("stage concurrent writer recovery");
+            true
+        })
+        .is_err()
+    );
+    assert_eq!(
+        fs::read(temp_path).expect("retained recovery evidence"),
+        b"unresolved writer recovery"
+    );
+}
+
+#[test]
+fn consensus_lane_frontier_authenticates_empty_private_directory_and_active_marker() {
+    let (temp_dir, config, lane_config) = two_lane_storage_fixture();
+    let lane_id = LaneId::from(1);
+    let lane = lane_config.entry(lane_id).expect("configured lane");
+    let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
+    let (data_path, _) = Kura::lane_artifact_paths_for_entry(lane, temp_dir.path());
+    let directory = data_path.parent().expect("committee-private directory");
+    if directory.exists() {
+        fs::remove_dir(directory).expect("remove empty private directory");
+    }
+    assert!(
+        kura.latest_lane_block_artifact(lane_id)
+            .expect("authenticated missing private directory")
+            .is_none()
+    );
+    assert!(
+        !directory.exists(),
+        "a read must not provision non-owner storage"
+    );
+    let marker = lane
+        .blocks_dir(temp_dir.path())
+        .join(".lane-incarnation.norito");
+    fs::write(&marker, b"corrupt active marker").expect("damage geometry marker");
+    assert!(kura.latest_lane_block_artifact(lane_id).is_err());
 }

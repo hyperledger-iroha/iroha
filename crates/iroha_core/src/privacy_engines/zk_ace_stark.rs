@@ -25,6 +25,8 @@
 //!
 //! No caller-selected parameter, transcript, proof shape, or backend is carried
 //! by the wire value.  All dimensions below are compiled consensus constants.
+//! Private witness buffers, execution-trace storage, and independent mask coefficients use
+//! compiler-resistant erasure guards on success, error, and unwinding paths.
 #[cfg(test)]
 use super::transparent_stark::goldilocks_fft_v1;
 use super::{
@@ -62,6 +64,7 @@ use iroha_data_model::{
 };
 use rand::{TryCryptoRng, TryRngCore};
 use thiserror::Error;
+use zeroize::Zeroizing;
 /// Internal, fixed AIR projection of the typed privacy statement.
 ///
 /// This type is deliberately not exported from `iroha_core`: callers submit
@@ -381,12 +384,12 @@ struct ScheduleRow {
 }
 #[derive(Clone)]
 struct TraceMaterial {
-    trace_columns: Vec<Vec<F>>,
+    trace_columns: Zeroizing<Vec<Vec<F>>>,
     fixed_columns: Vec<Vec<F>>,
     public_outputs: [F; PUBLIC_OUTPUTS],
 }
 struct MaskedTraceMaterial {
-    lde_columns: Vec<Vec<F>>,
+    lde_columns: Zeroizing<Vec<Vec<F>>>,
     masks: Vec<ReplayableTraceMaskV1>,
 }
 #[derive(Clone, Debug)]
@@ -417,13 +420,8 @@ struct FriLaneMaterial {
     terminal_values: Vec<E>,
 }
 struct FriMaskMaterial {
-    values: Vec<E>,
+    values: Zeroizing<Vec<E>>,
     tree: MerkleTree,
-}
-impl Drop for FriMaskMaterial {
-    fn drop(&mut self) {
-        self.values.fill(E::ZERO);
-    }
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ZkAceStarkProofV1 {
@@ -1327,21 +1325,19 @@ fn build_schedule(
     );
     Ok(schedule)
 }
-fn witness_limbs(witness: &ZkAcePrivacyWitnessV1) -> Result<[F; PRIVATE_LIMBS], ZkAceStarkError> {
-    let mut result = [F::ZERO; PRIVATE_LIMBS];
-    let mut identity_witness = [0_u8; 64];
+fn witness_limbs(
+    witness: &ZkAcePrivacyWitnessV1,
+) -> Result<Zeroizing<[F; PRIVATE_LIMBS]>, ZkAceStarkError> {
+    let mut result = Zeroizing::new([F::ZERO; PRIVATE_LIMBS]);
+    let mut identity_witness = Zeroizing::new([0_u8; 64]);
     identity_witness[..32].copy_from_slice(&witness.identity_root);
     identity_witness[32..].copy_from_slice(&witness.identity_blinding);
-    let identity = zk_ace_pack_bytes_to_field_limbs(&identity_witness);
-    let replay = zk_ace_pack_bytes_to_field_limbs(&witness.replay_secret);
-    if identity.length != 64
-        || identity.limbs.len() != 10
-        || replay.length != 32
-        || replay.limbs.len() != 5
-    {
+    let identity = Zeroizing::new(zk_ace_pack_bytes_to_field_limbs(&identity_witness[..]).limbs);
+    let replay = Zeroizing::new(zk_ace_pack_bytes_to_field_limbs(&witness.replay_secret).limbs);
+    if identity.len() != 10 || replay.len() != 5 {
         return Err(ZkAceStarkError::WitnessPacking);
     }
-    for (offset, limb) in identity.limbs.into_iter().chain(replay.limbs).enumerate() {
+    for (offset, limb) in identity.iter().chain(replay.iter()).copied().enumerate() {
         result[offset] = F::canonical(limb).ok_or(ZkAceStarkError::WitnessPacking)?;
     }
     Ok(result)
@@ -1389,15 +1385,15 @@ fn apply_mds_extension(state: [E; 3]) -> [E; 3] {
     result
 }
 fn trace_row(
-    state: [F; 3],
-    queue: [F; PRIVATE_LIMBS],
+    state: &[F; 3],
+    queue: &[F; PRIVATE_LIMBS],
     limb: F,
     message: F,
     round_constants: [F; 3],
 ) -> Vec<F> {
     let mut row = vec![F::ZERO; TRACE_WIDTH];
-    row[STATE_OFFSET..STATE_OFFSET + 3].copy_from_slice(&state);
-    row[QUEUE_OFFSET..QUEUE_OFFSET + PRIVATE_LIMBS].copy_from_slice(&queue);
+    row[STATE_OFFSET..STATE_OFFSET + 3].copy_from_slice(state);
+    row[QUEUE_OFFSET..QUEUE_OFFSET + PRIVATE_LIMBS].copy_from_slice(queue);
     row[LIMB_OFFSET] = limb;
     row[MESSAGE_OFFSET] = message;
     for bit in 0..LIMB_BITS {
@@ -1481,10 +1477,10 @@ fn build_trace_material(
     let schedule = build_schedule(public_inputs)?;
     let witness_limbs = witness_limbs(witness)?;
     let public_outputs = public_output_words(public_inputs)?;
-    let mut trace_rows = Vec::with_capacity(TRACE_SIZE);
+    let mut trace_rows = Zeroizing::new(Vec::with_capacity(TRACE_SIZE));
     let mut fixed_rows = Vec::with_capacity(TRACE_SIZE);
-    let mut state = [F::ZERO; 3];
-    let mut queue = [F::ZERO; PRIVATE_LIMBS];
+    let mut state = Zeroizing::new([F::ZERO; 3]);
+    let mut queue = Zeroizing::new([F::ZERO; PRIVATE_LIMBS]);
     for schedule_row in schedule.iter().copied() {
         let fixed = fixed_row(schedule_row);
         let round_constants = [
@@ -1503,35 +1499,36 @@ fn build_trace_material(
             },
             _ => F::ZERO,
         };
-        let row = trace_row(state, queue, limb, message, round_constants);
+        let row = trace_row(&state, &queue, limb, message, round_constants);
         match schedule_row.op {
             ScheduleOp::Hold | ScheduleOp::Output { .. } => {}
-            ScheduleOp::Reset { state: reset_state } => state = reset_state.map(F),
+            ScheduleOp::Reset { state: reset_state } => *state = reset_state.map(F),
             ScheduleOp::Load(index) => queue[index] = limb,
             ScheduleOp::Absorb { position, .. } => {
                 state[position] = state[position].add(message);
             }
             ScheduleOp::FullRound { .. } => {
-                state = apply_mds([row[X7_OFFSET], row[X7_OFFSET + 1], row[X7_OFFSET + 2]]);
+                *state = apply_mds([row[X7_OFFSET], row[X7_OFFSET + 1], row[X7_OFFSET + 2]]);
             }
             ScheduleOp::PartialRound { .. } => {
-                state = apply_mds([
+                *state = apply_mds([
                     row[X7_OFFSET],
                     state[1].add(round_constants[1]),
                     state[2].add(round_constants[2]),
                 ]);
             }
         }
+        let observed_output = row[STATE_OFFSET];
+        trace_rows.push(row);
         if let ScheduleOp::Output { output_index } = schedule_row.op {
-            if row[STATE_OFFSET] != public_outputs[output_index] {
+            if observed_output != public_outputs[output_index] {
                 return Err(ZkAceStarkError::WitnessRelation);
             }
         }
-        trace_rows.push(row);
         fixed_rows.push(fixed);
     }
     Ok(TraceMaterial {
-        trace_columns: transpose_rows(&trace_rows, TRACE_WIDTH)?,
+        trace_columns: Zeroizing::new(transpose_rows(&trace_rows, TRACE_WIDTH)?),
         fixed_columns: transpose_rows(&fixed_rows, FIXED_WIDTH)?,
         public_outputs,
     })
@@ -1545,7 +1542,7 @@ fn masked_lde_columns<R: TryRngCore>(
         TransparentStarkErrorV1::AllocationFailure => ZkAceStarkError::ProofAllocationUnavailable,
         _ => ZkAceStarkError::InternalInvariant("compiled trace-masking LDE shape is invalid"),
     };
-    let mut lde_columns = Vec::with_capacity(base_columns.len());
+    let mut lde_columns = Zeroizing::new(Vec::with_capacity(base_columns.len()));
     let mut masks = Vec::with_capacity(base_columns.len());
     for column in base_columns {
         let mask = sample_trace_mask_v1(MASK_DEGREE, rng).map_err(map_error)?;
@@ -1704,10 +1701,9 @@ fn masked_trace_column_at_extension(
             "masked extension evaluation shape mismatch",
         ));
     }
-    let mut coefficients = base_column.to_vec();
+    let mut coefficients = Zeroizing::new(base_column.to_vec());
     ifft(&mut coefficients, primitive_root(TRACE_LOG2)?)?;
     let base_value = evaluate_base_coefficients_at_extension(&coefficients, point);
-    coefficients.fill(F::ZERO);
     let mask_value = evaluate_base_coefficients_at_extension(mask.coefficients(), point);
     Ok(base_value.add(point.pow(TRACE_SIZE as u128).sub(E::ONE).mul(mask_value)))
 }
@@ -2222,6 +2218,10 @@ fn trace_tree(trace_lde: &[Vec<F>]) -> Result<MerkleTree, ZkAceStarkError> {
         .collect::<Result<Vec<_>, _>>()?;
     MerkleTree::from_leaves(leaves, TRACE_NODE_ROLE_V1)
 }
+/// Translate one LDE point by the base trace generator, including cyclic wraparound.
+fn trace_next_lde_index_v1(index: usize) -> usize {
+    (index + TRACE_NEXT_STRIDE) % LDE_SIZE
+}
 fn composition_lanes(
     trace_lde: &[Vec<F>],
     fixed_lde: &[Vec<F>],
@@ -2242,10 +2242,11 @@ fn composition_lanes(
     let trace_root = primitive_root(TRACE_LOG2)?;
     let last_trace_point = trace_root.pow((TRACE_SIZE - 1) as u128);
     // `x^TRACE_SIZE` repeats every blow-up factor along the LDE
-    // domain, so only sixteen vanishing-polynomial inversions are needed.
-    let mut inverse_vanishing_by_residue = Vec::with_capacity(TERMINAL_SIZE);
+    // domain, so exactly eight vanishing-polynomial inversions are needed.
+    // This is independent of the FRI terminal domain size.
+    let mut inverse_vanishing_by_residue = Vec::with_capacity(TRACE_NEXT_STRIDE);
     let mut residue_point = coset_shift;
-    for _ in 0..TERMINAL_SIZE {
+    for _ in 0..TRACE_NEXT_STRIDE {
         inverse_vanishing_by_residue.push(
             residue_point
                 .pow(TRACE_SIZE as u128)
@@ -2267,7 +2268,7 @@ fn composition_lanes(
             .into_iter()
             .map(E::from_base)
             .collect::<Vec<_>>();
-        let next = row_at(trace_lde, (index + TERMINAL_SIZE) % LDE_SIZE)?
+        let next = row_at(trace_lde, trace_next_lde_index_v1(index))?
             .into_iter()
             .map(E::from_base)
             .collect::<Vec<_>>();
@@ -2276,10 +2277,10 @@ fn composition_lanes(
             .map(E::from_base)
             .collect::<Vec<_>>();
         let inverse_trace_vanishing =
-            E::from_base(inverse_vanishing_by_residue[index % TERMINAL_SIZE]);
+            E::from_base(inverse_vanishing_by_residue[index % TRACE_NEXT_STRIDE]);
         let transition_factor = E::from_base(
             x.sub(last_trace_point)
-                .mul(inverse_vanishing_by_residue[index % TERMINAL_SIZE]),
+                .mul(inverse_vanishing_by_residue[index % TRACE_NEXT_STRIDE]),
         );
         for lane in 0..SECURITY_LANES {
             lanes[lane].push(constraint_quotient_value_with_factors(
@@ -2691,7 +2692,7 @@ fn fri_mask_material<R: TryRngCore>(
     lane: usize,
     rng: &mut R,
 ) -> Result<FriMaskMaterial, ZkAceStarkError> {
-    let mut coefficients = exact_vec(LDE_SIZE)?;
+    let mut coefficients = Zeroizing::new(exact_vec(LDE_SIZE)?);
     for _ in 0..FRI_MASK_COEFFICIENTS {
         coefficients.push(random_goldilocks_fp4_v1(rng).map_err(|error| match error {
             TransparentStarkErrorV1::RandomnessUnavailable => {
@@ -2708,12 +2709,12 @@ fn fri_mask_material<R: TryRngCore>(
     validate_fri_mask_coefficients_v1(&coefficients)?;
     coefficients.resize(LDE_SIZE, E::ZERO);
     let lde_root = primitive_root(LDE_LOG2)?;
-    let values =
+    let values = Zeroizing::new(
         goldilocks_fp4_evaluate_coset_v1(&coefficients, LDE_SIZE, lde_root, F(FIELD_GENERATOR))
             .map_err(|_| {
                 ZkAceStarkError::InternalInvariant("invalid Fp4 FRI-mask coefficient/coset shape")
-            })?;
-    coefficients.fill(E::ZERO);
+            })?,
+    );
     let leaves = values
         .iter()
         .copied()
@@ -2732,7 +2733,7 @@ fn proof_query(
     fri_masks: &[FriMaskMaterial],
     fri_lanes: &[FriLaneMaterial],
 ) -> Result<ZkAceQueryProofV1, ZkAceStarkError> {
-    let next_index = (index + TRACE_NEXT_STRIDE) % LDE_SIZE;
+    let next_index = trace_next_lde_index_v1(index);
     let current_row = row_at(trace_lde, index)?;
     let next_row = row_at(trace_lde, next_index)?;
     let composition_values = compositions.iter().map(|values| values[index]).collect();
@@ -3149,7 +3150,7 @@ pub(super) fn verify_zk_ace_stark_v1(
         if index != expected_indices[query_position] || index >= LDE_SIZE {
             return Err(ZkAceStarkError::TranscriptMismatch);
         }
-        let next_index = (index + TRACE_NEXT_STRIDE) % LDE_SIZE;
+        let next_index = trace_next_lde_index_v1(index);
         let current = canonical_fields(&query.current_row, TRACE_WIDTH)?;
         let next = canonical_fields(&query.next_row, TRACE_WIDTH)?;
         if verify_merkle_path(
@@ -3548,6 +3549,71 @@ mod tests {
             ifft(&mut values, root).expect("inverse FFT");
             assert_eq!(values, expected);
         }
+    }
+
+    #[test]
+    fn trace_next_lde_index_is_the_trace_generator_translate() {
+        let lde_generator = primitive_root(LDE_LOG2).expect("LDE generator");
+        let trace_generator = primitive_root(TRACE_LOG2).expect("trace generator");
+        assert_ne!(TRACE_NEXT_STRIDE, TERMINAL_SIZE);
+        for index in [
+            0,
+            1,
+            TRACE_NEXT_STRIDE,
+            LDE_SIZE - TRACE_NEXT_STRIDE,
+            LDE_SIZE - 1,
+        ] {
+            let point = F(FIELD_GENERATOR).mul(lde_generator.pow(index as u128));
+            let next =
+                F(FIELD_GENERATOR).mul(lde_generator.pow(trace_next_lde_index_v1(index) as u128));
+            assert_eq!(next, point.mul(trace_generator));
+        }
+    }
+
+    #[test]
+    fn composition_lanes_use_the_trace_stride_instead_of_the_fri_terminal_size() {
+        // Isolate the state transition term on f(X) = X. Its quotient has the
+        // independent closed form (g - 1)X(X - g^-1)/(X^n - 1). A terminal-size
+        // stride replaces g with g^2 and fails this identity at every point.
+        let lde_generator = primitive_root(LDE_LOG2).expect("LDE generator");
+        let trace_generator = primitive_root(TRACE_LOG2).expect("trace generator");
+        let mut trace = Zeroizing::new(vec![vec![F::ZERO; LDE_SIZE]; TRACE_WIDTH]);
+        let mut point = F(FIELD_GENERATOR);
+        for value in &mut trace[STATE_OFFSET] {
+            *value = point;
+            point = point.mul(lde_generator);
+        }
+        let fixed = vec![vec![F::ZERO; LDE_SIZE]; FIXED_WIDTH];
+        let mut alphas = vec![vec![E::ZERO; CONSTRAINT_COUNT]; SECURITY_LANES];
+        alphas[0][LOCAL_CONSTRAINT_COUNT] = E::ONE;
+        let compositions = composition_lanes(&trace, &fixed, &[F::ZERO; PUBLIC_OUTPUTS], &alphas)
+            .expect("bounded composition evaluation");
+        for index in [0, 1, 31_337, LDE_SIZE - TRACE_NEXT_STRIDE, LDE_SIZE - 1] {
+            let point = trace[STATE_OFFSET][index];
+            let (_, transition_factor) = constraint_quotient_factors(E::from_base(point))
+                .expect("LDE is disjoint from the trace domain");
+            let expected =
+                E::from_base(point.mul(trace_generator.sub(F::ONE))).mul(transition_factor);
+            assert_eq!(compositions[0][index], expected, "LDE index {index}");
+        }
+    }
+
+    #[test]
+    fn field_zeroize_traits_erase_base_extension_and_witness_limbs() {
+        use zeroize::Zeroize as _;
+
+        let mut base = [F::ONE, F(17), F(FIELD_MODULUS - 1)];
+        base.zeroize();
+        assert_eq!(base, [F::ZERO; 3]);
+        let mut extension = [E::ONE, E::from_base(F(17))];
+        extension.zeroize();
+        assert_eq!(extension, [E::ZERO; 2]);
+
+        let (_, witness) = public_inputs_and_witness();
+        let mut limbs = witness_limbs(&witness).expect("canonical witness packing");
+        assert!(limbs.iter().any(|limb| *limb != F::ZERO));
+        limbs.zeroize();
+        assert_eq!(*limbs, [F::ZERO; PRIVATE_LIMBS]);
     }
 
     #[test]

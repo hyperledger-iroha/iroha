@@ -271,7 +271,6 @@ fn install_fixture_validator_authority(
             pop: Some(pop.clone()),
             activation_height: 0,
             expiry_height: None,
-            hsm: None,
             replaces: None,
             status: ConsensusKeyStatus::Active,
         };
@@ -361,28 +360,6 @@ fn install_fixture_validator_authority(
         "fixture lane/dataspace authority must match the active height roster"
     );
 }
-fn install_fixture_kagemusha_runtime_lifecycle(
-    state: &State,
-    runtime_effective_config_sha256: [u8; 32],
-) {
-    let lifecycle = crate::smartcontracts::isi::offline::staged_lifecycle_for_test(
-        runtime_effective_config_sha256,
-        state.network_id,
-    );
-    let key: iroha_data_model::state_path::StatePath =
-        iroha_data_model::offline::kagemusha_v4_release_lifecycle_state_key(
-            &lifecycle.artifact_binding.manifest_sha256,
-        )
-        .expect("derive canonical Kagemusha lifecycle key")
-        .parse()
-        .expect("parse canonical Kagemusha lifecycle key");
-    let mut world_block = state.world.block();
-    world_block.smart_contract_state.insert(
-        key,
-        norito::encode_canonical(&lifecycle).expect("encode Kagemusha lifecycle fixture"),
-    );
-    world_block.commit();
-}
 impl ApplyFixture {
     fn new() -> Self {
         Self::new_with_lane_payload(false)
@@ -405,16 +382,6 @@ impl ApplyFixture {
     fn new_for_production_recovered_decision_apply_with_native_lane_lifecycle() -> Self {
         Self::new_with_options_and_network(false, false, true, true, true)
     }
-    fn new_for_kagemusha_runtime_projection() -> Self {
-        Self::new_with_options_and_network_and_kagemusha(
-            false,
-            false,
-            false,
-            false,
-            true,
-            Some(([0x55; 32], Some([0x55; 32]))),
-        )
-    }
     fn new_with_options(
         include_lane_payload: bool,
         include_projection_policies: bool,
@@ -435,23 +402,6 @@ impl ApplyFixture {
         include_lane_lifecycle: bool,
         include_native_lane: bool,
         match_context_network: bool,
-    ) -> Self {
-        Self::new_with_options_and_network_and_kagemusha(
-            include_lane_payload,
-            include_projection_policies,
-            include_lane_lifecycle,
-            include_native_lane,
-            match_context_network,
-            None,
-        )
-    }
-    fn new_with_options_and_network_and_kagemusha(
-        include_lane_payload: bool,
-        include_projection_policies: bool,
-        include_lane_lifecycle: bool,
-        include_native_lane: bool,
-        match_context_network: bool,
-        kagemusha_runtime: Option<([u8; 32], Option<[u8; 32]>)>,
     ) -> Self {
         let chain_id: ChainId = "sumeragi-v2-apply-crash-test".into();
         let mut keys = (1_u8..=4)
@@ -474,8 +424,11 @@ impl ApplyFixture {
                 power: 1,
             })
             .collect::<Vec<_>>();
+        let network_id = crate::sumeragi::synthetic_network_id("sumeragi-v2-apply-crash-test");
+        let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
+            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(network_id, 0, &roster);
         let mut context = wire::HeightContext {
-            network_id: crate::sumeragi::synthetic_network_id("sumeragi-v2-apply-crash-test"),
+            network_id,
             protocol_version: wire::PROTOCOL_VERSION,
             height: 1,
             epoch: 0,
@@ -486,9 +439,11 @@ impl ApplyFixture {
             snapshot_bootstrap: None,
             quorum: wire::DualQuorum::from_roster(&roster).expect("fixture quorum"),
             roster,
+            kagemusha_mint_finality_epoch_id,
+            kagemusha_mint_finality_epoch_roster,
             nexus_amx_context_hash: Hash::new(b"apply crash fixture Nexus/AMX"),
             execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
-            da_layout: wire::SumeragiV2GenesisContextParameters::recommended().da_layout,
+            da_layout: wire::recommended_data_availability_layout(),
             leader_seed: [0x63; 32],
         };
         context.validate().expect("valid fixture context");
@@ -535,14 +490,6 @@ impl ApplyFixture {
         install_fixture_validator_authority(&state, &context, &validator_set_pops);
         if include_native_lane {
             install_fixture_native_lane(&mut state, &mut context);
-        }
-        if let Some((expected, local)) = kagemusha_runtime {
-            install_fixture_kagemusha_runtime_lifecycle(&state, expected);
-            if let Some(local) = local {
-                state
-                    .install_kagemusha_runtime_effective_config_sha256(local)
-                    .expect("install Kagemusha runtime projection fixture");
-            }
         }
         if match_context_network {
             context.nexus_amx_context_hash =
@@ -635,16 +582,9 @@ impl ApplyFixture {
             max_source_age_ms: REPUTATION_JOURNAL_MAX_SOURCE_AGE_MS_V1,
         };
         let transaction_instructions = || {
-            let mut instructions = if kagemusha_runtime.is_some() {
-                vec![InstructionBox::from(Log::new(
-                    Level::INFO,
-                    "Kagemusha runtime projection gate fixture".to_owned(),
-                ))]
-            } else {
-                vec![InstructionBox::from(SetParameter::new(
-                    Parameter::Sumeragi(SumeragiParameter::MaxClockDriftMs(100)),
-                ))]
-            };
+            let mut instructions = vec![InstructionBox::from(SetParameter::new(
+                Parameter::Sumeragi(SumeragiParameter::MaxClockDriftMs(100)),
+            ))];
             if include_projection_policies {
                 instructions.push(InstructionBox::from(
                     SetSorafsReputationJournalAuthorityPolicy::new(reputation_policy.clone()),
@@ -847,19 +787,6 @@ impl ApplyFixture {
         );
         (service, state)
     }
-    fn restart_service_with_kagemusha_runtime_projection(
-        &self,
-        local_runtime_effective_config_sha256: Option<[u8; 32]>,
-    ) -> (V2ApplyService, Arc<State>) {
-        let (service, state) = self.restart_service_from_last_finalized_snapshot();
-        install_fixture_kagemusha_runtime_lifecycle(state.as_ref(), [0x55; 32]);
-        if let Some(local) = local_runtime_effective_config_sha256 {
-            state
-                .install_kagemusha_runtime_effective_config_sha256(local)
-                .expect("install restarted Kagemusha runtime projection");
-        }
-        (service, state)
-    }
     fn execute(&self, store: &mut V2BodyStore) -> Result<(), V2ApplyError> {
         self.service
             .execute(&self.context, store, &self.task)
@@ -883,7 +810,7 @@ impl ApplyFixture {
                 .encode_wire()
                 .expect("encode exact executed block wire");
             let mut execution_commitment =
-                wire::ExecutionCommitment::without_topups_or_merge_carrier(
+                wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
                     Hash::new(b"v2 apply reservation finality parent state"),
                     Hash::new(b"v2 apply reservation finality post state"),
                     Hash::new(b"v2 apply reservation finality ordinary writes"),
@@ -1511,6 +1438,7 @@ fn pending_merge_entry(
         epoch_id: context.epoch,
         lane_catalog_hash: Hash::new(b"v2 apply decided-sidecar catalog"),
         active_lanes: Vec::new(),
+        lane_authority_catalog: iroha_data_model::merge::MergeLaneAuthorityCatalogV1::default(),
         incarnation_root: Hash::new(b"v2 apply decided-sidecar incarnations"),
         activation_root: Hash::new(b"v2 apply decided-sidecar activations"),
         lane_snapshots: Vec::new(),
@@ -1859,6 +1787,7 @@ fn merge_entry_with_reservations(
         autonomous_epoch: context.epoch,
         autonomous_payload_hash: payload.payload_hash,
         entrypoint_hashes,
+        authenticated_signed_replay_aliases: vec![None; entrypoints.len()],
         entrypoints,
         reservation_keys,
         routing_plans,

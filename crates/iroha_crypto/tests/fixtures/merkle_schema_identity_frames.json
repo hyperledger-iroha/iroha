@@ -1,0 +1,30 @@
+[
+  {
+    "deserialize_hash": "fb1aa61bc52062a3916e49658e91c9f7",
+    "frame_hex": "4e5254300000fb1aa61bc52062a3916e49658e91c9f7007700000000000000b59cd63410f341f802040200000071030000000000000022012093a8071afbbcde51736443659d2ddb52a596077c9388ddc5306cc0f716f3d41722012013f19d4abe2fc5f4ca28b5b9978443c57a42d5c3bb0430a4d37b681aadec495f220120d054c7ce4b34384a2a387fecb300fbde7305da451876ed4f42727b5a5f675ad9",
+    "frame_name": "iroha_crypto::merkle::MerkleProof<iroha_crypto_group_01::merkle_schema_identity::OriginalMarker>",
+    "nominal": "iroha_crypto::merkle::MerkleProof<iroha_crypto_group_01::merkle_schema_identity::OriginalMarker>",
+    "serialize_hash": "fb1aa61bc52062a3916e49658e91c9f7"
+  },
+  {
+    "deserialize_hash": "c1e3a12c7f9c60ad6bd86c012901b88a",
+    "frame_hex": "4e5254300000c1e3a12c7f9c60ad6bd86c012901b88a002a000000000000006fc5225a97ae8d8202206bde2d14d764f1ded32a70e3a30a441a107aa05ce076afdf9543b8742cd99219080500000000000000",
+    "frame_name": "iroha_crypto::merkle::MerkleTreeCommitment<iroha_crypto_group_01::merkle_schema_identity::OriginalMarker>",
+    "nominal": "iroha_crypto::merkle::MerkleTreeCommitment<iroha_crypto_group_01::merkle_schema_identity::OriginalMarker>",
+    "serialize_hash": "c1e3a12c7f9c60ad6bd86c012901b88a"
+  },
+  {
+    "deserialize_hash": "22fc6518609b578b87bb356b26c9188a",
+    "frame_hex": "4e525430000022fc6518609b578b87bb356b26c9188a00b10000000000000017c87b355b2df289020101ad01050000000000000020f161bd9c408fb8f0754760c203bc1b7e3390bc359146ff7f556240490b7418d920c9aa51e182c73e53a834f4342fe926b7cce3a03da0e92185f9c2916e02a574fb20c4b0245f3dbc28054a093d4d947a84e2a854e94a9040b9eb3d56d7b1b02581f92093a8071afbbcde51736443659d2ddb52a596077c9388ddc5306cc0f716f3d41720d054c7ce4b34384a2a387fecb300fbde7305da451876ed4f42727b5a5f675ad9",
+    "frame_name": "iroha_crypto::merkle::MerkleTree<iroha_crypto_group_01::merkle_schema_identity::OriginalMarker>",
+    "nominal": "iroha_crypto::merkle::MerkleTree<iroha_crypto_group_01::merkle_schema_identity::OriginalMarker>",
+    "serialize_hash": "22fc6518609b578b87bb356b26c9188a"
+  },
+  {
+    "deserialize_hash": "315acea512ae2ca5864214798ab2baf3",
+    "frame_hex": "4e5254300000315acea512ae2ca5864214798ab2baf300200000000000000032c7bcaad6dbf656000707070707070707070707070707070707070707070707070707070707070707",
+    "frame_name": "iroha_crypto::hash::HashOf<iroha_crypto::merkle::MerkleTree<iroha_crypto_group_01::merkle_schema_identity::OriginalMarker>>",
+    "nominal": "iroha_crypto::hash::HashOf<iroha_crypto::merkle::MerkleTree<iroha_crypto_group_01::merkle_schema_identity::OriginalMarker>>",
+    "serialize_hash": "315acea512ae2ca5864214798ab2baf3"
+  }
+]

@@ -6,7 +6,7 @@ use integration_tests::{
     sync::{get_status_with_retry_or_storage, sync_after_submission},
 };
 use iroha::{
-    client::{Client, Status},
+    client::Client,
     crypto::KeyPair,
     data_model::{ValidationFail, prelude::*},
     query::QueryError,
@@ -15,6 +15,7 @@ use iroha_data_model::query::error::{FindError, QueryExecutionFail};
 use iroha_executor_data_model::permission::asset::CanTransferAsset;
 use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, gen_account_in};
+use iroha_torii_shared::status::Status;
 use std::{
     sync::{
         OnceLock,

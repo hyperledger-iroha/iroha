@@ -8,9 +8,10 @@
 use axum::http::HeaderMap;
 use dashmap::{DashMap, mapref::entry::Entry};
 use parking_lot::Mutex;
+use sha2::{Digest as _, Sha256};
 use std::{
     cmp::Reverse,
-    collections::{BinaryHeap, HashMap, HashSet, VecDeque, hash_map::DefaultHasher},
+    collections::{BTreeMap, BinaryHeap, HashMap, VecDeque, hash_map::DefaultHasher},
     fmt,
     hash::{Hash, Hasher},
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
@@ -21,6 +22,89 @@ use std::{
     },
     time::{Duration, Instant},
 };
+const API_TOKEN_DIGEST_DOMAIN: &[u8] = b"iroha.torii.api-token.v1\0";
+/// Fixed-length, sensitive identity derived from an authenticated API token.
+#[derive(Clone, Copy, Eq, Hash, PartialEq)]
+pub(crate) struct ApiTokenPrincipal([u8; 32]);
+impl fmt::Debug for ApiTokenPrincipal {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("ApiTokenPrincipal([REDACTED])")
+    }
+}
+impl ApiTokenPrincipal {
+    /// Derive the stable principal without retaining the supplied token text.
+    #[must_use]
+    pub(crate) fn from_token(token: &str) -> Self {
+        let mut hasher = Sha256::new();
+        hasher.update(API_TOKEN_DIGEST_DOMAIN);
+        hasher.update(token.as_bytes());
+        Self(hasher.finalize().into())
+    }
+    /// Return the fixed-length digest for domain-separated downstream derivations.
+    #[must_use]
+    pub(crate) const fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+    /// Return a namespaced, stable limiter identity that contains no raw token text.
+    #[must_use]
+    pub(crate) fn rate_limit_key(self) -> String {
+        format!("api-token:{}", hex::encode(self.0))
+    }
+}
+/// Startup-compiled API-token digests used for constant-time authentication.
+#[derive(Clone, Default)]
+pub(crate) struct ApiTokenDigestSet {
+    digests: Box<[[u8; 32]]>,
+}
+impl fmt::Debug for ApiTokenDigestSet {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ApiTokenDigestSet")
+            .field("count", &self.digests.len())
+            .finish_non_exhaustive()
+    }
+}
+impl ApiTokenDigestSet {
+    /// Compile token text to fixed-length digests and discard duplicate entries.
+    #[must_use]
+    pub(crate) fn from_tokens<T, I>(tokens: I) -> Self
+    where
+        T: AsRef<str>,
+        I: IntoIterator<Item = T>,
+    {
+        let mut digests = tokens
+            .into_iter()
+            .map(|token| ApiTokenPrincipal::from_token(token.as_ref()).0)
+            .collect::<Vec<_>>();
+        digests.sort_unstable();
+        digests.dedup();
+        Self {
+            digests: digests.into_boxed_slice(),
+        }
+    }
+    /// Return whether no usable token was configured.
+    #[must_use]
+    pub(crate) fn is_empty(&self) -> bool {
+        self.digests.is_empty()
+    }
+    /// Enumerate the authenticated principal keys used to seed fixed limiter buckets.
+    pub(crate) fn rate_limit_keys(&self) -> impl Iterator<Item = String> + '_ {
+        self.digests
+            .iter()
+            .map(|digest| ApiTokenPrincipal(*digest).rate_limit_key())
+    }
+    /// Authenticate one token digest without early exit at a matching entry.
+    #[must_use]
+    pub(crate) fn authenticate(&self, token: &str) -> Option<ApiTokenPrincipal> {
+        let principal = ApiTokenPrincipal::from_token(token);
+        let mut matched = false;
+        for configured in &self.digests {
+            matched |=
+                iroha_torii_shared::connect_sdk::constant_time_eq(configured, principal.as_bytes());
+        }
+        matched.then_some(principal)
+    }
+}
 /// Shared, cheap-to-clone limiter.
 #[derive(Clone)]
 pub struct RateLimiter {
@@ -29,8 +113,8 @@ pub struct RateLimiter {
 /// Shared limiter whose complete key set is fixed at construction time.
 ///
 /// Missing keys are always rejected and never allocate or evict a bucket. This
-/// is intentionally crate-private because its keys may be deployment API-token
-/// secrets and must not be exposed through diagnostics.
+/// is crate-private because its keys identify authenticated principals and must
+/// not be exposed through diagnostics.
 #[derive(Clone)]
 pub(crate) struct FixedKeyRateLimiter {
     inner: Arc<FixedKeyShardedLimiter>,
@@ -43,6 +127,7 @@ struct FixedKeyShardedLimiter {
     disabled: bool,
     shards: Vec<Mutex<FixedKeyInnerLimiter>>,
 }
+#[derive(Clone)]
 struct InnerLimiter {
     rate_per_sec: f64,
     burst: f64,
@@ -59,6 +144,21 @@ struct FixedKeyInnerLimiter {
 struct TokenBucket {
     tokens: f64,
     last: Instant,
+    pending_reservations: usize,
+}
+
+/// Tokens deducted provisionally from one or more rate-limit buckets.
+///
+/// Call [`Self::commit`] after the protected operation accepts ownership of the
+/// charge. Dropping an uncommitted reservation atomically refunds every key.
+#[must_use = "an uncommitted rate-limit reservation is refunded when dropped"]
+pub struct RateLimitReservation {
+    pending: Option<PendingRateLimitReservation>,
+}
+
+struct PendingRateLimitReservation {
+    limiter: Arc<ShardedLimiter>,
+    charges: Vec<(usize, Vec<(String, usize)>)>,
 }
 const DEFAULT_MAX_BUCKETS: usize = 4_096;
 const DEFAULT_RATE_LIMITER_SHARDS: usize = 64;
@@ -256,8 +356,11 @@ impl ShardedLimiter {
             .collect();
         Self { disabled, shards }
     }
+    fn shard_index_for(&self, key: &str) -> usize {
+        shard_index_for_key(key, self.shards.len())
+    }
     fn shard_for(&self, key: &str) -> &Mutex<InnerLimiter> {
-        &self.shards[shard_index_for_key(key, self.shards.len())]
+        &self.shards[self.shard_index_for(key)]
     }
 }
 impl FixedKeyShardedLimiter {
@@ -296,6 +399,7 @@ impl FixedKeyShardedLimiter {
                 TokenBucket {
                     tokens: burst,
                     last: now,
+                    pending_reservations: 0,
                 },
             );
             debug_assert!(previous.is_none(), "fixed limiter keys were deduplicated");
@@ -325,11 +429,20 @@ impl InnerLimiter {
             max_buckets,
         }
     }
-    fn insert_full_bucket(&mut self, key: &str, now: Instant) {
-        if self.buckets.len() >= self.max_buckets {
-            if let Some(oldest) = self.order.pop_front() {
-                self.buckets.remove(&oldest);
-            }
+    fn insert_full_bucket(&mut self, key: &str, now: Instant) -> bool {
+        while self.buckets.len() >= self.max_buckets {
+            let Some(position) = self.order.iter().position(|candidate| {
+                self.buckets
+                    .get(candidate)
+                    .is_none_or(|bucket| bucket.pending_reservations == 0)
+            }) else {
+                return false;
+            };
+            let oldest = self
+                .order
+                .remove(position)
+                .expect("rate-limit eviction position must remain valid");
+            self.buckets.remove(&oldest);
         }
         let key_owned = key.to_string();
         self.order.push_back(key_owned.clone());
@@ -338,8 +451,10 @@ impl InnerLimiter {
             TokenBucket {
                 tokens: self.burst,
                 last: now,
+                pending_reservations: 0,
             },
         );
+        true
     }
     fn refill_bucket(rate_per_sec: f64, burst: f64, bucket: &mut TokenBucket, now: Instant) {
         let elapsed = now.saturating_duration_since(bucket.last).as_secs_f64();
@@ -366,7 +481,9 @@ impl InnerLimiter {
         let bucket = match self.buckets.get_mut(key) {
             Some(bucket) => bucket,
             None => {
-                self.insert_full_bucket(key, now);
+                if !self.insert_full_bucket(key, now) {
+                    return false;
+                }
                 self.buckets
                     .get_mut(key)
                     .expect("inserted rate-limit bucket must be present")
@@ -389,6 +506,101 @@ impl InnerLimiter {
             return false;
         }
         self.allow_required(key, required, now)
+    }
+
+    fn prepare_reservation_key(&mut self, key: &str) -> bool {
+        let Some(bucket) = self.buckets.get_mut(key) else {
+            return true;
+        };
+        let Some(updated) = bucket.pending_reservations.checked_add(1) else {
+            return false;
+        };
+        bucket.pending_reservations = updated;
+        true
+    }
+
+    fn reserve_prepared_repeated(&mut self, key: &str, count: usize, now: Instant) -> bool {
+        let already_pinned = self.buckets.contains_key(key);
+        if !self.allow_repeated(key, count, now) {
+            return false;
+        }
+        if !already_pinned {
+            let bucket = self
+                .buckets
+                .get_mut(key)
+                .expect("a successful reservation must have a bucket");
+            bucket.pending_reservations = 1;
+        }
+        true
+    }
+
+    fn reservation_is_pending(&self, key: &str) -> bool {
+        self.buckets
+            .get(key)
+            .is_some_and(|bucket| bucket.pending_reservations > 0)
+    }
+
+    fn finish_reservation(&mut self, key: &str, count: usize, refund: bool) {
+        let bucket = self
+            .buckets
+            .get_mut(key)
+            .expect("a pending reservation's bucket cannot be evicted");
+        bucket.pending_reservations -= 1;
+        if refund {
+            bucket.tokens = (bucket.tokens + count as f64).min(self.burst);
+        }
+    }
+}
+
+impl RateLimitReservation {
+    /// Finalize the provisional token deduction without refunding it.
+    pub fn commit(mut self) {
+        self.finish(false);
+    }
+
+    fn finish(&mut self, refund: bool) {
+        let Some(pending) = self.pending.take() else {
+            return;
+        };
+        pending.finish(refund);
+    }
+}
+
+impl Drop for RateLimitReservation {
+    fn drop(&mut self) {
+        self.finish(true);
+    }
+}
+
+impl PendingRateLimitReservation {
+    fn finish(self, refund: bool) {
+        let mut guards = self
+            .charges
+            .iter()
+            .map(|(shard_index, _)| self.limiter.shards[*shard_index].lock())
+            .collect::<Vec<_>>();
+
+        let all_pending = guards
+            .iter()
+            .zip(&self.charges)
+            .all(|(guard, (_, shard_charges))| {
+                shard_charges
+                    .iter()
+                    .all(|(key, _)| guard.reservation_is_pending(key))
+            });
+        debug_assert!(
+            all_pending,
+            "all provisionally charged buckets must remain reserved"
+        );
+        if !all_pending {
+            return;
+        }
+
+        for (guard, (_, shard_charges)) in guards.iter_mut().zip(&self.charges) {
+            for (key, count) in shard_charges {
+                guard.finish_reservation(key, *count, refund);
+            }
+        }
     }
 }
 impl FixedKeyInnerLimiter {
@@ -490,6 +702,99 @@ impl RateLimiter {
             .shard_for(key)
             .lock()
             .allow_repeated(key, count, Instant::now())
+    }
+    /// Atomically consumes the requested token count for every supplied key.
+    ///
+    /// Duplicate keys are combined before admission and zero-count entries are ignored. If any
+    /// combined count overflows, exceeds the configured burst, or lacks available tokens, every
+    /// bucket remains unchanged.
+    #[allow(clippy::unused_async)]
+    pub async fn allow_many_repeated<I, K>(&self, charges: I) -> bool
+    where
+        I: IntoIterator<Item = (K, usize)>,
+        K: AsRef<str>,
+    {
+        let Some(reservation) = self.reserve_many_repeated(charges).await else {
+            return false;
+        };
+        reservation.commit();
+        true
+    }
+
+    /// Provisionally and atomically consume token counts for every supplied key.
+    ///
+    /// Duplicate keys are combined and zero-count entries are ignored. The returned reservation
+    /// protects its buckets from bounded-capacity eviction. Calling [`RateLimitReservation::commit`]
+    /// finalizes the charge; dropping it refunds every key as one atomic operation. If any charge
+    /// cannot be reserved, no bucket is changed.
+    #[allow(clippy::unused_async)]
+    pub async fn reserve_many_repeated<I, K>(&self, charges: I) -> Option<RateLimitReservation>
+    where
+        I: IntoIterator<Item = (K, usize)>,
+        K: AsRef<str>,
+    {
+        if self.inner.disabled {
+            return Some(RateLimitReservation { pending: None });
+        }
+
+        let mut combined = BTreeMap::<String, usize>::new();
+        for (key, count) in charges {
+            if count == 0 {
+                continue;
+            }
+            let entry = combined.entry(key.as_ref().to_owned()).or_default();
+            let Some(updated) = entry.checked_add(count) else {
+                return None;
+            };
+            *entry = updated;
+        }
+        if combined.is_empty() {
+            return Some(RateLimitReservation { pending: None });
+        }
+
+        let mut charges_by_shard = BTreeMap::<usize, Vec<(String, usize)>>::new();
+        for (key, count) in combined {
+            charges_by_shard
+                .entry(self.inner.shard_index_for(&key))
+                .or_default()
+                .push((key, count));
+        }
+
+        let grouped_charges = charges_by_shard.into_iter().collect::<Vec<_>>();
+        let mut guards = grouped_charges
+            .iter()
+            .map(|(shard_index, _)| self.inner.shards[*shard_index].lock())
+            .collect::<Vec<_>>();
+        let now = Instant::now();
+        let mut shadows = guards
+            .iter()
+            .map(|guard| (**guard).clone())
+            .collect::<Vec<_>>();
+        for (shadow, (_, shard_charges)) in shadows.iter_mut().zip(&grouped_charges) {
+            for (key, _) in shard_charges {
+                if !shadow.prepare_reservation_key(key) {
+                    return None;
+                }
+            }
+        }
+        for (shadow, (_, shard_charges)) in shadows.iter_mut().zip(&grouped_charges) {
+            for (key, count) in shard_charges {
+                if !shadow.reserve_prepared_repeated(key, *count, now) {
+                    return None;
+                }
+            }
+        }
+        for (guard, shadow) in guards.iter_mut().zip(shadows) {
+            **guard = shadow;
+        }
+        drop(guards);
+
+        Some(RateLimitReservation {
+            pending: Some(PendingRateLimitReservation {
+                limiter: Arc::clone(&self.inner),
+                charges: grouped_charges,
+            }),
+        })
     }
     #[cfg(test)]
     #[allow(clippy::unused_async)]
@@ -612,56 +917,19 @@ fn parse_forwarded_for_chain(headers: &HeaderMap) -> Option<Vec<IpAddr>> {
     }
     (!addresses.is_empty()).then_some(addresses)
 }
-/// Derive a rate-limit key from headers and optional hint:
-/// - Prefer `X-API-Token` if present and token usage is enabled
+/// Derive a rate-limit key from an authenticated principal and optional request metadata:
+/// - Prefer the supplied digest-derived API-token principal
 /// - Else the effective client IP resolved by ingress middleware
 /// - Else provided hint
 /// - Else "anon"
-pub fn key_from_headers(
+pub(crate) fn key_from_headers(
     headers: &HeaderMap,
     remote: Option<IpAddr>,
     hint: Option<&str>,
-    use_api_token: bool,
+    authenticated_api_token: Option<ApiTokenPrincipal>,
 ) -> String {
-    if use_api_token {
-        let mut values = headers.get_all("x-api-token").iter();
-        if let Some(value) = values.next()
-            && values.next().is_none()
-            && let Ok(value) = value.to_str()
-            && !value.is_empty()
-        {
-            return value.to_owned();
-        }
-    }
-    if let Some(ip) = effective_remote_ip(headers, remote) {
-        return ip.to_string();
-    }
-    if let Some(h) = hint {
-        return h.to_string();
-    }
-    "anon".to_string()
-}
-/// Derive a rate-limit key while accepting only configured API tokens as identities.
-///
-/// Invalid or ambiguous token headers fall back to the effective remote address, so an attacker
-/// cannot manufacture an unbounded family of fresh rate buckets before authentication rejects the
-/// request.
-pub fn key_from_validated_headers(
-    headers: &HeaderMap,
-    remote: Option<IpAddr>,
-    hint: Option<&str>,
-    use_api_token: bool,
-    valid_tokens: &HashSet<String>,
-) -> String {
-    if use_api_token {
-        let mut values = headers.get_all("x-api-token").iter();
-        if let Some(value) = values.next()
-            && values.next().is_none()
-            && let Ok(value) = value.to_str()
-            && valid_tokens.contains(value)
-        {
-            return value.to_owned();
-        }
+    if let Some(principal) = authenticated_api_token {
+        return principal.rate_limit_key();
     }
     if let Some(ip) = effective_remote_ip(headers, remote) {
         return ip.to_string();
@@ -808,10 +1076,15 @@ pub fn has_trusted_forwarded_header(
     if !cidr_contains(trusted_proxies, remote_ip) {
         return false;
     }
-    headers
-        .get(header_name)
-        .and_then(|value| value.to_str().ok())
+    let mut values = headers.get_all(header_name).iter();
+    let Some(value) = values.next() else {
+        return false;
+    };
+    value
+        .to_str()
+        .ok()
         .is_some_and(|value| !value.trim().is_empty())
+        && values.next().is_none()
 }
 /// Configuration for the pre-authentication connection gate.
 #[derive(Debug, Clone)]
@@ -1292,6 +1565,30 @@ mod tests {
         assert!(!limiter.allow("a").await);
     }
     #[tokio::test]
+    async fn configured_token_digests_seed_exact_authenticated_limiter_keys() {
+        let tokens = ApiTokenDigestSet::from_tokens(["first-token", "second-token", "first-token"]);
+        let limiter =
+            FixedKeyRateLimiter::new_per_minute(Some(1), Some(1), tokens.rate_limit_keys());
+        assert_eq!(limiter.bucket_count(), 2);
+        for token in ["first-token", "second-token"] {
+            let key = tokens
+                .authenticate(token)
+                .expect("configured token")
+                .rate_limit_key();
+            assert!(!key.contains(token));
+            assert!(limiter.allow(&key).await);
+            assert!(!limiter.allow(&key).await);
+            assert!(!limiter.allow(token).await);
+        }
+        assert!(
+            !limiter
+                .allow(&ApiTokenPrincipal::from_token("unknown-token").rate_limit_key())
+                .await
+        );
+        assert_eq!(limiter.bucket_count(), 2);
+        assert_eq!(ApiTokenDigestSet::default().rate_limit_keys().count(), 0);
+    }
+    #[tokio::test]
     async fn fixed_key_limiter_empty_set_rejects_without_growth() {
         let limiter =
             FixedKeyRateLimiter::new_per_minute(Some(60), Some(1), std::iter::empty::<String>());
@@ -1483,6 +1780,335 @@ mod tests {
         assert!(limiter.allow("batch").await);
         assert!(!limiter.allow("batch").await);
     }
+    #[tokio::test]
+    async fn limiter_allow_many_repeated_canonicalizes_duplicate_keys() {
+        let limiter = RateLimiter::new(Some(1), Some(3));
+        assert!(
+            limiter
+                .allow_many_repeated([("same", 1), ("other", 1), ("same", 2)])
+                .await
+        );
+        assert_eq!(limiter.bucket_count().await, 2);
+        assert!(!limiter.allow("same").await);
+        assert!(limiter.allow_repeated("other", 2).await);
+        assert!(!limiter.allow("other").await);
+    }
+    #[tokio::test]
+    async fn limiter_allow_many_repeated_rolls_back_every_key() {
+        let limiter = RateLimiter {
+            inner: Arc::new(ShardedLimiter::new(Some(f64::EPSILON), 2.0, 2)),
+        };
+        assert!(limiter.allow_repeated("z-blocked", 2).await);
+        assert!(
+            !limiter
+                .allow_many_repeated([("a-fresh", 2), ("z-blocked", 1)])
+                .await
+        );
+        assert_eq!(
+            limiter.bucket_count().await,
+            1,
+            "a failed multi-key charge must not allocate a bucket for an earlier key"
+        );
+        assert!(limiter.allow_repeated("a-fresh", 2).await);
+        assert!(!limiter.allow("z-blocked").await);
+    }
+    #[tokio::test]
+    async fn limiter_allow_many_repeated_rejects_impossible_aggregate_without_mutation() {
+        let limiter = RateLimiter::new(Some(1), Some(2));
+        assert!(
+            !limiter
+                .allow_many_repeated([("overflow", usize::MAX), ("overflow", 1)])
+                .await
+        );
+        assert!(
+            !limiter
+                .allow_many_repeated([("too-large", 1), ("too-large", 2)])
+                .await
+        );
+        assert_eq!(limiter.bucket_count().await, 0);
+        assert!(limiter.allow_repeated("too-large", 2).await);
+    }
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn limiter_allow_many_repeated_serializes_opposite_order_contention() {
+        const WORKERS: usize = 32;
+
+        let limiter = RateLimiter::new_per_minute(Some(1), Some(1));
+        let first = "contended-0".to_owned();
+        let first_shard = limiter.inner.shard_index_for(&first);
+        let second = (1..10_000)
+            .map(|index| format!("contended-{index}"))
+            .find(|key| limiter.inner.shard_index_for(key) != first_shard)
+            .expect("test keys must cover at least two limiter shards");
+        let start = Arc::new(tokio::sync::Barrier::new(WORKERS + 1));
+        let mut handles = Vec::with_capacity(WORKERS);
+        for worker in 0..WORKERS {
+            let limiter = limiter.clone();
+            let start = Arc::clone(&start);
+            let first = first.clone();
+            let second = second.clone();
+            handles.push(tokio::spawn(async move {
+                start.wait().await;
+                let charges = if worker % 2 == 0 {
+                    [(first, 1), (second, 1)]
+                } else {
+                    [(second, 1), (first, 1)]
+                };
+                limiter.allow_many_repeated(charges).await
+            }));
+        }
+        start.wait().await;
+        let successes = tokio::time::timeout(Duration::from_secs(5), async move {
+            let mut successes = 0;
+            for handle in handles {
+                if handle.await.expect("limiter task should finish") {
+                    successes += 1;
+                }
+            }
+            successes
+        })
+        .await
+        .expect("opposite key ordering must not deadlock");
+        assert_eq!(successes, 1);
+        assert!(!limiter.allow(&first).await);
+        assert!(!limiter.allow(&second).await);
+    }
+    #[tokio::test]
+    async fn limiter_reservation_commit_finalizes_every_charge() {
+        let limiter = RateLimiter {
+            inner: Arc::new(ShardedLimiter::new(Some(f64::EPSILON), 2.0, 2)),
+        };
+        let reservation = limiter
+            .reserve_many_repeated([("first", 2), ("second", 1)])
+            .await
+            .expect("both charges should be reservable");
+        assert!(!limiter.allow("first").await);
+        assert!(limiter.allow("second").await);
+        assert!(!limiter.allow("second").await);
+
+        reservation.commit();
+
+        assert!(!limiter.allow("first").await);
+        assert!(!limiter.allow("second").await);
+        let shard = limiter.inner.shards[0].lock();
+        assert!(
+            shard
+                .buckets
+                .values()
+                .all(|bucket| bucket.pending_reservations == 0),
+            "commit must release every eviction pin"
+        );
+    }
+    #[tokio::test]
+    async fn limiter_reservation_drop_atomically_refunds_every_charge() {
+        let limiter = RateLimiter {
+            inner: Arc::new(ShardedLimiter::new(Some(f64::EPSILON), 2.0, 2)),
+        };
+        let reservation = limiter
+            .reserve_many_repeated([("first", 2), ("second", 2)])
+            .await
+            .expect("both charges should be reservable");
+        assert!(!limiter.allow("first").await);
+        assert!(!limiter.allow("second").await);
+
+        drop(reservation);
+
+        assert!(limiter.allow_repeated("first", 2).await);
+        assert!(limiter.allow_repeated("second", 2).await);
+        assert!(!limiter.allow("first").await);
+        assert!(!limiter.allow("second").await);
+    }
+    #[tokio::test]
+    async fn limiter_reservation_prevents_eviction_until_settled() {
+        let limiter = RateLimiter::new_with_capacity(Some(1), Some(1), 2);
+        let reservation = limiter
+            .reserve_many_repeated([("pinned", 1)])
+            .await
+            .expect("initial key should be reservable");
+        assert!(limiter.allow("transient").await);
+        assert!(
+            limiter.allow("replacement").await,
+            "an unreserved bucket should remain available for eviction"
+        );
+        assert_eq!(limiter.bucket_count().await, 2);
+        assert!(!limiter.allow("pinned").await);
+
+        drop(reservation);
+
+        assert!(
+            limiter.allow("pinned").await,
+            "the protected bucket must survive so its charge can be refunded"
+        );
+        assert!(!limiter.allow("pinned").await);
+    }
+    #[tokio::test]
+    async fn limiter_reservation_fails_closed_when_every_bucket_is_reserved() {
+        let limiter = RateLimiter::new_with_capacity(Some(1), Some(1), 2);
+        let first = limiter
+            .reserve_many_repeated([("first", 1)])
+            .await
+            .expect("first bucket should be reservable");
+        let second = limiter
+            .reserve_many_repeated([("second", 1)])
+            .await
+            .expect("second bucket should be reservable");
+
+        assert!(
+            limiter
+                .reserve_many_repeated([("third", 1)])
+                .await
+                .is_none(),
+            "reservation must not evict a pending bucket"
+        );
+        assert!(!limiter.allow("third").await);
+        assert_eq!(limiter.bucket_count().await, 2);
+
+        drop(first);
+        assert!(limiter.allow("third").await);
+        drop(second);
+        assert_eq!(limiter.bucket_count().await, 2);
+    }
+    #[tokio::test]
+    async fn limiter_reservation_does_not_refill_a_later_key_by_evicting_it() {
+        let limiter = RateLimiter {
+            inner: Arc::new(ShardedLimiter::new(Some(f64::EPSILON), 1.0, 2)),
+        };
+        assert!(limiter.allow("z-drained").await);
+        assert!(limiter.allow("discardable").await);
+
+        assert!(
+            limiter
+                .reserve_many_repeated([("a-new", 1), ("z-drained", 1)])
+                .await
+                .is_none(),
+            "an existing target must remain pinned while earlier target keys are evaluated"
+        );
+
+        let shard = limiter.inner.shards[0].lock();
+        assert!(shard.buckets.contains_key("z-drained"));
+        assert!(shard.buckets.contains_key("discardable"));
+        assert!(!shard.buckets.contains_key("a-new"));
+        assert!(
+            shard
+                .buckets
+                .values()
+                .all(|bucket| bucket.pending_reservations == 0),
+            "a failed reservation must not publish provisional eviction pins"
+        );
+    }
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn limiter_reservation_is_refunded_when_owning_task_is_cancelled() {
+        let limiter = RateLimiter {
+            inner: Arc::new(ShardedLimiter::new(Some(f64::EPSILON), 1.0, 2)),
+        };
+        let task_limiter = limiter.clone();
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(async move {
+            let _reservation = task_limiter
+                .reserve_many_repeated([("first", 1), ("second", 1)])
+                .await
+                .expect("both keys should be reservable");
+            ready_tx.send(()).expect("test receiver should remain live");
+            std::future::pending::<()>().await;
+        });
+        ready_rx
+            .await
+            .expect("reservation task should become ready");
+        assert!(!limiter.allow("first").await);
+        assert!(!limiter.allow("second").await);
+
+        task.abort();
+        assert!(
+            task.await
+                .expect_err("the reservation task should be cancelled")
+                .is_cancelled()
+        );
+
+        assert!(limiter.allow("first").await);
+        assert!(limiter.allow("second").await);
+    }
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn limiter_concurrent_commit_and_drop_do_not_create_tokens() {
+        let limiter = RateLimiter {
+            inner: Arc::new(ShardedLimiter::new(Some(f64::EPSILON), 2.0, 4_096)),
+        };
+        let first = "settle-0".to_owned();
+        let first_shard = limiter.inner.shard_index_for(&first);
+        let second = (1..10_000)
+            .map(|index| format!("settle-{index}"))
+            .find(|key| limiter.inner.shard_index_for(key) != first_shard)
+            .expect("test keys must cover at least two limiter shards");
+        let refunded = limiter
+            .reserve_many_repeated([(first.clone(), 1), (second.clone(), 1)])
+            .await
+            .expect("first reservation should succeed");
+        let committed = limiter
+            .reserve_many_repeated([(second.clone(), 1), (first.clone(), 1)])
+            .await
+            .expect("second reservation should succeed");
+        let start = Arc::new(tokio::sync::Barrier::new(3));
+        let drop_start = Arc::clone(&start);
+        let drop_task = tokio::spawn(async move {
+            drop_start.wait().await;
+            drop(refunded);
+        });
+        let commit_start = Arc::clone(&start);
+        let commit_task = tokio::spawn(async move {
+            commit_start.wait().await;
+            committed.commit();
+        });
+        start.wait().await;
+        tokio::time::timeout(Duration::from_secs(5), async {
+            drop_task.await.expect("refund task should finish");
+            commit_task.await.expect("commit task should finish");
+        })
+        .await
+        .expect("opposite settlement operations must not deadlock");
+
+        assert!(limiter.allow(&first).await);
+        assert!(limiter.allow(&second).await);
+        assert!(!limiter.allow(&first).await);
+        assert!(!limiter.allow(&second).await);
+    }
+    #[test]
+    fn api_token_digest_set_authenticates_exact_text_and_deduplicates() {
+        let tokens =
+            ApiTokenDigestSet::from_tokens(["alpha-secret", "beta-secret", "alpha-secret"]);
+        assert_eq!(tokens.digests.len(), 2);
+        assert_eq!(
+            tokens.authenticate("alpha-secret"),
+            Some(ApiTokenPrincipal::from_token("alpha-secret"))
+        );
+        assert_eq!(tokens.authenticate("Alpha-secret"), None);
+        assert_eq!(tokens.authenticate("alpha-secret "), None);
+        assert_eq!(tokens.authenticate(""), None);
+    }
+    #[test]
+    fn api_token_debug_output_redacts_token_and_digest_material() {
+        let raw_token = "debug-must-not-expose-this-token";
+        let principal = ApiTokenPrincipal::from_token(raw_token);
+        let digest_hex = hex::encode(principal.as_bytes());
+        let principal_debug = format!("{principal:?}");
+        let set_debug = format!("{:?}", ApiTokenDigestSet::from_tokens([raw_token]));
+        for rendered in [&principal_debug, &set_debug] {
+            assert!(!rendered.contains(raw_token));
+            assert!(!rendered.contains(&digest_hex));
+        }
+        assert!(principal_debug.contains("REDACTED"));
+    }
+    #[test]
+    fn limiter_keys_are_not_written_to_torii_logs() {
+        for source in [
+            include_str!("lib.rs"),
+            include_str!("operator_rate_limit_helpers.rs"),
+        ] {
+            assert!(
+                !source
+                    .lines()
+                    .any(|line| line.trim_start().starts_with("%key")),
+                "rate-limit keys may contain credential-derived material and must not be logged"
+            );
+        }
+    }
     #[test]
     fn key_from_headers_prefers_token_then_remote_then_hint() {
         let mut headers = HeaderMap::new();
@@ -1491,39 +2117,49 @@ mod tests {
                 &headers,
                 Some("203.0.113.99".parse().unwrap()),
                 Some("hint"),
-                true
+                None
             ),
             "203.0.113.99"
         );
         headers.insert("x-api-token", "secret".parse().unwrap());
+        let principal = ApiTokenPrincipal::from_token("secret").rate_limit_key();
         assert_eq!(
-            key_from_headers(&headers, Some("203.0.113.99".parse().unwrap()), None, true),
-            "secret"
+            key_from_headers(
+                &headers,
+                Some("203.0.113.99".parse().unwrap()),
+                None,
+                Some(ApiTokenPrincipal::from_token("secret")),
+            ),
+            principal
         );
+        assert!(!principal.contains("secret"));
         let headers2 = HeaderMap::new();
         assert_eq!(
-            key_from_headers(&headers2, None, Some("hint"), true),
+            key_from_headers(&headers2, None, Some("hint"), None),
             "hint"
         );
-        assert_eq!(key_from_headers(&headers2, None, None, true), "anon");
+        assert_eq!(key_from_headers(&headers2, None, None, None), "anon");
     }
     #[test]
-    fn validated_header_key_reuses_remote_bucket_for_invalid_tokens() {
+    fn only_authenticated_principals_replace_the_remote_bucket() {
         let remote = Some("203.0.113.99".parse().unwrap());
-        let valid = HashSet::from(["configured-secret".to_owned()]);
+        let valid = ApiTokenDigestSet::from_tokens(["configured-secret"]);
         for supplied in ["attacker-one", "attacker-two"] {
             let mut headers = HeaderMap::new();
             headers.insert("x-api-token", supplied.parse().unwrap());
             assert_eq!(
-                key_from_validated_headers(&headers, remote, Some("hint"), true, &valid),
+                key_from_headers(&headers, remote, Some("hint"), valid.authenticate(supplied),),
                 "203.0.113.99"
             );
         }
         let mut headers = HeaderMap::new();
         headers.insert("x-api-token", "configured-secret".parse().unwrap());
+        let principal = valid
+            .authenticate("configured-secret")
+            .expect("configured token authenticates");
         assert_eq!(
-            key_from_validated_headers(&headers, remote, Some("hint"), true, &valid),
-            "configured-secret"
+            key_from_headers(&headers, remote, Some("hint"), Some(principal)),
+            principal.rate_limit_key()
         );
     }
     #[test]
@@ -1535,18 +2171,18 @@ mod tests {
                 &headers,
                 Some("203.0.113.77".parse().unwrap()),
                 Some("hint"),
-                false
+                None
             ),
             "203.0.113.77"
         );
         let headers2 = HeaderMap::new();
         assert_eq!(
-            key_from_headers(&headers2, None, Some("hint"), false),
+            key_from_headers(&headers2, None, Some("hint"), None),
             "hint"
         );
     }
     #[test]
-    fn key_from_headers_rejects_ambiguous_token_identity() {
+    fn key_from_headers_never_infers_a_principal_from_raw_headers() {
         let mut headers = HeaderMap::new();
         headers.append("x-api-token", "first".parse().unwrap());
         headers.append("x-api-token", "second".parse().unwrap());
@@ -1555,7 +2191,7 @@ mod tests {
                 &headers,
                 Some("203.0.113.88".parse().unwrap()),
                 Some("hint"),
-                true,
+                None,
             ),
             "203.0.113.88",
             "duplicate API-token fields must not choose an attacker-controlled bucket",
@@ -1580,6 +2216,13 @@ mod tests {
         ));
         assert!(!has_trusted_forwarded_header(
             &HeaderMap::new(),
+            Some("127.0.0.1".parse().unwrap()),
+            &trusted,
+            "x-forwarded-client-cert",
+        ));
+        headers.append("x-forwarded-client-cert", "cert=second".parse().unwrap());
+        assert!(!has_trusted_forwarded_header(
+            &headers,
             Some("127.0.0.1".parse().unwrap()),
             &trusted,
             "x-forwarded-client-cert",
@@ -1867,7 +2510,7 @@ mod tests {
             REMOTE_ADDR_HEADER,
             "2001:db8::42".parse().expect("valid header value"),
         );
-        assert_eq!(key_from_headers(&headers, None, None, true), "2001:db8::42");
+        assert_eq!(key_from_headers(&headers, None, None, None), "2001:db8::42");
     }
     #[test]
     fn key_from_headers_prefers_injected_header() {
@@ -1878,7 +2521,7 @@ mod tests {
                 &headers,
                 Some("198.51.100.1".parse().unwrap()),
                 Some("hint"),
-                true
+                None
             ),
             "203.0.113.55"
         );

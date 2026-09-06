@@ -1362,7 +1362,7 @@ fn decision_commitment_mismatch_fails_closed_before_apply() {
         )
         .expect("start exact local proposal");
     complete_local_proposal_fixture(&mut executor, &mut services);
-    let conflicting_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
+    let conflicting_commitment = wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
         Hash::new(b"Decision conflict parent state"),
         Hash::new(b"Decision conflict post state"),
         Hash::new(b"Decision conflict ordinary writes"),
@@ -1408,7 +1408,7 @@ fn reconciled_decision_rejects_same_round_subject_commitment_drift() {
     assert_eq!(executor.protected_decision, Some(first));
     let retired_outbound = services.retired_all_outbound;
     let retired_candidate = services.retired_candidate_work;
-    let drifted_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
+    let drifted_commitment = wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
         Hash::new(b"drifted Decision parent state"),
         Hash::new(b"drifted Decision post state"),
         Hash::new(b"drifted Decision ordinary writes"),
@@ -2389,7 +2389,7 @@ fn missing_replay_validate_rejects_mismatched_durable_prepare_commitment() {
     let (key, _) = install_exact_recovered_body_without_lifecycle_replay(&mut executor, &fixture);
     let (prepare, effect, ownership) = protected_prepare_validate_fixture(&fixture, 9_103);
     let mut mismatched = prepare;
-    mismatched.execution_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
+    mismatched.execution_commitment = wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
         Hash::new(b"foreign protected-lock parent state"),
         Hash::new(b"foreign protected-lock post state"),
         Hash::new(b"foreign protected-lock ordinary writes"),
@@ -2900,6 +2900,108 @@ fn live_validate_successor_refines_only_the_same_attested_row() {
 }
 
 #[test]
+fn unwoken_validate_sidecar_cancellation_retires_only_its_exact_retry_authority() {
+    let fixture = Fixture::new();
+    let ordinal = 42_u128;
+    let cancellation_key = || {
+        LifecycleValidateDispatchKeyV1::for_test(
+            &fixture.context,
+            LifecycleDigest::new([0x42; 32]),
+            ordinal,
+            ordinal,
+            0,
+            LifecycleDigest::new([0x52; 32]),
+        )
+        .expect("construct the cancelled Validate dispatch key")
+    };
+
+    let mut executor = fixture.executor(EffectQueueConfig::default());
+    let services = fixture.services();
+    let (key, _, _) =
+        install_recovered_validate_retry_seal(&mut executor, &fixture, tag(0), ordinal);
+    assert_eq!(
+        executor.validate_retry_lifecycle_ordinal_for_test(key),
+        Some(Some(ordinal))
+    );
+    assert_eq!(
+        executor.pending_kura_apply_owner_flags_for_test(),
+        (false, false, false, false, false),
+        "an unwoken sidecar wait must not own a preliminary successor"
+    );
+    let cancellation =
+        CancelledLifecycleValidateSidecarV1::for_test(cancellation_key(), key.0, key.1)
+            .expect("seal the exact unwoken sidecar cancellation");
+    executor
+        .cancel_unwoken_lifecycle_validate_retry(cancellation)
+        .expect("retire the exact cancelled sidecar retry authority");
+    assert_eq!(
+        executor.validate_retry_lifecycle_ordinal_for_test(key),
+        None
+    );
+    assert_eq!(
+        executor.pending_kura_apply_owner_flags_for_test(),
+        (false, false, false, false, false)
+    );
+    assert!(!executor.output_guard.restart_required());
+    assert!(services.apply_tasks.is_empty());
+
+    let mut mismatched = fixture.executor(EffectQueueConfig::default());
+    let mismatch_services = fixture.services();
+    let (mismatch_key, _, _) =
+        install_recovered_validate_retry_seal(&mut mismatched, &fixture, tag(0), ordinal);
+    let mut foreign_subject = mismatch_key.1;
+    foreign_subject.payload_hash = Hash::new(b"foreign unwoken sidecar cancellation");
+    let foreign = CancelledLifecycleValidateSidecarV1::for_test(
+        cancellation_key(),
+        mismatch_key.0,
+        foreign_subject,
+    )
+    .expect("seal an exact-shape foreign cancellation");
+    let before = mismatched.body_ownership_projection();
+    assert!(matches!(
+        mismatched.cancel_unwoken_lifecycle_validate_retry(foreign),
+        Err(EffectExecutorError::Contract(reason))
+            if reason == "cancelled unwoken Validate changed its exact retry authority"
+    ));
+    assert_eq!(mismatched.body_ownership_projection(), before);
+    assert_eq!(
+        mismatched.validate_retry_lifecycle_ordinal_for_test(mismatch_key),
+        Some(Some(ordinal)),
+        "a substituted subject must leave the retry authority live"
+    );
+    assert!(!mismatched.output_guard.restart_required());
+    assert!(mismatch_services.apply_tasks.is_empty());
+
+    mismatched.live_lifecycle_validate_successor = Some(LiveLifecycleValidateSuccessorOwnerV1 {
+        dispatch_key: cancellation_key(),
+        round: mismatch_key.0,
+        subject: mismatch_key.1,
+        apply_is_authorized: true,
+    });
+    let phase_mismatch = CancelledLifecycleValidateSidecarV1::for_test(
+        cancellation_key(),
+        mismatch_key.0,
+        mismatch_key.1,
+    )
+    .expect("seal the phase-mismatched cancellation");
+    assert!(matches!(
+        mismatched.cancel_unwoken_lifecycle_validate_retry(phase_mismatch),
+        Err(EffectExecutorError::Contract(reason))
+            if reason == "cancelled unwoken Validate changed its exact retry authority"
+    ));
+    assert_eq!(
+        mismatched.validate_retry_lifecycle_ordinal_for_test(mismatch_key),
+        Some(Some(ordinal)),
+        "an already-published successor must not enter the pre-wake cleanup path"
+    );
+    assert_eq!(
+        mismatched.pending_kura_apply_owner_flags_for_test(),
+        (false, true, false, false, false)
+    );
+    assert!(mismatch_services.apply_tasks.is_empty());
+}
+
+#[test]
 #[allow(clippy::too_many_lines)]
 fn recovered_validate_retry_frontier_is_monotonic_and_keeps_its_physical_owner() {
     let fixture = Fixture::new();
@@ -3017,7 +3119,7 @@ fn recovered_validate_retry_frontier_is_monotonic_and_keeps_its_physical_owner()
     assert_eq!(executor.durable_validate_retry_seals[&key], accepted);
 
     let mut conflicting = prepare;
-    conflicting.execution_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
+    conflicting.execution_commitment = wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
         Hash::new(b"foreign recovered retry parent state"),
         Hash::new(b"foreign recovered retry post state"),
         Hash::new(b"foreign recovered retry writes"),
@@ -3045,7 +3147,7 @@ fn recovered_validate_retry_frontier_is_monotonic_and_keeps_its_physical_owner()
 fn recovered_validate_retry_later_marker_and_decision_joins_are_atomic() {
     let fixture = Fixture::new();
     let commitment = fixture.qc(wire::GlobalPhase::Commit).execution_commitment;
-    let conflicting_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
+    let conflicting_commitment = wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
         Hash::new(b"late cold fact parent state"),
         Hash::new(b"late cold fact post state"),
         Hash::new(b"late cold fact writes"),
@@ -3871,7 +3973,7 @@ fn admitted_validate_retry_seal_coalesces_exact_authority_upgrade_without_replay
     let accepted_seal = executor.durable_validate_retry_seals[&key].clone();
 
     let mut conflicting = prepare;
-    conflicting.execution_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
+    conflicting.execution_commitment = wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
         Hash::new(b"conflicting sealed Validate parent state"),
         Hash::new(b"conflicting sealed Validate post state"),
         Hash::new(b"conflicting sealed Validate ordinary writes"),
@@ -5609,7 +5711,7 @@ fn decision_body_stage_adoption_rejects_commitment_drift() {
     };
     let incumbent = bound_test_effect_ownership(&store, tag(0), 9_020);
     let mut conflicting = commit.clone();
-    conflicting.execution_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
+    conflicting.execution_commitment = wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
         Hash::new(b"conflicting Decision parent state"),
         Hash::new(b"conflicting Decision post state"),
         Hash::new(b"conflicting Decision ordinary writes"),
@@ -6312,10 +6414,10 @@ fn runtime_step_reconciliation_rejects_durable_decision_loss() {
     let mut services = fixture.services();
     let subject = fixture.manifest.subject;
     services
-        .finish_runtime_step_reconciliation(Some(subject))
+        .finish_runtime_step_reconciliation(Some(subject), None)
         .expect("publish the durable Decision");
     let error = services
-        .finish_runtime_step_reconciliation(None)
+        .finish_runtime_step_reconciliation(None, None)
         .expect_err("a durable Decision cannot disappear on a later runtime step");
     assert!(error.contains("lost its durable Decision"));
     assert_eq!(services.durable_runtime_decision, Some(subject));

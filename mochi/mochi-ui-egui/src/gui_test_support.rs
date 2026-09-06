@@ -67,6 +67,7 @@ if [ "$1" = "genesis" ] && [ "$2" = "generate" ]; then
   fi
   requested_mode=permissioned
   requested_chain=
+  kagemusha_parameters=
   previous=
   for argument in "$@"; do
     if [ "$previous" = "--consensus-mode" ]; then
@@ -75,9 +76,13 @@ if [ "$1" = "genesis" ] && [ "$2" = "generate" ]; then
     if [ "$previous" = "--chain-id" ]; then
       requested_chain="$argument"
     fi
+    if [ "$previous" = "--kagemusha-mint-finality-parameters" ]; then
+      kagemusha_parameters="$argument"
+    fi
     previous="$argument"
   done
   test -n "$requested_chain"
+  test -f "$kagemusha_parameters"
   if [ "$requested_mode" = "npos" ]; then
     cat <<JSON
 {npos_manifest}
@@ -175,10 +180,19 @@ fn fixture_manifest(consensus_mode: SumeragiConsensusMode, chain: &str) -> Strin
             .expect("encode signed Sumeragi v2 context"),
     );
     manifest.insert(
+        "kagemusha_mint_finality".to_owned(),
+        Value::String("__MOCHI_KAGEMUSHA_PARAMETERS__".to_owned()),
+    );
+    manifest.insert(
         "transactions".to_owned(),
         Value::Array(vec![Value::Object(transaction)]),
     );
-    json::to_string(&Value::Object(manifest)).expect("encode fixture manifest")
+    json::to_string(&Value::Object(manifest))
+        .expect("encode fixture manifest")
+        .replace(
+            "\"__MOCHI_KAGEMUSHA_PARAMETERS__\"",
+            "$(cat \"$kagemusha_parameters\")",
+        )
 }
 pub(super) fn install_noop_stub(root: &Path, name: &str) -> PathBuf {
     install_stub_script(

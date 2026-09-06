@@ -1190,7 +1190,9 @@ final class TxBuilderTests: XCTestCase {
         let stub = StubPipelineClient()
         let sdk = IrohaSDK(toriiClient: stub, baseURL: URL(string: "https://example.test")!)
         let expectation = expectation(description: "rest unavailable")
-        sdk.getAccountTransferHistory(accountId: Self.fixtureExplorerAccountId) { result in
+        sdk.getAccountTransferHistory(accountId: Self.fixtureExplorerAccountId,
+                                      cursor: "Y3Vyc29y",
+                                      limit: 25) { result in
             switch result {
             case .success:
                 XCTFail("expected failure when REST client is missing")
@@ -1207,7 +1209,9 @@ final class TxBuilderTests: XCTestCase {
         let stub = StubPipelineClient()
         let sdk = IrohaSDK(toriiClient: stub, baseURL: URL(string: "https://example.test")!)
         do {
-            _ = try await sdk.getAccountTransferHistory(accountId: Self.fixtureExplorerAccountId)
+            _ = try await sdk.getAccountTransferHistory(accountId: Self.fixtureExplorerAccountId,
+                                                        cursor: "Y3Vyc29y",
+                                                        limit: 25)
             XCTFail("expected failure when REST client is missing")
         } catch {
             XCTAssertEqual(error as? IrohaSDKError, .restClientUnavailable)
@@ -1219,7 +1223,9 @@ final class TxBuilderTests: XCTestCase {
         let stub = StubPipelineClient()
         let sdk = IrohaSDK(toriiClient: stub, baseURL: URL(string: "https://example.test")!)
         let expectation = expectation(description: "rest unavailable")
-        sdk.getTransactionHistory(accountId: Self.fixtureExplorerAccountId) { result in
+        sdk.getTransactionHistory(accountId: Self.fixtureExplorerAccountId,
+                                  cursor: "Y3Vyc29y",
+                                  limit: 25) { result in
             switch result {
             case .success:
                 XCTFail("expected failure when REST client is missing")
@@ -1236,7 +1242,9 @@ final class TxBuilderTests: XCTestCase {
         let stub = StubPipelineClient()
         let sdk = IrohaSDK(toriiClient: stub, baseURL: URL(string: "https://example.test")!)
         do {
-            _ = try await sdk.getTransactionHistory(accountId: Self.fixtureExplorerAccountId)
+            _ = try await sdk.getTransactionHistory(accountId: Self.fixtureExplorerAccountId,
+                                                    cursor: "Y3Vyc29y",
+                                                    limit: 25)
             XCTFail("expected failure when REST client is missing")
         } catch {
             XCTAssertEqual(error as? IrohaSDKError, .restClientUnavailable)
@@ -1248,7 +1256,9 @@ final class TxBuilderTests: XCTestCase {
         let stub = StubPipelineClient()
         let sdk = IrohaSDK(toriiClient: stub, baseURL: URL(string: "https://example.test")!)
         do {
-            for try await _ in sdk.iterateAccountTransferHistory(accountId: Self.fixtureExplorerAccountId) {
+            for try await _ in sdk.iterateAccountTransferHistory(accountId: Self.fixtureExplorerAccountId,
+                                                                 cursor: "Y3Vyc29y",
+                                                                 limit: 25) {
                 XCTFail("expected no items when REST client is missing")
             }
             XCTFail("expected failure when REST client is missing")
@@ -1318,7 +1328,9 @@ final class TxBuilderTests: XCTestCase {
         let stub = StubPipelineClient()
         let sdk = IrohaSDK(toriiClient: stub, baseURL: URL(string: "https://example.test")!)
         do {
-            for try await _ in sdk.streamAccountTransferHistory(accountId: Self.fixtureExplorerAccountId) {
+            for try await _ in sdk.streamAccountTransferHistory(accountId: Self.fixtureExplorerAccountId,
+                                                                cursor: "Y3Vyc29y",
+                                                                limit: 25) {
                 XCTFail("expected no items when REST client is missing")
             }
             XCTFail("expected failure when REST client is missing")
@@ -1815,46 +1827,6 @@ final class TxBuilderTests: XCTestCase {
             privateKey: keypair.privateKeyBytes
         ) else {
             XCTFail("Expected native bridge governance encoding")
-            return
-        }
-
-        let normalized = normalizeNativeSignedTransaction(native)
-        XCTAssertEqual(normalized.signed, swift.signedTransaction)
-        XCTAssertEqual(native.hash, swift.transactionHash)
-        XCTAssertEqual(normalized.norito, swift.norito)
-    }
-
-    func testPersistCouncilMatchesNativeBridge() throws {
-        try requireNativeTestCapability(
-            NoritoNativeBridge.shared.supportsTransactions(using: .ed25519),
-            "Native transaction encoder unavailable"
-        )
-
-        let keypair = try makeFixtureKeypair()
-        let authority = AccountId.make(publicKey: keypair.publicKey)
-        let request = PersistCouncilRequest(networkId: Self.fixtureNetworkId,
-                                            authority: authority,
-                                            epoch: 7,
-                                            members: [authority],
-                                            feePayment: .authority(chargeLimits: [], gasLimit: nil),
-                                            ttlMs: 15)
-
-        let swift = try SwiftTransactionEncoder.encodePersistCouncil(request: request,
-                                                                     keypair: keypair,
-                                                                     creationTimeMs: Self.fixtureCreationTimeMs)
-        let membersJson = try NoritoJSON(request.members).data
-
-        guard let native = try? NoritoNativeBridge.shared.encodeGovernancePersistCouncil(
-            networkId: request.networkId,
-            authority: request.authority,
-            creationTimeMs: Self.fixtureCreationTimeMs,
-            ttlMs: request.ttlMs,
-            epoch: request.epoch,
-            membersJson: membersJson,
-            feePaymentJSON: try request.feePayment.canonicalJSONData(),
-            privateKey: keypair.privateKeyBytes
-        ) else {
-            XCTFail("Expected native bridge persist council encoding")
             return
         }
 

@@ -54,7 +54,6 @@ fn wire_payload_matches_current_strict_timeout_recovery_round(
         wire::ConsensusMessageV2Payload::Proposal(_)
         | wire::ConsensusMessageV2Payload::Vote(_)
         | wire::ConsensusMessageV2Payload::QuorumCertificate(_)
-        | wire::ConsensusMessageV2Payload::PayloadManifest(_)
         | wire::ConsensusMessageV2Payload::PayloadChunk(_)
         | wire::ConsensusMessageV2Payload::CertifiedBodyRequest(_)
         | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
@@ -99,7 +98,6 @@ fn wire_payload_advances_or_supersedes_future_prepare_qc_fifo_block(
         | wire::ConsensusMessageV2Payload::TimeoutVote(_)
         | wire::ConsensusMessageV2Payload::QuorumCertificate(_)
         | wire::ConsensusMessageV2Payload::TimeoutCertificate(_)
-        | wire::ConsensusMessageV2Payload::PayloadManifest(_)
         | wire::ConsensusMessageV2Payload::PayloadChunk(_)
         | wire::ConsensusMessageV2Payload::CertifiedBodyRequest(_)
         | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
@@ -119,8 +117,7 @@ fn network_command_class(payload: &wire::ConsensusMessageV2Payload) -> Option<Co
         wire::ConsensusMessageV2Payload::Proposal(_) | wire::ConsensusMessageV2Payload::Vote(_) => {
             Some(CommandClass::Normal)
         }
-        wire::ConsensusMessageV2Payload::PayloadManifest(_)
-        | wire::ConsensusMessageV2Payload::PayloadChunk(_)
+        wire::ConsensusMessageV2Payload::PayloadChunk(_)
         | wire::ConsensusMessageV2Payload::CertifiedBodyRequest(_)
         | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
         | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)

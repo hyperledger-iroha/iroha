@@ -108,10 +108,11 @@ impl core::fmt::Debug for V2GlobalBeaconLifecycle {
 impl V2GlobalBeaconLifecycle {
     /// Open the exact height producer from committed public state.
     ///
-    /// NPoS pre-boundary slots are consensus-mandatory. Committed Parliament
-    /// sortition and timed-ballot slots are also produced, but remain optional
-    /// for chain liveness so their objective missing-pulse retry paths remain
-    /// reachable. Every requested slot uses the same authenticated producer.
+    /// NPoS pre-boundary slots and committed Parliament sortition or
+    /// timed-ballot slots are consensus-mandatory. Requiring every requested
+    /// pulse prevents a proposer from omitting an unfavourable reconstructed
+    /// value and grinding a later Parliament retry. Every requested slot uses
+    /// the same authenticated producer.
     pub(crate) fn open(
         context: &wire::HeightContext,
         state: &State,
@@ -136,18 +137,19 @@ impl V2GlobalBeaconLifecycle {
                 outbound: Vec::new(),
             });
         }
-        let required_for_consensus = context.mode == wire::ConsensusMode::Npos
+        let npos_boundary_requested = context.mode == wire::ConsensusMode::Npos
             && context
                 .height
                 .checked_add(1)
                 .is_some_and(|next| next == context.epoch_end_height);
         let world = state.world_view();
         let logical_beacon_id = BeaconSessionId::for_network_v1(&context.network_id);
-        let parliament_requested_at_height =
-            world.parliament_attempts().iter().any(|(_, attempt)| {
-                attempt.requires_beacon_pulse_at(logical_beacon_id, context.height)
-            });
-        if !required_for_consensus && !parliament_requested_at_height {
+        let parliament_requested_at_height = world
+            .parliament_required_beacon_pulse_slots
+            .get(&(logical_beacon_id, context.height))
+            .is_some_and(|attempts| !attempts.is_empty());
+        let required_for_consensus = npos_boundary_requested || parliament_requested_at_height;
+        if !required_for_consensus {
             return Ok(Self {
                 context: context.clone(),
                 roster,
@@ -287,13 +289,14 @@ impl V2GlobalBeaconLifecycle {
         if active.view.is_some_and(|previous| view < previous) {
             return Err(V2GlobalBeaconError::WrongView);
         }
-        active.view = Some(view);
-        active.retransmit = None;
 
+        let mut next_aggregator = active.aggregator.clone();
+        let mut next_finalized = active.finalized;
+        let mut next_retransmit = None;
         if let (Some(local_validator), Some(signer)) = (self.local_validator, self.signer.as_ref())
         {
             let partial = signer
-                .sign_partial(&active.session, active.aggregator.payload())
+                .sign_partial(&active.session, next_aggregator.payload())
                 .map_err(|_| V2GlobalBeaconError::LocalSigning)?;
             let expected_index = u16::try_from(local_validator)
                 .ok()
@@ -311,11 +314,11 @@ impl V2GlobalBeaconLifecycle {
                 partial.signature_share[0] ^= 1;
                 partial
             } else {
-                let _ = active.aggregator.accept_partial(partial)?;
+                let _ = next_aggregator.accept_partial(partial)?;
                 partial
             };
             #[cfg(not(feature = "test-network-parliament-signers"))]
-            let _ = active.aggregator.accept_partial(partial)?;
+            let _ = next_aggregator.accept_partial(partial)?;
             let message = wire::ConsensusMessageV2::new(
                 wire::ConsensusMessageV2Payload::GlobalBeaconPartialSignature(
                     wire::GlobalBeaconPartialSignature {
@@ -328,23 +331,29 @@ impl V2GlobalBeaconLifecycle {
                     },
                 ),
             );
-            active.retransmit = Some(message.clone());
-            self.outbound.push(message);
+            next_retransmit = Some(message);
             #[cfg(not(feature = "test-network-parliament-signers"))]
-            if active.finalized.is_none()
-                && active.aggregator.verified_partial_count()
+            if next_finalized.is_none()
+                && next_aggregator.verified_partial_count()
                     >= usize::from(active.session.record().threshold)
             {
-                active.finalized = Some(active.aggregator.finalize()?);
+                next_finalized = Some(next_aggregator.finalize()?);
             }
             #[cfg(feature = "test-network-parliament-signers")]
             if !deliberately_invalid_outbound
-                && active.finalized.is_none()
-                && active.aggregator.verified_partial_count()
+                && next_finalized.is_none()
+                && next_aggregator.verified_partial_count()
                     >= usize::from(active.session.record().threshold)
             {
-                active.finalized = Some(active.aggregator.finalize()?);
+                next_finalized = Some(next_aggregator.finalize()?);
             }
+        }
+        active.aggregator = next_aggregator;
+        active.finalized = next_finalized;
+        active.view = Some(view);
+        active.retransmit = next_retransmit;
+        if let Some(message) = active.retransmit.clone() {
+            self.outbound.push(message);
         }
         Ok(())
     }
@@ -422,7 +431,7 @@ impl V2GlobalBeaconLifecycle {
     }
 
     /// Attach the exact-view pulse to candidate effects, failing closed when
-    /// a consensus-mandatory pre-boundary height has not reconstructed it yet.
+    /// a consensus-mandatory requested height has not reconstructed it yet.
     pub(crate) fn attach_candidate_effects(
         &self,
         view: wire::View,

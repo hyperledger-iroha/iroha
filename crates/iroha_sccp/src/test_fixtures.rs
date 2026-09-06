@@ -7,6 +7,7 @@ use halo2curves::{
     bn256::{Fq, Fr, G1Affine},
     ff::PrimeField as _,
     group::{Curve, GroupEncoding},
+    pasta::{Fp as PastaFp, Fq as PastaFq, PallasAffine, VestaAffine},
 };
 use iroha_crypto::{Algorithm, Hash, KeyPair, MerkleTree, Signature, SignatureOf};
 use iroha_data_model::{
@@ -99,6 +100,48 @@ pub struct SccpFinalizedBlockTestFixtureV1 {
     block: SignedBlock,
     proof: TairaBridgeFinalityProofV1,
 }
+
+fn sccp_mint_finality_roster_test_fixture_v1(
+    network_id: iroha_data_model::NetworkId,
+    epoch: u64,
+    roster: &[ValidatorPower],
+) -> iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochRosterV1 {
+    use iroha_data_model::isi::kagemusha_v1::{
+        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterV1,
+        KagemushaMintFinalityValidatorKeysV1,
+    };
+
+    KagemushaMintFinalityEpochRosterV1 {
+        version: KAGEMUSHA_CHAIN_VERSION_V1,
+        network_id,
+        epoch,
+        validators: roster
+            .iter()
+            .enumerate()
+            .map(|(index, validator)| {
+                let scalar = u64::try_from(index + 1).expect("small SCCP fixture roster");
+                let eq_encoded = (<PallasAffine as CurveAffine>::CurveExt::generator()
+                    * PastaFq::from(scalar))
+                .to_affine()
+                .to_bytes();
+                let ep_encoded = (<VestaAffine as CurveAffine>::CurveExt::generator()
+                    * PastaFp::from(scalar))
+                .to_affine()
+                .to_bytes();
+                let mut eq_proof_public_key = [0_u8; 32];
+                eq_proof_public_key.copy_from_slice(eq_encoded.as_ref());
+                let mut ep_proof_public_key = [0_u8; 32];
+                ep_proof_public_key.copy_from_slice(ep_encoded.as_ref());
+                KagemushaMintFinalityValidatorKeysV1 {
+                    validator: validator.validator.clone(),
+                    eq_proof_public_key,
+                    ep_proof_public_key,
+                }
+            })
+            .collect(),
+    }
+}
+
 impl SccpFinalizedBlockTestFixtureV1 {
     /// Return the complete signed block authenticated by this fixture.
     #[must_use]
@@ -398,7 +441,7 @@ fn ton_outbound_policy() -> SccpOutboundProofPolicyV1 {
         sora_finality_anchor: outbound_policy().sora_finality_anchor,
     }
 }
-/// Build the deterministic proved burn-and-record policy used by SCCP tests.
+/// Build the deterministic contract burn-and-record policy used by SCCP tests.
 #[must_use]
 pub fn sccp_sora_outbound_execution_policy_test_fixture_v1() -> SccpSoraOutboundExecutionPolicyV1 {
     SccpSoraOutboundExecutionPolicyV1 {
@@ -892,12 +935,19 @@ pub fn sccp_finalize_taira_block_test_fixture_v1(
         max_payload_size_bytes: 4096,
         max_chunk_count: 8,
     };
+    let network_id = sccp_taira_finality_network_id_v1();
+    let epoch = 1;
+    let kagemusha_mint_finality_epoch_roster =
+        sccp_mint_finality_roster_test_fixture_v1(network_id, epoch, &roster);
+    let kagemusha_mint_finality_epoch_id = kagemusha_mint_finality_epoch_roster
+        .finality_epoch_id()
+        .expect("valid deterministic SCCP mint-finality roster");
     let context = match (height, block_header.prev_block_hash(), parent) {
         (1, None, None) => HeightContext {
-            network_id: sccp_taira_finality_network_id_v1(),
+            network_id,
             protocol_version: PROTOCOL_VERSION,
             height,
-            epoch: 1,
+            epoch,
             epoch_end_height: 10,
             next_epoch_snapshot: None,
             mode: ConsensusMode::Npos,
@@ -909,6 +959,8 @@ pub fn sccp_finalize_taira_block_test_fixture_v1(
             execution_policy_hash: Hash::new(b"exact SCCP fixture execution policy"),
             da_layout,
             leader_seed: [0x5a; 32],
+            kagemusha_mint_finality_epoch_id,
+            kagemusha_mint_finality_epoch_roster,
         },
         (2, Some(parent_hash), Some(parent)) => {
             assert_exact_finalized_block_fixture(parent);
@@ -941,6 +993,10 @@ pub fn sccp_finalize_taira_block_test_fixture_v1(
                 execution_policy_hash: parent_context.execution_policy_hash,
                 da_layout: parent_context.da_layout,
                 leader_seed: parent_context.leader_seed,
+                kagemusha_mint_finality_epoch_id: parent_context.kagemusha_mint_finality_epoch_id,
+                kagemusha_mint_finality_epoch_roster: parent_context
+                    .kagemusha_mint_finality_epoch_roster
+                    .clone(),
             }
         }
         _ => panic!(
@@ -964,7 +1020,7 @@ pub fn sccp_finalize_taira_block_test_fixture_v1(
         proposal_round: round,
         phase: GlobalPhase::Commit,
         subject,
-        execution_commitment: ExecutionCommitment::without_topups_or_merge_carrier(
+        execution_commitment: ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
             Hash::new(b"exact SCCP fixture parent state"),
             Hash::new(b"exact SCCP fixture post state"),
             Hash::new(b"exact SCCP fixture ordinary writes"),
@@ -1066,7 +1122,7 @@ fn exact_sccp_fixture_block(
         v2_evidence_admissions: Vec::new(),
         penalty_actions: vec![NposPenaltyAction::MarkConsensusEvidenceApplied(
             NposMarkConsensusEvidenceAppliedAction {
-                evidence_key: b"exact-sccp-fixture".to_vec(),
+                evidence_key: Hash::new(b"exact-sccp-fixture"),
                 height,
             },
         )],
@@ -1328,6 +1384,34 @@ mod tests {
                 .parent_commit_qc
                 .is_none()
         );
+        let context = &default_finality.finality_artifact.height_context;
+        assert_eq!(
+            context.kagemusha_mint_finality_epoch_roster.network_id, context.network_id,
+            "the mint-finality roster must bind the consensus network"
+        );
+        assert_eq!(
+            context.kagemusha_mint_finality_epoch_roster.epoch, context.epoch,
+            "the mint-finality roster must bind the consensus epoch"
+        );
+        assert_eq!(
+            context
+                .kagemusha_mint_finality_epoch_roster
+                .finality_epoch_id(),
+            Ok(context.kagemusha_mint_finality_epoch_id),
+            "the SCCP fixture must carry a self-authenticating KAGEMUSHA mint-finality roster"
+        );
+        assert!(
+            context
+                .roster
+                .iter()
+                .map(|validator| &validator.validator)
+                .eq(context
+                    .kagemusha_mint_finality_epoch_roster
+                    .validators
+                    .iter()
+                    .map(|validator| &validator.validator)),
+            "the Pasta fixture authority must exactly match consensus roster order"
+        );
         let block = fixture.finalized_block.block().clone();
         let header = block.header();
         let rebound = fixture.with_finalized_block(&block, None);
@@ -1399,6 +1483,30 @@ mod tests {
             finality.finality_artifact.height_context.epoch,
             parent.proof().finality_artifact.height_context.epoch,
             "an in-epoch successor must inherit its parent's epoch"
+        );
+        assert_eq!(
+            finality
+                .finality_artifact
+                .height_context
+                .kagemusha_mint_finality_epoch_id,
+            parent
+                .proof()
+                .finality_artifact
+                .height_context
+                .kagemusha_mint_finality_epoch_id,
+            "an in-epoch successor must inherit the exact Pasta authority identifier"
+        );
+        assert_eq!(
+            finality
+                .finality_artifact
+                .height_context
+                .kagemusha_mint_finality_epoch_roster,
+            parent
+                .proof()
+                .finality_artifact
+                .height_context
+                .kagemusha_mint_finality_epoch_roster,
+            "an in-epoch successor must inherit the exact Pasta authority roster"
         );
         assert_eq!(
             finality.finality_artifact.height_context.epoch_end_height,

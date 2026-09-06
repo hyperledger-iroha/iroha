@@ -93,7 +93,7 @@ pub mod fastpq;
 pub mod fraud;
 // Certificate-bearing Parliament data must remain available to the always-on
 // validation-fee registry without enabling governance instructions or events.
-/// Governance protocol types and feature-gated governance events.
+/// Governance protocol types.
 pub mod governance;
 mod governance_fingerprint;
 /// Hijiri reputation system data types.
@@ -111,6 +111,8 @@ mod json_helpers;
 mod json_key_codec;
 /// Jurisdiction Data Guardian attestations and committee types.
 pub mod jurisdiction;
+/// KAGEMUSHA hardware-backed cash commitments, proofs, and settlement models.
+pub mod kagemusha;
 /// Kaigi session descriptors and billing profile definitions.
 pub mod kaigi;
 /// Log-level and severity utilities.
@@ -129,8 +131,6 @@ pub mod name;
 pub mod nexus;
 /// Non-fungible token structures and specs.
 pub mod nft;
-/// Offline allowance commitments, certificates, and transfer proofs.
-pub mod offline;
 /// Oracle feed schemas and deterministic committee helpers.
 pub mod oracle;
 /// Runtime parameter definitions and schema.
@@ -228,6 +228,8 @@ include!(concat!(
 // Slice-based Norito decoders for model types used in packed sequences and
 // options. These forward to the archived Norito representation to avoid
 // duplicating decoding logic.
+#[cfg(all(test, feature = "json"))]
+mod base_wire_fixtures;
 mod norito_slice_decode;
 /// Private module defining sealing traits for `iroha_data_model`.
 mod seal {
@@ -388,3 +390,6 @@ pub mod prelude {
         },
     };
 }
+
+#[cfg(test)]
+mod captured_schema_tests;

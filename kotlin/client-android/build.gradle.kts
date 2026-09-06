@@ -1297,9 +1297,6 @@ abstract class StripNativeBridgeTask @Inject constructor(
     @get:Input
     abstract val privacyProductionEnabled: Property<Boolean>
 
-    @get:Input
-    abstract val kagemushaProductionAuthorizationSha256: Property<String>
-
     @get:InputDirectory
     @get:PathSensitive(PathSensitivity.RELATIVE)
     abstract val inputDirectory: DirectoryProperty
@@ -1544,8 +1541,6 @@ abstract class StripNativeBridgeTask @Inject constructor(
         } else {
             emptyList<String>()
         }
-        val authorizationSha256 = kagemushaProductionAuthorizationSha256.get()
-            .ifEmpty { null }
         val manifest = linkedMapOf<String, Any?>(
             "schema" to "iroha.android-native-build-provenance.v1",
             "native_bridge_abi_version" to 23,
@@ -1553,7 +1548,6 @@ abstract class StripNativeBridgeTask @Inject constructor(
             "cargo_locked" to true,
             "privacy_production_enabled" to privacyProductionEnabled.get(),
             "cargo_features" to cargoFeatures,
-            "kagemusha_production_authorization_sha256" to authorizationSha256,
             "build_environment" to NativeBridgeBuildContract.buildEnvironmentDocument(tools),
             "source_commit" to sourceCommit,
             "source_tree_dirty" to sourceTreeDirty,
@@ -1601,6 +1595,7 @@ val mobileSdkRepoDir = providers.gradleProperty("irohaSdkRepoDir")
 android {
     namespace = "org.hyperledger.iroha.sdk.android"
     compileSdk = 35
+    ndkVersion = NativeBridgeBuildContract.pinnedAndroidNdkBaseRevision
 
     defaultConfig {
         minSdk = 24
@@ -1672,7 +1667,10 @@ dependencies {
 }
 
 tasks.withType<Test>().configureEach {
-    useJUnitPlatform()
+    val hostNativeTask = name == "testDebugHostNative"
+    useJUnitPlatform {
+        if (!hostNativeTask) excludeTags("host-native")
+    }
     if (name == "testDebugUnitTest") {
         dependsOn("processDebugManifest")
         systemProperty(
@@ -1681,6 +1679,42 @@ tasks.withType<Test>().configureEach {
                 "intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml",
             ).get().asFile.absolutePath,
         )
+    }
+}
+
+// Reuse the Android variant's compiled consumers and mockable Android classpath.
+// Loading a host JNI library is an explicit qualification task, separate from
+// managed unit tests and from physical-device/Android-native execution.
+afterEvaluate {
+    tasks.register<Test>("testDebugHostNative") {
+        description = "Run Android Java consumers against an explicitly supplied host JNI bridge."
+        group = "verification"
+        val managed = tasks.named<Test>("testDebugUnitTest").get()
+        testClassesDirs = managed.testClassesDirs
+        classpath = managed.classpath
+        dependsOn(provider { managed.taskDependencies.getDependencies(managed) })
+        useJUnitPlatform { includeTags("host-native") }
+        filter {
+            includeTestsMatching("org.hyperledger.iroha.sdk.IrohaKeyManagerNativeJavaConsumerTest")
+            isFailOnNoMatchingTests = true
+        }
+        outputs.upToDateWhen { false }
+        outputs.doNotCacheIf("Host JNI qualification must execute against the supplied artifact") { true }
+        val nativeDirectory = providers.environmentVariable("IROHA_NATIVE_LIBRARY_PATH")
+        doFirst {
+            val configured = nativeDirectory.orNull
+            require(!configured.isNullOrBlank()) {
+                "testDebugHostNative requires IROHA_NATIVE_LIBRARY_PATH for the rebuilt host bridge"
+            }
+            val directory = File(configured)
+            require(directory.isAbsolute && directory.isDirectory) {
+                "IROHA_NATIVE_LIBRARY_PATH must be an absolute existing directory"
+            }
+            require(directory.resolve(System.mapLibraryName("connect_norito_bridge")).isFile) {
+                "The configured host JNI bridge is missing"
+            }
+            systemProperty("java.library.path", directory.absolutePath)
+        }
     }
 }
 
@@ -1700,44 +1734,15 @@ if (privacyProductionEnabledInput != "true" && privacyProductionEnabledInput != 
     )
 }
 val privacyProductionEnabledValue = privacyProductionEnabledInput == "true"
-val requireKagemushaProductionAuthorizationInput =
-    providers.gradleProperty("requireKagemushaProductionAuthorization").orNull ?: "false"
-if (
-    requireKagemushaProductionAuthorizationInput != "true" &&
-        requireKagemushaProductionAuthorizationInput != "false"
-) {
-    throw GradleException(
-        "requireKagemushaProductionAuthorization must be exactly 'true' or 'false'",
-    )
-}
-val requireKagemushaProductionAuthorization =
-    requireKagemushaProductionAuthorizationInput == "true"
-val kagemushaProductionAuthorizationSha256Input =
-    providers.gradleProperty("kagemushaProductionAuthorizationSha256").orNull ?: ""
-if (
-    kagemushaProductionAuthorizationSha256Input.isNotEmpty() &&
-        (!Regex("[0-9a-f]{64}").matches(kagemushaProductionAuthorizationSha256Input) ||
-            kagemushaProductionAuthorizationSha256Input.all { character -> character == '0' })
-) {
-    throw GradleException(
-        "kagemushaProductionAuthorizationSha256 must be non-zero lowercase SHA-256",
-    )
-}
-if (kagemushaProductionAuthorizationSha256Input.isNotEmpty() && !privacyProductionEnabledValue) {
-    throw GradleException(
-        "a Kagemusha production authorization may bind only a production-enabled build",
-    )
-}
-if (
-    requireKagemushaProductionAuthorization &&
-        privacyProductionEnabledValue &&
-        kagemushaProductionAuthorizationSha256Input.isEmpty()
-) {
-    throw GradleException(
-        "official production build requires a verified Kagemusha authorization digest",
-    )
-}
 val nativeBuildMode = if (privacyProductionEnabledValue) "production" else "default"
+// JVM-only Debug tests do not need an Android native library. Device builds
+// can explicitly request the same sealed/stripped bridge used by Release.
+val includeDebugNativeBridgeInput =
+    providers.gradleProperty("irohaDebugNativeBridge").orNull ?: "false"
+require(includeDebugNativeBridgeInput == "true" || includeDebugNativeBridgeInput == "false") {
+    "irohaDebugNativeBridge must be exactly 'true' or 'false'"
+}
+val includeDebugNativeBridge = includeDebugNativeBridgeInput == "true"
 val mobileSdkAndroidArtifactDirectoryInput =
     providers.environmentVariable("MOBILE_SDK_ANDROID_ARTIFACT_DIR")
 val requireExternalAndroidArtifactDirectory =
@@ -1793,6 +1798,9 @@ tasks.register("verifyAndroidNdkIdentityContract") {
     group = "verification"
     description = "Exercises the strict Android NDK package identity parser"
     doLast {
+        check(android.ndkVersion == NativeBridgeBuildContract.pinnedAndroidNdkBaseRevision) {
+            "Gradle must select the same NDK installation required by native artifact verification"
+        }
         val canonicalText = listOf(
             "Pkg.Desc = Android NDK",
             "Pkg.Revision = 28.0.12674087-beta2",
@@ -2073,9 +2081,6 @@ val stripNativeLibs = tasks.register<StripNativeBridgeTask>("stripNativeLibs") {
     group = "native"
     description = "Canonically strip the compiled Android native bridge libraries"
     privacyProductionEnabled.set(privacyProductionEnabledValue)
-    kagemushaProductionAuthorizationSha256.set(
-        kagemushaProductionAuthorizationSha256Input,
-    )
     inputDirectory.set(compileNativeLibs.flatMap { it.outputDirectory })
     sourceSealFile.set(compileNativeLibs.flatMap { it.sourceSealFile })
     buildEnvironmentFile.set(compileNativeLibs.flatMap { it.buildEnvironmentFile })
@@ -2096,10 +2101,14 @@ val stripNativeLibs = tasks.register<StripNativeBridgeTask>("stripNativeLibs") {
     outputs.upToDateWhen { false }
 }
 
-// Only release packaging consumes the shipping bridge. Registering generated
-// JNI/assets on debug made ordinary JVM unit-test compilation run cargo-ndk,
-// even though those tests never load an Android shared object.
-androidComponents.onVariants(androidComponents.selector().withBuildType("release")) { variant ->
+// Release always consumes the shipping bridge. Debug device integration can
+// opt in without making ordinary JVM-only test compilation launch Cargo/NDK.
+// Both variants use the same authenticated build, stripping and provenance;
+// the opt-in neither changes privacyProductionEnabled nor admits a provider.
+androidComponents.onVariants { variant ->
+    if (variant.buildType != "release" &&
+        !(variant.buildType == "debug" && includeDebugNativeBridge)
+    ) return@onVariants
     requireNotNull(variant.sources.jniLibs) {
         "AGP did not expose jniLibs sources for ${variant.name}"
     }.addGeneratedSourceDirectory(stripNativeLibs, StripNativeBridgeTask::outputDirectory)

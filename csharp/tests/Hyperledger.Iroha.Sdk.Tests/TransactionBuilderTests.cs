@@ -809,7 +809,7 @@ public sealed class TransactionBuilderTests
         const ushort embeddedDiscriminant = 369;
         var privateKeySeed = Convert.FromHexString(FixtureSeedHex);
         var publicKey = Ed25519Signer.GetPublicKey(privateKeySeed);
-        var authority = AccountAddress.FromPublicKey(publicKey, "ed25519")
+        var authority = AccountAddress.FromPublicKey(publicKey)
             .ToI105(embeddedDiscriminant);
         var context = new TransactionEncodingContext(authority);
 
@@ -1116,7 +1116,7 @@ public sealed class TransactionBuilderTests
             new HttpClient(handler),
             new ToriiClientOptions
             {
-                LocalSigningContext = new ToriiLocalSigningContext(FixtureNetworkId),
+                NetworkId = FixtureNetworkId,
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     FixtureAccountId,
                     Convert.FromHexString(FixtureSeedHex)),
@@ -1189,6 +1189,40 @@ public sealed class TransactionBuilderTests
 
             Assert.Contains(kind, error.Message, StringComparison.Ordinal);
         }
+    }
+
+    [Fact]
+    public async Task LedgerClientWaitReportsTimeoutSeparatelyFromCallerCancellation()
+    {
+        const string transactionHash =
+            "da01f3a369d10e6ad78f241c86f4fe2d5481ff13ace97e6fb5db5c30240bdb3b";
+        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent($$"""
+                {
+                  "hash": "{{transactionHash}}",
+                  "status": { "kind": "Queued" },
+                  "scope": "global",
+                  "resolved_from": "queue"
+                }
+                """, Encoding.UTF8, "application/json"),
+        });
+        using var client = new IrohaClient(
+            new Uri("https://torii.example"),
+            new HttpClient(handler));
+
+        var error = await Assert.ThrowsAsync<TimeoutException>(() =>
+            client.Ledger.WaitForAsync(
+                transactionHash,
+                new PipelineSubmitOptions
+                {
+                    PollInterval = TimeSpan.FromMilliseconds(10),
+                    Timeout = TimeSpan.FromMilliseconds(1),
+                },
+                TestContext.Current.CancellationToken));
+
+        Assert.Contains(transactionHash, error.Message, StringComparison.Ordinal);
+        Assert.Contains("00:00:00.0010000", error.Message, StringComparison.Ordinal);
     }
 
     [Fact]

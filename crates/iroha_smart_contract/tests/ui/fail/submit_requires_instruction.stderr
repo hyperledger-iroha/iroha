@@ -13,7 +13,7 @@ error[E0277]: the trait bound `std::string::String: BuiltInInstruction` is not s
             ActivateContractInstance
             ActivateFeeSponsorProgramRevision
             ActivateIdentifierPolicy
-            ActivateKagemushaRecursiveReleaseV4
+            ActivatePrivateSettlementPoolV1
           and $N others
   = note: required for `std::string::String` to implement `Instruction`
   = note: required for `std::string::String` to implement `BuiltInInstruction`

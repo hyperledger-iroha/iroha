@@ -481,6 +481,112 @@ def test_all_supported_algorithms_sign_verify_and_roundtrip_keys() -> None:
         assert CryptoKeyPair.from_private_key_multihash(private_multihash) == keypair
 
 
+def test_key_representations_redact_secret_material() -> None:
+    keypair = derive_keypair_from_seed(b"repr must not disclose private keys", ED25519_ALGORITHM)
+    representation = repr(keypair)
+
+    assert keypair.private_key.hex() not in representation
+    assert keypair.public_key.hex() in representation
+
+    ed25519 = crypto_module.derive_ed25519_keypair_from_seed(b"redacted ed25519 repr")
+    assert ed25519.private_key.hex() not in repr(ed25519)
+    assert ed25519.public_key.hex() in repr(ed25519)
+
+    confidential = crypto_module.derive_confidential_keyset(bytes([0x31]) * 32)
+    assert repr(confidential) == "ConfidentialKeyset(<redacted>)"
+    assert all(value not in repr(confidential) for value in confidential.as_hex().values())
+
+
+def test_key_containers_reject_non_bytes_and_invalid_lengths() -> None:
+    with pytest.raises(TypeError, match="private_key must be bytes"):
+        crypto_module.Ed25519KeyPair(  # type: ignore[arg-type]
+            private_key=32,
+            public_key=bytes(32),
+        )
+    with pytest.raises(ValueError, match="public_key must be exactly 32 bytes"):
+        crypto_module.Ed25519KeyPair(private_key=bytes(32), public_key=bytes(31))
+    pair = crypto_module.derive_ed25519_keypair_from_seed(b"pair consistency")
+    with pytest.raises(ValueError, match="public_key does not match private_key"):
+        crypto_module.Ed25519KeyPair(
+            private_key=pair.private_key,
+            public_key=bytes([pair.public_key[0] ^ 1]) + pair.public_key[1:],
+        )
+    generic = derive_keypair_from_seed(b"generic pair consistency", ED25519_ALGORITHM)
+    with pytest.raises(ValueError, match="public_key does not match private_key"):
+        CryptoKeyPair(
+            algorithm=ED25519_ALGORITHM,
+            private_key=generic.private_key,
+            public_key=bytes([generic.public_key[0] ^ 1]) + generic.public_key[1:],
+        )
+    with pytest.raises(ValueError, match="sk_spend must be exactly 32 bytes"):
+        crypto_module.ConfidentialKeyset(
+            sk_spend=bytes(31),
+            nk=bytes(32),
+            ivk=bytes(32),
+            ovk=bytes(32),
+            fvk=bytes(32),
+        )
+
+
+def test_native_key_factory_results_do_not_repeat_key_derivation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class CountingNative:
+        def __init__(self) -> None:
+            self.generic_loads = 0
+            self.ed25519_loads = 0
+            self.sm2_loads = 0
+
+        @staticmethod
+        def normalize_crypto_algorithm(algorithm: str) -> str:
+            return algorithm
+
+        def load_keypair(self, private_key: bytes, algorithm: str):
+            self.generic_loads += 1
+            return private_key, b"generic-public"
+
+        def load_ed25519_keypair(self, private_key: bytes):
+            self.ed25519_loads += 1
+            return private_key, bytes([0x22]) * crypto_module.ED25519_PUBLIC_KEY_LENGTH
+
+        def load_sm2_keypair(self, private_key: bytes, _distid: str | None):
+            self.sm2_loads += 1
+            return private_key, bytes([0x33]) * crypto_module.SM2_PUBLIC_KEY_LENGTH
+
+    native = CountingNative()
+    monkeypatch.setattr(crypto_module, "_crypto", native)
+
+    generic = crypto_module.load_keypair(b"generic-private", ED25519_ALGORITHM)
+    ed25519 = crypto_module.load_ed25519_keypair(
+        bytes([0x11]) * crypto_module.ED25519_PRIVATE_KEY_LENGTH
+    )
+    sm2 = crypto_module.load_sm2_keypair(
+        bytes([0x44]) * crypto_module.SM2_PRIVATE_KEY_LENGTH
+    )
+
+    assert generic.public_key == b"generic-public"
+    assert len(ed25519.public_key) == crypto_module.ED25519_PUBLIC_KEY_LENGTH
+    assert len(sm2.public_key) == crypto_module.SM2_PUBLIC_KEY_LENGTH
+    assert (native.generic_loads, native.ed25519_loads, native.sm2_loads) == (1, 1, 1)
+
+
+@pytest.mark.parametrize(
+    "private_key_hex",
+    ["", "00", "00" * 31, "00" * 33, "AA" * 32, "  " + "00" * 32],
+)
+def test_private_key_hex_requires_exact_lowercase_encoding(private_key_hex: str) -> None:
+    with pytest.raises(ValueError, match="lowercase hexadecimal"):
+        crypto_module.load_ed25519_keypair_from_hex(private_key_hex)
+    with pytest.raises(ValueError, match="lowercase hexadecimal"):
+        crypto_module.derive_confidential_keyset_from_hex(private_key_hex)
+
+
+@pytest.mark.parametrize("distid", ["", " SM2", "SM2 ", "x" * 8_192])
+def test_sm2_distid_rejects_ambiguous_or_oversize_values(distid: str) -> None:
+    with pytest.raises(ValueError, match="distid"):
+        crypto_module.generate_sm2_keypair(distid)
+
+
 def test_native_verify_rejects_empty_and_all_zero_signatures_before_backend() -> None:
     keypair = derive_keypair_from_seed(
         b"python native verify checked signature admission",

@@ -154,7 +154,7 @@ pub(crate) async fn handler_account_onboarding_current_state(
         remote.ip(),
         "v1/accounts/onboarding/current-state",
         "account_onboarding_current_state",
-        false,
+        None,
     )
     .await?;
     let request: AccountOnboardingCurrentStateRequestV1 =

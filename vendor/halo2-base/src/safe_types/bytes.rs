@@ -1,9 +1,9 @@
 #![allow(clippy::len_without_is_empty)]
 use crate::{
-    AssignedValue, Context,
-    QuantumCell::{Constant, Existing},
     gates::GateInstructions,
     utils::bit_length,
+    AssignedValue, Context,
+    QuantumCell::{Constant, Existing},
 };
 
 use super::{SafeByte, ScalarField};

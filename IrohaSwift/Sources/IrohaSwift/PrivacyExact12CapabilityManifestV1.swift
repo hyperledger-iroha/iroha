@@ -286,7 +286,7 @@ public struct PrivacyExact12CapabilityRowV1: Equatable, Sendable {
     let compiledProfileCanonicalNorito: Data
 }
 
-/// Immutable model issued only from exact Torii Norito plus an ABI23 local catalog.
+/// Immutable native-validated projection; network admission also requires authenticated Torii origin.
 public final class PrivacyExact12CapabilityManifestV1: @unchecked Sendable {
     public static let versionV1: UInt32 = 1
     public static let maximumArchiveBytes = 256 * 1024
@@ -298,6 +298,7 @@ public final class PrivacyExact12CapabilityManifestV1: @unchecked Sendable {
     public let protocols: [PrivacyExact12CapabilityRowV1]
     public let manifestDigest: Data
     private let archive: Data
+    fileprivate let authenticatedToriiOrigin: Bool
 
     fileprivate init(
         version: UInt32,
@@ -306,7 +307,8 @@ public final class PrivacyExact12CapabilityManifestV1: @unchecked Sendable {
         qualification: PrivacyExact12QualificationRecordV1?,
         protocols: [PrivacyExact12CapabilityRowV1],
         manifestDigest: Data,
-        canonicalArchive: Data
+        canonicalArchive: Data,
+        authenticatedToriiOrigin: Bool = false
     ) {
         self.version = version
         self.committedHeight = committedHeight
@@ -315,6 +317,24 @@ public final class PrivacyExact12CapabilityManifestV1: @unchecked Sendable {
         self.protocols = protocols
         self.manifestDigest = Data(manifestDigest)
         archive = Data(canonicalArchive)
+        self.authenticatedToriiOrigin = authenticatedToriiOrigin
+    }
+
+    /// Issue network authority only after the Torii client authenticates and bounds the response.
+    static func fromAuthenticatedToriiResponseV1(
+        _ archive: Data
+    ) throws -> PrivacyExact12CapabilityManifestV1 {
+        let validated = try PrivacyNativeBridge.validateExact12CapabilityManifestV1(archive)
+        return PrivacyExact12CapabilityManifestV1(
+            version: validated.version,
+            committedHeight: validated.committedHeight,
+            consensusPolicy: validated.consensusPolicy,
+            qualification: validated.qualification,
+            protocols: validated.protocols,
+            manifestDigest: validated.manifestDigest,
+            canonicalArchive: validated.canonicalBytes(),
+            authenticatedToriiOrigin: true
+        )
     }
 
     /// Defensive copy of the exact canonical bytes returned by Torii.
@@ -395,6 +415,9 @@ public enum PrivacyExact12CapabilityAdmissionV1 {
         _ manifest: PrivacyExact12CapabilityManifestV1,
         protocolId: PrivacyProtocolIdV1
     ) throws -> PrivacyExact12CapabilityTupleAdmissionV1 {
+        guard manifest.authenticatedToriiOrigin else {
+            throw PrivacyExact12CapabilityManifestErrorV1.invalidAdmission
+        }
         // Decode again so admission cannot rely on stale managed state or a prior native load.
         let current = try PrivacyNativeBridge.validateExact12CapabilityManifestV1(
             manifest.canonicalBytes()
@@ -477,7 +500,7 @@ extension PrivacyProtocolIdV1 {
     }
 }
 
-/// Allocation-bounded canonical Norito decoder used after the ABI23 prerequisite.
+/// Bounded Norito field projection used after Rust validates the entire archive and its evidence.
 enum PrivacyExact12CapabilityManifestCodecV1 {
     private static let manifestSchema = "iroha.privacy.exact12-capability-manifest.v1"
     private static let catalogSchema = "iroha.privacy.compiled-profile-catalog.v1"
@@ -505,8 +528,8 @@ enum PrivacyExact12CapabilityManifestCodecV1 {
         }
         return bytes
     }()
-    private static let maximumFieldBytes = 128 * 1024
-    private static let maximumEvidenceBytes = 240 * 1024
+    private static let maximumFieldBytes = PrivacyExact12CapabilityManifestV1.maximumArchiveBytes
+    private static let maximumEvidenceBytes = PrivacyExact12CapabilityManifestV1.maximumArchiveBytes
     private static let maximumActionBytes = 9 * 1024 * 1024
     private static let noticeBlocks: UInt64 = 300
 

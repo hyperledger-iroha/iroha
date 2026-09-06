@@ -13,7 +13,7 @@ fn byte_merkle_tree_matches_crypto_merkle_root() {
     }
     let chunk = 32usize;
     // Build ByteMerkleTree root
-    let bmt = ByteMerkleTree::from_bytes(&data, chunk);
+    let bmt = ByteMerkleTree::from_bytes(&data, chunk).unwrap();
     let root_a = bmt.root();
     // Build leaves as SHA256 of 32-byte chunks (last chunk zero-padded)
     let mut leaves = Vec::new();

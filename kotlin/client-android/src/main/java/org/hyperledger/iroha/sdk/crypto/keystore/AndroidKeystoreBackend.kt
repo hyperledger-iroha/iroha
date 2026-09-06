@@ -16,6 +16,12 @@ interface AndroidKeystoreBackend : KeystoreBackend {
     @Throws(KeyManagementException::class)
     override fun load(alias: String): KeyPair?
 
+    /**
+     * Generates a key using the requested Android Keystore policy.
+     *
+     * The system backend treats `preferStrongBox` as best effort and retries without StrongBox
+     * when Android reports that StrongBox is unavailable. `requireStrongBox` never downgrades.
+     */
     @Throws(KeyManagementException::class)
     override fun generate(alias: String, parameters: KeyGenParameters): KeyGenerationResult
 

@@ -6,11 +6,11 @@ cd -- "$ROOT"
 TORII_URL="${TORII_URL:-http://127.0.0.1:8080}"
 TORII_STATUS_URL="${TORII_URL%/}/status"
 RUN_DIR="${RUN_DIR:-$ROOT/target/kaigi-demo}"
-GENESIS_CLEAN="$RUN_DIR/genesis.cleaned.json"
 GENESIS_NRT="$RUN_DIR/genesis.nrt"
 SUMMARY_JSON="$RUN_DIR/kaigi_summary.json"
 NODE_LOG="$RUN_DIR/iroha3d.log"
 GENESIS_PRIVATE_KEY_FILE=""
+GENESIS_MANIFEST="${KAIGI_GENESIS_MANIFEST:-}"
 
 log() {
   printf '[kaigi-demo] %s\n' "$*" >&2
@@ -62,7 +62,14 @@ trap cleanup EXIT
 
 ensure_cmd cargo
 ensure_cmd curl
-ensure_cmd python3
+if [[ -z "$GENESIS_MANIFEST" || ! -s "$GENESIS_MANIFEST" ]]; then
+  log "KAIGI_GENESIS_MANIFEST must name an operator-materialized complete genesis manifest"
+  exit 1
+fi
+if [[ "$GENESIS_MANIFEST" == *.template.json ]]; then
+  log "KAIGI_GENESIS_MANIFEST must not name a non-signable source template"
+  exit 1
+fi
 mkdir -p "$RUN_DIR"
 umask 077
 GENESIS_PRIVATE_KEY_FILE="$(mktemp "$RUN_DIR/.genesis-private-key.XXXXXX")"
@@ -70,25 +77,10 @@ printf '%s\n' \
   '80262082B3BDE54AEBECA4146257DA0DE8D59D8E46D5FE34887DCD8072866792FCB3AD' \
   >"$GENESIS_PRIVATE_KEY_FILE"
 
-log "preparing genesis manifest -> $GENESIS_CLEAN"
-python3 - "$ROOT/defaults/nexus/genesis.json" "$GENESIS_CLEAN" <<'PY'
-import json, sys, pathlib
-src = pathlib.Path(sys.argv[1])
-dst = pathlib.Path(sys.argv[2])
-with src.open('r', encoding='utf-8') as f:
-    data = json.load(f)
-ivm_dir = data.get('ivm_dir')
-if isinstance(ivm_dir, list):
-    data['ivm_dir'] = ivm_dir[0] if ivm_dir else "."
-with dst.open('w', encoding='utf-8') as f:
-    json.dump(data, f, indent=2)
-    f.write('\n')
-PY
-
 log "signing demo genesis manifest -> $GENESIS_NRT"
 KAGAMI_OUTPUT="$(
   cargo run -q -p iroha_kagami -- genesis sign \
-    "$GENESIS_CLEAN" \
+    "$GENESIS_MANIFEST" \
     --private-key-file "$GENESIS_PRIVATE_KEY_FILE" \
     --out-file "$GENESIS_NRT"
 )"
@@ -99,7 +91,7 @@ IROHA_GENESIS__FILE="$GENESIS_NRT" \
   cargo run -q -p irohad --bin iroha3d -- \
   --sora \
   --config defaults/nexus/config.toml \
-  --genesis-manifest-json defaults/nexus/genesis.json \
+  --genesis-manifest-json "$GENESIS_MANIFEST" \
   >"$NODE_LOG" 2>&1 &
 NODE_PID=$!
 

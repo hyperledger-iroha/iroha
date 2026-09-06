@@ -23,18 +23,14 @@ use crate::{
     smartcontracts::{code, ivm::cache::IvmCache},
     state::{StateBlock, StateReadOnlyWithTransactions, StateTransaction, WorldReadOnly},
 };
+pub(crate) use authority_admission::instructions_allow_multisig_envelope_authority;
 pub use authority_admission::{allows_unregistered_authority, executable_self_registers_authority};
-pub(crate) use authority_admission::{
-    instructions_allow_direct_kagemusha_lifecycle_authority,
-    instructions_allow_multisig_envelope_authority,
-};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use core::{fmt, str::FromStr as _};
 use eyre::Result;
 use hex;
 pub use iroha_data_model::prelude::*;
 use iroha_data_model::{
-    asset::definition::ConfidentialPolicyMode,
     fraud::types::FraudAssessment,
     isi::error::Mismatch,
     isi::{
@@ -92,6 +88,132 @@ pub(crate) fn exact_signed_transaction_hash(
         TransactionEntrypoint::SealedReveal(reveal) => Some(reveal.signed_transaction().hash()),
         TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => None,
     }
+}
+/// Return every identity that must be checked for replay before executing entrypoints.
+///
+/// A sealed reveal always exposes both its carrier and enclosed signed identity
+/// to duplicate/replay validation. This helper does not decide which identities
+/// a rejected reveal is authenticated to commit; use
+/// [`canonical_carrier_membership_hashes`] at the persistence boundary.
+pub(crate) fn canonical_replay_alias_hashes(
+    entrypoints: &[TransactionEntrypoint],
+) -> Vec<HashOf<TransactionEntrypoint>> {
+    let mut hashes = Vec::with_capacity(entrypoints.len().saturating_mul(2));
+    for entrypoint in entrypoints {
+        let carrier_hash = entrypoint.hash();
+        hashes.push(carrier_hash);
+        if let TransactionEntrypoint::SealedReveal(reveal) = entrypoint {
+            let execution_hash = reveal.signed_transaction().hash_as_entrypoint();
+            if execution_hash != carrier_hash {
+                hashes.push(execution_hash);
+            }
+        }
+    }
+    hashes
+}
+/// Return the identities authenticated for canonical carrier membership.
+///
+/// Every entrypoint commits its outer carrier identity. A sealed reveal commits
+/// the enclosed signed identity only when it exactly authenticates a pending
+/// commitment from the pre-block state at this block's height. Re-reading the
+/// pre-block value keeps the classification stable after successful removal,
+/// rejected execution rollback, or end-of-block expiry pruning.
+pub(crate) fn canonical_carrier_membership_hashes(
+    state_block: &StateBlock<'_>,
+    entrypoints: &[TransactionEntrypoint],
+) -> Vec<HashOf<TransactionEntrypoint>> {
+    let mut hashes = Vec::with_capacity(entrypoints.len().saturating_mul(2));
+    for entrypoint in entrypoints {
+        let carrier_hash = entrypoint.hash();
+        hashes.push(carrier_hash);
+        if let Some(execution_hash) = authenticated_signed_replay_alias(state_block, entrypoint) {
+            if execution_hash != carrier_hash {
+                hashes.push(execution_hash);
+            }
+        }
+    }
+    hashes
+}
+/// Return the signed replay alias authenticated by the pre-block state, if any.
+#[must_use]
+pub(crate) fn authenticated_signed_replay_alias(
+    state_block: &StateBlock<'_>,
+    entrypoint: &TransactionEntrypoint,
+) -> Option<HashOf<TransactionEntrypoint>> {
+    let TransactionEntrypoint::SealedReveal(reveal) = entrypoint else {
+        return None;
+    };
+    sealed_reveal_authenticated_at_block_start(state_block, reveal)
+        .then(|| reveal.signed_transaction().hash_as_entrypoint())
+}
+fn rejected_live_execution_fee_eligible(
+    executable: &Executable,
+    result: &TransactionResultInner,
+) -> bool {
+    (matches!(executable, Executable::Batch(_))
+        || matches!(
+            crate::state::standalone_governance_ballot_instruction_v1(executable),
+            Ok(Some(_))
+        ))
+        && !matches!(
+            result,
+            Err(TransactionRejectionReason::Validation(error))
+                if crate::executor::is_live_batch_overlay_limit_rejection(error)
+        )
+}
+fn rejected_transaction_gas_is_accountable(gas_used: u64, result: &TransactionResultInner) -> bool {
+    gas_used > 0
+        && !matches!(
+            result,
+            Err(TransactionRejectionReason::Validation(
+                ValidationFail::InternalError(_)
+            ))
+        )
+}
+
+/// Enforce the signature-bound payer and admission intent of every native KAGEMUSHA V1 top-up.
+///
+/// Queue admission calls this before deriving an operation-id claim, while stateful validation
+/// repeats it as a deterministic last line of defence for block and replay execution paths.
+pub(crate) fn validate_kagemusha_top_up_admission_invariants_v1(
+    tx: &SignedTransaction,
+) -> Result<(), &'static str> {
+    fn is_top_up(instruction: &InstructionBox) -> bool {
+        instruction
+            .as_any()
+            .downcast_ref::<iroha_data_model::isi::kagemusha_v1::TopUpKagemushaV1>()
+            .is_some()
+    }
+    let contains_top_up = tx.instructions().explicit_instructions().any(is_top_up)
+        || matches!(
+            tx.instructions(),
+            Executable::IvmProved(proved) if proved.overlay.iter().any(is_top_up)
+        );
+    if !contains_top_up {
+        return Ok(());
+    }
+    let Executable::Instructions(instructions) = tx.instructions() else {
+        return Err(
+            "KAGEMUSHA V1 top-up cannot be carried by batch, proved, overlay, or opaque execution",
+        );
+    };
+    let [instruction] = instructions.as_ref() else {
+        return Err("a KAGEMUSHA V1 top-up must be the only instruction in its signed transaction");
+    };
+    let Some(top_up) = instruction
+        .as_any()
+        .downcast_ref::<iroha_data_model::isi::kagemusha_v1::TopUpKagemushaV1>()
+    else {
+        return Err("KAGEMUSHA V1 top-up carrier shape changed during validation");
+    };
+    let request = top_up.request();
+    if tx.authority() != &request.payer {
+        return Err("KAGEMUSHA V1 top-up authority must equal the embedded payer");
+    }
+    if tx.admission_intent() != TransactionAdmissionIntent::QueuePlanSynced {
+        return Err("KAGEMUSHA V1 top-up transaction must bind QueuePlanSynced admission");
+    }
+    Ok(())
 }
 /// Project a hash known to identify an external signed transaction into its entrypoint identity.
 ///
@@ -333,6 +455,77 @@ fn sealed_state_encode_error(error: impl fmt::Display) -> TransactionRejectionRe
         "sealed transaction commitment state encode failed: {error}"
     )))
 }
+fn validate_sealed_reveal_authentication(
+    reveal: &SealedTransactionReveal,
+    record: &PendingSealedTransactionCommitment,
+    height: u64,
+) -> Result<(), TransactionRejectionReason> {
+    if height < record.payload.reveal_after_height {
+        return Err(TransactionRejectionReason::Validation(
+            ValidationFail::NotPermitted(format!(
+                "sealed transaction reveal is too early: height {height}, reveal_after_height {}",
+                record.payload.reveal_after_height
+            )),
+        ));
+    }
+    if height > record.payload.reveal_deadline_height {
+        return Err(TransactionRejectionReason::Validation(
+            ValidationFail::NotPermitted(format!(
+                "sealed transaction reveal deadline {} passed at height {height}",
+                record.payload.reveal_deadline_height
+            )),
+        ));
+    }
+    let signed = reveal.signed_transaction();
+    if signed.network_id() != Some(&record.payload.network_id) {
+        return Err(TransactionRejectionReason::Validation(
+            ValidationFail::NotPermitted(format!(
+                "sealed transaction network mismatch: commitment network {} reveal domain {:?}",
+                record.payload.network_id,
+                signed.domain()
+            )),
+        ));
+    }
+    if signed.authority() != &record.payload.authority {
+        return Err(TransactionRejectionReason::Validation(
+            ValidationFail::NotPermitted(
+                "sealed transaction reveal authority does not match commitment authority".into(),
+            ),
+        ));
+    }
+    let expected = compute_sealed_transaction_commitment(
+        &record.payload.network_id,
+        signed,
+        reveal.salt,
+        record.payload.reveal_deadline_height,
+    );
+    if expected != record.payload.commitment || expected != reveal.commitment {
+        return Err(TransactionRejectionReason::Validation(
+            ValidationFail::NotPermitted(
+                "sealed transaction reveal does not match commitment".into(),
+            ),
+        ));
+    }
+    Ok(())
+}
+fn sealed_reveal_authenticated_at_block_start(
+    state_block: &StateBlock<'_>,
+    reveal: &SealedTransactionReveal,
+) -> bool {
+    let key = sealed_commitment_state_key(&reveal.commitment);
+    let Some(bytes) = state_block
+        .world
+        .smart_contract_state
+        .get_before_block(&key)
+    else {
+        return false;
+    };
+    let Ok(record) = norito::decode_from_bytes::<PendingSealedTransactionCommitment>(bytes) else {
+        return false;
+    };
+    validate_sealed_reveal_authentication(reveal, &record, state_block._curr_block.height().get())
+        .is_ok()
+}
 pub(crate) fn validate_sealed_commitment_stateless(
     commitment: &SignedSealedTransactionCommitment,
     expected_network_id: &NetworkId,
@@ -497,11 +690,26 @@ impl fmt::Display for TransactionAlreadyCommitted {
     }
 }
 impl std::error::Error for TransactionAlreadyCommitted {}
+/// Validation identity of the complete signed envelope, including its signature.
+/// Canonical entrypoint identity alone cannot authorize signature-check reuse.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct StatelessValidationCacheKey(HashOf<SignedTransaction>);
+impl StatelessValidationCacheKey {
+    pub(crate) fn new(transaction: &SignedTransaction) -> Self {
+        Self(HashOf::new(transaction))
+    }
+    #[cfg(test)]
+    pub(crate) fn for_test(hash: HashOf<SignedTransaction>) -> Self {
+        Self(hash)
+    }
+}
 /// Reusable stateless transaction metadata derived once for block validation.
 #[derive(Debug, Clone)]
 pub(crate) struct PreparedTransactionMetadata {
     /// Canonical signed transaction hash.
     pub(crate) signed_hash: HashOf<SignedTransaction>,
+    /// Exact envelope identity used only for reusable stateless validation.
+    pub(crate) stateless_cache_key: StatelessValidationCacheKey,
     /// Canonical entrypoint hash used by block Merkle roots.
     pub(crate) entrypoint_hash: HashOf<TransactionEntrypoint>,
     /// Hash of the signed payload, used as the Ed25519 verification message.
@@ -539,7 +747,7 @@ impl<'tx> CheckedTransaction<'tx> {
         tx: AcceptedTransaction<'tx>,
         state: &impl StateReadOnlyWithTransactions,
     ) -> Result<Self, (AcceptedTransaction<'tx>, TransactionAlreadyCommitted)> {
-        if state.has_entrypoint(tx.hash_as_entrypoint()) {
+        if tx.has_committed_replay_identity(state) {
             return Err((tx, TransactionAlreadyCommitted));
         }
         Ok(Self(tx))
@@ -565,7 +773,7 @@ impl<'tx> CheckedTransaction<'tx> {
     /// Check whether the transaction is now recorded in the blockchain.
     #[must_use]
     pub fn is_in_blockchain(&self, state: &impl StateReadOnlyWithTransactions) -> bool {
-        state.has_entrypoint(self.hash_as_entrypoint())
+        self.as_accepted().has_committed_replay_identity(state)
     }
 }
 impl<'tx> core::ops::Deref for CheckedTransaction<'tx> {
@@ -930,17 +1138,10 @@ fn is_time_sensitive_instruction_type(type_id: TypeId) -> bool {
         };
     }
     matches_any_type!(
-        iroha_data_model::isi::offline::TopUpKagemushaRecursiveV4,
-        iroha_data_model::isi::offline::RedeemKagemushaRecursiveV4,
-        iroha_data_model::isi::offline::ActivateKagemushaRecursiveReleaseV4,
-        iroha_data_model::isi::offline::EnableKagemushaRecursiveIssuanceV4,
-        iroha_data_model::isi::offline::CancelKagemushaRecursiveReleaseV4,
-        iroha_data_model::isi::offline::DeactivateKagemushaRecursiveIssuanceV4,
-        iroha_data_model::isi::offline::RecordKagemushaTairaCanaryV4,
-        iroha_data_model::isi::offline::AuthorizeKagemushaTairaCanaryV4,
-        iroha_data_model::isi::offline::RegisterOfflineDeviceAttestation,
-        iroha_data_model::isi::offline::SetOfflineDeviceAttestationPolicy,
+        iroha_data_model::isi::kagemusha_v1::TopUpKagemushaV1,
+        iroha_data_model::isi::kagemusha_v1::RedeemKagemushaV1,
         iroha_data_model::isi::private_settlement::ActivatePrivateSettlementPoolV1,
+        iroha_data_model::isi::private_settlement::RegisterAtomicPrivateSettlementPrepareV1,
         iroha_data_model::isi::private_settlement::AbortAtomicPrivateSettlementV1,
         iroha_data_model::isi::private_settlement::FinalizeAtomicPrivateSettlementV1,
         iroha_data_model::isi::oracle::RecordTwitterBinding,
@@ -957,6 +1158,9 @@ fn is_time_sensitive_instruction_type(type_id: TypeId) -> bool {
         ActivateRuntimeUpgrade,
         CancelRuntimeUpgrade,
         iroha_data_model::isi::governance::ProposeDeployContract,
+        iroha_data_model::isi::governance::ProposeContractLifecycleGovernance,
+        iroha_data_model::isi::governance::ProposeContractEmergencyHold,
+        iroha_data_model::isi::governance::ProposeGlobalDataTriggerPermissionGovernance,
         iroha_data_model::isi::governance::ProposeRuntimeUpgradeProposal,
         iroha_data_model::isi::governance::ProposeSccpRouteGovernance,
         iroha_data_model::isi::governance::ProposeSorafsProviderGovernance,
@@ -982,134 +1186,6 @@ fn is_time_sensitive_executable(executable: &Executable) -> bool {
             ExecutableBatchItem::ContractCall(_) => true,
         }),
         Executable::Ivm(_) | Executable::IvmProved(_) => true,
-    }
-}
-#[derive(Clone, Copy)]
-enum ConfidentialPolicyAdmissionAction {
-    TopUp,
-    Redeem,
-}
-impl ConfidentialPolicyAdmissionAction {
-    const fn label(self) -> &'static str {
-        match self {
-            Self::TopUp => "confidential top-up",
-            Self::Redeem => "confidential redemption",
-        }
-    }
-}
-fn confidential_policy_admission_rejection(
-    action: ConfidentialPolicyAdmissionAction,
-) -> TransactionRejectionReason {
-    TransactionRejectionReason::Validation(ValidationFail::NotPermitted(format!(
-        "{} not permitted by policy",
-        action.label()
-    )))
-}
-fn effective_confidential_policy_mode_for_admission(
-    world: &impl WorldReadOnly,
-    asset_def_id: &AssetDefinitionId,
-    block_height: u64,
-) -> Result<ConfidentialPolicyMode, TransactionRejectionReason> {
-    let asset_definition = world
-        .asset_definition(asset_def_id)
-        .map_err(|err| TransactionRejectionReason::Validation(ValidationFail::from(err)))?;
-    let policy = *asset_definition.confidential_policy();
-    let Some(transition) = policy.pending_transition() else {
-        return Ok(policy.mode());
-    };
-    if transition.new_mode() == ConfidentialPolicyMode::ShieldedOnly
-        && block_height >= transition.effective_height()
-    {
-        let transparent_total = world
-            .asset_total_amount(asset_def_id)
-            .map_err(|err| TransactionRejectionReason::Validation(ValidationFail::from(err)))?;
-        if transparent_total > Quantity::zero() {
-            // Entering a conversion window enables confidential commitments and
-            // is irreversible in ABI V1. If finalization is blocked by remaining
-            // transparent supply, retain the currently active mode.
-            return Ok(policy.mode());
-        }
-    }
-    Ok(policy.effective_mode(block_height))
-}
-fn validate_confidential_policy_for_action(
-    world: &impl WorldReadOnly,
-    asset_def_id: &AssetDefinitionId,
-    block_height: u64,
-    action: ConfidentialPolicyAdmissionAction,
-) -> Result<(), TransactionRejectionReason> {
-    let policy_mode =
-        effective_confidential_policy_mode_for_admission(world, asset_def_id, block_height)?;
-    if confidential_policy_allows_action(policy_mode, action) {
-        Ok(())
-    } else {
-        Err(confidential_policy_admission_rejection(action))
-    }
-}
-fn confidential_policy_allows_action(
-    policy_mode: ConfidentialPolicyMode,
-    action: ConfidentialPolicyAdmissionAction,
-) -> bool {
-    matches!(
-        (policy_mode, action),
-        (
-            ConfidentialPolicyMode::Convertible,
-            ConfidentialPolicyAdmissionAction::TopUp | ConfidentialPolicyAdmissionAction::Redeem
-        )
-    )
-}
-pub(crate) fn validate_confidential_policy_admission_for_world(
-    executable: &Executable,
-    world: &impl WorldReadOnly,
-    block_height: u64,
-) -> Result<(), TransactionRejectionReason> {
-    for instruction in executable.explicit_instructions() {
-        let any = instruction.as_any();
-        if let Some(topup) =
-            any.downcast_ref::<iroha_data_model::isi::offline::TopUpKagemushaRecursiveV4>()
-        {
-            validate_confidential_policy_for_action(
-                world,
-                topup.request.asset.definition(),
-                block_height,
-                ConfidentialPolicyAdmissionAction::TopUp,
-            )?;
-        } else if let Some(redeem) =
-            any.downcast_ref::<iroha_data_model::isi::offline::RedeemKagemushaRecursiveV4>()
-        {
-            validate_confidential_policy_for_action(
-                world,
-                &redeem.request.bundle.statement.current_note.asset,
-                block_height,
-                ConfidentialPolicyAdmissionAction::Redeem,
-            )?;
-        }
-    }
-    Ok(())
-}
-#[cfg(test)]
-mod confidential_policy_admission_tests {
-    use super::{ConfidentialPolicyAdmissionAction, confidential_policy_allows_action};
-    use iroha_data_model::asset::definition::ConfidentialPolicyMode;
-    #[test]
-    fn kagemusha_value_movement_requires_convertible_policy() {
-        for action in [
-            ConfidentialPolicyAdmissionAction::TopUp,
-            ConfidentialPolicyAdmissionAction::Redeem,
-        ] {
-            assert!(confidential_policy_allows_action(
-                ConfidentialPolicyMode::Convertible,
-                action,
-            ));
-            assert!(!confidential_policy_allows_action(
-                ConfidentialPolicyMode::TransparentOnly,
-                action,
-            ));
-            assert!(!confidential_policy_allows_action(
-                ConfidentialPolicyMode::ShieldedOnly,
-                action,
-            ));
-        }
     }
 }
 fn format_nts_health_reason(status: &crate::time::NetworkTimeStatus) -> String {
@@ -1223,6 +1299,22 @@ impl<'tx> AcceptedTransaction<'tx> {
     #[must_use]
     pub(crate) fn validation_time(&self) -> Option<Duration> {
         self.validation_time
+    }
+    /// Return whether the ledger already commits this carrier or an authenticated replay alias.
+    #[must_use]
+    pub(crate) fn has_committed_replay_identity(
+        &self,
+        state: &impl StateReadOnlyWithTransactions,
+    ) -> bool {
+        state.has_entrypoint(self.hash_as_entrypoint())
+            || match self.entrypoint() {
+                TransactionEntrypoint::SealedReveal(reveal) => {
+                    state.has_entrypoint(reveal.signed_transaction().hash_as_entrypoint())
+                }
+                TransactionEntrypoint::External(_)
+                | TransactionEntrypoint::SealedCommitment(_)
+                | TransactionEntrypoint::Time(_) => false,
+            }
     }
     fn from_external_with_cached_bytes(
         tx: SignedTransaction,
@@ -1413,6 +1505,7 @@ impl<'tx> AcceptedTransaction<'tx> {
         let signed_hash = HashOf::from_untyped_unchecked(iroha_crypto::Hash::from(entrypoint_hash));
         PreparedTransactionMetadata {
             signed_hash,
+            stateless_cache_key: StatelessValidationCacheKey::new(tx),
             entrypoint_hash,
             payload_hash: HashOf::new(tx.payload()),
             encoded_len,
@@ -2349,6 +2442,7 @@ impl<'tx> AcceptedTransaction<'tx> {
             .get_or_init(|| self.external().and_then(Self::parsed_single_ed25519_key));
         Some(PreparedTransactionMetadata {
             signed_hash: self.hash(),
+            stateless_cache_key: StatelessValidationCacheKey::new(self.external()?),
             entrypoint_hash: self.hash_as_entrypoint(),
             payload_hash,
             encoded_len: self.encoded_len(),
@@ -2369,6 +2463,7 @@ impl<'tx> AcceptedTransaction<'tx> {
             .get_or_init(|| Self::parsed_single_ed25519_key(signed));
         Some(PreparedTransactionMetadata {
             signed_hash: self.hash(),
+            stateless_cache_key: StatelessValidationCacheKey::new(signed),
             entrypoint_hash: self.hash_as_entrypoint(),
             payload_hash,
             encoded_len: self.encoded_len(),
@@ -2751,6 +2846,60 @@ impl AsRef<SignedTransaction> for AcceptedTransaction<'_> {
     }
 }
 impl StateBlock<'_> {
+    /// Carry bounded confidential work from one live overlay into block totals.
+    pub(crate) fn account_confidential_work_v1(
+        &mut self,
+        operations: u32,
+        verify_calls: u32,
+        proof_bytes: u64,
+        confidential_gas: u64,
+    ) {
+        self.zk_confidential_ops_in_block =
+            self.zk_confidential_ops_in_block.saturating_add(operations);
+        self.zk_verify_calls_in_block = self.zk_verify_calls_in_block.saturating_add(verify_calls);
+        self.zk_proof_bytes_in_block = self.zk_proof_bytes_in_block.saturating_add(proof_bytes);
+        self.confidential_gas_used_in_block = self
+            .confidential_gas_used_in_block
+            .saturating_add(confidential_gas);
+    }
+    /// Commit prevalidated ballot penalties after their originating transaction was rejected.
+    ///
+    /// This shared corridor is used by ordinary scheduler, sealed-entrypoint,
+    /// and autonomous-lane execution paths. Penalties commit before any rejected
+    /// fee transaction, so a fee failure cannot roll them back.
+    pub(crate) fn apply_rejected_governance_ballot_penalties_v1(
+        &mut self,
+        tx: &SignedTransaction,
+        penalties: Vec<crate::state::DeferredGovernanceBallotPenaltyV1>,
+        routing: Option<crate::queue::RoutingDecision>,
+        entrypoint_index: Option<u64>,
+    ) -> Result<(), TransactionRejectionReason> {
+        if penalties.is_empty() {
+            return Ok(());
+        }
+        let mut penalty_tx = self.transaction();
+        if let Some(routing) = routing {
+            penalty_tx.current_lane_id = Some(routing.lane_id);
+            penalty_tx.current_dataspace_id = Some(routing.dataspace_id);
+            penalty_tx.world.current_dataspace_id = Some(routing.dataspace_id);
+        }
+        penalty_tx.current_entrypoint_index = entrypoint_index;
+        penalty_tx.tx_call_hash = Some(iroha_crypto::Hash::from(tx.hash_as_entrypoint()));
+        penalty_tx.current_tx_hash = Some(tx.hash());
+        for penalty in &penalties {
+            crate::smartcontracts::isi::world::isi::apply_deferred_governance_ballot_penalty_v1(
+                penalty,
+                &mut penalty_tx,
+            )
+            .map_err(|error| {
+                TransactionRejectionReason::Validation(ValidationFail::InternalError(format!(
+                    "failed to commit deferred governance ballot penalty: {error}"
+                )))
+            })?;
+        }
+        penalty_tx.apply();
+        Ok(())
+    }
     /// Validate stateful admission rules that must hold before transaction execution.
     ///
     /// This helper intentionally does not execute instructions or apply state. Callers must only
@@ -2761,6 +2910,9 @@ impl StateBlock<'_> {
         routing_decision: Option<crate::queue::RoutingDecision>,
     ) -> Result<StatefulAdmission, TransactionRejectionReason> {
         let authority = tx.authority().clone();
+        validate_kagemusha_top_up_admission_invariants_v1(tx).map_err(|reason| {
+            TransactionRejectionReason::Validation(ValidationFail::NotPermitted(reason.to_owned()))
+        })?;
         if code::is_historical_contract_subject(&state_transaction.world, &authority) {
             warn!(
                 authority = %authority,
@@ -2790,9 +2942,6 @@ impl StateBlock<'_> {
                 ),
             ));
         }
-        let lifecycle_entrypoint =
-            crate::smartcontracts::isi::offline::signed_lifecycle_entrypoint_context(tx)
-                .map_err(TransactionRejectionReason::Validation)?;
         let (require_height_ttl, require_sequence) = {
             let params = state_transaction.world.parameters();
             (
@@ -2826,11 +2975,6 @@ impl StateBlock<'_> {
                     )),
                 ));
             }
-        }
-        if let Some(context) = lifecycle_entrypoint.as_ref() {
-            context
-                .validate_stage_expiry_horizon(state_transaction.block_height())
-                .map_err(TransactionRejectionReason::Validation)?;
         }
         let mut sequence_to_commit = None;
         if let Some(seq) = tx_sequence_value {
@@ -2885,15 +3029,8 @@ impl StateBlock<'_> {
                 | Executable::IvmProved(_)
                 | Executable::Ivm(_) => false,
             };
-            let allows_direct_kagemusha_lifecycle_authority = lifecycle_entrypoint.is_some()
-                && matches!(
-                    tx.instructions(),
-                    Executable::Instructions(instructions)
-                        if instructions_allow_direct_kagemusha_lifecycle_authority(instructions)
-                );
             if (has_multisig_state || has_multisig_metadata || has_multisig_controller)
                 && !allows_multisig_envelope_authority
-                && !allows_direct_kagemusha_lifecycle_authority
             {
                 warn!(
                     authority = %authority,
@@ -2938,11 +3075,6 @@ impl StateBlock<'_> {
             dataspace_catalog: &state_transaction.nexus.dataspace_catalog,
         };
         enforce_lane_policies(tx, state_transaction, &lane_assignment)?;
-        validate_confidential_policy_admission_for_world(
-            tx.instructions(),
-            &state_transaction.world,
-            state_transaction.block_height(),
-        )?;
         let validation_fee_credit =
             crate::validation_fee::enforce_validation_fee_admission(tx, state_transaction)?;
         enforce_fraud_policy(
@@ -3087,40 +3219,61 @@ impl StateBlock<'_> {
         entrypoint_index: Option<u64>,
         routing_decision: Option<crate::queue::RoutingDecision>,
     ) -> (HashOf<TransactionEntrypoint>, TransactionResultInner) {
-        // Capture gas accounting inputs up front to avoid borrowing conflicts
+        let signed_transaction = match tx.entrypoint() {
+            TransactionEntrypoint::External(signed) => Some(signed.clone()),
+            TransactionEntrypoint::SealedReveal(reveal) => {
+                Some(reveal.signed_transaction().clone())
+            }
+            TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => None,
+        };
+        // Capture gas accounting inputs up front to avoid borrowing conflicts.
         let gas_total_before = self.gas_used_in_block;
         let gas_limit = self.gas_limit_per_block;
-        let ops_total_before = self.zk_confidential_ops_in_block;
-        let verify_calls_before = self.zk_verify_calls_in_block;
-        let proof_bytes_before = self.zk_proof_bytes_in_block;
-        let conf_gas_before = self.confidential_gas_used_in_block;
         let mut state_transaction = self.transaction();
         state_transaction.current_entrypoint_index = entrypoint_index;
-        state_transaction.kagemusha_taira_canary_external_entrypoint =
-            matches!(tx.entrypoint(), TransactionEntrypoint::External(_));
         if let Some(routing) = routing_decision {
             state_transaction.current_lane_id = Some(routing.lane_id);
             state_transaction.current_dataspace_id = Some(routing.dataspace_id);
             state_transaction.world.current_dataspace_id = Some(routing.dataspace_id);
         }
         let hash = tx.hash_as_entrypoint();
-        let result = Self::validate_transaction_internal(
+        let mut result = Self::validate_transaction_internal(
             tx,
             &mut state_transaction,
             ivm_cache,
             routing_decision,
         );
+        let rejected_gas_used = state_transaction.last_tx_gas_used;
+        let rejected_confidential_work = (
+            state_transaction.zk_confidential_ops_in_tx,
+            state_transaction.zk_verify_calls_in_tx,
+            state_transaction.zk_proof_bytes_in_tx,
+            state_transaction.confidential_gas_used_in_tx,
+        );
+        let governance_penalties = if result.is_err() {
+            state_transaction.take_deferred_governance_ballot_penalties_v1()
+        } else {
+            Vec::new()
+        };
         if result.is_ok() {
             // Enforce block gas limit if configured; accumulate gas used by last tx (IVM path)
             let used = state_transaction.last_tx_gas_used;
             // Compute new total without touching `self` while `state_transaction` borrows it
             let new_total = gas_total_before.saturating_add(used);
-            if used > 0 && new_total > gas_limit {
+            if !crate::gas::gas_components_fit_block_limit(gas_limit, [gas_total_before, used]) {
+                let attempted_total = u128::from(gas_total_before) + u128::from(used);
+                drop(state_transaction);
+                self.account_confidential_work_v1(
+                    rejected_confidential_work.0,
+                    rejected_confidential_work.1,
+                    rejected_confidential_work.2,
+                    rejected_confidential_work.3,
+                );
                 return (
                     hash,
                     Err(TransactionRejectionReason::Validation(
                         ValidationFail::NotPermitted(format!(
-                            "block gas limit exceeded: {new_total} > {gas_limit}"
+                            "block gas limit exceeded: {attempted_total} > {gas_limit}"
                         )),
                     )),
                 );
@@ -3129,26 +3282,78 @@ impl StateBlock<'_> {
             let tx_verify_calls = state_transaction.zk_verify_calls_in_tx;
             let tx_proof_bytes = state_transaction.zk_proof_bytes_in_tx;
             let tx_conf_gas = state_transaction.confidential_gas_used_in_tx;
-            let new_ops_total = ops_total_before.saturating_add(tx_ops);
-            let new_verify_total = verify_calls_before.saturating_add(tx_verify_calls);
-            let new_proof_bytes_total = proof_bytes_before.saturating_add(tx_proof_bytes);
-            let new_conf_total = conf_gas_before.saturating_add(tx_conf_gas);
             // Apply staged changes first, then update gas accounting after borrow ends
             state_transaction.apply();
             if used > 0 {
                 self.gas_used_in_block = new_total;
             }
-            if tx_ops > 0 {
-                self.zk_confidential_ops_in_block = new_ops_total;
+            self.account_confidential_work_v1(tx_ops, tx_verify_calls, tx_proof_bytes, tx_conf_gas);
+        } else {
+            drop(state_transaction);
+            self.account_confidential_work_v1(
+                rejected_confidential_work.0,
+                rejected_confidential_work.1,
+                rejected_confidential_work.2,
+                rejected_confidential_work.3,
+            );
+            let mut penalty_committed = true;
+            if !governance_penalties.is_empty() {
+                let penalty_result = signed_transaction.as_ref().map_or_else(
+                    || {
+                        Err(TransactionRejectionReason::Validation(
+                            ValidationFail::InternalError(
+                                "deferred governance ballot penalty has no signed transaction"
+                                    .to_owned(),
+                            ),
+                        ))
+                    },
+                    |signed| {
+                        self.apply_rejected_governance_ballot_penalties_v1(
+                            signed,
+                            governance_penalties,
+                            routing_decision,
+                            entrypoint_index,
+                        )
+                    },
+                );
+                if let Err(error) = penalty_result {
+                    result = Err(error);
+                    penalty_committed = false;
+                }
             }
-            if tx_conf_gas > 0 {
-                self.confidential_gas_used_in_block = new_conf_total;
-            }
-            if tx_verify_calls > 0 {
-                self.zk_verify_calls_in_block = new_verify_total;
-            }
-            if tx_proof_bytes > 0 {
-                self.zk_proof_bytes_in_block = new_proof_bytes_total;
+            if penalty_committed
+                && rejected_transaction_gas_is_accountable(rejected_gas_used, &result)
+            {
+                self.gas_used_in_block = self.gas_used_in_block.saturating_add(rejected_gas_used);
+                if let Some(signed) = signed_transaction.as_ref()
+                    && rejected_live_execution_fee_eligible(signed.instructions(), &result)
+                {
+                    let authority = signed.authority().clone();
+                    let mut fee_tx = self.transaction();
+                    if let Some(routing) = routing_decision {
+                        fee_tx.current_lane_id = Some(routing.lane_id);
+                        fee_tx.current_dataspace_id = Some(routing.dataspace_id);
+                        fee_tx.world.current_dataspace_id = Some(routing.dataspace_id);
+                    }
+                    fee_tx.current_entrypoint_index = entrypoint_index;
+                    fee_tx.tx_call_hash =
+                        Some(iroha_crypto::Hash::from(signed.hash_as_entrypoint()));
+                    fee_tx.current_tx_hash = Some(signed.hash());
+                    let fee_result = crate::executor::charge_fees_for_rejected_live_batch(
+                        &mut fee_tx,
+                        &authority,
+                        signed,
+                        rejected_gas_used,
+                    )
+                    .map_err(TransactionRejectionReason::Validation);
+                    match &fee_result {
+                        Ok(()) => fee_tx.apply(),
+                        Err(_) => drop(fee_tx),
+                    }
+                    if let Err(error) = fee_result {
+                        result = Err(error);
+                    }
+                }
             }
         }
         (hash, result)
@@ -3194,6 +3399,14 @@ impl StateBlock<'_> {
                         ),
                     ));
                 }
+                code::ensure_contract_execution_allowed(
+                    &state_transaction.world,
+                    &call.contract_address,
+                    state_transaction.block_height(),
+                )
+                .map_err(|reason| {
+                    TransactionRejectionReason::Validation(ValidationFail::NotPermitted(reason))
+                })?;
                 let record =
                     code::fetch_bound_contract_record(state_transaction, &call.contract_address)
                         .ok_or_else(|| {
@@ -3333,53 +3546,8 @@ impl StateBlock<'_> {
         let record: PendingSealedTransactionCommitment =
             norito::decode_from_bytes(bytes).map_err(sealed_state_decode_error)?;
         let height = state_transaction._curr_block.height().get();
-        if height < record.payload.reveal_after_height {
-            return Err(TransactionRejectionReason::Validation(
-                ValidationFail::NotPermitted(format!(
-                    "sealed transaction reveal is too early: height {height}, reveal_after_height {}",
-                    record.payload.reveal_after_height
-                )),
-            ));
-        }
-        if height > record.payload.reveal_deadline_height {
-            return Err(TransactionRejectionReason::Validation(
-                ValidationFail::NotPermitted(format!(
-                    "sealed transaction reveal deadline {} passed at height {height}",
-                    record.payload.reveal_deadline_height
-                )),
-            ));
-        }
+        validate_sealed_reveal_authentication(reveal, &record, height)?;
         let signed = reveal.signed_transaction();
-        if signed.network_id() != Some(&record.payload.network_id) {
-            return Err(TransactionRejectionReason::Validation(
-                ValidationFail::NotPermitted(format!(
-                    "sealed transaction network mismatch: commitment network {} reveal domain {:?}",
-                    record.payload.network_id,
-                    signed.domain()
-                )),
-            ));
-        }
-        if signed.authority() != &record.payload.authority {
-            return Err(TransactionRejectionReason::Validation(
-                ValidationFail::NotPermitted(
-                    "sealed transaction reveal authority does not match commitment authority"
-                        .into(),
-                ),
-            ));
-        }
-        let expected = compute_sealed_transaction_commitment(
-            &record.payload.network_id,
-            signed,
-            reveal.salt,
-            record.payload.reveal_deadline_height,
-        );
-        if expected != record.payload.commitment || expected != reveal.commitment {
-            return Err(TransactionRejectionReason::Validation(
-                ValidationFail::NotPermitted(
-                    "sealed transaction reveal does not match commitment".into(),
-                ),
-            ));
-        }
         state_transaction.world.smart_contract_state.remove(key);
         let accepted = AcceptedTransaction::new_unchecked(Cow::Borrowed(signed));
         // The outer entrypoint's route was authenticated before the reveal was opened. Preserve it
@@ -3602,17 +3770,15 @@ impl StateBlock<'_> {
         }
         // Protected namespaces admission (governance gating)
         if let Some(contract_address) = deploy_target {
-            // Read protected namespaces from on-chain custom parameter `gov_protected_namespaces`
-            let mut protected: Vec<String> = Vec::new();
-            if let Ok(name) = core::str::FromStr::from_str("gov_protected_namespaces") {
-                let id = iroha_data_model::parameter::CustomParameterId(name);
-                let params = state_transaction.world.parameters.get();
-                if let Some(custom) = params.custom().get(&id)
-                    && let Ok(v) = custom.payload().try_into_any_norito::<Vec<String>>()
-                {
-                    protected = v;
-                }
-            }
+            let protected = crate::smartcontracts::code::protected_contract_namespaces(
+                state_transaction.world.parameters.get(),
+            )
+            .map_err(|error| {
+                TransactionRejectionReason::Validation(ValidationFail::InternalError(format!(
+                    "invalid protected-contract namespace policy: {error}"
+                )))
+            })?
+            .unwrap_or_default();
             if !protected.is_empty() {
                 // Require an enacted proposal matching the governed contract address and hashes.
                 let want_code = hex::encode(<[u8; 32]>::from(code_hash));
@@ -5328,7 +5494,6 @@ pub mod tests {
         KeyPair::try_random_with_algorithm(algorithm)
             .expect("transaction fixture key generation should succeed")
     }
-    include!("tx/kagemusha_lifecycle_admission_tests.rs");
     fn test_network_id() -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
             Hash::prehashed([0x15; Hash::LENGTH]),
@@ -6079,10 +6244,7 @@ pub mod tests {
         let domain = Domain::new(domain_id.clone()).build(&deployer);
         let deployer_account = new_account_in_domain(&deployer, &domain_id).build(&deployer);
         let mut world = World::with([domain], [deployer_account], []);
-        world.contract_instances.insert(
-            contract_address.clone(),
-            iroha_crypto::Hash::new(b"contract-code"),
-        );
+        let contract_code_hash = iroha_crypto::Hash::new(b"contract-code");
         let lifecycle_permission: Permission =
             iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode
                 .into();
@@ -6095,8 +6257,23 @@ pub mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut state_tx = block.transaction();
+        state_tx
+            .world
+            .bind_inactive_contract_subject_for_testing(contract_address.clone(), deployer.clone());
+        state_tx
+            .world
+            .contract_subject_bindings
+            .get_mut(&contract_address)
+            .expect("seed retained lifecycle")
+            .lifecycle
+            .active_code_hash = Some(contract_code_hash);
+        state_tx
+            .world
+            .contract_instances
+            .insert(contract_address.clone(), contract_code_hash);
         DeactivateContractInstance {
             contract_address: contract_address.clone(),
+            expected_revision: 1,
             reason: Some("retired for signer-history regression".to_owned()),
         }
         .execute(&deployer, &mut state_tx)
@@ -6605,6 +6782,7 @@ pub mod tests {
         )
         .with_instructions([ActivateContractInstance {
             contract_address,
+            expected_revision: 1,
             code_hash: Hash::prehashed([0_u8; 32]),
         }])
         .sign(keypair.private_key());
@@ -7206,6 +7384,70 @@ pub mod tests {
         let view = state.view();
         let result = accepted.into_checked(&view);
         assert!(matches!(result, Err((_, TransactionAlreadyCommitted))));
+    }
+    #[test]
+    fn checked_sealed_reveal_rejects_only_a_committed_replay_alias() {
+        let (authority, keypair) = gen_account_in("sealed-queue-replay-alias");
+        let signed = TransactionBuilder::new(
+            test_network_id(),
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "sealed queue alias".into())])
+        .sign(keypair.private_key());
+        let deadline = 9;
+        let first_salt = [0x41; 32];
+        let second_salt = [0x42; 32];
+        let first = TransactionEntrypoint::SealedReveal(SealedTransactionReveal::new(
+            compute_sealed_transaction_commitment(
+                &test_network_id(),
+                &signed,
+                first_salt,
+                deadline,
+            ),
+            signed.clone(),
+            first_salt,
+        ));
+        let second = TransactionEntrypoint::SealedReveal(SealedTransactionReveal::new(
+            compute_sealed_transaction_commitment(
+                &test_network_id(),
+                &signed,
+                second_salt,
+                deadline,
+            ),
+            signed.clone(),
+            second_salt,
+        ));
+        let accepted = AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(second.clone()));
+        let state = State::new_for_testing(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let mut first_membership = state.transactions.block();
+        first_membership.insert_block_with_single_tx(first.hash(), nonzero!(1_usize));
+        first_membership
+            .commit()
+            .expect("commit outer-only reveal identity");
+
+        let pending_checked = accepted
+            .clone()
+            .into_checked(&state.view())
+            .expect("a different carrier remains pending while the signed alias is uncommitted");
+        assert!(!pending_checked.is_in_blockchain(&state.view()));
+
+        let mut second_membership = state.transactions.block();
+        second_membership
+            .insert_block_with_single_tx(signed.hash_as_entrypoint(), nonzero!(2_usize));
+        second_membership
+            .commit()
+            .expect("commit authenticated signed replay alias");
+
+        assert!(pending_checked.is_in_blockchain(&state.view()));
+        assert!(matches!(
+            accepted.into_checked(&state.view()),
+            Err((_, TransactionAlreadyCommitted))
+        ));
     }
     #[test]
     fn accepted_transaction_caches_hashes_and_encoded_length() {
@@ -7965,6 +8207,7 @@ pub mod tests {
             iroha_data_model::isi::governance::CreateParliamentGovernanceAttemptV1 {
                 proposal: iroha_data_model::governance::types::ProposalKind::DeployContract(
                     iroha_data_model::governance::types::DeployContractProposal {
+                        proposal_operator: authority.clone(),
                         contract_address: ContractAddress::derive(
                             &test_network_id(),
                             &authority,
@@ -8159,18 +8402,13 @@ pub mod tests {
     #[test]
     fn time_sensitive_type_table_covers_offline_and_governance_operations() {
         let classified = [
-            TypeId::of::<iroha_data_model::isi::offline::TopUpKagemushaRecursiveV4>(),
-            TypeId::of::<iroha_data_model::isi::offline::RedeemKagemushaRecursiveV4>(),
-            TypeId::of::<iroha_data_model::isi::offline::ActivateKagemushaRecursiveReleaseV4>(),
-            TypeId::of::<iroha_data_model::isi::offline::EnableKagemushaRecursiveIssuanceV4>(),
-            TypeId::of::<iroha_data_model::isi::offline::CancelKagemushaRecursiveReleaseV4>(),
-            TypeId::of::<iroha_data_model::isi::offline::DeactivateKagemushaRecursiveIssuanceV4>(),
-            TypeId::of::<iroha_data_model::isi::offline::RecordKagemushaTairaCanaryV4>(),
-            TypeId::of::<iroha_data_model::isi::offline::AuthorizeKagemushaTairaCanaryV4>(),
-            TypeId::of::<iroha_data_model::isi::offline::RegisterOfflineDeviceAttestation>(),
-            TypeId::of::<iroha_data_model::isi::offline::SetOfflineDeviceAttestationPolicy>(),
+            TypeId::of::<iroha_data_model::isi::kagemusha_v1::TopUpKagemushaV1>(),
+            TypeId::of::<iroha_data_model::isi::kagemusha_v1::RedeemKagemushaV1>(),
             TypeId::of::<iroha_data_model::isi::private_settlement::ActivatePrivateSettlementPoolV1>(
             ),
+            TypeId::of::<
+                iroha_data_model::isi::private_settlement::RegisterAtomicPrivateSettlementPrepareV1,
+            >(),
             TypeId::of::<iroha_data_model::isi::private_settlement::AbortAtomicPrivateSettlementV1>(
             ),
             TypeId::of::<
@@ -8181,6 +8419,9 @@ pub mod tests {
             TypeId::of::<CancelRuntimeUpgrade>(),
             TypeId::of::<iroha_data_model::isi::governance::ProposeRuntimeUpgradeProposal>(),
             TypeId::of::<iroha_data_model::isi::governance::ProposeSorafsProviderGovernance>(),
+            TypeId::of::<
+                iroha_data_model::isi::governance::ProposeGlobalDataTriggerPermissionGovernance,
+            >(),
             TypeId::of::<iroha_data_model::isi::governance::ProposeValidationFeePolicy>(),
             TypeId::of::<iroha_data_model::isi::governance::ProposeValidationFeePayoutLifecycle>(),
         ];
@@ -8197,6 +8438,7 @@ pub mod tests {
         let attempt = iroha_data_model::isi::governance::CreateParliamentGovernanceAttemptV1 {
             proposal: iroha_data_model::governance::types::ProposalKind::DeployContract(
                 iroha_data_model::governance::types::DeployContractProposal {
+                    proposal_operator: authority.clone(),
                     contract_address: ContractAddress::derive(
                         &test_network_id(),
                         &authority,
@@ -8260,6 +8502,7 @@ pub mod tests {
         let attempt = iroha_data_model::isi::governance::CreateParliamentGovernanceAttemptV1 {
             proposal: iroha_data_model::governance::types::ProposalKind::DeployContract(
                 iroha_data_model::governance::types::DeployContractProposal {
+                    proposal_operator: authority.clone(),
                     contract_address: ContractAddress::derive(
                         &test_network_id(),
                         &authority,
@@ -11097,6 +11340,7 @@ pub mod tests {
         .expect("contract address");
         let instruction = iroha_data_model::isi::smart_contract_code::ActivateContractInstance {
             contract_address,
+            expected_revision: 1,
             code_hash: Hash::prehashed([0_u8; 32]),
         };
         let tx = TransactionBuilder::new(
@@ -11174,10 +11418,12 @@ pub mod tests {
         let legacy = vec![
             InstructionBox::from(DeactivateContractInstance {
                 contract_address: old_address,
+                expected_revision: 1,
                 reason: Some("legacy rotation".to_owned()),
             }),
             InstructionBox::from(ActivateContractInstance {
                 contract_address: new_address,
+                expected_revision: 1,
                 code_hash,
             }),
         ];
@@ -12152,6 +12398,177 @@ pub mod tests {
                 .is_some(),
             "a rejected reveal must roll back pending-commitment removal"
         );
+    }
+    #[test]
+    fn sealed_reveal_replay_validation_checks_carrier_and_signed_alias() {
+        let (authority, keypair) = gen_account_in("sealed-replay-identities");
+        let signed = TransactionBuilder::new(
+            test_network_id(),
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "sealed replay identity".to_owned())])
+        .sign(keypair.private_key());
+        let salt = [0x5A; 32];
+        let deadline = 9;
+        let commitment =
+            compute_sealed_transaction_commitment(&test_network_id(), &signed, salt, deadline);
+        let reveal = TransactionEntrypoint::SealedReveal(SealedTransactionReveal::new(
+            commitment,
+            signed.clone(),
+            salt,
+        ));
+
+        let identities = canonical_replay_alias_hashes(core::slice::from_ref(&reveal));
+
+        assert_eq!(identities.len(), 2);
+        assert!(identities.contains(&reveal.hash()));
+        assert!(identities.contains(&signed.hash_as_entrypoint()));
+    }
+    #[test]
+    fn sealed_reveal_membership_requires_exact_preblock_authentication() {
+        let (authority, keypair) = gen_account_in("sealed-membership-authentication");
+        let signed = TransactionBuilder::new(
+            test_network_id(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "sealed membership".to_owned())])
+        .sign(keypair.private_key());
+        let salt = [0x31; 32];
+        let wrong_salt = [0x32; 32];
+        let deadline = 9;
+        let commitment =
+            compute_sealed_transaction_commitment(&test_network_id(), &signed, salt, deadline);
+        let exact = TransactionEntrypoint::SealedReveal(SealedTransactionReveal::new(
+            commitment,
+            signed.clone(),
+            salt,
+        ));
+        let wrong = TransactionEntrypoint::SealedReveal(SealedTransactionReveal::new(
+            commitment,
+            signed.clone(),
+            wrong_salt,
+        ));
+        let missing = TransactionEntrypoint::SealedReveal(SealedTransactionReveal::new(
+            Hash::new(b"missing sealed commitment"),
+            signed.clone(),
+            salt,
+        ));
+        let record = PendingSealedTransactionCommitment {
+            payload: SealedTransactionCommitmentPayload {
+                network_id: test_network_id(),
+                authority,
+                commitment,
+                reveal_after_height: 2,
+                reveal_deadline_height: deadline,
+                nonce: None,
+            },
+            commit_height: 1,
+            commit_index: 0,
+        };
+        let state = State::new_for_testing(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        {
+            let mut world = state.world.block();
+            world.smart_contract_state.insert(
+                sealed_commitment_state_key(&commitment),
+                norito::to_bytes(&record).expect("encode pending sealed commitment"),
+            );
+            world.commit();
+        }
+
+        let early_block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+        let early =
+            canonical_carrier_membership_hashes(&early_block, core::slice::from_ref(&exact));
+        assert_eq!(early, vec![exact.hash()]);
+        drop(early_block);
+
+        let open_block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+        let missing_identities =
+            canonical_carrier_membership_hashes(&open_block, core::slice::from_ref(&missing));
+        assert_eq!(missing_identities, vec![missing.hash()]);
+        let wrong_identities =
+            canonical_carrier_membership_hashes(&open_block, core::slice::from_ref(&wrong));
+        assert_eq!(wrong_identities, vec![wrong.hash()]);
+        let exact_identities =
+            canonical_carrier_membership_hashes(&open_block, core::slice::from_ref(&exact));
+        assert_eq!(exact_identities.len(), 2);
+        assert!(exact_identities.contains(&exact.hash()));
+        assert!(exact_identities.contains(&signed.hash_as_entrypoint()));
+        drop(open_block);
+
+        let late_block = state.block(BlockHeader::new(nonzero!(10_u64), None, None, None, 0, 0));
+        let late = canonical_carrier_membership_hashes(&late_block, core::slice::from_ref(&exact));
+        assert_eq!(late, vec![exact.hash()]);
+    }
+    #[test]
+    fn rejected_confidential_work_consumes_the_next_overlay_block_budget() {
+        let mut state = State::new_for_testing(
+            World::new(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let mut zk = state.zk.clone();
+        zk.max_confidential_ops_per_block = 1;
+        zk.max_verify_calls_per_block = 1;
+        zk.max_verify_calls_per_tx = 2;
+        zk.max_proof_bytes_block = 64;
+        zk.max_proof_size_bytes = 64;
+        state
+            .set_zk(zk)
+            .expect("empty SCCP state accepts focused confidential limits");
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut rejected = block.transaction();
+        rejected
+            .register_confidential_proof(8)
+            .expect("first attempted proof fits the block budget");
+        let work = (
+            rejected.zk_confidential_ops_in_tx,
+            rejected.zk_verify_calls_in_tx,
+            rejected.zk_proof_bytes_in_tx,
+            rejected.confidential_gas_used_in_tx,
+        );
+        drop(rejected);
+        block.account_confidential_work_v1(work.0, work.1, work.2, work.3);
+
+        let mut next = block.transaction();
+        let error = next
+            .register_confidential_proof(8)
+            .expect_err("a rejected proof must still exhaust the one-call block budget");
+        assert!(error.to_string().contains("per block exceeded"));
+    }
+    #[test]
+    fn zero_block_gas_limit_remains_unlimited_in_shared_validation() {
+        let chain: ChainId = "zero-block-gas-unlimited".parse().expect("chain id");
+        let (world, authority, keypair) = world_with_authority("wonderland");
+        let state = State::new_with_chain(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+            chain,
+        );
+        let signed = TransactionBuilder::new(
+            *state.network_id_ref(),
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "unlimited block gas".to_owned())])
+        .sign(keypair.private_key());
+        let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(signed));
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        block.gas_limit_per_block = 0;
+        let mut cache = IvmCache::new();
+
+        let (_, result) = block.validate_transaction(accepted, &mut cache);
+
+        result.expect("zero block gas limit must mean unlimited");
+        assert!(block.gas_used_in_block > 0);
     }
     #[test]
     fn lane_block_execution_input_rejects_forged_hashes_before_state_execution() {

@@ -1,0 +1,16 @@
+[
+  {
+    "deserialize_hash": "bce27fbd490a31a147b96a25cc252bb5",
+    "frame_hex": "4e5254300000bce27fbd490a31a147b96a25cc252bb500200000000000000032c7bcaad6dbf656000707070707070707070707070707070707070707070707070707070707070707",
+    "frame_name": "iroha_crypto::hash::HashOf<iroha_crypto_group_01::schema_identity::OriginalMarker>",
+    "nominal": "iroha_crypto::hash::HashOf<iroha_crypto_group_01::schema_identity::OriginalMarker>",
+    "serialize_hash": "bce27fbd490a31a147b96a25cc252bb5"
+  },
+  {
+    "deserialize_hash": "970c4a44fcc90db3c43580186e6693c3",
+    "frame_hex": "4e5254300000970c4a44fcc90db3c43580186e6693c3008800000000000000b4e7321cc9078f860240000000000000000103010301030103010301030103010301030103010301030103010301030103010301030103010301030103010301030103010301030103010301030103010301030103010301030103010301030103010301030103010301030103010301030103010301030103010301030103010301030103010301030103010301030103",
+    "frame_name": "iroha_crypto::signature::SignatureOf<iroha_crypto_group_01::schema_identity::OriginalMarker>",
+    "nominal": "iroha_crypto::signature::SignatureOf<iroha_crypto_group_01::schema_identity::OriginalMarker>",
+    "serialize_hash": "970c4a44fcc90db3c43580186e6693c3"
+  }
+]

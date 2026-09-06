@@ -2,7 +2,8 @@ use manyhow::{Emitter, emit};
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use syn::{
-    Attribute, Data, DeriveInput, Expr, ExprLit, Field, Fields, Lit, parse_quote, spanned::Spanned,
+    Attribute, Data, DeriveInput, Expr, ExprLit, Field, Fields, Lit, LitStr, parse_quote,
+    spanned::Spanned,
 };
 struct FieldInfo {
     ident: syn::Ident,
@@ -82,8 +83,61 @@ fn normalize_value_expr(expr: Expr) -> syn::Result<Expr> {
         Ok(expr)
     }
 }
+
+/// Read the single declared identity of the generated registration builder.
+fn child_schema_name(input: &DeriveInput) -> syn::Result<LitStr> {
+    let mut name = None;
+    let mut declaration_seen = false;
+    for attribute in &input.attrs {
+        if !attribute.path().is_ident("registrable_builder") {
+            continue;
+        }
+        if declaration_seen {
+            return Err(syn::Error::new_spanned(
+                attribute,
+                "duplicate registration builder identity declaration",
+            ));
+        }
+        declaration_seen = true;
+        attribute.parse_nested_meta(|nested| {
+            if !nested.path.is_ident("schema_name") {
+                return Err(nested.error("unsupported registration builder identity option"));
+            }
+            if name.is_some() {
+                return Err(nested.error("duplicate registration builder schema_name"));
+            }
+            let literal: LitStr = nested.value()?.parse()?;
+            let value = literal.value();
+            if value.is_empty()
+                || value.trim() != value
+                || value.chars().any(char::is_control)
+            {
+                return Err(syn::Error::new_spanned(
+                    literal,
+                    "registration builder schema_name must be nonempty without surrounding whitespace or control characters",
+                ));
+            }
+            name = Some(literal);
+            Ok(())
+        })?;
+    }
+    name.ok_or_else(|| {
+        syn::Error::new_spanned(
+            &input.ident,
+            "RegistrableBuilder requires #[registrable_builder(schema_name = \"captured child identity\")]",
+        )
+    })
+}
+
 #[allow(clippy::too_many_lines)]
 pub fn impl_registrable_builder(emitter: &mut Emitter, input: &DeriveInput) -> TokenStream {
+    let schema_name = match child_schema_name(input) {
+        Ok(name) => name,
+        Err(error) => {
+            emit!(emitter, error.span(), "{}", error);
+            return quote!();
+        }
+    };
     let name = &input.ident;
     let builder_name = format_ident!("New{}", name);
     let mut item_attrs: Vec<Attribute> = input
@@ -207,6 +261,8 @@ pub fn impl_registrable_builder(emitter: &mut Emitter, input: &DeriveInput) -> T
         .collect::<Vec<_>>();
     quote! {
         #[derive(Debug, Clone, IdEqOrdHash, Decode, Encode, IntoSchema)]
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(name = #schema_name)]
         #[cfg_attr(
             feature = "json",
             derive(crate::DeriveJsonSerialize, crate::DeriveFastJson)
@@ -293,3 +349,6 @@ fn add_doc_if_missing(attrs: &mut Vec<syn::Attribute>, default: impl AsRef<str>)
     let doc = default.as_ref();
     attrs.push(syn::parse_quote!(#[doc = #doc]));
 }
+
+#[cfg(test)]
+mod tests;

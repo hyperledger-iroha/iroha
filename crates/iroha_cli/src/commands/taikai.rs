@@ -608,10 +608,10 @@ pub struct CekRotateArgs {
     /// Stream identifier within the event.
     #[arg(long, value_name = "NAME")]
     pub stream_id: String,
-    /// Named KMS profile (e.g., `nitro:prod`).
+    /// Named custody-provider profile (legacy flag name; for example `software:prod`).
     #[arg(long)]
     pub kms_profile: String,
-    /// Label of the new wrap key minted by the KMS.
+    /// Label of the new wrap key supplied by the selected provider.
     #[arg(long)]
     pub new_wrap_key_label: String,
     /// Optional label for the previously active wrap key.

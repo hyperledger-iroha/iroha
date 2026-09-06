@@ -6,6 +6,8 @@
 //! sidecar. Restart may observe Kura/WSV already at the decided height while
 //! the sidecar is absent; that state is completed without re-applying the
 //! block or validating it against a later state.
+use mv::storage::StorageReadOnly as _;
+
 use super::{
     message::CanonicalExecutedBlockNeedV1,
     network_topology::Topology,
@@ -55,7 +57,8 @@ use crate::{
         AutonomousLaneRetirementQueueSnapshotPhaseV1, AutonomousLaneRetirementSnapshotEvidenceV1,
         AutonomousLaneSlotRetirementV1, AutonomousLifecycleCursorRead,
         AutonomousLifecyclePendingCanonicalCarrierRecovery,
-        AutonomousLifecyclePendingTerminalOutcomeRecovery, CommitManifest,
+        AutonomousLifecyclePendingTerminalOutcomeRecovery,
+        AutonomousLifecycleReplicaQueueDispositionV1, CommitManifest,
         HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS, HistoricalAutonomousLaneRecoveryPersistOutcome,
         HistoricalAutonomousLaneRecoveryRecordV1, Kura, KuraV2CommitReceipt,
         NativeAmxParticipantApplicationEvidenceByteBudgetError,
@@ -100,6 +103,48 @@ use std::{
     time::{Duration, Instant},
 };
 use thiserror::Error;
+
+#[cfg(feature = "test-network-native-amx-fault-injection")]
+fn private_settlement_carrier_bundle_source_v1(
+    transaction: &iroha_data_model::transaction::SignedTransaction,
+) -> Option<[u8; 32]> {
+    transaction
+        .instructions()
+        .explicit_instructions()
+        .find_map(|instruction| {
+            let instruction = instruction.as_any();
+            instruction
+                .downcast_ref::<
+                    iroha_data_model::isi::private_settlement::FinalizeAtomicPrivateSettlementV1,
+                >()
+                .map(|carrier| *carrier.commit_bundle.manifest.bundle_id.as_ref())
+                .or_else(|| {
+                    instruction
+                        .downcast_ref::<
+                            iroha_data_model::isi::private_settlement::RegisterAtomicPrivateSettlementPrepareV1,
+                        >()
+                        .map(|carrier| *carrier.barrier.manifest.bundle_id.as_ref())
+                })
+                .or_else(|| {
+                    instruction
+                        .downcast_ref::<
+                            iroha_data_model::isi::private_settlement::AbortAtomicPrivateSettlementV1,
+                        >()
+                        .map(|carrier| *carrier.manifest.bundle_id.as_ref())
+                })
+        })
+}
+
+#[cfg(feature = "test-network-native-amx-fault-injection")]
+fn private_settlement_carrier_bundle_sources_v1(block: &SignedBlock) -> Vec<[u8; 32]> {
+    block
+        .external_transactions()
+        .filter_map(private_settlement_carrier_bundle_source_v1)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
 /// Fail-closed error while consuming or recovering durable lane reservations.
 #[derive(Debug, Error)]
 pub(crate) enum V2ReservationLifecycleError {
@@ -773,18 +818,18 @@ pub(crate) fn retire_autonomous_lane_replica_with_queue_disposition(
     cursor_read: AutonomousLifecycleCursorRead,
     expected_network_id: iroha_data_model::NetworkId,
     expected_epoch: u64,
-) -> Result<(), V2ReservationLifecycleError> {
+) -> Result<AutonomousLifecycleReplicaQueueDispositionV1, V2ReservationLifecycleError> {
     let barrier = retirement.queue_release_barrier()?;
     let authorization = queue
         .authorize_autonomous_lane_replica_queue_disposition(&cursor_read, &barrier.ordered_keys)?;
-    kura.retire_autonomous_lane_slot_with_replica_queue_disposition(
+    let disposition = kura.retire_autonomous_lane_slot_with_replica_queue_disposition(
         retirement,
         expected_network_id,
         expected_epoch,
         cursor_read,
         authorization,
     )?;
-    Ok(())
+    Ok(disposition)
 }
 /// Receipt-bound startup form of replicated-custody terminalization.
 ///
@@ -857,7 +902,7 @@ fn canonical_autonomous_carrier_disposition(
         || execution_commitment.validate().is_err()
         || execution_commitment.executed_block_wire_len == 0
         || execution_commitment.executed_block_wire_len > crate::kura::STRICT_INIT_MAX_BLOCK_BYTES
-        || kura.durable_block_payload_len_by_hash(finality.block_hash)
+        || kura.durable_block_payload_len_by_hash(finality.block_hash)?
             != Some((height, execution_commitment.executed_block_wire_len))
     {
         return Err(V2ReservationLifecycleError::CanonicalContextMismatch { height });
@@ -872,7 +917,7 @@ fn canonical_autonomous_carrier_disposition(
     };
     let block_height = NonZeroUsize::new(usize::try_from(height)?)
         .ok_or(V2ReservationLifecycleError::MissingCanonicalBody { height })?;
-    let Some(block) = kura.get_block_without_merge_sidecar(block_height) else {
+    let Some(block) = kura.read_block_body(block_height)? else {
         return Ok(CanonicalAutonomousCarrierInspection::MissingBody(need));
     };
     let executed_block_wire = block
@@ -3994,13 +4039,6 @@ impl V2ApplyService {
             && self.network_id == context.network_id
             && self.validator_set_pops == validator_set_pops
     }
-    /// Recheck the committed Kagemusha runtime lock immediately before signing.
-    pub(crate) fn require_committed_kagemusha_runtime_effective_config(
-        &self,
-    ) -> Result<(), String> {
-        self.state
-            .require_committed_kagemusha_runtime_effective_config()
-    }
     /// Apply one exact CommitQC task or complete its interrupted sidecar write.
     pub(crate) fn execute(
         &self,
@@ -4083,6 +4121,219 @@ impl V2ApplyService {
             },
         ))
     }
+
+    /// Prove every finalized top-up and advance every installed release across a roster boundary.
+    ///
+    /// This runs only after both the finality artifact and receipt sidecar are durable. Every
+    /// write is immutable and idempotent, so restart resumes at the first missing outbox or
+    /// authority checkpoint without changing bytes that were already exposed to Torii.
+    fn publish_kagemusha_mint_outbox_v1(
+        &self,
+        artifact: &wire::finality::V2FinalityArtifact,
+    ) -> Result<(), V2ApplyError> {
+        let operation_ids = self
+            .kura
+            .kagemusha_top_up_operation_ids_v1(artifact.height)
+            .map_err(|error| {
+                V2ApplyError::committed_recovery_required(
+                    "Kagemusha V1 finalized top-up inventory",
+                    &error,
+                )
+            })?;
+        let records = {
+            let view = self.state.view();
+            operation_ids
+                .iter()
+                .map(|operation_id| {
+                    match view.world.kagemusha_reserve_operations.get(operation_id) {
+                        Some(
+                            crate::smartcontracts::isi::kagemusha::KagemushaReserveOperationRecordV1::TopUp(
+                                record,
+                            ),
+                        ) if record.reserve_receipt.operation_id == *operation_id => {
+                            Ok(record.clone())
+                        }
+                        _ => Err(V2ApplyError::committed_recovery_required(
+                            "Kagemusha V1 finalized top-up state",
+                            &format!(
+                                "canonical top-up {} has no matching committed reserve record",
+                                hex::encode(operation_id)
+                            ),
+                        )),
+                    }
+                })
+                .collect::<Result<Vec<_>, _>>()?
+        };
+        let finalities = records
+            .iter()
+            .map(|record| {
+                self.kura
+                    .kagemusha_operation_finality_v1(artifact.height, record.operation_id)
+                    .map_err(|error| {
+                        V2ApplyError::committed_recovery_required(
+                            "Kagemusha V1 canonical operation finality",
+                            &error,
+                        )
+                    })?
+                    .ok_or_else(|| {
+                        V2ApplyError::committed_recovery_required(
+                            "Kagemusha V1 canonical operation finality",
+                            &"finalized top-up has no canonical operation proof",
+                        )
+                    })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let runtime = Arc::clone(&self.state.kagemusha_v1_runtime_verifier);
+        let current_head = artifact.height_context.kagemusha_mint_finality_epoch_id;
+        let load_checkpoint = |release_id| {
+            if let Some(checkpoint) = self
+                .kura
+                .kagemusha_mint_authority_checkpoint_v1(release_id, current_head)
+                .map_err(|error| {
+                    V2ApplyError::committed_recovery_required(
+                        "Kagemusha V1 mint-authority checkpoint read",
+                        &error,
+                    )
+                })?
+            {
+                return Ok(checkpoint);
+            }
+            let checkpoint = runtime
+                .prove_mint_authority_bootstrap(
+                    release_id,
+                    &artifact.height_context.kagemusha_mint_finality_epoch_roster,
+                )
+                .map_err(|error| {
+                    V2ApplyError::committed_recovery_required(
+                        "Kagemusha V1 mint-authority bootstrap proof",
+                        &error,
+                    )
+                })?;
+            if checkpoint.authority_head != current_head {
+                return Err(V2ApplyError::committed_recovery_required(
+                    "Kagemusha V1 mint-authority continuity",
+                    &"no recursively authenticated checkpoint exists for the current roster",
+                ));
+            }
+            self.kura
+                .store_kagemusha_mint_authority_checkpoint_v1(&checkpoint)
+                .map_err(|error| {
+                    V2ApplyError::committed_recovery_required(
+                        "Kagemusha V1 bootstrap mint-authority publication",
+                        &error,
+                    )
+                })?;
+            Ok(checkpoint)
+        };
+
+        for (record, finality) in records.iter().zip(finalities.iter()) {
+            if self
+                .kura
+                .kagemusha_mint_outbox_entry_v1(record.operation_id)
+                .map_err(|error| {
+                    V2ApplyError::committed_recovery_required(
+                        "Kagemusha V1 mint outbox recovery",
+                        &error,
+                    )
+                })?
+                .is_some()
+            {
+                continue;
+            }
+            let checkpoint = load_checkpoint(record.release_id)?;
+            let result = runtime
+                .prove_finalized_top_up(record, finality.clone(), &checkpoint)
+                .map_err(|error| {
+                    V2ApplyError::committed_recovery_required(
+                        "Kagemusha V1 finalized mint proof",
+                        &error,
+                    )
+                })?;
+            self.kura
+                .store_kagemusha_mint_outbox_entry_v1(&result)
+                .map_err(|error| {
+                    V2ApplyError::committed_recovery_required(
+                        "Kagemusha V1 immutable mint outbox publication",
+                        &error,
+                    )
+                })?;
+        }
+
+        let next_head = artifact
+            .commit_qc
+            .kagemusha_finality_seal_payload()
+            .map_err(|error| {
+                V2ApplyError::committed_recovery_required(
+                    "Kagemusha V1 boundary seal envelope",
+                    &error,
+                )
+            })?
+            .map(crate::zk::kagemusha_v1_recursion::decode_kagemusha_mint_finality_seal_bundle_v1)
+            .transpose()
+            .map_err(|error| {
+                V2ApplyError::committed_recovery_required(
+                    "Kagemusha V1 boundary seal bundle",
+                    &error,
+                )
+            })?
+            .and_then(|bundle| bundle.message.next_finality_epoch_id);
+        if artifact.height_context.next_epoch_snapshot.is_some() && next_head.is_none() {
+            return Err(V2ApplyError::committed_recovery_required(
+                "Kagemusha V1 mint-authority rotation",
+                &"epoch boundary finality does not carry a next-roster certificate",
+            ));
+        }
+        if let Some(next_head) = next_head {
+            let membership = finalities
+                .first()
+                .and_then(|finality| finality.top_up_membership_witness.clone());
+            for release_id in runtime.mint_release_ids() {
+                if self
+                    .kura
+                    .kagemusha_mint_authority_checkpoint_v1(release_id, next_head)
+                    .map_err(|error| {
+                        V2ApplyError::committed_recovery_required(
+                            "Kagemusha V1 successor mint-authority checkpoint read",
+                            &error,
+                        )
+                    })?
+                    .is_some()
+                {
+                    continue;
+                }
+                let checkpoint = load_checkpoint(release_id)?;
+                let successor = runtime
+                    .prove_mint_authority_rotation(
+                        release_id,
+                        artifact,
+                        membership.clone(),
+                        &checkpoint,
+                    )
+                    .map_err(|error| {
+                        V2ApplyError::committed_recovery_required(
+                            "Kagemusha V1 recursive mint-authority rotation",
+                            &error,
+                        )
+                    })?;
+                if successor.authority_head != next_head {
+                    return Err(V2ApplyError::committed_recovery_required(
+                        "Kagemusha V1 recursive mint-authority rotation",
+                        &"rotation proof exposed a different successor roster",
+                    ));
+                }
+                self.kura
+                    .store_kagemusha_mint_authority_checkpoint_v1(&successor)
+                    .map_err(|error| {
+                        V2ApplyError::committed_recovery_required(
+                            "Kagemusha V1 successor mint-authority publication",
+                            &error,
+                        )
+                    })?;
+            }
+        }
+        Ok(())
+    }
+
     fn execute_exact_apply(
         &self,
         context: &wire::HeightContext,
@@ -4329,13 +4580,14 @@ impl V2ApplyService {
             })?;
         self.publish_committed_block_merge_entry(committed_block.as_ref())?;
         self.kura
-            .promote_kagemusha_topup_finality_sidecar(artifact, &receipt)
+            .promote_kagemusha_finality_sidecar(artifact, &receipt)
             .map_err(|error| {
                 V2ApplyError::committed_recovery_required(
-                    "Kagemusha finality sidecar promotion",
+                    "Kagemusha V1 finality sidecar promotion",
                     &error,
                 )
             })?;
+        self.publish_kagemusha_mint_outbox_v1(artifact)?;
         // Queue ownership is the final durable boundary after Kura, WSV, and
         // every post-carrier evidence repair. An exact retry reaches this point
         // even when State already crossed its commit boundary, so a crash
@@ -4577,9 +4829,6 @@ impl V2ApplyService {
             )
         })?;
         self.validate_prospective_autoscale_retirement_queue(valid.as_ref(), &state_block)?;
-        self.state
-            .require_kagemusha_runtime_effective_config_for_world(state_block.world())
-            .map_err(V2ApplyError::Validation)?;
         let witness = state_block
             .take_exec_witness()
             .ok_or(V2ApplyError::ExecutionCommitmentUnavailable)?;
@@ -4709,9 +4958,6 @@ impl V2ApplyService {
                 )
             })?;
         self.validate_prospective_autoscale_retirement_queue(valid_block.as_ref(), &state_block)?;
-        self.state
-            .require_kagemusha_runtime_effective_config_for_world(state_block.world())
-            .map_err(V2ApplyError::Validation)?;
         let witness = state_block
             .take_exec_witness()
             .ok_or(V2ApplyError::ExecutionCommitmentUnavailable)?;
@@ -4751,7 +4997,7 @@ impl V2ApplyService {
         // deferred until Kura has durably persisted the exact finality
         // artifact; a crash at any intermediate point leaves an idempotent
         // stage that restart can complete without replaying committed state.
-        self.kura.stage_kagemusha_topup_finality_sidecar(
+        self.kura.stage_kagemusha_finality_sidecar(
             context.height,
             block_hash,
             &witness,
@@ -4792,6 +5038,16 @@ impl V2ApplyService {
                 elapsed_ms = autonomous_apply_started.elapsed().as_millis(),
                 "autonomous carrier reached durable Kura block/finality stage"
             );
+        }
+        #[cfg(feature = "test-network-native-amx-fault-injection")]
+        if store_block {
+            for source_id in private_settlement_carrier_bundle_sources_v1(committed_block.as_ref())
+            {
+                crate::native_amx_fault_injection::maybe_abort(
+                    crate::native_amx_fault_injection::NativeAmxFaultPhase::AfterPrivateSettlementKuraAppend,
+                    source_id,
+                );
+            }
         }
         let native_amx_prepublication = if store_block {
             Some(
@@ -4984,6 +5240,13 @@ impl V2ApplyService {
         commit_result.map_err(|error| {
             V2ApplyError::committed_recovery_required("WSV publication after Kura commit", &error)
         })?;
+        #[cfg(feature = "test-network-native-amx-fault-injection")]
+        for source_id in private_settlement_carrier_bundle_sources_v1(committed_block.as_ref()) {
+            crate::native_amx_fault_injection::maybe_abort(
+                crate::native_amx_fault_injection::NativeAmxFaultPhase::AfterPrivateSettlementWsvApplication,
+                source_id,
+            );
+        }
         // Proof generation is post-finality, local, and best-effort: a stopped or saturated lane
         // must never turn a successfully committed block into a consensus application failure.
         if store_block && let Some(fastpq_witness_context) = fastpq_witness_context {
@@ -5059,6 +5322,20 @@ impl V2ApplyService {
                     &error,
                 )
             })?;
+        // An authenticated sealed reveal also commits the enclosed signed identity.
+        // Retire ordinary sibling carriers keyed by a different outer hash so they cannot
+        // remain permanently capacity-accounted after becoming replay-ineligible.
+        self.queue
+            .remove_state_committed_replay_owners_preserving_globally_bound(
+                &self.state.view(),
+                None,
+            )
+            .map_err(|error| {
+                V2ApplyError::committed_recovery_required(
+                    "replay-terminal committed Queue cleanup",
+                    &error,
+                )
+            })?;
         let nexus = self.state.nexus_snapshot();
         let compliance = self.queue.lane_compliance_engine();
         let queue_reconfiguration_started = Instant::now();
@@ -5100,6 +5377,71 @@ impl V2ApplyService {
     }
 }
 include!("v2_apply/error_recovery.rs");
+#[cfg(all(test, feature = "test-network-native-amx-fault-injection"))]
+mod private_settlement_fault_source_tests {
+    use super::*;
+    use crate::private_settlement::coordinator::tests::certified_commit_bundle_fixture;
+    use iroha_data_model::{
+        isi::private_settlement::{
+            AbortAtomicPrivateSettlementV1, FinalizeAtomicPrivateSettlementV1,
+            RegisterAtomicPrivateSettlementPrepareV1,
+        },
+        nexus::{PrivateSettlementAbortReasonV1, PrivateSettlementPrepareBarrierV1},
+        transaction::TransactionBuilder,
+    };
+
+    #[test]
+    fn every_global_carrier_source_is_the_exact_public_bundle_id() {
+        let (bundle, sponsor_key) = certified_commit_bundle_fixture();
+        let expected = *bundle.manifest.bundle_id.as_ref();
+        let finalization = TransactionBuilder::new(
+            bundle.manifest.network_id,
+            bundle.manifest.sponsor.clone(),
+            bundle.manifest.public_fee_intent.clone(),
+        )
+        .with_instructions([FinalizeAtomicPrivateSettlementV1::new(bundle.clone())])
+        .sign(sponsor_key.private_key());
+        assert_eq!(
+            private_settlement_carrier_bundle_source_v1(&finalization),
+            Some(expected)
+        );
+
+        let barrier = PrivateSettlementPrepareBarrierV1 {
+            version: bundle.version,
+            manifest: bundle.manifest.clone(),
+            authority_catalog: bundle.authority_catalog.clone(),
+            deltas: bundle.legs.iter().map(|leg| leg.delta.clone()).collect(),
+            prepare_certificates: bundle.legs.iter().map(|leg| leg.prepare.clone()).collect(),
+            prepared_bundle_digest: bundle.legs[0].commit.body.prepared_bundle_digest,
+        };
+        let registration = TransactionBuilder::new(
+            bundle.manifest.network_id,
+            bundle.manifest.sponsor.clone(),
+            bundle.manifest.public_fee_intent.clone(),
+        )
+        .with_instructions([RegisterAtomicPrivateSettlementPrepareV1::new(barrier)])
+        .sign(sponsor_key.private_key());
+        assert_eq!(
+            private_settlement_carrier_bundle_source_v1(&registration),
+            Some(expected)
+        );
+
+        let abort = TransactionBuilder::new(
+            bundle.manifest.network_id,
+            bundle.manifest.sponsor.clone(),
+            bundle.manifest.public_fee_intent.clone(),
+        )
+        .with_instructions([AbortAtomicPrivateSettlementV1::new(
+            bundle.manifest,
+            PrivateSettlementAbortReasonV1::ParticipantRejected,
+        )])
+        .sign(sponsor_key.private_key());
+        assert_eq!(
+            private_settlement_carrier_bundle_source_v1(&abort),
+            Some(expected)
+        );
+    }
+}
 #[cfg(test)]
 mod fastpq_submission_tests {
     use super::*;
@@ -5174,6 +5516,5 @@ mod tests;
 pub(crate) use tests::install_historical_autonomous_lane_recovery;
 #[cfg(all(test, feature = "bls"))]
 pub(in crate::sumeragi) use tests::{
-    ProductionKagemushaRuntimeGateFixtureV1, ProductionRecoveredDecisionApplyFixtureV1,
-    production_kagemusha_runtime_gate_fixture_v1, production_recovered_decision_apply_fixture_v1,
+    ProductionRecoveredDecisionApplyFixtureV1, production_recovered_decision_apply_fixture_v1,
 };

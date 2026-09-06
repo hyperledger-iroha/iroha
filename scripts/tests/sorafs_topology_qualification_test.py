@@ -41,7 +41,7 @@ SIGNER_POLICY_DIGEST = hashlib.sha256(
 SIGNING_SEED = hashlib.sha256(b"sorafs-topology-qualification-test-key").digest()
 PUBLIC_KEY = public_key_from_seed(SIGNING_SEED)
 EXPECTED_TOPOLOGY_SIGNING_PAYLOAD_SHA256 = (
-    "36a3507ff2a0d9a13f94d590fdb3b87b560089c67f9b672539c987e474606f4a"
+    "cfad64a4bcc5c8b20a4766ad3eec2418ff4a8f2f49563ab3cc22f5839e9dee1e"
 )
 
 
@@ -94,7 +94,7 @@ def qualification_summary() -> dict[str, Any]:
         "runtime_handle_kinds": [
             "monitoring",
             "external_signer",
-            "kms",
+            "key_custody",
             "webauthn",
         ],
         "runtime_material_policy_valid": True,

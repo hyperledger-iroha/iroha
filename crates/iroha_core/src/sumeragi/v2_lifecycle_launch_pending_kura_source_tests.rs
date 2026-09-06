@@ -198,6 +198,33 @@ fn pending_kura_actor_backpressure_gates_rollover_through_closed_prefix() {
 }
 
 #[test]
+fn pending_kura_terminal_height_authenticates_after_closed_drain_without_a_successor() {
+    let source = include_str!("v2_runner/lifecycle_pending_kura.rs");
+    let terminal = source_region(
+        source,
+        "activated.close_runner_ingress_for_finalized_drain",
+        "let (finalized, lane_work) = activated.into_finalized_rollover",
+    );
+    assert_source_tokens_in_order(
+        terminal,
+        &[
+            "DecidedLaneRecoveryIngressDrainMode::FinalizedClosedPrefix",
+            "drain_finalized_lane_relay_prefix(",
+            "ensure_closed_drained_cut()",
+            "if context.height == u64::MAX",
+            "executor.durable_finality()",
+            "authenticate_terminal_complete_tip(",
+            "activated.into_clean_shutdown(&mut active_runner)?",
+            "return Ok(HeightRunOutcome::Terminal);",
+        ],
+    );
+    assert_forbidden_source_tokens(
+        terminal,
+        &["build_verified_successor(", "into_finalized_rollover("],
+    );
+}
+
+#[test]
 fn apply_terminal_settlement_fails_closed_if_runtime_reopens() {
     let source = include_str!("v2_runner/lifecycle_run_inner.rs");
     let terminal_tail = source_region(

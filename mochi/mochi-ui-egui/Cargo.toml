@@ -27,6 +27,6 @@ iroha_executor_data_model = { path = "../../crates/iroha_executor_data_model" }
 
 [dev-dependencies]
 iroha_test_samples = { path = "../../crates/iroha_test_samples" }
-iroha_telemetry = { path = "../../crates/iroha_telemetry" }
+iroha_torii_shared = { workspace = true }
 mochi-core = { path = "../mochi-core", features = ["test"] }
 tempfile = { workspace = true }

@@ -24,6 +24,8 @@ mod small_string {
     /// specific size of stack-based strings.
     #[schema(transparent = "String")]
     #[repr(transparent)]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_primitives::small::small_string::SmallStr")]
     pub struct SmallStr(SmallString<[u8; 32]>);
     impl SmallStr {
         #[must_use]
@@ -443,6 +445,14 @@ mod small_vector {
             let mut out = smallvec::SmallVec::<A>::with_capacity(values.len());
             out.extend(values);
             Ok(Self(out))
+        }
+    }
+    impl<A: Array + norito::NoritoSchema> norito::NoritoSchema for SmallVec<A> {
+        fn nominal_name() -> String {
+            norito::schema::identity::generic_name(
+                "iroha_primitives::small::small_vector::SmallVec",
+                &[A::nominal_name()],
+            )
         }
     }
     impl<A: Array> NoritoSerialize for SmallVec<A>

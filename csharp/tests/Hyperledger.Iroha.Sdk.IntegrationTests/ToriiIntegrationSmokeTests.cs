@@ -2,7 +2,6 @@ using System.Net;
 using Hyperledger.Iroha.Address;
 using Hyperledger.Iroha.Torii;
 using Hyperledger.Iroha.Http;
-using Hyperledger.Iroha.Crypto;
 
 namespace Hyperledger.Iroha.Sdk.IntegrationTests;
 
@@ -41,11 +40,11 @@ public sealed class ToriiIntegrationSmokeTests
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(
             TestContext.Current.CancellationToken);
         timeout.CancelAfter(TimeSpan.FromSeconds(20));
-        var capability = await client.GetOfflineCapabilityAsync(timeout.Token);
+        var capability = await client.GetKagemushaReadinessAsync(timeout.Token);
 
-        Assert.Equal("cash_handoff_v1", capability.CashHandoffCapability);
-        Assert.Equal(23u, capability.RequiredBridgeAbiVersion);
-        Assert.Equal(8u, capability.MaxHops);
+        Assert.Equal("kagemusha_handoff_v1", capability.KagemushaHandoffCapability);
+        Assert.Equal(1u, capability.WireVersion);
+        Assert.Equal(1u, capability.DeviceLifecycleVersion);
         Assert.True(capability.Ready);
     }
 
@@ -109,17 +108,16 @@ public sealed class ToriiIntegrationSmokeTests
             new Uri(baseUrl, UriKind.Absolute),
             options: new ToriiClientOptions
             {
-                LocalSigningContext = new ToriiLocalSigningContext(
-                    NetworkId.Parse(networkId)),
+                NetworkId = NetworkId.Parse(networkId),
                 CanonicalRequestCredentials = canonicalCredentials,
             });
 
-        var offlineCapability = await client.GetOfflineCapabilityAsync(
+        var kagemushaReadiness = await client.GetKagemushaReadinessAsync(
             TestContext.Current.CancellationToken);
-        Assert.Equal("cash_handoff_v1", offlineCapability.CashHandoffCapability);
-        Assert.Equal(23u, offlineCapability.RequiredBridgeAbiVersion);
-        Assert.Equal(8u, offlineCapability.MaxHops);
-        Assert.True(offlineCapability.Ready);
+        Assert.Equal("kagemusha_handoff_v1", kagemushaReadiness.KagemushaHandoffCapability);
+        Assert.Equal(1u, kagemushaReadiness.WireVersion);
+        Assert.Equal(1u, kagemushaReadiness.DeviceLifecycleVersion);
+        Assert.True(kagemushaReadiness.Ready);
 
         var capabilities = await client.GetNodeCapabilitiesAsync(cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(1, capabilities.AbiVersion);
@@ -238,28 +236,24 @@ public sealed class ToriiIntegrationSmokeTests
             Assert.Equal(accounts.Items[0].Id, resolvedAlias!.AccountId);
         }
 
-        var smokeContractNamespace = Environment.GetEnvironmentVariable("IROHA_CSHARP_SMOKE_CONTRACT_NAMESPACE");
-        var contractNamespace = string.IsNullOrWhiteSpace(smokeContractNamespace)
-            ? "universal"
-            : smokeContractNamespace.Trim();
-        var contractInstances = await TryGetOptionalReadAsync<ToriiContractInstancesResponse>(
-            () => client.GetContractInstancesAsync(
-                contractNamespace,
-                new ToriiContractInstancesQuery
-                {
-                    Limit = 1,
-                }));
-        if (contractInstances is not null)
+        var smokeContractAddress = Environment.GetEnvironmentVariable(
+            "IROHA_CSHARP_SMOKE_CONTRACT_ADDRESS")?.Trim();
+        ToriiGovernedContractResponse? governedContract = null;
+        if (!string.IsNullOrWhiteSpace(smokeContractAddress))
         {
-            Assert.True(contractInstances.Total >= (ulong)contractInstances.Instances.Count);
+            governedContract = await TryGetOptionalReadAsync<ToriiGovernedContractResponse>(
+                () => client.GetGovernedContractAsync(smokeContractAddress));
+            if (governedContract is not null)
+            {
+                Assert.Equal(smokeContractAddress, governedContract.ContractAddress);
+            }
         }
 
         var contractCodeHash = Environment.GetEnvironmentVariable("IROHA_CSHARP_SMOKE_CONTRACT_CODE_HASH")?.Trim();
         if (string.IsNullOrWhiteSpace(contractCodeHash)
-            && contractInstances is not null
-            && contractInstances.Instances.Count > 0)
+            && governedContract is { Found: true, Active: true })
         {
-            contractCodeHash = contractInstances.Instances[0].CodeHashHex;
+            contractCodeHash = governedContract.CodeHashHex;
         }
 
         if (!string.IsNullOrWhiteSpace(contractCodeHash))
@@ -288,7 +282,7 @@ public sealed class ToriiIntegrationSmokeTests
         }
 
         var meteringPublicKeyHex = Convert.ToHexString(
-            Ed25519Signer.GetPublicKey(canonicalCredentials.PrivateKeySeed)).ToLowerInvariant();
+            AccountAddress.Parse(canonicalCredentials.AccountId).PublicKey).ToLowerInvariant();
         var quote = await client.CreateVpnQuoteAsync(new ToriiVpnQuoteCreateRequest
         {
             MeteringPublicKeyHex = meteringPublicKeyHex,

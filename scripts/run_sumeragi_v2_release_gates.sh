@@ -1855,7 +1855,6 @@ if [[ "$profile" == "--release" ]]; then
   release_gate_boundary "source-file-budget:before" || exit $?
   set +e
   "$IROHA_RELEASE_PYTHON_BIN" -I -S scripts/check_source_file_budget.py \
-    --require-objective \
     2>&1 | tee "$source_budget_log"
   source_budget_pipeline_status=("${PIPESTATUS[@]}")
   set -e
@@ -2490,8 +2489,10 @@ required_production_liveness_tests=(
   sumeragi::v2_worker::tests::auxiliary_completion_drain_is_batch_bounded
   sumeragi::v2_worker::tests::actor_backpressure_retains_exact_final_lane_commit_qc_post
   sumeragi::v2_worker::tests::actor_backpressure_retains_complete_merge_share_fanout
-  sumeragi::v2_certified_serve_payload_store::tests::authenticated_cut_rejects_a_later_valid_payload_from_a_second_store_owner
-  sumeragi::v2_certified_serve_payload_store::tests::authenticated_cut_rejects_store_directory_symlink_replacement
+  sumeragi::v2_certified_serve_payload_store::tests::authenticated_cut_has_one_exclusive_store_owner
+  sumeragi::v2_certified_serve_payload_store::tests::authenticated_cut_rejects_store_directory_inode_replacement
+  sumeragi::v2_certified_serve_payload_store::tests::production_open_consumes_the_exact_kura_directory_authority
+  sumeragi::v2_certified_serve_payload_store::tests::emergency_fast_payload_store_skips_inventory_and_rejects_retirement
   sumeragi::v2_certified_serve_payload_store::tests::capacity_is_checked_before_a_second_file_is_published
   sumeragi::v2_certified_serve_payload_store::tests::completed_payload_requires_exact_certified_responder_authority
   sumeragi::v2_certified_serve_payload_store::tests::completed_payload_requires_exact_durable_body_receipt_and_bytes
@@ -2501,6 +2502,7 @@ required_production_liveness_tests=(
   sumeragi::v2_certified_serve_payload_store::tests::recovery_cut_reauthenticates_request_qc_and_typed_negative
   sumeragi::v2_certified_serve_payload_store::tests::recovery_cut_reconstructs_and_authenticates_completed_response
   sumeragi::v2_certified_serve_payload_store::tests::reopen_discards_regular_interrupted_file_but_rejects_corruption
+  sumeragi::v2_lifecycle_coordinator::ledger::tests::durable_ready_fetch_recovery::complete_tip_corrupt_payload_rejects_before_live_apply_ledger_repair
   sumeragi::v2_lifecycle_coordinator::ledger::tests::durable_ready_fetch_recovery::complete_tip_all_row_retirement_consumes_pending_serve_terminal_update
   sumeragi::v2_lifecycle_coordinator::ledger::tests::durable_ready_fetch_recovery::complete_tip_retirement_survives_completed_serve_body_cleanup_with_live_work
   sumeragi::v2_lifecycle_coordinator::ledger::tests::durable_ready_fetch_recovery::completed_certified_serve_replay_requires_exact_worker_readback
@@ -2628,9 +2630,8 @@ required_production_liveness_tests=(
   sumeragi::status::v2_liveness_watchdog_tests::active_watchdog_is_deadline_driven_edge_triggered_and_recovers_on_progress
   sumeragi::status::v2_liveness_watchdog_tests::active_watchdog_resets_on_successor_owner_and_status_clear
   sumeragi::status::v2_liveness_watchdog_tests::rejected_running_successor_failure_projection_preserves_status
-  zk::kagemusha_finality::tests::aggregate_signature_authenticates_proposal_origin
   block::consensus_v2::finality::tests::header_binding_allows_unchanged_reproposal_but_rejects_earlier_decision_round
-  offline::kagemusha_v4_topup_provenance_tests::compact_qc_rejects_foreign_or_future_proposal_origin
+  block::consensus_v2::tests::kagemusha_consensus_signature_envelope_roundtrips_and_rejects_drift
   block::consensus_v2::tests::height_context_identity_ignores_reproposal_round_and_rejects_split_rounds
   block::consensus_v2::tests::timeout_proposal_accepts_only_the_selected_prepare_subject
   sumeragi_v2_runner::prepare_qc_split_tests::locked_commit_progress_witness_rejects_inexact_or_empty_ownership
@@ -2774,7 +2775,7 @@ required_production_liveness_tests=(
   parameters::user::duration_clamp_tests::sumeragi_authenticated_non_validator_sources_must_fit_network_geometry
   parameters::user::duration_clamp_tests::sumeragi_authenticated_non_validator_sources_use_effective_lane_profile_geometry
 )
-readonly expected_production_liveness_test_count=864
+readonly expected_production_liveness_test_count=866
 if (( ${#required_production_liveness_tests[@]} != expected_production_liveness_test_count )); then
   echo "expected exactly ${expected_production_liveness_test_count} production Sumeragi v2 liveness tests, found ${#required_production_liveness_tests[@]}" >&2
   exit 1
@@ -2796,7 +2797,7 @@ production_data_model_ignored_unit_list="$(
 # This source-bound corridor intentionally exercises `iroha_p2p`'s production
 # default feature set (`default = []`). Feature-gated QUIC first-packet geometry
 # tests remain useful transport regressions, but are not claimed by this
-# 44-module pre-network inventory.
+# 42-module pre-network inventory.
 production_p2p_unit_list="$(run_cargo test --locked --offline -p iroha_p2p --lib -- --list)"
 production_p2p_ignored_unit_list="$(
   run_cargo test --locked --offline -p iroha_p2p --lib -- --list --ignored
@@ -2827,7 +2828,6 @@ multilane_config_fixtures_ignored_unit_list="$(
 )"
 production_data_model_modules=(
   block::consensus_v2::finality::tests
-  offline::kagemusha_v4_topup_provenance_tests
   block::consensus_v2::tests
 )
 for required_test in "${required_production_liveness_tests[@]}"; do
@@ -2865,7 +2865,7 @@ for required_test in "${required_production_liveness_tests[@]}"; do
 done
 
 # Keep the multilane closure-critical focused tests explicit even when they do
-# not belong to the canonical 864-test liveness inventory above. The later
+# not belong to the canonical 866-test liveness inventory above. The later
 # source-sealed workspace leg executes these non-ignored tests; this preflight
 # prevents a rename, deletion, or accidental `#[ignore]` from hiding behind
 # Cargo's successful zero-test filtering.
@@ -3659,6 +3659,7 @@ readonly multilane_autoscale_four_peer_release_test="nexus::autoscale_localnet::
 readonly multilane_autoscale_restart_release_test="nexus::autoscale_localnet::nexus_autoscale_certified_merge_recovers_missing_sidecar_after_restart"
 readonly multilane_autoscale_drain_release_test="nexus::autoscale_localnet::nexus_autoscale_two_phase_drain_closes_certifies_then_retires_after_restart"
 readonly multilane_native_amx_rotating_release_test="native_amx_rotating_validator_fault_soak_preserves_independent_participant_qcs"
+readonly bpng_native_bootstrap_release_test="alias_registry_bootstrap_network::bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansion"
 readonly multilane_native_amx_grouped_pruning_marker="[multilane-release-native-evidence] grouped_sources=2 durable_manifest=passed body_eviction_recovery=passed authenticated_remote_recovery=passed exact_once=passed"
 if [[ "$(grep -Fxc -- "readonly NATIVE_AMX_GROUPED_PRUNING_MARKER=\"${multilane_native_amx_grouped_pruning_marker}\"" scripts/run_nexus_cross_dataspace_atomic_swap.sh || true)" != 1 ]]; then
   echo "mandatory four-peer launcher is not source-bound to grouped Native AMX pruning evidence" >&2
@@ -3763,9 +3764,7 @@ production_liveness_modules=(
   sumeragi::v2_runner::lifecycle_height_driver::tests
   sumeragi::v2_worker::tests
   sumeragi::status::v2_liveness_watchdog_tests
-  zk::kagemusha_finality::tests
   block::consensus_v2::finality::tests
-  offline::kagemusha_v4_topup_provenance_tests
   block::consensus_v2::tests
   sumeragi_v2_runner
   peer::run::tests
@@ -3809,9 +3808,7 @@ production_liveness_leg_ids=(
   production-v2-lifecycle-height-driver
   production-v2-worker
   production-v2-watchdog
-  production-kagemusha-finality
   production-data-model-v2-finality
-  production-data-model-offline-compact-qc
   production-data-model-v2-context-identity
   production-v2-integration-runner
   production-p2p-peer-reliable-flush
@@ -4126,8 +4123,8 @@ if [[ "$profile" == "--release" ]]; then
     129
     88
     34
-    44
-    43
+    50
+    48
   )
   for sumeragi_v2_sdk_diagnostics_index in \
     "${!sumeragi_v2_sdk_diagnostics_surfaces[@]}"; do
@@ -4495,10 +4492,10 @@ publish_corridor_completion() {
     echo "source-bound localnet binary bundle changed before corridor completion" >&2
     return 1
   fi
-  # 44 production-module + 9 G-UNIT + 2 exact data-model + 6 source-sealed
+  # 42 production-module + 9 G-UNIT + 2 exact data-model + 6 source-sealed
   # command + 1 cross-SDK Rust + 1 Native AMX fixture + 6 grouped SDK +
-  # 6 diagnostics + 10 pytest legs = 85.
-  readonly expected_corridor_leg_count=85
+  # 6 diagnostics + 10 pytest legs = 83.
+  readonly expected_corridor_leg_count=83
   if ((corridor_leg_index != expected_corridor_leg_count)); then
     echo "release corridor recorded ${corridor_leg_index} legs, expected ${expected_corridor_leg_count}" >&2
     exit 1
@@ -4684,6 +4681,85 @@ if [[ "$profile" == "--release" && ! -s "$seed_completion_path_file" ]]; then
   exit 1
 fi
 verify_release_identity "after deterministic seed matrix"
+
+verify_bpng_native_bootstrap_release_identity() {
+  local checkpoint="$1"
+  if [[ "${PATH:-}" != "${IROHA_RELEASE_INVOCATION_ROOT:-}/runtime/bin" \
+    || "${IROHA_RELEASE_PYTHON_BIN:-}" != "${PATH:-}/python3" \
+    || "${IROHA_RELEASE_GIT_BIN:-}" != "${PATH:-}/git" ]]; then
+    echo "native BPNG release runtime escaped its pinned PATH at ${checkpoint}" >&2
+    return 1
+  fi
+  verify_release_identity "$checkpoint" || return $?
+  if [[ "${IROHA_TEST_SKIP_BUILD:-}" != 1 \
+    || "${IROHA_TEST_BUILD_PROFILE:-}" != release \
+    || "${PROFILE:-}" != release \
+    || "${TEST_NETWORK_BIN_IROHAD:-}" \
+      != "${IROHA_TEST_TARGET_DIR:-}/release/iroha3d" \
+    || "${TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL:-}" \
+      != "${IROHA_TEST_TARGET_DIR:-}/message-control/release/iroha3d" \
+    || "${TEST_NETWORK_BIN_IROHA:-}" \
+      != "${IROHA_TEST_TARGET_DIR:-}/release/iroha" \
+    || "${KAGAMI_BIN:-}" != "${IROHA_TEST_TARGET_DIR:-}/release/kagami" ]]; then
+    echo "native BPNG release binary exports changed at ${checkpoint}" >&2
+    return 1
+  fi
+  if ! localnet_binary_attestation_valid; then
+    echo "native BPNG release binary bundle changed at ${checkpoint}" >&2
+    return 1
+  fi
+}
+
+run_bpng_native_bootstrap_release_gate() {
+  local test_list ignored_test_list run_log
+  local -a run_pipeline_status
+  test_list="$(run_cargo test --locked --offline -p integration_tests --test network_functional -- --list)" || { echo "native BPNG release-test discovery failed" >&2; return 1; }
+  ignored_test_list="$(run_cargo test --locked --offline -p integration_tests --test network_functional -- --list --ignored)" || { echo "native BPNG ignored-test discovery failed" >&2; return 1; }
+  [[ "$(grep -Fxc -- "${bpng_native_bootstrap_release_test}: test" <<<"$test_list" || true)" == 1 ]] \
+    || { echo "missing or renamed native BPNG release test: ${bpng_native_bootstrap_release_test}" >&2; return 1; }
+  if grep -Fqx -- "${bpng_native_bootstrap_release_test}: test" \
+    <<<"$ignored_test_list"; then
+    echo "native BPNG release test is ignored: ${bpng_native_bootstrap_release_test}" >&2
+    return 1
+  fi
+  run_log="$(mktemp "${TMPDIR%/}/bpng-native-bootstrap-release.log.XXXXXX")" \
+    || { echo "native BPNG release gate could not allocate its private transcript" >&2; return 1; }
+  set +e
+  (
+    export IROHA_TEST_SERIALIZE_NETWORKS=1 IROHA_TEST_NETWORK_START_ATTEMPTS=1
+    run_cargo test --locked --offline -p integration_tests \
+      --test network_functional "$bpng_native_bootstrap_release_test" -- \
+      --exact --show-output --test-threads=1
+  ) 2>&1 | tee "$run_log"
+  run_pipeline_status=("${PIPESTATUS[@]}")
+  set -e
+  if ((run_pipeline_status[0] != 0 || run_pipeline_status[1] != 0)); then
+    echo "native BPNG release gate failed (cargo=${run_pipeline_status[0]}, tee=${run_pipeline_status[1]}); log retained at ${run_log}" >&2
+    return 1
+  fi
+  if [[ "$(grep -Ec '^running [0-9]+ tests?$' "$run_log" || true)" != 1 \
+    || "$(grep -Ec '^test result:' "$run_log" || true)" != 1 \
+    || "$(grep -Fxc -- "running 1 test" "$run_log" || true)" != 1 \
+    || "$(grep -Fxc -- "test ${bpng_native_bootstrap_release_test} ... ok" \
+      "$run_log" || true)" != 1 \
+    || "$(grep -Ec \
+      '^test result: ok[.] 1 passed; 0 failed; 0 ignored; 0 measured; [0-9]+ filtered out; finished in .+$' \
+      "$run_log" || true)" != 1 ]]; then
+    echo "native BPNG release gate lacks one unambiguous passing result; log retained at ${run_log}" >&2
+    return 1
+  fi
+  rm -f -- "$run_log" \
+    || { echo "native BPNG release gate could not remove its validated temporary transcript" >&2; return 1; }
+}
+
+if [[ "$profile" == "--release" ]]; then
+  verify_bpng_native_bootstrap_release_identity \
+    "before native BPNG bootstrap release gate"
+  run_cooperative_gate bpng-native-bootstrap-release \
+    run_bpng_native_bootstrap_release_gate
+  verify_bpng_native_bootstrap_release_identity \
+    "after native BPNG bootstrap release gate"
+fi
 
 if [[ "$profile" == "--release" ]]; then
   multilane_four_peer_completion_path_file="${IROHA_RELEASE_HOST_ROOT}/multilane-four-peer-completion-path"

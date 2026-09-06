@@ -597,7 +597,10 @@ pub struct StreamingSession {
     kem_suite: MlKemSuite,
 }
 /// Persistable view of the resolved transport capabilities.
-#[derive(Copy, Clone, Debug, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
+#[derive(
+    Copy, Clone, Debug, NoritoSerialize, NoritoDeserialize, PartialEq, Eq, norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_crypto::streaming::TransportCapabilityResolutionSnapshot")]
 pub struct TransportCapabilityResolutionSnapshot {
     /// Selected HPKE suite.
     pub hpke_suite: HpkeSuite,
@@ -638,7 +641,8 @@ impl<'a> norito::core::DecodeFromSlice<'a> for TransportCapabilityResolutionSnap
     }
 }
 /// Minimal persistence snapshot for resuming streaming sessions after restarts.
-#[derive(Clone, Debug, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, NoritoSerialize, NoritoDeserialize, PartialEq, Eq, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::streaming::StreamingSessionSnapshot")]
 pub struct StreamingSessionSnapshot {
     /// Endpoint role associated with the session.
     pub role: CapabilityRole,
@@ -759,7 +763,10 @@ struct FeedbackState {
     observed_rtt_ms: u16,
 }
 /// Persisted view of the session rekey cadence.
-#[derive(Clone, Copy, Debug, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
+#[derive(
+    Clone, Copy, Debug, NoritoSerialize, NoritoDeserialize, PartialEq, Eq, norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_crypto::streaming::SessionCadenceSnapshot")]
 pub struct SessionCadenceSnapshot {
     /// Wall-clock start of the session in milliseconds since Unix epoch.
     pub started_at_ms: u64,
@@ -1958,7 +1965,8 @@ fn parity_from_loss_fp(loss_fp: u32) -> u8 {
     parity as u8
 }
 /// Canonical Norito transcript used for signing and verifying `KeyUpdate` frames.
-#[derive(Clone, norito::derive::NoritoSerialize)]
+#[derive(Clone, norito::derive::NoritoSerialize, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::streaming::KeyUpdateTranscript")]
 struct KeyUpdateTranscript {
     session_id: Hash,
     suite: EncryptionSuite,
@@ -2354,3 +2362,6 @@ mod key_update_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod captured_schema_tests;

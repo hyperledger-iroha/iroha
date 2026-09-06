@@ -1,0 +1,5 @@
+error: generic schema identities cannot use a fixed frame projection
+ --> tests/ui/fail/schema_identity_generic_frame.rs:3:52
+  |
+3 | #[norito_schema(name = "example::Generic", frame = "example.generic")]
+  |                                                    ^^^^^^^^^^^^^^^^^

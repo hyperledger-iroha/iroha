@@ -713,9 +713,9 @@ geometry, not an abstract payload-size allowance. If `F(x)` is canonical
 compact-length framing, a frozen layout with `C` chunk hashes has manifest
 ceiling `F(8 + C * F(32)) + 228`. The maximal proposal contains that manifest,
 one full-QC timeout group per validator, the separately carried highest QC, and
-maximum signatures; the recommended 128-validator value is 232,541 bare bytes.
+maximum signatures; the protocol-maximum 31-validator value is 1,106,267 bare bytes.
 The maximum recommended `PayloadChunk`/`CertifiedBodyResponse` envelope is
-16,828,108 bare bytes; the response arm includes a current responder `PeerId`
+16,844,237 bare bytes; the response arm includes a current responder `PeerId`
 at the protocol-wide maximum public-key payload. Recovery request and
 `CommitCertificateResponse` ceilings include maximum QCs, maximum signatures,
 the actual chain-id length where present, and an embedded `PeerId` derived from
@@ -1551,7 +1551,7 @@ reconstruction-refinement, or starvation obligations; the added rollover and
 tip-recovery regressions remain executable regression evidence, not independent
 proof of the promoted obligations.
 
-The current pre-network release inventory names 864 tests across 44 Rust
+The current pre-network release inventory names 866 tests across 42 Rust
 modules. The preceding 298-name inventory arose from the 264-name inventory by
 adding 37 positive regressions which
 comprise 10 per-target exact-output and historical/current typed-rollover tests,
@@ -1678,11 +1678,16 @@ retired rows already represented by their stricter replacements, exact-renamed
 four surviving tests, and replaced one retired combined daemon check with its
 two real block/lane checks, yielding the 862-test checkpoint. The eligible-only
 sealed Ready-Proposal-Sign preemption regression yielded the 863-test
-checkpoint; retaining the exact failed-pre-handshake dial backoff owner yields
-the current 864-test,
-44-module inventory. The complete source-sealed
+checkpoint; retaining the exact failed-pre-handshake dial backoff owner yielded
+the 864-test checkpoint. The two sealed Certified-Serve storage regressions and
+the CompleteTip payload-before-ledger-repair regression yielded the historical
+867-test, 44-module inventory. The Kagemusha clean-break retired the separate
+finality and offline compact-QC rows and their module legs, replacing them with
+one consensus-signature-envelope regression in the existing context-identity
+module and yielding the current 866-test,
+42-module inventory. The complete source-sealed
 pre-network corridor
-contains 85 legs. Six source-
+contains 83 legs. Six source-
 sealed command legs and the G-SCALE
 runner/validator preflight harden that release corridor.
 Wire protocol version 1 uses positive `NonZeroU64` responder generation,
@@ -1751,7 +1756,7 @@ empty successor projection, without forging close prefixes. Same-roster
 rehydration preserves generation and responder ownership; a new requester
 against a full same-roster table rejects without mutation.
 The canonical module/test TSV inventory SHA-256 is
-`44784c79c489d83ab142bb0db84e89138c3a54b1349926a80597e2c5b21a83df`.
+`47a818de4cc0793664977d5e0f4b7e56dda943580b647f15671c3b8aa8a5cd20`.
 The separate source-sealed G-UNIT inventory contains 522 focused tests,
 including 316 core and 143 queue-journal `iroha_core` tests. Its 523-line
 canonical TSV has SHA-256
@@ -1793,15 +1798,15 @@ through an authenticated non-validator hop, and retains the capacity-negative
 boundary. It
 also adds one four-validator exact PrepareQC count-and-power quorum regression.
 The four integration names share a module-filtered leg; the pre-network corridor
-now has 85 legs, including the governance-unlock audit module, the autonomous
+now has 83 legs, including the governance-unlock audit module, the autonomous
 lifecycle-recovery module, separate
 exact data-model status and atomic
 lane-certificate decode contracts, two `iroha_config` geometry modules, three P2P
-geometry modules, and source-sealed command-success legs. Its finality, offline
-compact-QC, and height-context proposal-origin
-modules each use a dedicated `iroha_data_model` leg. Its `iroha_p2p` legs use
+geometry modules, and source-sealed command-success legs. Its finality and
+height-context proposal-origin modules each use a dedicated `iroha_data_model`
+leg. Its `iroha_p2p` legs use
 the crate's empty default feature set; feature-gated QUIC first-packet geometry
-tests are not claimed by the 44-module, 85-leg corridor. It
+tests are not claimed by the 42-module, 83-leg corridor. It
 includes
 exact completion ownership, body-owner binding and
 rebind, rejection of future physical completions, durable-recovery retry to the

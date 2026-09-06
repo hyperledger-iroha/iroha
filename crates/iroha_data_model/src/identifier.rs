@@ -42,6 +42,8 @@ pub enum IdentifierNormalizationError {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[norito(tag = "normalization", content = "value", rename_all = "snake_case")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::identifier::IdentifierNormalization")]
 pub enum IdentifierNormalization {
     /// Trim outer whitespace and otherwise preserve the original bytes.
     Exact,
@@ -81,6 +83,8 @@ impl IdentifierNormalization {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::identifier::IdentifierPolicyId")]
 pub struct IdentifierPolicyId {
     /// Identifier kind such as `phone`, `email`, or `account_number`.
     pub kind: Name,
@@ -124,6 +128,8 @@ impl FromStr for IdentifierPolicyId {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::identifier::IdentifierPolicy")]
 pub struct IdentifierPolicy {
     /// Policy namespace identifier.
     pub id: IdentifierPolicyId,
@@ -171,6 +177,8 @@ impl IdentifierPolicy {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::identifier::IdentifierClaimRecord")]
 pub struct IdentifierClaimRecord {
     /// Claimed identifier namespace.
     pub policy_id: IdentifierPolicyId,
@@ -195,6 +203,8 @@ pub struct IdentifierClaimRecord {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::identifier::IdentifierResolutionReceipt")]
 pub struct IdentifierResolutionReceipt {
     /// Canonical payload covered by the attestation.
     pub payload: IdentifierResolutionReceiptPayload,
@@ -207,6 +217,8 @@ pub struct IdentifierResolutionReceipt {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::identifier::IdentifierResolutionReceiptPayload")]
 pub struct IdentifierResolutionReceiptPayload {
     /// Policy namespace used for the resolution.
     pub policy_id: IdentifierPolicyId,
@@ -910,3 +922,6 @@ mod tests {
         hex::encode_upper(Sha256::digest(bytes))
     }
 }
+
+#[cfg(test)]
+mod captured_identifier_schema_tests;

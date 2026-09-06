@@ -390,7 +390,7 @@ class ContractManifestTest {
     @Test
     fun manifestEndpointValidatesPathAndParsesFullRecord() {
         val executor = ManifestExecutor(fullResponse().toByteArray(StandardCharsets.UTF_8))
-        val transport = HttpClientTransport.withExecutor(
+        val transport = HttpClientTransport(
             executor,
             ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build(),
         )

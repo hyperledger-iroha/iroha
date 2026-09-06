@@ -266,7 +266,7 @@ fn worker_completion_is_retained_behind_a_full_runtime_fifo() {
         Arc::clone(&admission),
     );
     let (completion_tx, completion_rx) = mpsc::sync_channel(channel_capacity);
-    try_send_tracked_completion(
+    try_send_tracked_completion_with_lifecycle_ordinal(
         &completion_tx,
         &admission,
         V2IoCompletion::Signature {
@@ -274,6 +274,7 @@ fn worker_completion_is_retained_behind_a_full_runtime_fifo() {
             signature: vec![0x4b],
             outbound_payload: None,
         },
+        Some(7_601),
     )
     .expect("retain one completed worker result");
     let snapshot_at = Instant::now() + Duration::from_millis(250);
@@ -315,6 +316,104 @@ fn worker_completion_is_retained_behind_a_full_runtime_fifo() {
     assert_eq!(drained.oldest_age, None);
     assert_eq!(drained.max_service_debt, 0);
 }
+
+#[test]
+fn empty_completion_lane_mints_an_executor_bound_runtime_cut() {
+    let (service, _) = fixture();
+    let V2CompletionRuntimeCutDecisionV1::Runtime(cut) = service
+        .prepare_completion_runtime_cut(true)
+        .expect("prepare empty Completion-lane cut")
+    else {
+        panic!("an empty Completion lane must release Runtime");
+    };
+    assert!(
+        cut.consume_for_executor(&ConsensusOutputGuard::isolated(), &service.context)
+            .is_none(),
+        "a cut cannot cross its fail-stop output owner"
+    );
+
+    let V2CompletionRuntimeCutDecisionV1::Runtime(cut) = service
+        .prepare_completion_runtime_cut(true)
+        .expect("remint empty Completion-lane cut")
+    else {
+        panic!("an empty Completion lane must remain releasable");
+    };
+    assert!(
+        cut.consume_for_executor(&service.output_guard, &service.context)
+            .is_some()
+    );
+}
+
+#[test]
+fn completion_runtime_cut_blocks_then_reliefs_an_exact_worker_head() {
+    let (mut service, _) = fixture();
+    let admission = Arc::new(V2IoAdmission::new(1, 1).expect("bounded I/O admission"));
+    let channel_capacity = admission.capacity();
+    let (command_tx, _command_rx) = v2_io_command_channel(
+        channel_capacity,
+        channel_capacity.max(1),
+        channel_capacity.max(1),
+        channel_capacity.max(1),
+        Arc::clone(&admission),
+    );
+    let (completion_tx, completion_rx) = mpsc::sync_channel(channel_capacity);
+    try_send_tracked_completion_with_lifecycle_ordinal(
+        &completion_tx,
+        &admission,
+        V2IoCompletion::Signature {
+            work_id: EffectWorkId::for_test(7_601),
+            signature: vec![0x5c],
+            outbound_payload: None,
+        },
+        Some(7_601),
+    )
+    .expect("retain one runtime-producing completion");
+    let retained_at = match admission.completion_runtime_cut_observation() {
+        V2IoCompletionRuntimeCutObservationV1::Pending(owner) => owner.retained_at,
+        V2IoCompletionRuntimeCutObservationV1::Empty { .. } => {
+            panic!("the tracked completion must own the physical head")
+        }
+    };
+    service.io = Some(V2IoHandle {
+        command_tx,
+        completion_rx,
+        join: None,
+        allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
+        admission: Arc::clone(&admission),
+    });
+
+    assert!(matches!(
+        service
+            .prepare_completion_runtime_cut(true)
+            .expect("inspect cut with free runtime capacity"),
+        V2CompletionRuntimeCutDecisionV1::RetryCompletion
+    ),
+        "a pending completion must return the outer driver to Completion rank"
+    );
+    assert!(matches!(
+        service.take_next_completion(false),
+        IoCompletionTake {
+            completion: None,
+            retained_runtime: true,
+        }
+    ));
+    let V2CompletionRuntimeCutDecisionV1::CapacityRelief(cut) = service
+        .prepare_completion_runtime_cut(false)
+        .expect("prepare full-FIFO relief cut")
+    else {
+        panic!("the held runtime completion requires one relief step");
+    };
+    assert_eq!(
+        cut.consume_for_executor(&service.output_guard, &service.context),
+        Some((retained_at, 7_601)),
+        "capacity relief must run at the exact worker-retention timestamp"
+    );
+
+    let _ = service.held_io_completion.take();
+    admission.acknowledge_completion_at(0);
+    drop(service.io.take());
+}
+
 #[test]
 fn production_drain_publishes_worker_completion_behind_full_runtime_fifo() {
     let (mut service, keys) = fixture();
@@ -647,7 +746,6 @@ fn cancelling_fetch_consumes_queued_reconstruction_owner() {
 #[test]
 fn fetch_consumer_rebind_preserves_live_or_queued_reconstruction_owner() {
     let (mut service, keys) = fixture();
-    let _chunk_root = install_temporary_chunk_root(&mut service);
     allow_fixture_block_payload(&mut service.context);
     let (_, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
     let tag = EventTag::new(
@@ -804,7 +902,6 @@ fn retransmitting_fetch_with_conflicting_queued_manifest_fails_closed() {
 #[test]
 fn cancelling_fetch_consumes_live_session_and_manifest_owner() {
     let (mut service, keys) = fixture();
-    let _chunk_root = install_temporary_chunk_root(&mut service);
     allow_fixture_block_payload(&mut service.context);
     let (_, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
     let tag = EventTag::new(
@@ -827,7 +924,6 @@ fn cancelling_fetch_consumes_live_session_and_manifest_owner() {
 #[test]
 fn duplicate_authenticated_chunk_skips_reconstruction() {
     let (mut service, keys) = fixture();
-    let _chunk_root = install_temporary_chunk_root(&mut service);
     allow_fixture_block_payload(&mut service.context);
     service.context.da_layout.data_shards = 3;
     service.context.da_layout.parity_shards = 2;
@@ -846,10 +942,16 @@ fn duplicate_authenticated_chunk_skips_reconstruction() {
     service
         .enqueue_body_fetch(task.clone())
         .expect("open exact live reconstruction session");
+    let validated = service.fetches[&task.id()]
+        .chunks
+        .as_ref()
+        .expect("manifest-backed fetch session")
+        .validated_manifest()
+        .clone();
     let sender_index = usize::try_from(proposal.proposer).expect("small proposer index");
     let sender = service.context.roster[sender_index].validator.clone();
     let mut chunk = wire::PayloadChunk {
-        manifest_hash: HashOf::new(&manifest),
+        manifest_hash: validated.manifest_hash(),
         index: 0,
         bytes: chunks[0].clone(),
         sender: proposal.proposer,
@@ -858,16 +960,17 @@ fn duplicate_authenticated_chunk_skips_reconstruction() {
     chunk.signature = Signature::new(
         keys[sender_index].private_key(),
         &chunk
-            .signature_preimage(&service.context, &manifest)
-            .expect("chunk preimage"),
+            .signature_payload(&validated)
+            .expect("chunk signature payload")
+            .signature_preimage(),
     )
     .payload()
     .to_vec();
-    let authenticated = authenticate_payload_chunk(&service.context, &manifest, chunk, &sender)
+    let authenticated = authenticate_payload_chunk(&validated, chunk.clone(), &sender)
         .expect("authenticate canonical chunk");
     assert_eq!(
         service
-            .accept_authenticated_chunk(&task, authenticated.clone())
+            .accept_authenticated_chunk(&task, authenticated)
             .expect("accept first chunk"),
         AuthenticatedChunkDisposition::Accepted
     );
@@ -877,9 +980,11 @@ fn duplicate_authenticated_chunk_skips_reconstruction() {
         .expect("manifest-backed fetch session")
         .reconstruction_attempts();
     assert_eq!(attempts_after_first, 1);
+    let duplicate = authenticate_payload_chunk(&validated, chunk, &sender)
+        .expect("authenticate an independently received exact duplicate");
     assert_eq!(
         service
-            .accept_authenticated_chunk(&task, authenticated)
+            .accept_authenticated_chunk(&task, duplicate)
             .expect("accept exact duplicate"),
         AuthenticatedChunkDisposition::Accepted
     );
@@ -896,10 +1001,15 @@ fn duplicate_authenticated_chunk_skips_reconstruction() {
     assert!(!service.output_guard.restart_required());
 }
 #[test]
-fn invalid_reconstruction_waits_for_reducer_authorized_retirement() {
+fn invalid_reconstruction_stays_terminal_across_reducer_retry_until_cancellation() {
     let (mut service, keys) = fixture();
-    let _chunk_root = install_temporary_chunk_root(&mut service);
     allow_fixture_block_payload(&mut service.context);
+    service.context.da_layout.data_shards = 3;
+    service.context.da_layout.parity_shards = 2;
+    service
+        .context
+        .validate()
+        .expect("multi-shard fixture context");
     let (body, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
     let mut invalid_body = body.clone();
     invalid_body[0] ^= 1;
@@ -922,35 +1032,108 @@ fn invalid_reconstruction_waits_for_reducer_authorized_retirement() {
         proposal.round.view,
         Generation::new(service.context.height),
     );
-    let task = BodyFetchTask::ordinary_for_test(61, tag, invalid_manifest.clone());
+    let certified = certified_fetch_task(
+        &service,
+        61,
+        tag,
+        Some(invalid_manifest.clone()),
+        proposal.round,
+        proposal.subject,
+    );
+    let request = certified
+        .certified_request()
+        .expect("certified retry fixture request")
+        .clone();
+    let sources = service
+        .context
+        .roster
+        .iter()
+        .map(|entry| entry.validator.clone())
+        .collect();
+    let task = BodyFetchTask::certified_for_test(
+        61,
+        tag,
+        Some(invalid_manifest.clone()),
+        sources,
+        request,
+    );
+    let request_admissions = Arc::new(AtomicUsize::new(0));
+    let request_admissions_for_hook = Arc::clone(&request_admissions);
+    service.set_exact_output_admission_hook(move |_post, _ticket| {
+        request_admissions_for_hook.fetch_add(1, Ordering::Relaxed);
+        Ok(())
+    });
     service
         .enqueue_body_fetch(task.clone())
         .expect("open invalid remote reconstruction session");
-    let mut chunk = wire::PayloadChunk {
-        manifest_hash: HashOf::new(&invalid_manifest),
-        index: 0,
-        bytes: invalid_chunks[0].clone(),
-        sender: 0,
-        signature: Vec::new(),
-    };
-    chunk.signature = Signature::new(
-        keys[0].private_key(),
-        &chunk
-            .signature_preimage(&service.context, &invalid_manifest)
-            .expect("chunk preimage"),
-    )
-    .payload()
-    .to_vec();
+    let request_admissions_before_poison = request_admissions.load(Ordering::Relaxed);
+    assert!(
+        request_admissions_before_poison > 0,
+        "the certified fixture must exercise the network request seam"
+    );
+    let validated = service.fetches[&task.id()]
+        .chunks
+        .as_ref()
+        .expect("manifest-backed invalid fetch session")
+        .validated_manifest()
+        .clone();
     let sender = service.context.roster[0].validator.clone();
-    let authenticated =
-        authenticate_payload_chunk(&service.context, &invalid_manifest, chunk, &sender)
-            .expect("authenticate chunk committed by invalid manifest");
+    let authenticate = |index: usize| {
+        let mut chunk = wire::PayloadChunk {
+            manifest_hash: validated.manifest_hash(),
+            index: u32::try_from(index).expect("chunk index"),
+            bytes: invalid_chunks[index].clone(),
+            sender: 0,
+            signature: Vec::new(),
+        };
+        chunk.signature = Signature::new(
+            keys[0].private_key(),
+            &chunk
+                .signature_payload(&validated)
+                .expect("chunk signature payload")
+                .signature_preimage(),
+        )
+        .payload()
+        .to_vec();
+        authenticate_payload_chunk(&validated, chunk, &sender)
+            .expect("authenticate chunk committed by invalid manifest")
+    };
+    let data_shards = usize::from(service.context.da_layout.data_shards);
+    let stripe_width = usize::from(
+        service.context.da_layout.data_shards + service.context.da_layout.parity_shards,
+    );
+    let mut data_indices = (0..invalid_chunks.len())
+        .filter(|index| index % stripe_width < data_shards)
+        .collect::<Vec<_>>();
+    let final_data_index = data_indices
+        .pop()
+        .expect("fixture has one final data shard");
+    for index in data_indices {
+        assert_eq!(
+            service
+                .accept_authenticated_chunk(&task, authenticate(index))
+                .expect("buffer committed invalid data shard"),
+            AuthenticatedChunkDisposition::Accepted
+        );
+    }
     assert_eq!(
         service
-            .accept_authenticated_chunk(&task, authenticated)
+            .accept_authenticated_chunk(&task, authenticate(final_data_index))
             .expect("invalid remote reconstruction is not a local service failure"),
         AuthenticatedChunkDisposition::Rejected
     );
+    let (reconstruction_attempts, payload_allocation_attempts) = {
+        let session = service.fetches[&task.id()]
+            .chunks
+            .as_ref()
+            .expect("terminal manifest session remains indexed");
+        assert!(session.is_terminally_failed());
+        (
+            session.reconstruction_attempts(),
+            session.payload_allocation_attempts(),
+        )
+    };
+    assert_eq!(payload_allocation_attempts, 1);
     assert_eq!(service.fetches[&task.id()].task, task);
     assert_eq!(
         service.fetch_by_manifest[&HashOf::new(&invalid_manifest)],
@@ -960,10 +1143,163 @@ fn invalid_reconstruction_waits_for_reducer_authorized_retirement() {
     assert!(!service.output_guard.restart_required());
     service
         .complete_body_reconstruction_fetch(&task)
-        .expect("the reducer retires the exact rejected reconstruction owner");
+        .expect("the reducer acknowledges the exact rejected reconstruction owner");
+    service
+        .enqueue_body_fetch(task.clone())
+        .expect("the reducer retry seam preserves the terminal tombstone");
+    assert_eq!(
+        request_admissions.load(Ordering::Relaxed),
+        request_admissions_before_poison,
+        "a terminal manifest must not emit another certified body request"
+    );
+    let later_unique_index = data_shards;
+    assert_eq!(
+        service
+            .accept_authenticated_chunk(&task, authenticate(later_unique_index))
+            .expect("a later committed shard is a remote rejection"),
+        AuthenticatedChunkDisposition::Rejected
+    );
+    let terminal = service.fetches[&task.id()]
+        .chunks
+        .as_ref()
+        .expect("terminal manifest session remains indexed");
+    assert!(terminal.is_terminally_failed());
+    assert_eq!(terminal.reconstruction_attempts(), reconstruction_attempts);
+    assert_eq!(
+        terminal.payload_allocation_attempts(),
+        payload_allocation_attempts
+    );
+    assert!(service.local_completions.is_empty());
+    assert!(!service.output_guard.restart_required());
+    service
+        .cancel_body_fetch(&task)
+        .expect("ordinary cancellation retires the terminal tombstone");
     assert!(service.fetches.is_empty());
     assert!(service.fetch_by_manifest.is_empty());
     assert!(!service.output_guard.restart_required());
+}
+#[test]
+fn noncanonical_parity_manifest_is_terminal_before_local_completion() {
+    let (mut service, keys) = fixture();
+    allow_fixture_block_payload(&mut service.context);
+    service.context.da_layout.data_shards = 3;
+    service.context.da_layout.parity_shards = 2;
+    service
+        .context
+        .validate()
+        .expect("multi-shard fixture context");
+    let (body, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
+    let (canonical_manifest, mut chunks) = payload.into_parts();
+    let data_shards = usize::from(service.context.da_layout.data_shards);
+    let stripe_width = usize::from(
+        service.context.da_layout.data_shards + service.context.da_layout.parity_shards,
+    );
+    chunks[data_shards][0] ^= 1;
+    let noncanonical_manifest = wire::PayloadManifest::derive(
+        &service.context,
+        proposal.round,
+        proposal.subject,
+        u64::try_from(body.len()).expect("body length"),
+        &chunks,
+    )
+    .expect("derive structurally valid noncanonical parity manifest");
+    assert_ne!(noncanonical_manifest, canonical_manifest);
+
+    let tag = EventTag::new(
+        service.context.height,
+        proposal.round.view,
+        Generation::new(service.context.height),
+    );
+    let task = BodyFetchTask::ordinary_for_test(62, tag, noncanonical_manifest.clone());
+    service
+        .enqueue_body_fetch(task.clone())
+        .expect("open noncanonical remote reconstruction session");
+    let validated = service.fetches[&task.id()]
+        .chunks
+        .as_ref()
+        .expect("manifest-backed noncanonical fetch session")
+        .validated_manifest()
+        .clone();
+    let sender = service.context.roster[0].validator.clone();
+    let authenticate = |index: usize| {
+        let mut chunk = wire::PayloadChunk {
+            manifest_hash: validated.manifest_hash(),
+            index: u32::try_from(index).expect("chunk index"),
+            bytes: chunks[index].clone(),
+            sender: 0,
+            signature: Vec::new(),
+        };
+        chunk.signature = Signature::new(
+            keys[0].private_key(),
+            &chunk
+                .signature_payload(&validated)
+                .expect("chunk signature payload")
+                .signature_preimage(),
+        )
+        .payload()
+        .to_vec();
+        authenticate_payload_chunk(&validated, chunk, &sender).expect("authenticate chunk")
+    };
+    let mut data_indices = (0..chunks.len())
+        .filter(|index| index % stripe_width < data_shards)
+        .collect::<Vec<_>>();
+    let final_data_index = data_indices
+        .pop()
+        .expect("fixture has one final data shard");
+    for index in data_indices {
+        assert_eq!(
+            service
+                .accept_authenticated_chunk(&task, authenticate(index))
+                .expect("buffer canonical data shard"),
+            AuthenticatedChunkDisposition::Accepted
+        );
+    }
+    assert_eq!(
+        service
+            .accept_authenticated_chunk(&task, authenticate(final_data_index))
+            .expect("reject noncanonical parity commitment"),
+        AuthenticatedChunkDisposition::Rejected
+    );
+    let (reconstruction_attempts, payload_allocation_attempts) = {
+        let session = service.fetches[&task.id()]
+            .chunks
+            .as_ref()
+            .expect("terminal parity session remains indexed");
+        assert!(session.is_terminally_failed());
+        (
+            session.reconstruction_attempts(),
+            session.payload_allocation_attempts(),
+        )
+    };
+    assert_eq!(payload_allocation_attempts, 1);
+    assert_eq!(
+        service.fetch_by_manifest[&HashOf::new(&noncanonical_manifest)],
+        task.id()
+    );
+    assert!(service.local_completions.is_empty());
+    assert!(!service.output_guard.restart_required());
+
+    assert_eq!(
+        service
+            .accept_authenticated_chunk(&task, authenticate(data_shards))
+            .expect("later unique parity shard remains a remote rejection"),
+        AuthenticatedChunkDisposition::Rejected
+    );
+    let terminal = service.fetches[&task.id()]
+        .chunks
+        .as_ref()
+        .expect("terminal parity session remains indexed");
+    assert_eq!(terminal.reconstruction_attempts(), reconstruction_attempts);
+    assert_eq!(
+        terminal.payload_allocation_attempts(),
+        payload_allocation_attempts
+    );
+    assert!(service.local_completions.is_empty());
+    service
+        .cancel_body_fetch(&task)
+        .expect("ordinary cancellation retires the terminal parity session");
+    assert!(service.fetches.is_empty());
+    assert!(service.fetch_by_manifest.is_empty());
 }
 #[test]
 fn cancelling_unowned_fetch_fails_closed() {
@@ -985,7 +1321,6 @@ fn cancelling_unowned_fetch_fails_closed() {
 #[test]
 fn cancelling_fetch_with_overlapping_owners_fails_closed() {
     let (mut service, keys) = fixture();
-    let _chunk_root = install_temporary_chunk_root(&mut service);
     allow_fixture_block_payload(&mut service.context);
     let (canonical_wire, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
     let tag = EventTag::new(
@@ -1021,7 +1356,6 @@ fn cancelling_fetch_with_overlapping_owners_fails_closed() {
 #[test]
 fn service_monotonically_upgrades_body_fetch_authority_in_both_orders() {
     let (mut service, keys) = fixture();
-    let _chunk_root = install_temporary_chunk_root(&mut service);
     allow_fixture_block_payload(&mut service.context);
     let (_, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
     let tag = EventTag::new(
@@ -1054,7 +1388,6 @@ fn service_monotonically_upgrades_body_fetch_authority_in_both_orders() {
         Some(&hybrid.id())
     );
     let (mut service, keys) = fixture();
-    let _chunk_root = install_temporary_chunk_root(&mut service);
     allow_fixture_block_payload(&mut service.context);
     let (_, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
     let tag = EventTag::new(
@@ -1091,7 +1424,6 @@ fn service_monotonically_upgrades_body_fetch_authority_in_both_orders() {
 #[test]
 fn certified_completion_retires_exact_live_or_reconstructed_owner() {
     let (mut service, keys) = fixture();
-    let _chunk_root = install_temporary_chunk_root(&mut service);
     allow_fixture_block_payload(&mut service.context);
     let (body, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
     let tag = EventTag::new(
@@ -1196,7 +1528,6 @@ fn certified_completion_retires_exact_live_or_reconstructed_owner() {
 #[test]
 fn certified_completion_preflight_rejects_mismatched_task_without_owner_mutation() {
     let (mut service, keys) = fixture();
-    let _chunk_root = install_temporary_chunk_root(&mut service);
     allow_fixture_block_payload(&mut service.context);
     let (_, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
     let tag = EventTag::new(
@@ -1254,7 +1585,6 @@ fn certified_completion_preflight_rejects_mismatched_task_without_owner_mutation
 #[test]
 fn cancellation_rejects_a_different_task_without_consuming_exact_owner() {
     let (mut service, keys) = fixture();
-    let _chunk_root = install_temporary_chunk_root(&mut service);
     allow_fixture_block_payload(&mut service.context);
     let (_, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
     let tag = EventTag::new(
@@ -1291,7 +1621,6 @@ fn cancellation_rejects_a_different_task_without_consuming_exact_owner() {
 #[test]
 fn corrupt_manifest_index_is_preserved_and_fails_closed_before_cancellation() {
     let (mut service, keys) = fixture();
-    let _chunk_root = install_temporary_chunk_root(&mut service);
     allow_fixture_block_payload(&mut service.context);
     let (_, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
     let tag = EventTag::new(
@@ -1349,7 +1678,6 @@ fn duplicate_queued_fetch_owners_fail_closed_without_consumption() {
 #[test]
 fn missing_orphan_and_wrong_manifest_indices_fail_closed_without_consumption() {
     let (mut service, keys) = fixture();
-    let _chunk_root = install_temporary_chunk_root(&mut service);
     allow_fixture_block_payload(&mut service.context);
     let (_, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
     let tag = EventTag::new(
@@ -1395,7 +1723,6 @@ fn missing_orphan_and_wrong_manifest_indices_fail_closed_without_consumption() {
     assert!(service.fetches.is_empty());
     assert!(service.output_guard.restart_required());
     let (mut service, keys) = fixture();
-    let _chunk_root = install_temporary_chunk_root(&mut service);
     allow_fixture_block_payload(&mut service.context);
     let (_, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
     let tag = EventTag::new(

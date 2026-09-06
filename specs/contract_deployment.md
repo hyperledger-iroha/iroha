@@ -183,10 +183,22 @@ native transactions rather than by a separate Torii deployment limiter.
   strings) to enable admission gating. Torii exposes helpers under
   `/v1/gov/protected-namespaces` and the CLI mirrors them via
   `iroha_cli app gov protected set` / `iroha_cli app gov protected get`.
-- Every raw bytecode registration, manifest registration, activation,
-  deactivation, or bytecode removal requires `CanRegisterSmartContractCode`.
-  Protected namespaces additionally require `CanEnactGovernance`; an empty
-  `gov_protected_namespaces` list never makes lifecycle mutation permissionless.
+- `CanRegisterSmartContractCode` authorizes artifact upload, manifest
+  registration, and unreferenced bytecode removal. It does not authorize an
+  address lifecycle takeover. `ActivateContractInstance` and
+  `DeactivateContractInstance` require the current account owner and the exact
+  lifecycle `expected_revision`; raw activation cannot create an address.
+- Direct `CommitContractDeployment` creates a revisioned lifecycle owned by its
+  submitting account. It rejects every protected namespace, even when the
+  submitter holds governance permissions. Protected addresses are created only
+  by the certified Parliament deployment effect, which records the proposer as
+  provenance and assigns Parliament ownership.
+- Account owners may use revision-guarded `SetContractParliamentDelegation`,
+  `OfferContractOwnership`, `AcceptContractOwnership`, and
+  `CancelContractOwnershipOffer`. Acceptance is a separate transaction, clears
+  Parliament delegation, and advances the revision. Certified delegated
+  Parliament may activate or deactivate but cannot transfer ownership or alter
+  delegation.
 - Proposals created with `ProposeDeployContract` (or the Torii
   `/v1/gov/proposals/deploy-contract` endpoint) capture
   `(contract_address, code_hash, abi_hash, abi_version, manifest_provenance)` as
@@ -209,9 +221,11 @@ native transactions rather than by a separate Torii deployment limiter.
 - `ivm_contract_deploy` uses the same native plan in blocking and emit modes.
   Transactions 1 through N-1 each carry one chunk; the final registration
   transaction carries chunk N plus finalization. Manifest registration and
-  activation remain separate transactions. Emit mode names files
+  the atomic deployment commit remain separate transactions. Emit mode names
+  files
   `register-bytes-chunk-NNNN-of-NNNN`, `register-bytes-finalize`,
-  `register-manifest`, and `activate` in submission order. Its JSON reports
+  `register-manifest`, and `commit-deployment` in submission order. Its JSON
+  reports
   `register_bytes_tx_strategy = "native_chunks"`, chunk size/count,
   `register_bytes_stage_tx_hashes`, and the finalization hash in
   `register_bytes_tx_hash`. `--skip-register-bytes` omits the complete

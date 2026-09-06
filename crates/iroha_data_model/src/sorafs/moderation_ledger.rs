@@ -7,9 +7,11 @@
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{
     account::AccountId,
+    asset::AssetDefinitionId,
     events::data::sorafs::{SorafsModerationLedgerEvent, SorafsRepairLedgerEvent},
     sorafs::moderation::{SoraFsModerationBallotContextV1, SoraFsModerationVoteChoice},
 };
+use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use std::collections::BTreeSet;
@@ -24,6 +26,8 @@ pub const MODERATION_APPEAL_INTAKE_VERSION_V1: u16 = 1;
 pub const MODERATION_LEDGER_MAX_PANEL_SIZE_V1: u16 = 128;
 /// Hard upper bound for one appeal's PoP-eligible candidate pool.
 pub const MODERATION_LEDGER_MAX_CANDIDATE_POOL_SIZE_V1: u16 = 1_024;
+/// Hard upper bound for appeals awaiting a consensus-pinned sortition anchor.
+pub const MODERATION_LEDGER_MAX_PENDING_SORTITION_ANCHORS_V1: usize = 1_024;
 /// Hard upper bound for one appeal's deterministic failover waitlist.
 pub const MODERATION_LEDGER_MAX_WAITLIST_SIZE_V1: u16 = 128;
 /// Hard upper bound for conflict-of-interest exclusions on one appeal.
@@ -32,6 +36,14 @@ pub const MODERATION_LEDGER_MAX_EXCLUSIONS_V1: u16 = 256;
 pub const MODERATION_LEDGER_MAX_CHALLENGES_V1: u16 = 128;
 /// Hard upper bound for one ballot's complete lifetime.
 pub const MODERATION_LEDGER_MAX_TOTAL_WINDOW_MS_V1: u64 = 90 * 24 * 60 * 60 * 1_000;
+/// Exact first-release bond required for one public moderation challenge.
+pub const MODERATION_CHALLENGE_BOND_AMOUNT_V1: u64 = 150;
+/// Portion of an unsuccessful moderation challenge bond sent to the slash receiver.
+///
+/// Execution rounds this ratio toward zero at the voting asset's declared scale.
+pub const MODERATION_CHALLENGE_REJECTED_SLASH_BPS_V1: u16 = 2_500;
+/// Exact governance-resolution grace after public challenge submission closes.
+pub const MODERATION_CHALLENGE_RESOLUTION_GRACE_MS_V1: u64 = 24 * 60 * 60 * 1_000;
 /// Maximum reveal nonce length accepted by the authoritative ledger.
 pub const MODERATION_LEDGER_MAX_NONCE_BYTES_V1: usize = 64;
 /// Maximum case, round, policy, finance-version, or challenge identifier length.
@@ -70,8 +82,10 @@ pub const MODERATION_SORTITION_SCORE_DOMAIN_V1: &[u8] = b"sorafs.moderation.sort
 /// Domain separator for selected roster and waitlist commitments.
 pub const MODERATION_SORTITION_DIGEST_DOMAIN_V1: &[u8] = b"sorafs.moderation.sortition-record.v1";
 /// Governance-controlled limits and no-show penalties for authoritative ballots.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::moderation_ledger::ModerationLedgerPolicyV1")]
 pub struct ModerationLedgerPolicyV1 {
     /// Schema version; must equal [`MODERATION_LEDGER_POLICY_VERSION_V1`].
     pub version: u16,
@@ -83,6 +97,18 @@ pub struct ModerationLedgerPolicyV1 {
         norito(json = "crate::json_helpers::fixed_bytes::option")
     )]
     pub predecessor_policy_digest: Option<[u8; 32]>,
+    /// Consensus governance voting asset used for public challenge bonds.
+    pub challenge_voting_asset_id: AssetDefinitionId,
+    /// Exact public challenge bond required at admission.
+    pub challenge_bond_amount: Quantity,
+    /// Consensus governance account that escrows challenge bonds.
+    pub challenge_escrow_account: AccountId,
+    /// Consensus governance account that receives rejected-challenge slashes.
+    pub challenge_slash_receiver_account: AccountId,
+    /// Rejected-challenge slash in basis points.
+    pub challenge_rejected_slash_bps: u16,
+    /// Exact governance resolution grace after challenge submission closes.
+    pub challenge_resolution_grace_ms: u64,
     /// Largest panel governance permits for one case.
     pub max_panel_size: u16,
     /// Largest PoP-verified candidate pool retained for one appeal.
@@ -122,6 +148,12 @@ impl ModerationLedgerPolicyV1 {
             (_, Some(digest)) if digest != [0; 32] => {}
             _ => return Err(ModerationLedgerPolicyError::MissingPredecessor),
         }
+        if self.challenge_bond_amount != Quantity::from(MODERATION_CHALLENGE_BOND_AMOUNT_V1)
+            || self.challenge_rejected_slash_bps != MODERATION_CHALLENGE_REJECTED_SLASH_BPS_V1
+            || self.challenge_resolution_grace_ms != MODERATION_CHALLENGE_RESOLUTION_GRACE_MS_V1
+        {
+            return Err(ModerationLedgerPolicyError::InvalidChallengeEconomics);
+        }
         if !(1..=MODERATION_LEDGER_MAX_PANEL_SIZE_V1).contains(&self.max_panel_size) {
             return Err(ModerationLedgerPolicyError::InvalidPanelSize {
                 found: self.max_panel_size,
@@ -144,7 +176,10 @@ impl ModerationLedgerPolicyV1 {
                 found: self.max_exclusions_per_case,
             });
         }
-        if !(1..=MODERATION_LEDGER_MAX_TOTAL_WINDOW_MS_V1).contains(&self.max_total_window_ms) {
+        if !(MODERATION_CHALLENGE_RESOLUTION_GRACE_MS_V1 + 1
+            ..=MODERATION_LEDGER_MAX_TOTAL_WINDOW_MS_V1)
+            .contains(&self.max_total_window_ms)
+        {
             return Err(ModerationLedgerPolicyError::InvalidTotalWindow {
                 found: self.max_total_window_ms,
             });
@@ -193,6 +228,9 @@ pub enum ModerationLedgerPolicyError {
     /// A later revision lacks a non-zero predecessor.
     #[error("moderation ledger policy revision after one requires a non-zero predecessor")]
     MissingPredecessor,
+    /// Challenge economics differ from the first-release consensus policy.
+    #[error("moderation challenge economics do not match the first-release consensus policy")]
+    InvalidChallengeEconomics,
     /// The configured panel bound is outside hard limits.
     #[error("invalid moderation ledger panel-size limit {found}")]
     InvalidPanelSize {
@@ -243,6 +281,8 @@ pub enum ModerationLedgerPolicyError {
 /// Activated moderation policy with consensus provenance.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::moderation_ledger::ModerationLedgerPolicyRecord")]
 pub struct ModerationLedgerPolicyRecord {
     /// Policy body.
     pub policy: ModerationLedgerPolicyV1,
@@ -257,6 +297,8 @@ pub struct ModerationLedgerPolicyRecord {
 /// Immutable active `PoP` registry anchors captured when an appeal is admitted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::moderation_ledger::ModerationPoPRegistrySnapshotV1")]
 pub struct ModerationPoPRegistrySnapshotV1 {
     /// Issuer policy digest used to admit both active publications.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -336,6 +378,8 @@ pub enum ModerationPoPRegistrySnapshotError {
 /// Authoritative, pre-sortition appeal intake submitted by the appellant.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::moderation_ledger::ModerationAppealIntakeV1")]
 pub struct ModerationAppealIntakeV1 {
     /// Schema version; must equal [`MODERATION_APPEAL_INTAKE_VERSION_V1`].
     pub version: u16,
@@ -377,8 +421,10 @@ pub struct ModerationAppealIntakeV1 {
     pub acceptance_deadline_unix_ms: u64,
     /// Last timestamp at which commitments are accepted.
     pub commit_deadline_unix_ms: u64,
-    /// Last timestamp in the challenge buffer.
-    pub challenge_deadline_unix_ms: u64,
+    /// Last timestamp at which a public challenge may be submitted.
+    pub challenge_submission_deadline_unix_ms: u64,
+    /// Last timestamp at which governance may resolve a submitted challenge.
+    pub challenge_resolution_deadline_unix_ms: u64,
     /// Last timestamp at which reveals are accepted.
     pub reveal_deadline_unix_ms: u64,
     /// Active moderation policy digest expected by the appellant.
@@ -463,8 +509,14 @@ impl ModerationAppealIntakeV1 {
         }
         if !(self.registration_deadline_unix_ms < self.acceptance_deadline_unix_ms
             && self.acceptance_deadline_unix_ms < self.commit_deadline_unix_ms
-            && self.commit_deadline_unix_ms < self.challenge_deadline_unix_ms
-            && self.challenge_deadline_unix_ms < self.reveal_deadline_unix_ms)
+            && self.commit_deadline_unix_ms < self.challenge_submission_deadline_unix_ms
+            && self.challenge_submission_deadline_unix_ms
+                < self.challenge_resolution_deadline_unix_ms
+            && self.challenge_resolution_deadline_unix_ms < self.reveal_deadline_unix_ms)
+            || self
+                .challenge_resolution_deadline_unix_ms
+                .checked_sub(self.challenge_submission_deadline_unix_ms)
+                != Some(MODERATION_CHALLENGE_RESOLUTION_GRACE_MS_V1)
         {
             return Err(ModerationAppealIntakeError::InvalidDeadlines);
         }
@@ -596,9 +648,9 @@ pub enum ModerationAppealIntakeError {
     /// Appellant could otherwise enter their own panel.
     #[error("moderation appeal exclusions must contain the appellant")]
     AppellantNotExcluded,
-    /// Lifecycle deadlines are not strictly ordered.
+    /// Lifecycle deadlines are not strictly ordered or do not carry the exact resolution grace.
     #[error(
-        "moderation appeal deadlines must satisfy registration < acceptance < commit < challenge < reveal"
+        "moderation appeal deadlines must satisfy registration < acceptance < commit < challenge submission < challenge resolution < reveal with the exact V1 resolution grace"
     )]
     InvalidDeadlines,
 }
@@ -609,6 +661,8 @@ pub enum ModerationAppealIntakeError {
     feature = "json",
     norito(tag = "class", content = "value", rename_all = "snake_case")
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::moderation_ledger::ModerationJurorEligibilityClassV1")]
 pub enum ModerationJurorEligibilityClassV1 {
     /// General juror pool.
     General,
@@ -624,6 +678,8 @@ pub enum ModerationJurorEligibilityClassV1 {
 /// Payload-free result of one verified private `PoP` membership proof.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::moderation_ledger::ModerationJurorEligibilityRecordV1")]
 pub struct ModerationJurorEligibilityRecordV1 {
     /// Appeal case identifier.
     pub case_id: String,
@@ -650,11 +706,13 @@ pub struct ModerationJurorEligibilityRecordV1 {
 /// Deterministically selected primary panel and failover queue.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::moderation_ledger::ModerationPanelSelectionV1")]
 pub struct ModerationPanelSelectionV1 {
-    /// Exact already-committed parent block fixed only after registration closes.
+    /// Exact consensus-pinned first post-registration block.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub randomness_anchor: [u8; 32],
-    /// Deterministic seed digest fixed by appeal, `PoP` snapshot, and parent block.
+    /// Deterministic seed digest fixed by appeal, `PoP` snapshot, and pinned block.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub seed_digest: [u8; 32],
     /// Primary jurors in canonical score order.
@@ -669,9 +727,25 @@ pub struct ModerationPanelSelectionV1 {
     /// Authorised moderation operator that closed registration.
     pub selected_by: AccountId,
 }
+/// Consensus-pinned first committed block after eligibility registration closes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::moderation_ledger::ModerationSortitionAnchorV1")]
+pub struct ModerationSortitionAnchorV1 {
+    /// One-based height of the block whose consensus hash seeds sortition.
+    pub block_height: u64,
+    /// Consensus hash of the exact anchor block.
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    pub block_hash: [u8; 32],
+    /// Consensus timestamp of the anchor block.
+    pub block_timestamp_unix_ms: u64,
+}
 /// One deterministic primary-juror no-show replacement.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::moderation_ledger::ModerationJurorReplacementV1")]
 pub struct ModerationJurorReplacementV1 {
     /// Primary juror who did not accept by the deadline.
     pub absent_juror: AccountId,
@@ -685,6 +759,8 @@ pub struct ModerationJurorReplacementV1 {
     feature = "json",
     norito(tag = "status", content = "value", rename_all = "snake_case")
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::moderation_ledger::ModerationAppealStatusV1")]
 pub enum ModerationAppealStatusV1 {
     /// Appeal admitted; private `PoP` eligibility proofs are being collected.
     RegisteringJurors,
@@ -702,6 +778,8 @@ pub enum ModerationAppealStatusV1 {
 /// Authoritative appeal intake, `PoP` snapshot, sortition, and activation record.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::moderation_ledger::ModerationAppealRecordV1")]
 pub struct ModerationAppealRecordV1 {
     /// Immutable appellant intake.
     pub intake: ModerationAppealIntakeV1,
@@ -723,6 +801,8 @@ pub struct ModerationAppealRecordV1 {
     pub submitted_at_unix_ms: u64,
     /// Canonically account-ordered `PoP`-eligible candidates.
     pub eligible_jurors: Vec<AccountId>,
+    /// First committed post-registration block, pinned by consensus maintenance.
+    pub sortition_anchor: Option<ModerationSortitionAnchorV1>,
     /// Selected primary panel and waitlist after registration closes.
     pub selection: Option<ModerationPanelSelectionV1>,
     /// Canonically account-ordered primary assignment acceptances.
@@ -928,6 +1008,8 @@ pub enum ModerationSortitionError {
 /// Immutable input used to open one authoritative moderation ballot.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::moderation_ledger::ModerationCaseSpecV1")]
 pub struct ModerationCaseSpecV1 {
     /// Schema version; must equal [`MODERATION_LEDGER_CASE_VERSION_V1`].
     pub version: u16,
@@ -941,8 +1023,10 @@ pub struct ModerationCaseSpecV1 {
     pub quorum: u16,
     /// Last block timestamp at which commitments are accepted.
     pub commit_deadline_unix_ms: u64,
-    /// Last block timestamp in the challenge buffer.
-    pub challenge_deadline_unix_ms: u64,
+    /// Last block timestamp at which a public challenge may be submitted.
+    pub challenge_submission_deadline_unix_ms: u64,
+    /// Last block timestamp at which governance may resolve a challenge.
+    pub challenge_resolution_deadline_unix_ms: u64,
     /// Last block timestamp at which reveals are accepted.
     pub reveal_deadline_unix_ms: u64,
     /// Active policy digest the opener expects.
@@ -1009,8 +1093,14 @@ impl ModerationCaseSpecV1 {
         {
             return Err(ModerationCaseSpecError::RosterHashMismatch);
         }
-        if self.commit_deadline_unix_ms >= self.challenge_deadline_unix_ms
-            || self.challenge_deadline_unix_ms >= self.reveal_deadline_unix_ms
+        if self.commit_deadline_unix_ms >= self.challenge_submission_deadline_unix_ms
+            || self.challenge_submission_deadline_unix_ms
+                >= self.challenge_resolution_deadline_unix_ms
+            || self.challenge_resolution_deadline_unix_ms >= self.reveal_deadline_unix_ms
+            || self
+                .challenge_resolution_deadline_unix_ms
+                .checked_sub(self.challenge_submission_deadline_unix_ms)
+                != Some(MODERATION_CHALLENGE_RESOLUTION_GRACE_MS_V1)
         {
             return Err(ModerationCaseSpecError::InvalidDeadlines);
         }
@@ -1077,8 +1167,10 @@ pub enum ModerationCaseSpecError {
     /// Context roster hash does not commit to the ordered canonical roster and quorum.
     #[error("moderation case panel roster hash mismatch")]
     RosterHashMismatch,
-    /// Deadlines are not strictly commit, challenge, reveal ordered.
-    #[error("moderation case deadlines must satisfy commit < challenge < reveal")]
+    /// Deadlines are not strictly ordered or do not carry the exact resolution grace.
+    #[error(
+        "moderation case deadlines must satisfy commit < challenge submission < challenge resolution < reveal with the exact V1 resolution grace"
+    )]
     InvalidDeadlines,
     /// Expected policy digest is zero.
     #[error("moderation case policy digest must be non-zero")]
@@ -1108,6 +1200,8 @@ pub fn sorafs_moderation_panel_roster_hash_v1(jurors: &[AccountId], quorum: u16)
     feature = "json",
     norito(tag = "status", content = "value", rename_all = "snake_case")
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::moderation_ledger::ModerationCaseStatusV1")]
 pub enum ModerationCaseStatusV1 {
     /// Commit, challenge, or reveal processing remains possible by block time.
     Open,
@@ -1119,6 +1213,8 @@ pub enum ModerationCaseStatusV1 {
 /// Authoritative case header and constant-time lifecycle counters.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::moderation_ledger::ModerationCaseRecordV1")]
 pub struct ModerationCaseRecordV1 {
     /// Immutable case specification.
     pub spec: ModerationCaseSpecV1,
@@ -1142,12 +1238,14 @@ pub struct ModerationCaseRecordV1 {
     pub pending_challenge_count: u32,
     /// Number of accepted challenges.
     pub accepted_challenge_count: u32,
-    /// Number of challenges that expired unresolved and forced fail-safe closure.
+    /// Number of challenges that expired unresolved and failed open after bond refund.
     pub expired_challenge_count: u32,
 }
 /// Immutable accepted juror commitment and ledger provenance.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::moderation_ledger::ModerationCommitRecordV1")]
 pub struct ModerationCommitRecordV1 {
     /// Case identifier.
     pub case_id: String,
@@ -1164,6 +1262,8 @@ pub struct ModerationCommitRecordV1 {
 /// Immutable accepted juror reveal and ledger provenance.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::moderation_ledger::ModerationRevealRecordV1")]
 pub struct ModerationRevealRecordV1 {
     /// Case identifier.
     pub case_id: String,
@@ -1184,6 +1284,8 @@ pub struct ModerationRevealRecordV1 {
     feature = "json",
     norito(tag = "kind", content = "value", rename_all = "snake_case")
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::moderation_ledger::ModerationChallengeKindV1")]
 pub enum ModerationChallengeKindV1 {
     /// Announced roster or roster digest is disputed.
     RosterMismatch,
@@ -1215,20 +1317,45 @@ impl ModerationChallengeKindV1 {
     feature = "json",
     norito(tag = "decision", content = "value", rename_all = "snake_case")
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::moderation_ledger::ModerationChallengeDecisionV1")]
 pub enum ModerationChallengeDecisionV1 {
     /// Challenge was rejected and normal ballot processing may resume.
     Rejected,
     /// Challenge was accepted and the ballot must close as challenged.
     Accepted,
-    /// Challenge was not resolved before the reveal window closed.
+    /// Challenge was not resolved before its resolution grace elapsed.
     ///
-    /// Finalization derives this state and closes fail-safe without penalizing
-    /// jurors who were prevented from revealing.
+    /// Anyone may derive this state, and finalization sweeps any remaining
+    /// pending records. The bond is refunded and the ballot continues.
     Expired,
+}
+/// Custody and settlement accounting for one public moderation challenge bond.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::moderation_ledger::ModerationChallengeBondV1")]
+pub struct ModerationChallengeBondV1 {
+    /// Governance voting asset locked for the challenge.
+    pub asset_definition_id: AssetDefinitionId,
+    /// Exact challenge bond locked at admission.
+    pub amount: Quantity,
+    /// Governance custody account holding the bond.
+    pub escrow_account: AccountId,
+    /// Governance account receiving the rejected-challenge slash.
+    pub slash_receiver_account: AccountId,
+    /// Amount returned to the challenger after settlement.
+    pub refunded_amount: Quantity,
+    /// Amount retained by the slash receiver after settlement.
+    pub slashed_amount: Quantity,
+    /// Block timestamp at which the bond was settled.
+    pub settled_at_unix_ms: Option<u64>,
 }
 /// Durable payload-free challenge and optional resolution.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::moderation_ledger::ModerationChallengeRecordV1")]
 pub struct ModerationChallengeRecordV1 {
     /// Case identifier.
     pub case_id: String,
@@ -1249,6 +1376,8 @@ pub struct ModerationChallengeRecordV1 {
     pub reason: String,
     /// Block timestamp at admission.
     pub raised_at_unix_ms: u64,
+    /// Exact governance-configured custody snapshot and settlement amounts.
+    pub bond: ModerationChallengeBondV1,
     /// Governance decision, absent while pending.
     pub decision: Option<ModerationChallengeDecisionV1>,
     /// Authority that resolved the challenge.
@@ -1259,6 +1388,8 @@ pub struct ModerationChallengeRecordV1 {
 /// Vote counts in a terminal authoritative outcome.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::moderation_ledger::ModerationVoteCountsV1")]
 pub struct ModerationVoteCountsV1 {
     /// `uphold` reveals.
     pub uphold: u32,
@@ -1309,6 +1440,8 @@ impl ModerationVoteCountsV1 {
     feature = "json",
     norito(tag = "kind", content = "value", rename_all = "snake_case")
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::moderation_ledger::ModerationOutcomeKindV1")]
 pub enum ModerationOutcomeKindV1 {
     /// Quorum was met and one choice had a unique plurality.
     Decided(SoraFsModerationVoteChoice),
@@ -1322,6 +1455,8 @@ pub enum ModerationOutcomeKindV1 {
 /// Immutable terminal outcome for one case and round.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::moderation_ledger::ModerationOutcomeRecordV1")]
 pub struct ModerationOutcomeRecordV1 {
     /// Case identifier.
     pub case_id: String,
@@ -1349,6 +1484,8 @@ pub struct ModerationOutcomeRecordV1 {
     feature = "json",
     norito(tag = "kind", content = "value", rename_all = "snake_case")
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::moderation_ledger::ModerationNoShowKindV1")]
 pub enum ModerationNoShowKindV1 {
     /// Juror submitted no accepted commitment.
     MissingCommit,
@@ -1358,6 +1495,8 @@ pub enum ModerationNoShowKindV1 {
 /// Durable no-show penalty record derived atomically during finalization.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::moderation_ledger::ModerationNoShowRecordV1")]
 pub struct ModerationNoShowRecordV1 {
     /// Case identifier.
     pub case_id: String,
@@ -1378,6 +1517,8 @@ pub struct ModerationNoShowRecordV1 {
 /// Constant-time authoritative moderation-ledger counters.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::moderation_ledger::ModerationLedgerStatusV1")]
 pub struct ModerationLedgerStatusV1 {
     /// Authoritative appeal intakes admitted.
     pub appeal_intakes: u64,
@@ -1411,6 +1552,8 @@ pub struct ModerationLedgerStatusV1 {
 /// Finalized block anchor for one coherent moderation query result.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::moderation_ledger::ModerationFinalizedCursorV1")]
 pub struct ModerationFinalizedCursorV1 {
     /// Finalized block height observed by the immutable state view.
     pub height: u64,
@@ -1421,6 +1564,8 @@ pub struct ModerationFinalizedCursorV1 {
 /// Exclusive cursor for one committed moderation event.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::moderation_ledger::ModerationFinalizedEventCursorV1")]
 pub struct ModerationFinalizedEventCursorV1 {
     /// Monotonic moderation-event sequence beginning at one.
     pub sequence: u64,
@@ -1435,6 +1580,8 @@ pub struct ModerationFinalizedEventCursorV1 {
 /// Typed moderation event with an unambiguous finalized-chain cursor.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::moderation_ledger::ModerationFinalizedEventV1")]
 pub struct ModerationFinalizedEventV1 {
     /// Monotonic moderation-event sequence beginning at one.
     pub sequence: u64,
@@ -1463,6 +1610,8 @@ impl ModerationFinalizedEventV1 {
 /// Cursor-bounded page of typed committed moderation events.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::moderation_ledger::ModerationFinalizedEventPageV1")]
 pub struct ModerationFinalizedEventPageV1 {
     /// Finalized state anchor shared by every event in the page.
     pub finalized_cursor: ModerationFinalizedCursorV1,
@@ -1476,6 +1625,8 @@ pub struct ModerationFinalizedEventPageV1 {
 /// One appeal and every payload-free eligibility record from one finalized view.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::moderation_ledger::ModerationFinalizedAppealViewV1")]
 pub struct ModerationFinalizedAppealViewV1 {
     /// Authoritative appeal, sortition, and activation record.
     pub appeal: ModerationAppealRecordV1,
@@ -1485,6 +1636,8 @@ pub struct ModerationFinalizedAppealViewV1 {
 /// One case and every authoritative ballot subrecord from one finalized view.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::moderation_ledger::ModerationFinalizedCaseViewV1")]
 pub struct ModerationFinalizedCaseViewV1 {
     /// Authoritative case header.
     pub case: ModerationCaseRecordV1,
@@ -1502,6 +1655,8 @@ pub struct ModerationFinalizedCaseViewV1 {
 /// Complete bounded moderation projection read from one finalized state view.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::moderation_ledger::ModerationFinalizedLedgerSnapshotV1")]
 pub struct ModerationFinalizedLedgerSnapshotV1 {
     /// Schema version; must equal [`MODERATION_FINALIZED_SNAPSHOT_VERSION_V1`].
     pub version: u16,
@@ -1650,6 +1805,8 @@ pub fn sorafs_repair_action_digest_v1<T: norito::core::NoritoSerialize>(
 /// Consensus-owned repair worker lease.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::moderation_ledger::RepairLedgerLeaseV1")]
 pub struct RepairLedgerLeaseV1 {
     /// Canonical account that exclusively owns the lease.
     pub owner: AccountId,
@@ -1665,6 +1822,8 @@ pub struct RepairLedgerLeaseV1 {
 /// Successful repair outcome payload.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::moderation_ledger::RepairLedgerCompletedV1")]
 pub struct RepairLedgerCompletedV1 {
     /// Digest of the completion evidence.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -1673,6 +1832,8 @@ pub struct RepairLedgerCompletedV1 {
 /// Unsuccessful repair outcome payload without slashing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::moderation_ledger::RepairLedgerFailedV1")]
 pub struct RepairLedgerFailedV1 {
     /// Digest of the payload-free failure reason or external evidence.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -1681,6 +1842,8 @@ pub struct RepairLedgerFailedV1 {
 /// Escalated repair outcome payload.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::moderation_ledger::RepairLedgerEscalatedV1")]
 pub struct RepairLedgerEscalatedV1 {
     /// Digest of the exact canonical slash proposal.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -1693,6 +1856,8 @@ pub struct RepairLedgerEscalatedV1 {
     feature = "json",
     norito(tag = "kind", content = "value", rename_all = "snake_case")
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::moderation_ledger::RepairLedgerTerminalKindV1")]
 pub enum RepairLedgerTerminalKindV1 {
     /// Repair completed and the external verification evidence is committed by digest.
     Completed(RepairLedgerCompletedV1),
@@ -1704,6 +1869,8 @@ pub enum RepairLedgerTerminalKindV1 {
 /// Provenance for the single terminal outcome of a repair task.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::moderation_ledger::RepairLedgerTerminalOutcomeV1")]
 pub struct RepairLedgerTerminalOutcomeV1 {
     /// Terminal result.
     pub kind: RepairLedgerTerminalKindV1,
@@ -1717,6 +1884,8 @@ pub struct RepairLedgerTerminalOutcomeV1 {
 /// Idempotent repair action accepted by consensus.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::moderation_ledger::RepairLedgerActionReceiptV1")]
 pub struct RepairLedgerActionReceiptV1 {
     /// Task-scoped idempotency key digest.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -1730,6 +1899,8 @@ pub struct RepairLedgerActionReceiptV1 {
 /// Slash proposal committed atomically with an escalated terminal outcome.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::moderation_ledger::RepairLedgerSlashRecordV1")]
 pub struct RepairLedgerSlashRecordV1 {
     /// Exact canonical `sorafs_manifest::repair::RepairSlashProposalV1` bytes.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
@@ -1745,6 +1916,8 @@ pub struct RepairLedgerSlashRecordV1 {
 /// Provider appeal committed against one escalated repair slash proposal.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::moderation_ledger::RepairLedgerAppealRecordV1")]
 pub struct RepairLedgerAppealRecordV1 {
     /// Deterministic appeal identity.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -1790,6 +1963,8 @@ pub fn sorafs_repair_appeal_id_v1(
 /// Chain-authoritative repair task, lease, terminal result, slash, and appeal.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::moderation_ledger::RepairLedgerTaskV1")]
 pub struct RepairLedgerTaskV1 {
     /// Schema version; must equal [`REPAIR_LEDGER_TASK_VERSION_V1`].
     pub version: u16,
@@ -1835,6 +2010,8 @@ pub struct RepairLedgerTaskV1 {
 /// Constant-time counters for the authoritative repair ledger.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::moderation_ledger::RepairLedgerStatusV1")]
 pub struct RepairLedgerStatusV1 {
     /// Admitted repair tasks.
     pub tasks: u64,
@@ -1858,6 +2035,8 @@ pub struct RepairLedgerStatusV1 {
 /// Finalized block anchor for one coherent repair-ledger query result.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::moderation_ledger::RepairFinalizedCursorV1")]
 pub struct RepairFinalizedCursorV1 {
     /// Finalized block height observed by the immutable state view.
     pub height: u64,
@@ -1868,6 +2047,8 @@ pub struct RepairFinalizedCursorV1 {
 /// One authoritative repair task anchored to finalized chain state.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::moderation_ledger::RepairFinalizedTaskV1")]
 pub struct RepairFinalizedTaskV1 {
     /// Finalized state anchor at which the task was read.
     pub finalized_cursor: RepairFinalizedCursorV1,
@@ -1877,6 +2058,8 @@ pub struct RepairFinalizedTaskV1 {
 /// Authoritative repair counters anchored to finalized chain state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::moderation_ledger::RepairFinalizedStatusV1")]
 pub struct RepairFinalizedStatusV1 {
     /// Finalized state anchor at which the counters were read.
     pub finalized_cursor: RepairFinalizedCursorV1,
@@ -1886,6 +2069,8 @@ pub struct RepairFinalizedStatusV1 {
 /// Cursor-bounded authoritative repair-task page.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::moderation_ledger::RepairLedgerTaskPageV1")]
 pub struct RepairLedgerTaskPageV1 {
     /// Finalized state anchor shared by every task in the page.
     pub finalized_cursor: RepairFinalizedCursorV1,
@@ -1903,6 +2088,8 @@ pub struct RepairLedgerTaskPageV1 {
 /// Exclusive cursor for one committed repair-ledger event.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::moderation_ledger::RepairFinalizedEventCursorV1")]
 pub struct RepairFinalizedEventCursorV1 {
     /// Monotonic repair-event sequence beginning at one.
     pub sequence: u64,
@@ -1917,6 +2104,8 @@ pub struct RepairFinalizedEventCursorV1 {
 /// Typed repair-ledger event with an unambiguous finalized-chain cursor.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::moderation_ledger::RepairFinalizedEventV1")]
 pub struct RepairFinalizedEventV1 {
     /// Monotonic repair-event sequence beginning at one.
     pub sequence: u64,
@@ -1945,6 +2134,8 @@ impl RepairFinalizedEventV1 {
 /// Cursor-bounded page of typed committed repair-ledger events.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::moderation_ledger::RepairFinalizedEventPageV1")]
 pub struct RepairFinalizedEventPageV1 {
     /// Finalized state anchor shared by every event in the page.
     pub finalized_cursor: RepairFinalizedCursorV1,
@@ -1966,6 +2157,13 @@ mod tests {
         let keypair = KeyPair::try_from_seed(vec![seed.max(1); 32], Algorithm::Ed25519)
             .expect("nonzero deterministic Ed25519 seed");
         AccountId::new(keypair.public_key().clone())
+    }
+    fn challenge_voting_asset() -> AssetDefinitionId {
+        AssetDefinitionId::derive_from_components(
+            crate::domain::DomainId::parse_fully_qualified("sora.universal")
+                .expect("test governance domain"),
+            "xor".parse().expect("test governance asset name"),
+        )
     }
     fn encode_with_alternate_norito_layout<T: norito::NoritoSerialize>(value: &T) -> Vec<u8> {
         let alternate_flags =
@@ -2002,11 +2200,17 @@ mod tests {
             version: MODERATION_LEDGER_POLICY_VERSION_V1,
             revision: 1,
             predecessor_policy_digest: None,
+            challenge_voting_asset_id: challenge_voting_asset(),
+            challenge_bond_amount: Quantity::from(MODERATION_CHALLENGE_BOND_AMOUNT_V1),
+            challenge_escrow_account: account(90),
+            challenge_slash_receiver_account: account(91),
+            challenge_rejected_slash_bps: MODERATION_CHALLENGE_REJECTED_SLASH_BPS_V1,
+            challenge_resolution_grace_ms: MODERATION_CHALLENGE_RESOLUTION_GRACE_MS_V1,
             max_panel_size: 5,
             max_candidate_pool_size: 32,
             max_waitlist_size: 5,
             max_exclusions_per_case: 16,
-            max_total_window_ms: 60_000,
+            max_total_window_ms: 90_000_000,
             max_challenges_per_case: 4,
             missing_commit_penalty_points: 10,
             unrevealed_commit_penalty_points: 20,
@@ -2029,8 +2233,10 @@ mod tests {
             jurors,
             quorum: 2,
             commit_deadline_unix_ms: 2_000,
-            challenge_deadline_unix_ms: 3_000,
-            reveal_deadline_unix_ms: 4_000,
+            challenge_submission_deadline_unix_ms: 3_000,
+            challenge_resolution_deadline_unix_ms: 3_000
+                + MODERATION_CHALLENGE_RESOLUTION_GRACE_MS_V1,
+            reveal_deadline_unix_ms: 3_001 + MODERATION_CHALLENGE_RESOLUTION_GRACE_MS_V1,
             policy_digest: policy().digest().unwrap(),
         }
     }
@@ -2055,9 +2261,44 @@ mod tests {
             registration_deadline_unix_ms: 2_000,
             acceptance_deadline_unix_ms: 3_000,
             commit_deadline_unix_ms: 4_000,
-            challenge_deadline_unix_ms: 5_000,
-            reveal_deadline_unix_ms: 6_000,
+            challenge_submission_deadline_unix_ms: 5_000,
+            challenge_resolution_deadline_unix_ms: 5_000
+                + MODERATION_CHALLENGE_RESOLUTION_GRACE_MS_V1,
+            reveal_deadline_unix_ms: 5_001 + MODERATION_CHALLENGE_RESOLUTION_GRACE_MS_V1,
             policy_digest: policy().digest().unwrap(),
+        }
+    }
+    fn appeal_record(
+        sortition_anchor: Option<ModerationSortitionAnchorV1>,
+    ) -> ModerationAppealRecordV1 {
+        let intake = appeal_intake();
+        let intake_digest = intake.digest().expect("appeal intake digest");
+        let pop_snapshot = ModerationPoPRegistrySnapshotV1 {
+            issuer_policy_digest: [0x21; 32],
+            commitment_root: [0x22; 32],
+            commitment_tree_version: 1,
+            revocation_root: [0x23; 32],
+            revocation_list_version: 1,
+            registry_audit_sequence: 1,
+            registry_audit_head: [0x24; 32],
+            captured_at_unix_ms: 1_000,
+        };
+        ModerationAppealRecordV1 {
+            intake,
+            intake_digest,
+            policy: policy(),
+            pop_snapshot,
+            pop_snapshot_digest: pop_snapshot.digest().expect("PoP snapshot digest"),
+            status: ModerationAppealStatusV1::RegisteringJurors,
+            submitted_by: account(9),
+            submitted_at_unix_ms: 1_000,
+            eligible_jurors: Vec::new(),
+            sortition_anchor,
+            selection: None,
+            accepted_jurors: Vec::new(),
+            replacements: Vec::new(),
+            activated_at_unix_ms: None,
+            finalized_at_unix_ms: None,
         }
     }
     fn eligibility(seed: u8, snapshot_digest: [u8; 32]) -> ModerationJurorEligibilityRecordV1 {
@@ -2081,6 +2322,39 @@ mod tests {
         let case = case_spec();
         case.validate().unwrap();
         assert_canonical_norito_round_trip(&case);
+    }
+
+    #[test]
+    fn moderation_challenge_economics_are_consensus_fixed_and_digest_bound() {
+        let baseline = policy();
+        let baseline_digest = baseline.digest().expect("baseline policy digest");
+        let mut mutations = Vec::new();
+        let mut bond = baseline.clone();
+        bond.challenge_bond_amount = Quantity::from(MODERATION_CHALLENGE_BOND_AMOUNT_V1 + 1);
+        mutations.push(bond);
+        let mut slash = baseline.clone();
+        slash.challenge_rejected_slash_bps += 1;
+        mutations.push(slash);
+        let mut grace = baseline.clone();
+        grace.challenge_resolution_grace_ms += 1;
+        mutations.push(grace);
+        for mutation in mutations {
+            assert_eq!(
+                mutation.validate(),
+                Err(ModerationLedgerPolicyError::InvalidChallengeEconomics)
+            );
+            assert_ne!(
+                mutation.digest().expect("mutated policy digest"),
+                baseline_digest
+            );
+        }
+        let mut custody = baseline;
+        custody.challenge_escrow_account = account(92);
+        assert!(custody.validate().is_ok());
+        assert_ne!(
+            custody.digest().expect("custody-bound policy digest"),
+            baseline_digest
+        );
     }
     #[test]
     fn ledger_identity_digests_ignore_ambient_norito_layout() {
@@ -2265,7 +2539,13 @@ mod tests {
             Err(ModerationCaseSpecError::RosterHashMismatch)
         );
         candidate = case_spec();
-        candidate.challenge_deadline_unix_ms = candidate.commit_deadline_unix_ms;
+        candidate.challenge_submission_deadline_unix_ms = candidate.commit_deadline_unix_ms;
+        assert_eq!(
+            candidate.validate(),
+            Err(ModerationCaseSpecError::InvalidDeadlines)
+        );
+        candidate = case_spec();
+        candidate.challenge_resolution_deadline_unix_ms += 1;
         assert_eq!(
             candidate.validate(),
             Err(ModerationCaseSpecError::InvalidDeadlines)
@@ -2378,6 +2658,78 @@ mod tests {
         );
     }
     #[test]
+    fn appeal_sortition_anchor_schema_roundtrips_and_rejects_pre_cut_layout() {
+        #[derive(norito::codec::Encode)]
+        struct PreCutModerationAppealRecordV1 {
+            intake: ModerationAppealIntakeV1,
+            intake_digest: [u8; 32],
+            policy: ModerationLedgerPolicyV1,
+            pop_snapshot: ModerationPoPRegistrySnapshotV1,
+            pop_snapshot_digest: [u8; 32],
+            status: ModerationAppealStatusV1,
+            submitted_by: AccountId,
+            submitted_at_unix_ms: u64,
+            eligible_jurors: Vec<AccountId>,
+            selection: Option<ModerationPanelSelectionV1>,
+            accepted_jurors: Vec<AccountId>,
+            replacements: Vec<ModerationJurorReplacementV1>,
+            activated_at_unix_ms: Option<u64>,
+            finalized_at_unix_ms: Option<u64>,
+        }
+
+        let without_anchor = appeal_record(None);
+        let with_anchor = appeal_record(Some(ModerationSortitionAnchorV1 {
+            block_height: 7,
+            block_hash: [0x71; 32],
+            block_timestamp_unix_ms: 2_001,
+        }));
+        assert_canonical_norito_round_trip(&without_anchor);
+        assert_canonical_norito_round_trip(&with_anchor);
+
+        let pre_cut = PreCutModerationAppealRecordV1 {
+            intake: without_anchor.intake.clone(),
+            intake_digest: without_anchor.intake_digest,
+            policy: without_anchor.policy.clone(),
+            pop_snapshot: without_anchor.pop_snapshot,
+            pop_snapshot_digest: without_anchor.pop_snapshot_digest,
+            status: without_anchor.status,
+            submitted_by: without_anchor.submitted_by.clone(),
+            submitted_at_unix_ms: without_anchor.submitted_at_unix_ms,
+            eligible_jurors: without_anchor.eligible_jurors.clone(),
+            selection: without_anchor.selection.clone(),
+            accepted_jurors: without_anchor.accepted_jurors.clone(),
+            replacements: without_anchor.replacements.clone(),
+            activated_at_unix_ms: without_anchor.activated_at_unix_ms,
+            finalized_at_unix_ms: without_anchor.finalized_at_unix_ms,
+        };
+        let pre_cut_bytes =
+            norito::encode_canonical(&pre_cut).expect("encode pre-cut appeal layout");
+        assert!(
+            norito::decode_canonical::<ModerationAppealRecordV1>(&pre_cut_bytes).is_err(),
+            "the first-release appeal schema must reject bytes without the anchor field"
+        );
+
+        #[cfg(feature = "json")]
+        {
+            for record in [&without_anchor, &with_anchor] {
+                let encoded = norito::json::to_vec(record).expect("encode moderation appeal JSON");
+                let decoded: ModerationAppealRecordV1 =
+                    norito::json::from_slice(&encoded).expect("decode moderation appeal JSON");
+                assert_eq!(&decoded, record);
+            }
+            let mut pre_cut_json =
+                norito::json::to_value(&without_anchor).expect("encode appeal JSON value");
+            pre_cut_json
+                .as_object_mut()
+                .expect("moderation appeal JSON object")
+                .remove("sortition_anchor");
+            assert!(
+                norito::json::from_value::<ModerationAppealRecordV1>(pre_cut_json).is_err(),
+                "the first-release appeal JSON schema must require the anchor field, including null"
+            );
+        }
+    }
+    #[test]
     #[expect(
         clippy::too_many_lines,
         reason = "one fail-closed sortition scenario checks ordering, uniqueness, and every rejection class"
@@ -2436,11 +2788,11 @@ mod tests {
         .unwrap();
         assert_ne!(
             first.2, later_anchor.2,
-            "post-registration parent anchors must produce distinct draw seeds"
+            "post-registration pinned anchors must produce distinct draw seeds"
         );
         assert_ne!(
             first.3, later_anchor.3,
-            "sortition commitments must bind the frozen parent anchor through the seed"
+            "sortition commitments must bind the pinned anchor through the seed"
         );
         assert_eq!(first.0.len(), 3);
         assert_eq!(first.1.len(), 2);
@@ -2691,3 +3043,6 @@ mod tests {
         assert_eq!(appeal_a, appeal_b);
     }
 }
+
+#[cfg(test)]
+mod captured_moderation_ledger_schema_tests;

@@ -1856,8 +1856,5 @@ fn network_event(message: &ConsensusMessageV2, current: EventTag) -> Event {
                 certificate: certificate.clone(),
             }
         }
-        ConsensusMessageV2::BodyRequest(_) | ConsensusMessageV2::BodyChunk(_) => {
-            panic!("transport payloads are handled outside the consensus reducer simulation")
-        }
     }
 }

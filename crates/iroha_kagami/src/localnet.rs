@@ -32,12 +32,18 @@ use iroha_data_model::{
     asset::AssetDefinitionAlias,
     block::{
         BlockHeader,
-        consensus_v2::{MAX_VALIDATORS_PER_HEIGHT, is_valid_committee_size},
+        consensus_v2::{
+            MAX_VALIDATORS_PER_HEIGHT, SumeragiV2GenesisContextParameters, is_valid_committee_size,
+        },
     },
     da::commitment::DaProofPolicyBundle,
     isi::{
         GrantBox, RegisterBox, RevokeBox, SetAssetDefinitionAlias,
         alias_setup::EnsureAlias,
+        kagemusha_v1::{
+            KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterTemplateV1,
+            KagemushaMintFinalityGenesisParametersV1,
+        },
         nexus::{
             ActivateFeeSponsorProgramRevision, CreateFeeSponsorProgram,
             EnrollFeeSponsorBeneficiary, FundFeeSponsorProgram, StageFeeSponsorProgramRevision,
@@ -1026,7 +1032,7 @@ pub struct Args {
     #[arg(long, default_value_t = 0)]
     extra_accounts: u16,
     /// Register the optional sample asset and mint to the default account.
-    /// The built-in Kagemusha asset is always emitted.
+    /// The built-in KAGEMUSHA V1 asset is always emitted.
     #[arg(long, default_value_t = false)]
     sample_asset: bool,
     /// Register additional asset definition IDs owned by the generated client signer.
@@ -1379,7 +1385,8 @@ fn generate_localnet_inner<T: Write>(
     } else {
         None
     };
-    let mut genesis = generate_raw_genesis(&genesis_public_key, opts.consensus_mode, &chain_id)?;
+    let mut genesis =
+        generate_raw_genesis(&genesis_public_key, opts.consensus_mode, &chain_id, &peers)?;
     if opts.extra_accounts > 0 || !assets.is_empty() {
         genesis = extend_genesis(
             genesis,
@@ -1392,25 +1399,25 @@ fn generate_localnet_inner<T: Write>(
     genesis = append_localnet_service_accounts(
         genesis,
         &[&client_identity.account_id, &onboarding_identity.account_id],
-    );
+    )?;
     genesis = append_localnet_alias_fee_bootstrap(
         genesis,
         &genesis_account_id,
         &client_identity.account_id,
         &onboarding_identity.account_id,
-    );
+    )?;
     genesis = apply_parameter_overrides(
         genesis,
         Some(block_cadence_ms),
         block_max_transactions,
         opts.consensus_mode,
-    );
+    )?;
     genesis = append_localnet_contract_permissions_for_client(
         genesis,
         &genesis_account_id,
         &client_identity.account_id,
-    );
-    genesis = append_peer_pop(genesis, &peers);
+    )?;
+    genesis = append_peer_pop(genesis, &peers)?;
     if npos_bootstrap {
         let gas_account_id = gas_account_id
             .as_ref()
@@ -1437,7 +1444,7 @@ fn generate_localnet_inner<T: Write>(
             &client_identity.account_id,
         )?;
     }
-    genesis = apply_localnet_crypto_overrides(genesis, npos_bootstrap);
+    genesis = apply_localnet_crypto_overrides(genesis, npos_bootstrap)?;
     let alias_setup_request =
         localnet_alias_setup_request(&genesis_account_id, &client_identity.account_id, taira)?;
     let append_alias_setup_to_current_transaction = npos_bootstrap
@@ -1449,7 +1456,7 @@ fn generate_localnet_inner<T: Write>(
         genesis,
         &alias_setup_request,
         append_alias_setup_to_current_transaction,
-    );
+    )?;
     genesis =
         append_localnet_onboarding_permissions(genesis, &onboarding_identity.account_id, taira)?;
     let alias_setup_intent_path =
@@ -2517,15 +2524,6 @@ fn render_peer_config(
         "allowed_algorithms".into(),
         Value::Array(vec![Value::String("bls_normal".to_owned())]),
     );
-    keys.insert(
-        "allowed_hsm_providers".into(),
-        Value::Array(
-            iroha_config::parameters::defaults::sumeragi::key_allowed_hsm_providers()
-                .into_iter()
-                .map(Value::String)
-                .collect(),
-        ),
-    );
     sumeragi.insert("keys".into(), Value::Table(keys));
     let mut nexus = Table::new();
     if npos_bootstrap {
@@ -2785,9 +2783,9 @@ fn render_peer_config(
     root.insert("streaming".into(), Value::Table(streaming));
     let mut sorafs_storage = Table::new();
     if sora_profile.is_some() {
-        // `iroha3d --sora` enables embedded storage after ordinary TOML parsing unless the
-        // operator explicitly selected a storage value. Localnets do not provision the governed
-        // compliance controller or native signer providers, so keep storage disabled explicitly.
+        // Sora localnets install Nexus geometry but do not provision the governed compliance
+        // controller or native signer providers needed for an embedded storage-provider role.
+        // Record that non-provider posture explicitly in every generated peer configuration.
         sorafs_storage.insert("enabled".into(), Value::Boolean(false));
     }
     // Validator durability queues beneath the SoraFS root remain active even when provider
@@ -3165,6 +3163,10 @@ fn render_peer_config(
                 .expect("LOCALNET_TORII_MAX_CONTENT_LEN fits i64"),
         ),
     );
+    // Generated localnet and prepared-Compose bundles do not yet project an
+    // immutable prover-key directory into every validator container.
+    // TODO: enable this profile once the key directory is captured and mounted.
+    torii.insert("zk_prover_enabled".into(), Value::Boolean(false));
     if mcp_enabled {
         let mut mcp = Table::new();
         mcp.insert("enabled".into(), Value::Boolean(true));
@@ -3295,13 +3297,18 @@ fn generate_raw_genesis(
     genesis_public_key: &iroha_crypto::PublicKey,
     consensus_mode: SumeragiConsensusMode,
     chain_id: &str,
+    peers: &[Peer],
 ) -> Result<RawGenesisTransaction> {
     let chain_id = chain_id
         .parse::<ChainId>()
         .wrap_err("localnet chain id must be canonical")?;
     let npos_epoch_seed = matches!(consensus_mode, SumeragiConsensusMode::Npos)
         .then(|| localnet_npos_epoch_seed(&chain_id));
-    let builder = GenesisBuilder::new_without_executor(chain_id, PathBuf::from("."));
+    let builder = GenesisBuilder::new_without_executor(chain_id, PathBuf::from("."))
+        .with_sumeragi_v2_context_parameters(SumeragiV2GenesisContextParameters::recommended())
+        .with_kagemusha_mint_finality_genesis_parameters(
+            localnet_kagemusha_mint_finality_genesis_parameters(peers)?,
+        );
     generate_default(
         builder,
         genesis_public_key,
@@ -3310,6 +3317,48 @@ fn generate_raw_genesis(
         None,
         npos_epoch_seed,
     )
+}
+
+fn localnet_kagemusha_mint_finality_genesis_parameters(
+    peers: &[Peer],
+) -> Result<KagemushaMintFinalityGenesisParametersV1> {
+    let mut validators = peers
+        .iter()
+        .map(|peer| PeerId::new(peer.public_key.clone()))
+        .collect::<Vec<_>>();
+    validators.sort();
+    let validators = validators
+        .into_iter()
+        .enumerate()
+        .map(|(index, validator)| {
+            let seed: [u8; 32] = Hash::new(format!(
+                "iroha:kagami:localnet:kagemusha-mint-finality:v1:epoch-0:{index}:{validator}"
+            ))
+            .into();
+            iroha_core::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
+                &seed,
+                0,
+                validator,
+            )
+            .map_err(|error| eyre!("derive localnet KAGEMUSHA mint-finality keys: {error}"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let parameters = KagemushaMintFinalityGenesisParametersV1 {
+        epoch_roster: KagemushaMintFinalityEpochRosterTemplateV1 {
+            version: KAGEMUSHA_CHAIN_VERSION_V1,
+            epoch: 0,
+            validators,
+        },
+        next_epoch_roster: None,
+    };
+    parameters
+        .validate()
+        .map_err(|error| eyre!("invalid localnet KAGEMUSHA mint-finality roster: {error}"))?;
+    iroha_core::zk::kagemusha_v1_recursion::validate_kagemusha_mint_finality_genesis_parameter_keys_v1(
+        &parameters,
+    )
+    .map_err(|error| eyre!("invalid localnet KAGEMUSHA curve keys: {error}"))?;
+    Ok(parameters)
 }
 fn extend_genesis(
     genesis: RawGenesisTransaction,
@@ -3372,7 +3421,7 @@ fn extend_genesis(
             ));
         }
     }
-    Ok(builder.build_raw())
+    builder.build_raw()
 }
 fn localnet_npos_epoch_seed(chain_id: &ChainId) -> [u8; 32] {
     let mut epoch_seed: [u8; 32] =
@@ -3446,11 +3495,11 @@ fn apply_parameter_overrides(
     block_cadence_ms: Option<u64>,
     block_max_transactions: u64,
     consensus_mode: SumeragiConsensusMode,
-) -> RawGenesisTransaction {
+) -> Result<RawGenesisTransaction> {
     let include_npos = matches!(consensus_mode, SumeragiConsensusMode::Npos);
     let mut parameters = genesis
         .effective_parameters()
-        .expect("generated localnet genesis has one structured parameter block");
+        .wrap_err("generated localnet genesis must have one structured parameter block")?;
     let fee_asset_id = localnet_fee_asset_literal();
     let gas_limit_param_id = localnet_custom_parameter_id("ivm_gas_limit_per_block");
     let block_max_transactions =
@@ -3483,7 +3532,7 @@ fn apply_parameter_overrides(
         || gas_fee_params_need_update
         || parameters.block.max_transactions != block_max_transactions;
     if !should_update {
-        return genesis;
+        return Ok(genesis);
     }
     parameters.block.max_transactions = block_max_transactions;
     if let Some(block_cadence_ms) = block_cadence_ms {
@@ -3510,14 +3559,16 @@ fn apply_parameter_overrides(
             builder = builder.append_parameter(parameter);
         }
     }
-    builder.build_raw()
+    builder
+        .build_raw()
+        .expect("existing localnet manifest preserves required signed consensus authority")
 }
 fn apply_localnet_crypto_overrides(
     genesis: RawGenesisTransaction,
     npos_bootstrap: bool,
-) -> RawGenesisTransaction {
+) -> Result<RawGenesisTransaction> {
     if !npos_bootstrap {
-        return genesis;
+        return Ok(genesis);
     }
     let mut crypto = genesis.crypto().clone();
     if !crypto
@@ -3541,24 +3592,29 @@ fn apply_localnet_crypto_overrides(
         .collect();
     crypto.allowed_curve_ids.sort_unstable();
     crypto.allowed_curve_ids.dedup();
-    genesis.into_builder().with_crypto(crypto).build_raw()
+    genesis
+        .into_builder()
+        .with_crypto(crypto)
+        .build_raw()
+        .expect("existing localnet manifest preserves required signed consensus authority")
 }
-fn append_peer_pop(genesis: RawGenesisTransaction, peers: &[Peer]) -> RawGenesisTransaction {
+fn append_peer_pop(
+    genesis: RawGenesisTransaction,
+    peers: &[Peer],
+) -> Result<RawGenesisTransaction> {
+    let mut topology = peers
+        .iter()
+        .map(|peer| {
+            GenesisTopologyEntry::new(PeerId::new(peer.public_key.clone()), peer.bls_pop.clone())
+        })
+        .collect::<Vec<_>>();
+    topology.sort_by(|left, right| left.peer.cmp(&right.peer));
     genesis
         .into_builder()
         .next_transaction()
-        .set_topology(
-            peers
-                .iter()
-                .map(|peer| {
-                    GenesisTopologyEntry::new(
-                        PeerId::new(peer.public_key.clone()),
-                        peer.bls_pop.clone(),
-                    )
-                })
-                .collect(),
-        )
+        .set_topology(topology)
         .build_raw()
+        .expect("existing localnet manifest preserves required signed consensus authority")
 }
 #[cfg(test)]
 fn append_localnet_contract_permissions(
@@ -3570,11 +3626,12 @@ fn append_localnet_contract_permissions(
         genesis_account_id,
         &localnet_client_account_id(),
     )
+    .expect("rebuilding a generated localnet fixture preserves explicit genesis authority")
 }
 fn append_localnet_service_accounts(
     genesis: RawGenesisTransaction,
     service_accounts: &[&AccountId],
-) -> RawGenesisTransaction {
+) -> Result<RawGenesisTransaction> {
     let mut registered = genesis
         .instructions()
         .filter_map(|instruction| {
@@ -3592,14 +3649,16 @@ fn append_localnet_service_accounts(
                 builder.append_instruction(Register::account(Account::new((*account_id).clone())));
         }
     }
-    builder.build_raw()
+    builder
+        .build_raw()
+        .expect("existing localnet manifest preserves required signed consensus authority")
 }
 fn append_localnet_alias_fee_bootstrap(
     genesis: RawGenesisTransaction,
     genesis_account_id: &AccountId,
     operator_account_id: &AccountId,
     onboarding_account_id: &AccountId,
-) -> RawGenesisTransaction {
+) -> Result<RawGenesisTransaction> {
     let mut registrations = BootstrapRegistrations::from_manifest(&genesis);
     let universal_domain = DomainId::parse_fully_qualified(LOCALNET_UNIVERSAL_DOMAIN)
         .expect("static universal domain must remain canonical");
@@ -3646,7 +3705,9 @@ fn append_localnet_alias_fee_bootstrap(
             AssetId::new(fee_asset_id, onboarding_account_id.clone()),
         ));
     }
-    builder.build_raw()
+    builder
+        .build_raw()
+        .expect("existing localnet manifest preserves required signed consensus authority")
 }
 fn localnet_alias_setup_request(
     genesis_account_id: &AccountId,
@@ -3708,7 +3769,7 @@ fn append_localnet_alias_setup(
     genesis: RawGenesisTransaction,
     request: &AliasSetupPlanRequestV1,
     append_to_current_transaction: bool,
-) -> RawGenesisTransaction {
+) -> Result<RawGenesisTransaction> {
     let mut builder = genesis.into_builder();
     if !append_to_current_transaction {
         builder = builder.next_transaction();
@@ -3716,7 +3777,9 @@ fn append_localnet_alias_setup(
     for ensure in request.intents.iter().cloned() {
         builder = builder.append_instruction(ensure);
     }
-    builder.build_raw()
+    builder
+        .build_raw()
+        .expect("existing localnet manifest preserves required signed consensus authority")
 }
 fn write_localnet_alias_setup_intent(
     out_dir: &Path,
@@ -3777,15 +3840,16 @@ fn append_localnet_onboarding_permissions(
             ));
         }
     }
-    Ok(builder.build_raw())
+    builder.build_raw()
 }
 fn append_localnet_contract_permissions_for_client(
     genesis: RawGenesisTransaction,
     genesis_account_id: &AccountId,
     client_account_id: &AccountId,
-) -> RawGenesisTransaction {
+) -> Result<RawGenesisTransaction> {
     let enact_governance: Permission = CanEnactGovernance.into();
-    let manage_offline_escrow = Permission::new("CanManageOfflineEscrow".into(), Json::new(()));
+    let manage_kagemusha_reserve =
+        Permission::new("CanManageKagemushaReserve".into(), Json::new(()));
     let manage_verifying_keys = Permission::new("CanManageVerifyingKeys".into(), Json::new(()));
     let manage_account_alias: Permission = CanManageAccountAlias {
         scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL),
@@ -3820,13 +3884,15 @@ fn append_localnet_contract_permissions_for_client(
     push_unique(manage_account_alias, client_account_id.clone());
     push_unique(publish_manifest, client_account_id.clone());
     if *client_account_id != *ALICE_ID {
-        push_unique(manage_offline_escrow, client_account_id.clone());
+        push_unique(manage_kagemusha_reserve, client_account_id.clone());
     }
     let mut builder = genesis.into_builder();
     for (permission, destination) in grants {
         builder = builder.append_instruction(Grant::account_permission(permission, destination));
     }
-    builder.build_raw()
+    builder
+        .build_raw()
+        .expect("existing localnet manifest preserves required signed consensus authority")
 }
 struct BootstrapRegistrations {
     domains: BTreeSet<DomainId>,
@@ -4082,7 +4148,7 @@ fn append_localnet_npos_bootstrap(
             });
         }
     }
-    Ok(builder.build_raw())
+    builder.build_raw()
 }
 #[allow(clippy::too_many_lines)]
 fn append_private_dataspace_genesis_bootstrap_for_client(
@@ -4299,7 +4365,7 @@ fn append_private_dataspace_genesis_bootstrap_for_client(
             client_account_id.clone(),
         ));
     }
-    Ok(builder.build_raw())
+    builder.build_raw()
 }
 struct GenesisConsensusPolicies {
     da_proof_policies: Option<DaProofPolicyBundle>,
@@ -5841,16 +5907,16 @@ fn write_localnet_readme(
             "- Owner-held genesis signing key: `{genesis_private_key}`\n",
             "- Client config: `{client_config}`\n\n",
             "## Built-in App API bootstrap\n\n",
-            "- Kagemusha asset definition: `{kagemusha_asset}`\n",
-            "- Kagemusha asset alias: `{kagemusha_alias}`\n",
+            "- KAGEMUSHA V1 asset definition: `{kagemusha_asset}`\n",
+            "- KAGEMUSHA V1 asset alias: `{kagemusha_alias}`\n",
             "- Ephemeral operator authority: `{operator_account_id}`\n",
             "- Ephemeral onboarding authority: `{onboarding_account_id}`\n",
             "- Operator signer sidecar: `{operator_signer_key}`\n",
             "- Onboarding signer sidecar: `{onboarding_signer_key}`\n",
             "- Onboarding API token sidecar: `{onboarding_token_file}`\n",
             "- Secret-free alias setup intent: `{alias_setup_intent}`\n",
-            "- Offline escrow account: deterministic account derived from the exact genesis network id and asset definition\n",
-            "- Generated peer configs enable structural `torii.account_onboarding` and Kagemusha escrow routing\n",
+            "- KAGEMUSHA reserve account: deterministic account derived from the exact genesis network id and asset definition\n",
+            "- Generated peer configs enable structural `torii.account_onboarding` and KAGEMUSHA V1 reserve routing\n",
             "- Runtime credentials are owner-only files; read the token from its sidecar when calling sponsored onboarding\n\n",
             "Run `kagami docker` without `--seed` against this directory to validate the exact ",
             "validator identities, PoPs, signed body, verifier key, and expected hash as one ",
@@ -5930,6 +5996,34 @@ mod tests {
         path::{Path, PathBuf},
     };
     include!("localnet/runtime_artifact_tests.rs");
+
+    #[test]
+    fn localnet_kagemusha_authority_matches_canonical_four_validator_topology() {
+        let peers = build_peers(4, Some(b"kagemusha-authority-fixture"), 8_080, 13_337)
+            .expect("derive deterministic localnet peers");
+        let mut expected_topology = peers
+            .iter()
+            .map(|peer| PeerId::new(peer.public_key.clone()))
+            .collect::<Vec<_>>();
+        expected_topology.sort();
+        let parameters = localnet_kagemusha_mint_finality_genesis_parameters(&peers)
+            .expect("derive validated localnet KAGEMUSHA authority");
+        let actual_topology = parameters
+            .epoch_roster
+            .validators
+            .iter()
+            .map(|keys| keys.validator.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(actual_topology, expected_topology);
+        assert_eq!(actual_topology.len(), 4);
+        assert_eq!(parameters.epoch_roster.epoch, 0);
+        assert!(parameters.next_epoch_roster.is_none());
+        assert_eq!(
+            parameters,
+            localnet_kagemusha_mint_finality_genesis_parameters(&peers)
+                .expect("repeat deterministic localnet KAGEMUSHA authority derivation")
+        );
+    }
 
     #[test]
     #[expect(
@@ -6236,9 +6330,13 @@ mod tests {
         } else {
             effective_localnet_assets_for_client(&opts.assets, client_account_id)
         };
-        let mut genesis =
-            generate_raw_genesis(&genesis_public_key, opts.consensus_mode, DEFAULT_CHAIN_ID)
-                .expect("generate raw genesis");
+        let mut genesis = generate_raw_genesis(
+            &genesis_public_key,
+            opts.consensus_mode,
+            DEFAULT_CHAIN_ID,
+            &peers,
+        )
+        .expect("generate raw genesis");
         if opts.extra_accounts > 0 || !assets.is_empty() {
             genesis = extend_genesis(
                 genesis,
@@ -6254,7 +6352,8 @@ mod tests {
             block_cadence_ms,
             block_max_transactions,
             opts.consensus_mode,
-        );
+        )
+        .expect("apply generated localnet fixture parameter overrides");
         genesis = if uses_default_client {
             append_localnet_contract_permissions(genesis, &genesis_account_id)
         } else {
@@ -6263,8 +6362,10 @@ mod tests {
                 &genesis_account_id,
                 client_account_id,
             )
+            .expect("append generated localnet fixture contract permissions")
         };
-        genesis = append_peer_pop(genesis, &peers);
+        genesis = append_peer_pop(genesis, &peers)
+            .expect("append generated localnet fixture topology and proofs of possession");
         if npos_bootstrap {
             let gas_account_id = localnet_gas_account_id(&genesis_public_key)
                 .expect("test localnet gas account derivation should succeed");
@@ -6297,6 +6398,7 @@ mod tests {
             .expect("append private-dataspace genesis bootstrap");
         }
         apply_localnet_crypto_overrides(genesis, npos_bootstrap)
+            .expect("apply generated localnet fixture cryptography overrides")
     }
     include!("localnet/private_profile_bootstrap_tests.rs");
     fn genesis_json_from_path(path: &Path) -> json::Value {
@@ -6528,16 +6630,16 @@ mod tests {
         let manifest = localnet_genesis_for_opts(&opts);
         let kagemusha_asset_id =
             AssetDefinitionId::parse_address_literal(LOCALNET_KAGEMUSHA_ASSET_ID)
-                .expect("Kagemusha asset id");
+                .expect("KAGEMUSHA V1 asset id");
         let kagemusha_alias = LOCALNET_KAGEMUSHA_ASSET_ALIAS
             .parse::<AssetDefinitionAlias>()
-            .expect("Kagemusha asset alias");
+            .expect("KAGEMUSHA V1 asset alias");
         let client_account_id = localnet_client_account_id();
         let (genesis_public_key, _) =
             generate_genesis_key_pair(opts.seed.as_ref().map(String::as_bytes), GENESIS_SEED)
                 .expect("test localnet genesis key generation should succeed");
         let genesis_account_id = AccountId::new(genesis_public_key);
-        let expected_explicit_manage_offline_escrow_grants =
+        let expected_explicit_manage_kagemusha_reserve_grants =
             usize::from(client_account_id != *ALICE_ID);
         let expected_mint_destination =
             AssetId::new(kagemusha_asset_id.clone(), client_account_id.clone());
@@ -6555,7 +6657,7 @@ mod tests {
         });
         assert!(
             has_definition,
-            "localnet must register the built-in asset used by universal Kagemusha protocols"
+            "localnet must register the built-in KAGEMUSHA V1 asset"
         );
         let has_alias_binding = manifest.instructions().any(|instruction| {
             instruction
@@ -6568,7 +6670,7 @@ mod tests {
         });
         assert!(
             has_alias_binding,
-            "localnet must bind the built-in Kagemusha asset alias"
+            "localnet must bind the built-in KAGEMUSHA V1 asset alias"
         );
         let has_initial_mint = manifest.instructions().any(|instruction| {
             instruction
@@ -6583,7 +6685,7 @@ mod tests {
         });
         assert!(
             has_initial_mint,
-            "localnet must mint the built-in Kagemusha asset to the client signer"
+            "localnet must mint the built-in KAGEMUSHA V1 asset to the client signer"
         );
         let has_owner_transfer = manifest.instructions().any(|instruction| {
             instruction
@@ -6599,12 +6701,12 @@ mod tests {
         });
         assert!(
             has_owner_transfer,
-            "localnet must transfer Kagemusha asset ownership to the client signer"
+            "localnet must transfer KAGEMUSHA V1 asset ownership to the client signer"
         );
         let mut has_alias_manage = false;
         let mut has_manifest_publish = false;
-        let mut manage_offline_escrow_grants = 0usize;
-        let mut total_manage_offline_escrow_grants = 0usize;
+        let mut manage_kagemusha_reserve_grants = 0usize;
+        let mut total_manage_kagemusha_reserve_grants = 0usize;
         let mut genesis_manage_verifying_keys_grants = 0usize;
         let mut client_manage_verifying_keys_grants = 0usize;
         let mut total_manage_verifying_keys_grants = 0usize;
@@ -6616,9 +6718,9 @@ mod tests {
                 continue;
             };
             let permission_name: &str = grant_permission.object().name();
-            if permission_name == "CanManageOfflineEscrow" {
-                total_manage_offline_escrow_grants =
-                    total_manage_offline_escrow_grants.saturating_add(1);
+            if permission_name == "CanManageKagemushaReserve" {
+                total_manage_kagemusha_reserve_grants =
+                    total_manage_kagemusha_reserve_grants.saturating_add(1);
             }
             if permission_name == "CanManageVerifyingKeys" {
                 total_manage_verifying_keys_grants =
@@ -6635,8 +6737,9 @@ mod tests {
             }
             match permission_name {
                 "CanManageAccountAlias" => has_alias_manage = true,
-                "CanManageOfflineEscrow" => {
-                    manage_offline_escrow_grants = manage_offline_escrow_grants.saturating_add(1);
+                "CanManageKagemushaReserve" => {
+                    manage_kagemusha_reserve_grants =
+                        manage_kagemusha_reserve_grants.saturating_add(1);
                 }
                 "CanManageVerifyingKeys" => {
                     client_manage_verifying_keys_grants =
@@ -6655,12 +6758,13 @@ mod tests {
             "localnet client signer must be able to publish onboarding manifests"
         );
         assert_eq!(
-            manage_offline_escrow_grants, expected_explicit_manage_offline_escrow_grants,
-            "localnet must only emit an explicit CanManageOfflineEscrow grant when the client signer is not Alice"
+            manage_kagemusha_reserve_grants, expected_explicit_manage_kagemusha_reserve_grants,
+            "localnet must only emit an explicit CanManageKagemushaReserve grant when the client signer is not Alice"
         );
         assert_eq!(
-            total_manage_offline_escrow_grants, expected_explicit_manage_offline_escrow_grants,
-            "localnet genesis must not emit duplicate explicit CanManageOfflineEscrow grants"
+            total_manage_kagemusha_reserve_grants,
+            expected_explicit_manage_kagemusha_reserve_grants,
+            "localnet genesis must not emit duplicate explicit CanManageKagemushaReserve grants"
         );
         assert_eq!(
             genesis_manage_verifying_keys_grants, 1,
@@ -6682,12 +6786,12 @@ mod tests {
         );
     }
     #[test]
-    fn permissioned_localnet_genesis_deduplicates_offline_escrow_grant() {
+    fn permissioned_localnet_genesis_deduplicates_kagemusha_reserve_grant() {
         let opts = LocalnetOptions {
             sora_profile: None,
             perf_profile: None,
             peers: NonZeroU16::new(4).expect("non-zero"),
-            seed: Some("permissioned-offline-escrow-dedup".to_owned()),
+            seed: Some("permissioned-kagemusha-reserve-dedup".to_owned()),
             bind_host: DEFAULT_PUBLIC_HOST.to_owned(),
             public_host: DEFAULT_PUBLIC_HOST.to_owned(),
             base_api_port: 29080,
@@ -6700,9 +6804,9 @@ mod tests {
         };
         let manifest = localnet_genesis_for_opts(&opts);
         let client_account_id = localnet_client_account_id();
-        let expected_explicit_manage_offline_escrow_grants =
+        let expected_explicit_manage_kagemusha_reserve_grants =
             usize::from(client_account_id != *ALICE_ID);
-        let offline_escrow_grants = manifest
+        let kagemusha_reserve_grants = manifest
             .instructions()
             .filter_map(|instruction| instruction.as_any().downcast_ref::<GrantBox>())
             .filter_map(|grant| match grant {
@@ -6710,16 +6814,18 @@ mod tests {
                 _ => None,
             })
             .filter(|grant_permission| grant_permission.destination() == &client_account_id)
-            .filter(|grant_permission| grant_permission.object().name() == "CanManageOfflineEscrow")
+            .filter(|grant_permission| {
+                grant_permission.object().name() == "CanManageKagemushaReserve"
+            })
             .count();
         assert_eq!(
-            offline_escrow_grants, expected_explicit_manage_offline_escrow_grants,
-            "permissioned localnet genesis must not duplicate the offline escrow manager grant and must skip the redundant Alice bootstrap grant"
+            kagemusha_reserve_grants, expected_explicit_manage_kagemusha_reserve_grants,
+            "permissioned localnet genesis must not duplicate the KAGEMUSHA reserve manager grant and must skip the redundant Alice bootstrap grant"
         );
     }
     #[test]
     #[allow(clippy::too_many_lines)]
-    fn generated_localnet_needs_no_backend_offline_switch() {
+    fn generated_localnet_needs_no_kagemusha_feature_switch() {
         let temp = tempfile::tempdir().expect("make temp dir");
         #[cfg(unix)]
         fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700))
@@ -7501,7 +7607,7 @@ mod tests {
         );
         assert_eq!(
             queues.get("body_bytes").and_then(toml::Value::as_integer),
-            Some(198 * 1024 * 1024)
+            Some(204 * 1024 * 1024)
         );
         assert_eq!(
             queues
@@ -8049,7 +8155,7 @@ mod tests {
         );
         assert_eq!(
             queues.get("body_bytes").and_then(toml::Value::as_integer),
-            Some(297 * 1024 * 1024),
+            Some(306 * 1024 * 1024),
             "seven validators and two authenticated non-validator sources each need one isolated body quota"
         );
         let manifest = localnet_genesis_for_opts(&opts);
@@ -9763,7 +9869,7 @@ mod tests {
         assert!(contents.contains("- Ephemeral onboarding authority: `"));
         assert!(
             contents.contains(
-                "- Offline escrow account: deterministic account derived from the exact genesis network id and asset definition"
+                "- KAGEMUSHA reserve account: deterministic account derived from the exact genesis network id and asset definition"
             )
         );
         assert!(!contents.contains("Localnet app authority / escrow account"));

@@ -60,16 +60,20 @@ nonce prefix plus chunk index, immutable object/chunk metadata as AAD, atomic
 envelope/index persistence, authenticated range reads, recovery validation,
 and rotation by DEK rewrap only after every old ciphertext chunk and the full
 payload digest authenticate. The DEK wrapper is a runtime-only
-`ModerationQuarantineKeyWrapper` boundary for PKCS#11 or a managed KMS.
+`ModerationQuarantineKeyWrapper` boundary for a deployment-selected,
+authenticated key-custody provider. Every implementation must satisfy the same
+qualification contract.
 Enabling authenticated screening without that wrapper fails node startup.
 On Linux and macOS the stock `irohad` launcher resolves this slot through the
 fixed same-service-UID runtime-provider broker. Its canonical handshake pins the
 configured provider qualification and active public key handle; bounded
 wrap/unwrap calls requalify those values before and after use and never carry
-provider credentials. The packaged broker boundary still needs a genuine
-deployment-owned PKCS#11/KMS backend and operator credential.
-`V1-BLOCK-AI-QUARANTINE-KMS-01` therefore remains open; tests-only wrappers,
-file keys, environment keys, and software fallback wrapping cannot close it.
+provider credentials. The packaged broker boundary still needs a reviewed
+deployment-owned key-wrapper implementation and operator credential.
+`V1-BLOCK-AI-QUARANTINE-KMS-01` (a legacy identifier) therefore remains open;
+tests-only wrappers, plaintext/manual wrapping, configuration or environment
+keys, and unauthenticated fallback wrapping cannot close it. A qualified
+software provider can.
 The repository does not contain operator-supplied genuine trained and
 calibrated canonical V1 model artefacts, and no deployed runner or committee
 process-isolation attestation has been supplied. Checked-in manifests,
@@ -489,7 +493,7 @@ The production service remains a staged rollout target:
 | Model registry | Stores model artifacts, reproducibility manifests, calibration datasets, and hashes. | Local Torii admission/readback, client/CLI admission tooling, node snapshot/checkpoint foundation, and standalone persistent `registry-serve` HTTP service foundation exist. |
 | AI runner | Executes approved models deterministically and emits model scores. | Deterministic integer `run-local` CLI, bounded loopback `runner-serve` HTTP mode, unary `runner-grpc-serve` gRPC foundation, supervised HTTP runner bundle, and `runner-canary` rollout evidence tooling exist. Torii now requires canonical signed results under the config-pinned governed policy; production signer packaging and deployed isolation evidence remain open. |
 | Committee orchestrator | Aggregates model outputs and yields `pass`, `quarantine`, or `escalate`. | Threshold schema, calibration report, local `committee-run` quorum aggregation, locked-manifest `committee-serve` HTTP aggregation, supervised committee bundle generation, and `committee-canary` tooling exist. Torii admits an aggregate only by reconstructing it from the complete bounded, unique, policy-authorized signed member set. |
-| Quarantine store | Stores flagged content and metadata under moderation access controls. | Local quarantine evidence records, chunked ChaCha20-Poly1305 payload envelopes, per-object DEKs, authenticated ranges, atomic recovery, role-gated object APIs, and rewrap are present. Standard `irohad` has a strict authenticated broker path for a deployment-owned wrapper, but no genuine PKCS#11/KMS backend or operator credential is checked in; `V1-BLOCK-AI-QUARANTINE-KMS-01` remains open. |
+| Quarantine store | Stores flagged content and metadata under moderation access controls. | Local quarantine evidence records, chunked ChaCha20-Poly1305 payload envelopes, per-object DEKs, authenticated ranges, atomic recovery, role-gated object APIs, and rewrap are present. Standard `irohad` has a strict authenticated broker path for a deployment-owned wrapper, but no reviewed production key-wrapper implementation or operator credential is checked in; `V1-BLOCK-AI-QUARANTINE-KMS-01` remains open under its legacy identifier. |
 | Moderation bridge | Hands escalations to appeal and transparency workflows. | Reviewed-quarantine appeal handoff, finalized-chain moderation projections/orchestration, caller-signed native moderation submission, juror notification planning, delivery manifests, outbox/webhook delivery CLI automation and transport canary tooling, commit/reveal coordination, supervised executor tooling, appeal pricing/deposit readback, transparency readback, and trusted in-process source producers exist; durable production boundary deployment and live rollout evidence remain gates. |
 
 ## Data Model
@@ -559,7 +563,7 @@ models. `quarantine` and `escalate` verdicts enqueue local evidence records that
 can be reviewed and released through authenticated Torii endpoints.
 Quarantined payload bytes are split into bounded independently authenticated
 chunks and sealed with a fresh random per-object DEK. The envelope persists
-only the non-secret PKCS#11/KMS key handle and context-bound wrapped DEK;
+only the non-secret deployment-provider key handle and context-bound wrapped DEK;
 provider credentials and plaintext DEKs are never config or checkpoint data.
 The plaintext digest must match the queue record, and rewrap authenticates all
 old chunks and that full digest before atomically replacing the wrapped DEK.
@@ -920,13 +924,13 @@ live governance-evidence rollout and production quarantine workflow.
 
 ## Remaining Production Gates
 
-- Finish `V1-BLOCK-AI-QUARANTINE-KMS-01`: inject a genuine deployment-owned
-  PKCS#11 or managed-KMS implementation of `ModerationQuarantineKeyWrapper`
-  into the packaged runtime-provider broker using runtime-only credentials, and
-  prove provider-outage, config/runtime mismatch, wrong key/tag/AAD, chunk
+- Finish `V1-BLOCK-AI-QUARANTINE-KMS-01` (legacy identifier): inject a reviewed
+  deployment-owned implementation of `ModerationQuarantineKeyWrapper` into the
+  packaged runtime-provider broker using runtime-only credentials. Prove
+  provider-outage, config/runtime mismatch, wrong key/tag/AAD, chunk
   reorder, restart recovery, rotation/rewrap, and rollback behavior. The stock
   client and broker protocol are present and fail closed, but the repository
-  intentionally supplies no genuine backend or credential.
+  intentionally supplies no deployment-qualified backend or credential.
 - Collect a payload-free live evidence bundle with
   `scripts/run_sorafs_ai_prescreen_rollout_evidence.py` and require it to pass
   `scripts/check_sorafs_ai_prescreen_rollout_evidence.py`, covering runner,
@@ -1017,8 +1021,8 @@ Completed local foundations:
   envelopes with fresh per-object DEKs, unique per-chunk nonces, immutable
   metadata AAD, atomic persistence, authenticated ranges, recovery validation,
   full-ciphertext authentication before DEK rewrap, and a persisted object
-  index. The PKCS#11/KMS wrapper remains runtime-injected and has no file-key or
-  environment-key production fallback.
+  index. The deployment-selected key wrapper remains runtime-injected and has no
+  plaintext/manual, configuration-key, or environment-key production fallback.
 - Expose canonical-authenticated and `sorafs_moderation_operator` role-gated
   Torii object store/readback for local encrypted quarantine payloads.
 - Provide local CLI commands for quarantine queue listing, review, release, and

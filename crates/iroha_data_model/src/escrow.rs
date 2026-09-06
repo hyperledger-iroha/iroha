@@ -94,6 +94,8 @@ impl JsonDeserialize for EscrowId {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "status", content = "value"))]
 #[repr(u8)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::escrow::AssetEscrowStatus")]
 pub enum AssetEscrowStatus {
     /// Seller has locked funds, but no buyer has accepted the offer.
     Open,
@@ -123,6 +125,8 @@ pub enum AssetEscrowStatus {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "kind", content = "value"))]
 #[repr(u8)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::escrow::AssetEscrowKind")]
 pub enum AssetEscrowKind {
     /// Seller/buyer escrow with acceptance, payment-sent, dispute, and release lifecycle.
     #[default]
@@ -136,6 +140,8 @@ pub enum AssetEscrowKind {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "kind", content = "value"))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::escrow::ConditionalEscrowValue")]
 pub enum ConditionalEscrowValue {
     /// Boolean value, such as whether an event occurred.
     Bool(bool),
@@ -148,6 +154,8 @@ pub enum ConditionalEscrowValue {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "kind", content = "value"))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::escrow::ConditionalEscrowPredicate")]
 pub enum ConditionalEscrowPredicate {
     /// Require exact typed equality.
     Equals(ConditionalEscrowValue),
@@ -157,6 +165,8 @@ pub enum ConditionalEscrowPredicate {
 /// Attestor-bound predicate in an ordered conditional-escrow release policy.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::escrow::ConditionalEscrowOracleCondition")]
 pub struct ConditionalEscrowOracleCondition {
     /// Caller-selected canonical condition identifier.
     pub id: Name,
@@ -170,6 +180,8 @@ pub struct ConditionalEscrowOracleCondition {
 /// Ledger-time window that bounds all attestations for one conditional escrow.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::escrow::ConditionalEscrowWithinCondition")]
 pub struct ConditionalEscrowWithinCondition {
     /// Caller-selected canonical condition identifier.
     pub id: Name,
@@ -180,6 +192,8 @@ pub struct ConditionalEscrowWithinCondition {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "kind", content = "value"))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::escrow::ConditionalEscrowCondition")]
 pub enum ConditionalEscrowCondition {
     /// Attestor-signed predicate.
     Oracle(ConditionalEscrowOracleCondition),
@@ -199,6 +213,8 @@ impl ConditionalEscrowCondition {
 /// Consensus-bound evidence for one satisfied oracle condition.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::escrow::ConditionalEscrowAttestation")]
 pub struct ConditionalEscrowAttestation {
     /// Exact account that authorized the attestation transaction.
     pub attestor: AccountId,
@@ -212,6 +228,8 @@ pub struct ConditionalEscrowAttestation {
 /// Query-visible satisfaction state for one conditional-escrow condition.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::escrow::ConditionalEscrowConditionState")]
 pub struct ConditionalEscrowConditionState {
     /// Immutable condition definition.
     pub condition: ConditionalEscrowCondition,
@@ -223,6 +241,8 @@ pub struct ConditionalEscrowConditionState {
 /// Court resolution details for a disputed escrow.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::escrow::AssetEscrowResolution")]
 pub struct AssetEscrowResolution {
     /// Account that resolved the dispute.
     pub resolver: AccountId,
@@ -238,6 +258,8 @@ pub struct AssetEscrowResolution {
 /// Ledger-managed numeric asset escrow.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::escrow::AssetEscrowRecord")]
 pub struct AssetEscrowRecord {
     /// Escrow identifier.
     pub id: EscrowId,
@@ -490,3 +512,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod captured_escrow_schema_tests;

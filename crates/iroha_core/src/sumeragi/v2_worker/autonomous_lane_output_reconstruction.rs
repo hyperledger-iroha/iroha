@@ -536,10 +536,12 @@ fn payload_chunk_output_has_applied_height_authority(
     artifact: &wire::finality::V2FinalityArtifact,
 ) -> Result<(), String> {
     let context = &artifact.height_context;
-    manifest.validate(context).map_err(|error| {
-        format!("payload-chunk rollover manifest is invalid for the applied context: {error}")
-    })?;
-    let manifest_hash = HashOf::new(manifest);
+    let validated = wire::ValidatedPayloadManifest::new(context, manifest.clone()).map_err(
+        |error| {
+            format!("payload-chunk rollover manifest is invalid for the applied context: {error}")
+        },
+    )?;
+    let manifest_hash = validated.manifest_hash();
     if messages.len() != manifest.chunk_hashes.len() {
         return Err("payload-chunk rollover changed the exact chunk count".to_owned());
     }
@@ -568,20 +570,16 @@ fn payload_chunk_output_has_applied_height_authority(
                 "payload-chunk rollover differs from its exact manifest coordinates".to_owned(),
             );
         }
-        chunk.validate(context, manifest).map_err(|error| {
+        let signature_payload = chunk.validate_for_authentication(&validated).map_err(|error| {
             format!("payload-chunk rollover is invalid for its exact manifest: {error}")
         })?;
-        let sender_index = usize::try_from(chunk.sender)
-            .map_err(|_| "payload-chunk rollover sender is not representable".to_owned())?;
-        let sender = context.roster.get(sender_index).ok_or_else(|| {
-            "payload-chunk rollover sender is outside the applied roster".to_owned()
-        })?;
-        let preimage = chunk
-            .signature_preimage(context, manifest)
+        let sender = validated
+            .validator(chunk.sender)
             .map_err(|error| error.to_string())?;
+        let preimage = signature_payload.signature_preimage();
         Signature::try_from_bytes(&chunk.signature)
             .map_err(|error| format!("payload-chunk rollover has an invalid signature: {error}"))?
-            .verify(sender.validator.public_key(), &preimage)
+            .verify(sender.public_key(), &preimage)
             .map_err(|error| {
                 format!("payload-chunk rollover signature is not owned by its sender: {error}")
             })?;
@@ -802,9 +800,6 @@ fn applied_height_reconstruction_covers(
                     wire::ConsensusMessageV2Payload::TimeoutVote(vote) => round_matches(vote.round),
                     wire::ConsensusMessageV2Payload::TimeoutCertificate(certificate) => {
                         round_matches(certificate.round)
-                    }
-                    wire::ConsensusMessageV2Payload::PayloadManifest(manifest) => {
-                        round_matches(manifest.round)
                     }
                     wire::ConsensusMessageV2Payload::PayloadChunk(_) => false,
                     wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request) => {

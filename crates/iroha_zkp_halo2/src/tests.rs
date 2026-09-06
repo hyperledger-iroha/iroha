@@ -1,7 +1,5 @@
 //! Unit tests validating the deterministic IPA and polynomial opening flow.
 use super::*;
-#[cfg(feature = "goldilocks_backend")]
-use crate::backend::goldilocks::{self as gold, GoldilocksBackend};
 use crate::{
     PolyOpenTranscriptMetadata,
     backend::{
@@ -17,10 +15,6 @@ fn sample_pallas_coeffs(n: usize) -> Vec<pallas::Scalar> {
     (0..n)
         .map(|i| pallas::Scalar::from((i + 1) as u64))
         .collect()
-}
-#[cfg(feature = "goldilocks_backend")]
-fn sample_goldilocks_coeffs(n: usize) -> Vec<gold::Scalar> {
-    (0..n).map(|i| gold::Scalar::from((i + 1) as u64)).collect()
 }
 fn sample_bn254_coeffs(n: usize) -> Vec<bn254::Scalar> {
     (0..n)
@@ -157,15 +151,6 @@ fn params_power_of_two() {
     let pallas_again = pallas::Params::new(8).expect("n=8");
     assert_eq!(pallas_params.g(), pallas_again.g());
     assert_eq!(pallas_params.h(), pallas_again.h());
-    #[cfg(feature = "goldilocks_backend")]
-    {
-        let gold_params = gold::Params::new(8).expect("n=8");
-        assert_eq!(gold_params.n(), 8);
-        assert_eq!(gold_params.g().len(), 8);
-        let gold_again = gold::Params::new(8).expect("n=8");
-        assert_eq!(gold_params.g(), gold_again.g());
-        assert_eq!(gold_params.h(), gold_again.h());
-    }
 }
 #[test]
 fn polynomial_transcript_binds_the_complete_parameter_set() {
@@ -250,12 +235,6 @@ fn params_invalid_n() {
         nh::params_from_wire::<Bn254Backend>(&bn254_wire),
         Err(Error::InvalidN(1))
     ));
-    #[cfg(feature = "goldilocks_backend")]
-    {
-        assert!(gold::Params::new(0).is_err());
-        assert!(matches!(gold::Params::new(1), Err(Error::InvalidN(1))));
-        assert!(gold::Params::new(3).is_err());
-    }
 }
 #[test]
 fn forged_zero_round_pallas_opening_is_rejected() {
@@ -282,19 +261,6 @@ fn poly_commit_open_verify_pallas() {
     let (proof, t) = poly.open(&params, &mut tr, z, commitment).unwrap();
     let mut tr_v = Transcript::new("test");
     pallas::Polynomial::verify_open(&params, &mut tr_v, z, commitment, t, &proof).unwrap();
-}
-#[cfg(feature = "goldilocks_backend")]
-#[test]
-fn poly_commit_open_verify_goldilocks() {
-    let params = gold::Params::new(8).unwrap();
-    let coeffs = sample_goldilocks_coeffs(8);
-    let poly = gold::Polynomial::from_coeffs(coeffs);
-    let mut tr = Transcript::new("test-gold");
-    let commitment = poly.commit(&params).unwrap();
-    let z = gold::Scalar::from(5u64);
-    let (proof, t) = poly.open(&params, &mut tr, z, commitment).unwrap();
-    let mut tr_v = Transcript::new("test-gold");
-    gold::Polynomial::verify_open(&params, &mut tr_v, z, commitment, t, &proof).unwrap();
 }
 #[test]
 fn poly_commit_open_verify_bn254() {
@@ -492,50 +458,6 @@ fn standalone_params_wire_never_carries_generator_material() {
     IpaParams::decode_bytes(&retired_bytes)
         .expect_err("the canonical selector wire must reject inline generators");
 }
-#[cfg(feature = "goldilocks_backend")]
-#[test]
-fn norito_roundtrip_params_and_proof_goldilocks() {
-    let params = gold::Params::new(8).unwrap();
-    let coeffs = sample_goldilocks_coeffs(8);
-    let poly = gold::Polynomial::from_coeffs(coeffs);
-    let commitment = poly.commit(&params).unwrap();
-    let z = gold::Scalar::from(4u64);
-    let mut tr = Transcript::new("test-gold");
-    let (proof, t) = poly.open(&params, &mut tr, z, commitment).unwrap();
-    let w_params = nh::params_to_wire(&params);
-    let bytes_params = w_params.encode_bytes();
-    let w_params2 = IpaParams::decode_bytes(&bytes_params).unwrap();
-    let params2 = nh::params_from_wire::<GoldilocksBackend>(&w_params2).unwrap();
-    assert_eq!(params.n(), params2.n());
-    assert_eq!(params.g(), params2.g());
-    assert_eq!(params.h(), params2.h());
-    let w_proof = nh::proof_to_wire(&proof);
-    let bytes_proof = w_proof.encode_bytes();
-    let w_proof2 = IpaProofData::decode_bytes(&bytes_proof).unwrap();
-    let proof2 = nh::proof_from_wire::<GoldilocksBackend>(&w_proof2).unwrap();
-    assert_eq!(proof.l_vec, proof2.l_vec);
-    assert_eq!(proof.r_vec, proof2.r_vec);
-    assert_eq!(proof.a_final.to_bytes(), proof2.a_final.to_bytes());
-    assert_eq!(proof.b_final.to_bytes(), proof2.b_final.to_bytes());
-    let mut tr_v = Transcript::new("test-gold");
-    gold::Polynomial::verify_open(&params2, &mut tr_v, z, commitment, t, &proof2).unwrap();
-    let envelope = OpenVerifyEnvelope {
-        params: w_params,
-        public: nh::poly_open_public::<GoldilocksBackend>(params.n(), z, t, commitment),
-        proof: w_proof,
-        transcript_label: "test-gold".into(),
-        vk_commitment: None,
-        public_inputs_schema_hash: None,
-        domain_tag: None,
-    };
-    let results = crate::batch::verify_open_batch(std::slice::from_ref(&envelope));
-    assert!(matches!(
-        results[0],
-        Err(Error::UnsupportedBackend {
-            backend: ZkCurveId::Goldilocks
-        })
-    ));
-}
 #[test]
 fn params_registry_keys_include_backend_curve() {
     let _guard = PARAMS_REGISTRY_TEST_LOCK.lock().unwrap();
@@ -568,9 +490,8 @@ fn params_registry_reuses_canonical_wire_params() {
     >(16));
     crate::params::clear_params_registry_for_tests();
 }
-#[cfg(feature = "goldilocks_backend")]
 #[test]
-fn batch_verify_two_envelopes_mixed() {
+fn batch_verify_supported_and_rejected_field_identities() {
     let params_p = pallas::Params::new(8).unwrap();
     let coeffs_p = sample_pallas_coeffs(8);
     let poly_p = pallas::Polynomial::from_coeffs(coeffs_p);
@@ -579,15 +500,6 @@ fn batch_verify_two_envelopes_mixed() {
     let mut tr_p = Transcript::new("batch");
     let (proof_p, t_p) = poly_p
         .open(&params_p, &mut tr_p, z_p, commitment_p)
-        .unwrap();
-    let params_g = gold::Params::new(8).unwrap();
-    let coeffs_g = sample_goldilocks_coeffs(8);
-    let poly_g = gold::Polynomial::from_coeffs(coeffs_g);
-    let commitment_g = poly_g.commit(&params_g).unwrap();
-    let z_g = gold::Scalar::from(3u64);
-    let mut tr_g = Transcript::new("batch");
-    let (proof_g, _t_g) = poly_g
-        .open(&params_g, &mut tr_g, z_g, commitment_g)
         .unwrap();
     let env_ok = OpenVerifyEnvelope {
         params: nh::params_to_wire(&params_p),
@@ -598,20 +510,9 @@ fn batch_verify_two_envelopes_mixed() {
         public_inputs_schema_hash: None,
         domain_tag: None,
     };
-    let env_bad = OpenVerifyEnvelope {
-        params: nh::params_to_wire(&params_g),
-        public: nh::poly_open_public::<GoldilocksBackend>(
-            params_g.n(),
-            z_g,
-            gold::Scalar::from(111u64),
-            commitment_g,
-        ),
-        proof: nh::proof_to_wire(&proof_g),
-        transcript_label: "batch".into(),
-        vk_commitment: None,
-        public_inputs_schema_hash: None,
-        domain_tag: None,
-    };
+    let mut env_bad = env_ok.clone();
+    env_bad.params.curve_id = ZkCurveId::Goldilocks.as_u16();
+    env_bad.public.curve_id = ZkCurveId::Goldilocks.as_u16();
     let results = crate::batch::verify_open_batch(&[env_ok.clone(), env_bad.clone()]);
     assert!(matches!(results[0], Ok(true)));
     assert!(matches!(
@@ -812,9 +713,8 @@ fn decode_envelope_reports_invalid_public_group_encoding() {
         Err(Error::InvalidEncoding)
     ));
 }
-#[cfg(not(feature = "goldilocks_backend"))]
 #[test]
-fn decode_envelope_reports_uncompiled_backend() {
+fn decode_envelope_rejects_goldilocks_field_as_ipa_group() {
     let mut envelope = sample_pallas_envelope(8, "unsupported-backend");
     envelope.params.curve_id = ZkCurveId::Goldilocks.as_u16();
     envelope.public.curve_id = ZkCurveId::Goldilocks.as_u16();

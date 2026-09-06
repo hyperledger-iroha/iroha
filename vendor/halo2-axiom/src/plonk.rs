@@ -14,7 +14,10 @@ use crate::helpers::{
     SerdeCurveAffine, SerdePrimeField, polynomial_slice_byte_length, read_polynomial_vec,
     write_polynomial_slice, write_polynomial_slice_streaming,
 };
-use crate::poly::{Coeff, EvaluationDomain, LagrangeCoeff, PinnedEvaluationDomain, Polynomial};
+use crate::poly::{
+    Coeff, EvaluationDomain, LagrangeCoeff, PinnedEvaluationDomain, Polynomial,
+    read_polynomial_vec_checked,
+};
 use crate::transcript::{ChallengeScalar, EncodedChallenge, Transcript};
 
 mod assigned;
@@ -39,10 +42,62 @@ pub use verifier::*;
 
 use evaluation::Evaluator;
 
-use std::io;
+use std::{fmt, io};
 
 // Version byte + domain degree + selector-compression flag + fixed-column count.
 const VERIFYING_KEY_SERIALIZED_HEADER_BYTES: usize = 1 + 4 + 1 + 4;
+
+#[derive(Default)]
+struct DebugByteCounter {
+    len: u64,
+}
+
+impl fmt::Write for DebugByteCounter {
+    fn write_str(&mut self, value: &str) -> fmt::Result {
+        self.len = self
+            .len
+            .checked_add(u64::try_from(value.len()).map_err(|_| fmt::Error)?)
+            .ok_or(fmt::Error)?;
+        Ok(())
+    }
+}
+
+struct Blake2bDebugWriter<'a> {
+    state: &'a mut blake2b_simd::State,
+}
+
+impl fmt::Write for Blake2bDebugWriter<'_> {
+    fn write_str(&mut self, value: &str) -> fmt::Result {
+        self.state.update(value.as_bytes());
+        Ok(())
+    }
+}
+
+/// Preserve Halo2's historical length-prefixed `Debug` transcript representation without ever
+/// materializing that representation as one contiguous allocation.
+///
+/// Large recursive constraint systems can render to tens of gigabytes even though their live
+/// circuit and key data are much smaller. Formatting once into a `String` therefore makes key
+/// generation consume memory proportional to the rendered text and can double capacity during a
+/// final reallocation. Two allocation-free formatting passes retain the exact historical bytes:
+/// the first determines the required prefix and the second streams those bytes into Blake2b.
+fn hash_debug_repr<T: fmt::Debug>(value: &T) -> [u8; 64] {
+    let mut counter = DebugByteCounter::default();
+    fmt::write(&mut counter, format_args!("{value:?}"))
+        .expect("counting a Debug representation cannot fail");
+
+    let mut hasher = Blake2bParams::new()
+        .hash_length(64)
+        .personal(b"Halo2-Verify-Key")
+        .to_state();
+    hasher.update(&counter.len.to_le_bytes());
+    fmt::write(
+        &mut Blake2bDebugWriter { state: &mut hasher },
+        format_args!("{value:?}"),
+    )
+    .expect("hashing a Debug representation cannot fail");
+    *hasher.finalize().as_array()
+}
 
 /// This is a verifying key which allows for the verification of proofs for a
 /// particular circuit.
@@ -65,6 +120,182 @@ impl<C: SerdeCurveAffine> VerifyingKey<C>
 where
     C::Scalar: SerdePrimeField + FromUniformBytes<64>, // the FromUniformBytes<64> should not be necessary: currently serialization always stores a Blake2b hash of verifying key; this should be removed
 {
+    /// Read a canonical processed verification key with a caller-selected domain bound.
+    ///
+    /// `expected_k` and circuit configuration must come from trusted local policy, not the
+    /// input stream. The header degree is checked before domain construction. Fixed-column
+    /// counts are bounded by configuration before allocation and checked exactly after
+    /// selector expansion; permutation columns come only from configuration.
+    ///
+    /// This preserves the existing Processed encoding and consumes only this key's prefix.
+    /// The caller remains responsible for artifact authentication and any outer framing/EOF
+    /// requirement. Raw and unchecked encodings are rejected by this checked entry point.
+    pub fn read_checked<R: io::Read, ConcreteCircuit: Circuit<C::Scalar>>(
+        reader: &mut R,
+        format: SerdeFormat,
+        expected_k: u32,
+        #[cfg(feature = "circuit-params")] params: ConcreteCircuit::Params,
+    ) -> io::Result<Self> {
+        if !matches!(format, SerdeFormat::Processed) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "checked key reading requires Processed format",
+            ));
+        }
+        let mut header = [0_u8; VERIFYING_KEY_SERIALIZED_HEADER_BYTES];
+        reader.read_exact(&mut header)?;
+        if header[0] != 0x02 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "unexpected version byte",
+            ));
+        }
+        let k = u32::from_le_bytes([header[1], header[2], header[3], header[4]]);
+        if k != expected_k {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "key degree does not match expected domain",
+            ));
+        }
+        let rows = 1_usize
+            .checked_shl(expected_k)
+            .filter(|rows| u32::try_from(*rows).is_ok() && expected_k <= C::Scalar::S)
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidInput, "unsupported expected domain")
+            })?;
+        if header[5] > 1 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "unexpected compress_selectors not boolean",
+            ));
+        }
+        let compress_selectors = header[5] == 1;
+        let num_fixed_columns = usize::try_from(u32::from_le_bytes([
+            header[6], header[7], header[8], header[9],
+        ]))
+        .map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "fixed-column count does not fit usize",
+            )
+        })?;
+
+        let mut cs = ConstraintSystem::default();
+        #[cfg(feature = "circuit-params")]
+        let _ = ConcreteCircuit::configure_with_params(&mut cs, params);
+        #[cfg(not(feature = "circuit-params"))]
+        let _ = ConcreteCircuit::configure(&mut cs);
+        let max_fixed_columns = cs
+            .num_fixed_columns
+            .checked_add(cs.num_selectors)
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "configured column count overflow",
+                )
+            })?;
+        if num_fixed_columns < cs.num_fixed_columns
+            || num_fixed_columns > max_fixed_columns
+            || (!compress_selectors && num_fixed_columns != max_fixed_columns)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "fixed-column count does not match configured bounds",
+            ));
+        }
+        let degree = u32::try_from(cs.degree())
+            .ok()
+            .filter(|degree| *degree >= 2)
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidInput, "unsupported circuit degree")
+            })?;
+        let extended_rows = (rows as u64)
+            .checked_mul(u64::from(degree - 1))
+            .and_then(u64::checked_next_power_of_two)
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidInput, "extended domain overflow")
+            })?;
+        if extended_rows.trailing_zeros() > C::Scalar::S
+            || usize::try_from(extended_rows).is_err()
+            || rows < cs.minimum_rows()
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "configured circuit does not fit expected domain",
+            ));
+        }
+        let domain = EvaluationDomain::new(degree, expected_k);
+        let mut fixed_commitments = Vec::new();
+        fixed_commitments
+            .try_reserve_exact(num_fixed_columns)
+            .map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::OutOfMemory,
+                    "cannot reserve fixed commitments",
+                )
+            })?;
+        for _ in 0..num_fixed_columns {
+            fixed_commitments.push(C::read(reader, format)?);
+        }
+        let permutation = permutation::VerifyingKey::read(reader, &cs.permutation, format)?;
+        let (cs, selectors) = if compress_selectors {
+            let mut selectors = Vec::new();
+            selectors.try_reserve_exact(cs.num_selectors).map_err(|_| {
+                io::Error::new(io::ErrorKind::OutOfMemory, "cannot reserve selectors")
+            })?;
+            let selector_bytes_len = rows.div_ceil(8);
+            for _ in 0..cs.num_selectors {
+                let mut selector_bytes = Vec::new();
+                selector_bytes
+                    .try_reserve_exact(selector_bytes_len)
+                    .map_err(|_| {
+                        io::Error::new(io::ErrorKind::OutOfMemory, "cannot reserve selector bytes")
+                    })?;
+                selector_bytes.resize(selector_bytes_len, 0_u8);
+                reader.read_exact(&mut selector_bytes)?;
+                if rows % 8 != 0
+                    && selector_bytes
+                        .last()
+                        .is_some_and(|last| *last >> (rows % 8) != 0)
+                {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "noncanonical selector padding",
+                    ));
+                }
+                let mut selector = Vec::new();
+                selector.try_reserve_exact(rows).map_err(|_| {
+                    io::Error::new(io::ErrorKind::OutOfMemory, "cannot reserve selector rows")
+                })?;
+                selector.resize(rows, false);
+                for (bits, byte) in selector.chunks_mut(8).zip(selector_bytes) {
+                    crate::helpers::unpack(byte, bits);
+                }
+                selectors.push(selector);
+            }
+            let (cs, _) = cs.compress_selectors(selectors.clone());
+            (cs, selectors)
+        } else {
+            let fake_selectors = vec![vec![false]; cs.num_selectors];
+            let (cs, _) = cs.directly_convert_selectors_to_fixed(fake_selectors);
+            (cs, vec![])
+        };
+        if fixed_commitments.len() != cs.num_fixed_columns {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "fixed-column count does not match expanded selectors",
+            ));
+        }
+        Ok(Self::from_parts(
+            domain,
+            fixed_commitments,
+            permutation,
+            cs,
+            selectors,
+            compress_selectors,
+        ))
+    }
+
     /// Writes a verifying key to a buffer.
     ///
     /// Writes a curve element according to `format`:
@@ -253,18 +484,9 @@ impl<C: CurveAffine> VerifyingKey<C> {
             compress_selectors,
         };
 
-        let mut hasher = Blake2bParams::new()
-            .hash_length(64)
-            .personal(b"Halo2-Verify-Key")
-            .to_state();
-
-        let s = format!("{:?}", vk.pinned());
-
-        hasher.update(&(s.len() as u64).to_le_bytes());
-        hasher.update(s.as_bytes());
-
-        // Hash in final Blake2bState
-        vk.transcript_repr = C::Scalar::from_uniform_bytes(hasher.finalize().as_array());
+        // Hash in the historical length-prefixed Debug encoding without allocating the complete
+        // rendering. Recursive circuits can otherwise need tens of gigabytes for this temporary.
+        vk.transcript_repr = C::Scalar::from_uniform_bytes(&hash_debug_repr(&vk.pinned()));
 
         vk
     }
@@ -364,6 +586,59 @@ impl<C: SerdeCurveAffine> ProvingKey<C>
 where
     C::Scalar: SerdePrimeField + FromUniformBytes<64>,
 {
+    /// Read a shape-bounded, canonical Processed proving key without legacy unchecked reads.
+    ///
+    /// The trusted `expected_k` and configured circuit bound all allocations. Each row-mask,
+    /// fixed, and permutation polynomial must contain exactly `2^expected_k` coefficients;
+    /// fixed and permutation vector counts must exactly match their configured columns.
+    /// Truncation, noncanonical fields/points, and mismatched serialized sizes return errors.
+    ///
+    /// The Processed bytes and verifying-key identity are unchanged. This reader does not
+    /// authenticate the artifact or require end of stream: callers must enforce their exact
+    /// authenticated artifact framing before accepting the returned key. Other formats are
+    /// rejected; the legacy [`Self::read`] remains available to its existing callers.
+    pub fn read_checked<R: io::Read, ConcreteCircuit: Circuit<C::Scalar>>(
+        reader: &mut R,
+        format: SerdeFormat,
+        expected_k: u32,
+        #[cfg(feature = "circuit-params")] params: ConcreteCircuit::Params,
+    ) -> io::Result<Self> {
+        let vk = VerifyingKey::<C>::read_checked::<R, ConcreteCircuit>(
+            reader,
+            format,
+            expected_k,
+            #[cfg(feature = "circuit-params")]
+            params,
+        )?;
+        let rows = usize::try_from(vk.domain.get_n()).map_err(|_| {
+            io::Error::new(io::ErrorKind::InvalidData, "domain size does not fit usize")
+        })?;
+        let l0 = Polynomial::read_checked(reader, format, rows)?;
+        let l_last = Polynomial::read_checked(reader, format, rows)?;
+        let l_active_row = Polynomial::read_checked(reader, format, rows)?;
+        let fixed_values =
+            read_polynomial_vec_checked(reader, format, vk.cs.num_fixed_columns, rows)?;
+        let fixed_polys =
+            read_polynomial_vec_checked(reader, format, vk.cs.num_fixed_columns, rows)?;
+        let permutation = permutation::ProvingKey::read_checked(
+            reader,
+            format,
+            vk.cs.permutation.columns.len(),
+            rows,
+        )?;
+        let ev = Evaluator::new(vk.cs());
+        Ok(Self {
+            vk,
+            l0,
+            l_last,
+            l_active_row,
+            fixed_values,
+            fixed_polys,
+            permutation,
+            ev,
+        })
+    }
+
     /// Writes a proving key to a buffer.
     ///
     /// Writes a curve element according to `format`:
@@ -534,16 +809,22 @@ type ChallengeX<F> = ChallengeScalar<F, X>;
 #[cfg(test)]
 mod tests {
     use super::{
-        Advice, Circuit, Column, ConstraintSystem, Error, KeygenWithExtractorError, Selector,
-        SerdeFormat, keygen_pk, keygen_pk_consuming_with, keygen_pk2, keygen_vk,
-        keygen_vk_consuming_with, keygen_vk_custom,
+        Advice, Circuit, Column, ConstraintSystem, Error, KeygenWithExtractorError, ProvingKey,
+        Selector, SerdeFormat, VerifyingKey, keygen_pk, keygen_pk_consuming_with, keygen_pk2,
+        keygen_pk2_consuming, keygen_pk2_consuming_with_profile, keygen_vk,
+        keygen_vk_consuming_with, keygen_vk_consuming_with_profile, keygen_vk_custom,
     };
     use crate::{
+        SerdeCurveAffine, SerdePrimeField,
         circuit::{Layouter, SimpleFloorPlanner, Value},
-        halo2curves::bn256::G1Affine,
+        halo2curves::{
+            bn256::G1Affine,
+            pasta::{EpAffine, EqAffine, Fp},
+        },
         poly::{Rotation, commitment::ParamsProver, ipa::commitment::ParamsIPA},
     };
-    use group::ff::Field;
+    use blake2b_simd::Params as Blake2bParams;
+    use group::ff::{Field, FromUniformBytes};
     use std::{
         io,
         sync::{
@@ -688,6 +969,279 @@ mod tests {
         )
     }
 
+    fn legacy_debug_hash<T: std::fmt::Debug>(value: &T) -> [u8; 64] {
+        let rendered = format!("{value:?}");
+        let mut hasher = Blake2bParams::new()
+            .hash_length(64)
+            .personal(b"Halo2-Verify-Key")
+            .to_state();
+        hasher.update(&(rendered.len() as u64).to_le_bytes());
+        hasher.update(rendered.as_bytes());
+        *hasher.finalize().as_array()
+    }
+
+    #[test]
+    fn streamed_debug_vk_hash_is_byte_exact_with_legacy_encoding() {
+        let parameters = ParamsIPA::<EqAffine>::new(6);
+        let key = keygen_pk2(
+            &parameters,
+            &TrackedCircuit {
+                lifetime: None,
+                fail_synthesis: false,
+            },
+            false,
+        )
+        .expect("tiny proving key");
+        let pinned = key.get_vk().pinned();
+        assert_eq!(super::hash_debug_repr(&pinned), legacy_debug_hash(&pinned));
+        assert_eq!(
+            key.get_vk().transcript_repr(),
+            Fp::from_uniform_bytes(&legacy_debug_hash(&pinned)),
+        );
+    }
+
+    fn assert_checked_processed_roundtrip<C: SerdeCurveAffine>()
+    where
+        C::Scalar: SerdePrimeField + FromUniformBytes<64>,
+    {
+        let parameters = ParamsIPA::<C>::new(6);
+        let circuit = TrackedCircuit {
+            lifetime: None,
+            fail_synthesis: false,
+        };
+        for compress_selectors in [false, true] {
+            let original =
+                keygen_pk2(&parameters, &circuit, compress_selectors).expect("tiny proving key");
+            let bytes = original.to_bytes(SerdeFormat::Processed);
+            let vk_bytes = original.get_vk().to_bytes(SerdeFormat::Processed);
+            let mut reader = io::Cursor::new(&bytes);
+            let restored = ProvingKey::<C>::read_checked::<_, TrackedCircuit>(
+                &mut reader,
+                SerdeFormat::Processed,
+                6,
+                #[cfg(feature = "circuit-params")]
+                (),
+            )
+            .expect("checked key read");
+            assert_eq!(reader.position() as usize, bytes.len());
+            assert_eq!(restored.to_bytes(SerdeFormat::Processed), bytes);
+            assert_eq!(restored.get_vk().to_bytes(SerdeFormat::Processed), vk_bytes);
+            assert_eq!(
+                restored.get_vk().transcript_repr(),
+                original.get_vk().transcript_repr()
+            );
+
+            let legacy = ProvingKey::<C>::read::<_, TrackedCircuit>(
+                &mut bytes.as_slice(),
+                SerdeFormat::Processed,
+                #[cfg(feature = "circuit-params")]
+                (),
+            )
+            .expect("legacy reader retains the same encoding");
+            assert_eq!(legacy.to_bytes(SerdeFormat::Processed), bytes);
+            let checked_vk = VerifyingKey::<C>::read_checked::<_, TrackedCircuit>(
+                &mut vk_bytes.as_slice(),
+                SerdeFormat::Processed,
+                6,
+                #[cfg(feature = "circuit-params")]
+                (),
+            )
+            .expect("standalone checked VK read");
+            assert_eq!(checked_vk.to_bytes(SerdeFormat::Processed), vk_bytes);
+        }
+    }
+
+    #[test]
+    fn checked_key_reader_k6_preserves_processed_bytes_and_vk_identity() {
+        assert_checked_processed_roundtrip::<EqAffine>();
+        assert_checked_processed_roundtrip::<EpAffine>();
+    }
+
+    fn checked_test_key(compress_selectors: bool) -> ProvingKey<EqAffine> {
+        let parameters = ParamsIPA::<EqAffine>::new(6);
+        keygen_pk2(
+            &parameters,
+            &TrackedCircuit {
+                lifetime: None,
+                fail_synthesis: false,
+            },
+            compress_selectors,
+        )
+        .expect("tiny checked-reader fixture")
+    }
+
+    fn read_checked_test_key(bytes: &[u8], expected_k: u32) -> io::Result<ProvingKey<EqAffine>> {
+        ProvingKey::read_checked::<_, TrackedCircuit>(
+            &mut &bytes[..],
+            SerdeFormat::Processed,
+            expected_k,
+            #[cfg(feature = "circuit-params")]
+            (),
+        )
+    }
+
+    /// Return each vector header and each polynomial header of the exact tiny fixture.
+    fn checked_test_key_offsets(key: &ProvingKey<EqAffine>) -> (Vec<usize>, Vec<usize>) {
+        let vk_len = key.get_vk().to_bytes(SerdeFormat::Processed).len();
+        let polynomial_bytes = 4 + 64 * 32;
+        let mut polynomial_headers = (0..3)
+            .map(|index| vk_len + index * polynomial_bytes)
+            .collect::<Vec<_>>();
+        let mut offset = vk_len + 3 * polynomial_bytes;
+        let mut vector_headers = Vec::new();
+        for count in [
+            key.fixed_values.len(),
+            key.fixed_polys.len(),
+            key.vk.cs.permutation.columns.len(),
+            key.vk.cs.permutation.columns.len(),
+        ] {
+            vector_headers.push(offset);
+            offset += 4;
+            for _ in 0..count {
+                polynomial_headers.push(offset);
+                offset += polynomial_bytes;
+            }
+        }
+        assert_eq!(offset, key.to_bytes(SerdeFormat::Processed).len());
+        (vector_headers, polynomial_headers)
+    }
+
+    #[test]
+    fn checked_key_reader_rejects_untrusted_degrees_and_formats() {
+        let key = checked_test_key(false);
+        let bytes = key.to_bytes(SerdeFormat::Processed);
+        assert_eq!(
+            read_checked_test_key(&bytes, 7).unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
+        let mut header = bytes[..super::VERIFYING_KEY_SERIALIZED_HEADER_BYTES].to_vec();
+        header[1..5].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert_eq!(
+            read_checked_test_key(&header, 6).unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
+        assert_eq!(
+            read_checked_test_key(&header, u32::MAX).unwrap_err().kind(),
+            io::ErrorKind::InvalidInput
+        );
+        header[1..5].copy_from_slice(&0_u32.to_le_bytes());
+        assert_eq!(
+            read_checked_test_key(&header, 0).unwrap_err().kind(),
+            io::ErrorKind::InvalidInput
+        );
+        for (offset, invalid) in [(0, 3), (5, 2)] {
+            let mut malformed = bytes.clone();
+            malformed[offset] = invalid;
+            assert_eq!(
+                read_checked_test_key(&malformed, 6).unwrap_err().kind(),
+                io::ErrorKind::InvalidData
+            );
+        }
+        for format in [SerdeFormat::RawBytes, SerdeFormat::RawBytesUnchecked] {
+            let result = ProvingKey::<EqAffine>::read_checked::<_, TrackedCircuit>(
+                &mut &[][..],
+                format,
+                6,
+                #[cfg(feature = "circuit-params")]
+                (),
+            );
+            assert_eq!(result.unwrap_err().kind(), io::ErrorKind::InvalidInput);
+        }
+    }
+
+    #[test]
+    fn checked_key_reader_rejects_column_and_polynomial_shapes_before_body_reads() {
+        let key = checked_test_key(false);
+        let bytes = key.to_bytes(SerdeFormat::Processed);
+        let (vector_headers, polynomial_headers) = checked_test_key_offsets(&key);
+        let mut huge_fixed_count = bytes[..super::VERIFYING_KEY_SERIALIZED_HEADER_BYTES].to_vec();
+        huge_fixed_count[6..10].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert_eq!(
+            read_checked_test_key(&huge_fixed_count, 6)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidData
+        );
+        for offset in vector_headers {
+            for count in [0_u32, u32::MAX] {
+                let mut malformed = bytes[..offset + 4].to_vec();
+                malformed[offset..offset + 4].copy_from_slice(&count.to_be_bytes());
+                assert_eq!(
+                    read_checked_test_key(&malformed, 6).unwrap_err().kind(),
+                    io::ErrorKind::InvalidData
+                );
+            }
+        }
+        for offset in polynomial_headers {
+            for len in [0_u32, 63, 65, u32::MAX] {
+                let mut malformed = bytes[..offset + 4].to_vec();
+                malformed[offset..offset + 4].copy_from_slice(&len.to_be_bytes());
+                assert_eq!(
+                    read_checked_test_key(&malformed, 6).unwrap_err().kind(),
+                    io::ErrorKind::InvalidData
+                );
+            }
+        }
+
+        // Zero fixed commitments fit the unexpanded [0, 1] selector bound, but not
+        // this selector's exact expanded fixed-column count. Remove the commitment
+        // so every subsequent point/selector still occupies the correct boundary.
+        let compressed = checked_test_key(true);
+        assert_eq!(compressed.vk.fixed_commitments.len(), 1);
+        let mut missing_expanded_column = compressed.to_bytes(SerdeFormat::Processed);
+        missing_expanded_column[6..10].copy_from_slice(&0_u32.to_le_bytes());
+        missing_expanded_column.drain(10..42);
+        assert_eq!(
+            read_checked_test_key(&missing_expanded_column, 6)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidData
+        );
+    }
+
+    #[test]
+    fn checked_key_reader_rejects_noncanonical_fields_points_and_truncation_without_panics() {
+        let key = checked_test_key(true);
+        let bytes = key.to_bytes(SerdeFormat::Processed);
+        let (vector_headers, polynomial_headers) = checked_test_key_offsets(&key);
+        for offset in &polynomial_headers {
+            let mut malformed = bytes.clone();
+            malformed[offset + 4..offset + 4 + 32].fill(0xff);
+            let result = std::panic::catch_unwind(|| read_checked_test_key(&malformed, 6))
+                .expect("noncanonical field must not panic");
+            assert_eq!(result.unwrap_err().kind(), io::ErrorKind::InvalidData);
+        }
+        let mut malformed_point = bytes.clone();
+        malformed_point[10..42].fill(0xff);
+        assert!(
+            std::panic::catch_unwind(|| read_checked_test_key(&malformed_point, 6))
+                .expect("invalid curve point must not panic")
+                .is_err()
+        );
+
+        let vk_len = key.get_vk().to_bytes(SerdeFormat::Processed).len();
+        let mut cut_points = vec![0, 1, 4, 9, 10, 41, vk_len - 1, vk_len, bytes.len() - 1];
+        cut_points.extend(
+            vector_headers
+                .into_iter()
+                .flat_map(|offset| [offset, offset + 3]),
+        );
+        cut_points.extend(
+            polynomial_headers
+                .into_iter()
+                .flat_map(|offset| [offset, offset + 3, offset + 4, offset + 35]),
+        );
+        for cut in cut_points {
+            let result = std::panic::catch_unwind(|| read_checked_test_key(&bytes[..cut], 6))
+                .expect("truncated input must return an error, never panic");
+            assert_eq!(
+                result.unwrap_err().kind(),
+                io::ErrorKind::UnexpectedEof,
+                "cut at {cut}"
+            );
+        }
+    }
+
     #[test]
     fn consuming_keygen_preserves_bytes_and_drops_circuits_on_all_paths() {
         let params = ParamsIPA::<G1Affine>::new(3);
@@ -703,7 +1257,17 @@ mod tests {
             borrowed_pk.to_bytes(SerdeFormat::Processed),
             combined_pk.to_bytes(SerdeFormat::Processed),
             "streaming permutation VK commitments before fixed expansion and reusing a supplied \
-             VK domain must preserve processed key bytes"
+            VK domain must preserve processed key bytes"
+        );
+
+        let (circuit, lifetime) = tracked_circuit(false);
+        let consuming_combined_pk = keygen_pk2_consuming(&params, circuit, false)
+            .expect("consuming combined PK generation");
+        assert!(lifetime.dropped.load(Ordering::SeqCst));
+        assert_eq!(
+            combined_pk.to_bytes(SerdeFormat::Processed),
+            consuming_combined_pk.to_bytes(SerdeFormat::Processed),
+            "consuming combined keygen must preserve canonical key bytes"
         );
         let compressed_vk =
             keygen_vk_custom(&params, &reference, true).expect("compressed VK generation");
@@ -715,6 +1279,46 @@ mod tests {
                 .get_vk()
                 .to_bytes(SerdeFormat::Processed),
             "permutation-first VK generation must preserve compressed-selector bytes"
+        );
+
+        let (circuit, lifetime) = tracked_circuit(false);
+        let (consuming_compressed_vk, vk_profile) = keygen_vk_consuming_with_profile(
+            &params,
+            circuit,
+            true,
+            |circuit, profile| {
+                let lifetime = circuit.lifetime.as_ref().expect("tracked circuit");
+                assert!(lifetime.synthesized.load(Ordering::SeqCst));
+                assert!(!lifetime.dropped.load(Ordering::SeqCst));
+                Ok::<_, &'static str>(profile)
+            },
+        )
+        .expect("compressed consuming VK generation");
+        assert!(lifetime.dropped.load(Ordering::SeqCst));
+        assert!(vk_profile.compress_selectors);
+        assert_eq!(vk_profile.domain_rows, 8);
+        assert_eq!(vk_profile.selector_columns, 1);
+        assert_eq!(vk_profile.materialized_selector_columns, 1);
+        assert_eq!(
+            consuming_compressed_vk.to_bytes(SerdeFormat::Processed),
+            compressed_vk.to_bytes(SerdeFormat::Processed),
+            "compressed consuming VK generation must preserve canonical bytes"
+        );
+
+        let (circuit, lifetime) = tracked_circuit(false);
+        let (consuming_compressed_pk, pk_profile) = keygen_pk2_consuming_with_profile(
+            &params,
+            circuit,
+            true,
+            |_circuit, profile| Ok::<_, &'static str>(profile),
+        )
+        .expect("compressed consuming combined PK generation");
+        assert!(lifetime.dropped.load(Ordering::SeqCst));
+        assert_eq!(pk_profile, vk_profile);
+        assert_eq!(
+            consuming_compressed_pk.to_bytes(SerdeFormat::Processed),
+            compressed_combined_pk.to_bytes(SerdeFormat::Processed),
+            "compressed consuming combined keygen must preserve canonical PK/VK bytes"
         );
 
         let (circuit, lifetime) = tracked_circuit(false);

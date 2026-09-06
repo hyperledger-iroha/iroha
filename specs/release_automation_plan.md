@@ -109,5 +109,6 @@ by this generic Iroha 3 release pipeline.
 - Registry, bucket, or SoraFS publication authorization.
 - Hosted build, install, scan, publication, rollback, and yank receipts.
 
-The provider boundary remains compatible with a later HSM adapter, but an HSM
-qualification requires new deployment evidence and promotion signatures.
+The provider contract is intentionally custody-neutral. Iroha exposes no
+HSM-specific adapter or qualification label; deployment-owned custody does not
+alter the signed provider identity or promotion evidence.

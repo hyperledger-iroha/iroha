@@ -4161,7 +4161,7 @@ mod tests {
             .expect("base root")
             .to_le_bytes();
         let mut transcript = TransparentTranscriptV1::new(
-            super::stark::ZK_X509_DIGEST_CONTEXT_V1,
+            super::super::stark::ZK_X509_DIGEST_CONTEXT_V1,
             b"zk-x509-der-challenge-test-suite-v1",
             &profile,
             &public,

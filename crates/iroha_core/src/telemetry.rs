@@ -8,7 +8,7 @@ use crate::pipeline::access::AccessSetSource;
 #[cfg_attr(not(feature = "telemetry"), allow(unused_imports))]
 use crate::smartcontracts::isi::settlement::{SETTLEMENT_KIND_DVP, SETTLEMENT_KIND_PVP};
 use crate::{
-    da::{DaPinIntentValidationError, DaShardCursorError},
+    da::DaShardCursorError,
     gossiper::{GossipPlane, gossip_plane_label},
     governance::manifest::{LaneManifestRegistryHandle, LaneManifestStatus},
     json_macros::{JsonDeserialize, JsonSerialize},
@@ -17,7 +17,6 @@ use crate::{
     queue::{Queue, QueueLimits},
     state::{State, WorldReadOnly},
     sumeragi::{
-        da::{GateReason, GateSatisfaction},
         message::BlockMessage,
         status::{
             self, DataspaceCommitmentSnapshot, LaneCommitmentSnapshot, SettlementOutcomeKind,
@@ -76,16 +75,16 @@ pub use iroha_telemetry::metrics::musubi::{
     MusubiPublicationPhaseMetricV1,
 };
 pub use iroha_telemetry::metrics::{
-    GOVERNANCE_MANIFEST_RECENT_CAP, GovernanceManifestActivation, Halo2Status,
-    LaneSettlementBuffer, LaneSettlementSnapshot, LaneSwaplineSnapshot, Metrics,
-    NexusDataspaceTeuStatus, NexusLaneManifestValidatorBindingStatus,
-    NexusLaneRuntimeUpgradeHookStatus, NexusLaneTeuBuckets, NexusLaneTeuStatus,
-    SchedulerLayerWidthBuckets, SorafsGatewayRequestMetricLabels,
-    SorafsGatewayResponseMetricLabels, SorafsReserveFinalizedProjection, TxGossipCaps,
-    TxGossipSnapshot, TxGossipStatus,
+    GOVERNANCE_MANIFEST_RECENT_CAP, LaneSettlementBuffer, LaneSettlementSnapshot,
+    LaneSwaplineSnapshot, Metrics, SorafsGatewayRequestMetricLabels,
+    SorafsGatewayResponseMetricLabels, SorafsReserveFinalizedProjection,
 };
 use iroha_telemetry::privacy::{
     PrivacyBucketConfig, PrivacyEventError, PrivacyShareError, SoranetSecureAggregator,
+};
+use iroha_torii_shared::status::{
+    GovernanceManifestActivation, Halo2Status, NexusDataspaceTeuStatus, NexusLaneTeuBuckets,
+    NexusLaneTeuStatus, SchedulerLayerWidthBuckets, TxGossipCaps, TxGossipStatus,
 };
 use ivm::host::{ZkCurve, ZkHalo2Backend, ZkHalo2Config};
 use mv::storage::StorageReadOnly;
@@ -546,6 +545,7 @@ fn parliament_no_result_label(
         Kind::BallotOpeningDeadlineExpired => "ballot_opening_deadline_expired",
         Kind::SortitionRetriesExhausted => "sortition_retries_exhausted",
         Kind::ConfirmationJuryCapacityUnavailable => "confirmation_jury_capacity_unavailable",
+        Kind::RandomnessRedrawBudgetExhausted => "randomness_redraw_budget_exhausted",
     }
 }
 #[cfg(feature = "telemetry")]
@@ -571,7 +571,8 @@ fn parliament_no_result_matches_transition(
         | NoResult::BallotReleasePulseUnavailable
         | NoResult::BallotOpeningDeadlineExpired => transition == Transition::FailBallotNoResult,
         NoResult::SortitionRetriesExhausted => transition == Transition::FailBodyElectionNoRoster,
-        NoResult::ConfirmationJuryCapacityUnavailable => {
+        NoResult::ConfirmationJuryCapacityUnavailable
+        | NoResult::RandomnessRedrawBudgetExhausted => {
             transition == Transition::FinalizeOpenedBallot
         }
     }
@@ -1495,7 +1496,6 @@ impl StateTelemetry {
         match status {
             PublicLaneValidatorStatus::PendingActivation(_) => "pending",
             PublicLaneValidatorStatus::Active => "active",
-            PublicLaneValidatorStatus::Jailed(_) => "jailed",
             PublicLaneValidatorStatus::Exiting(_) => "exiting",
             PublicLaneValidatorStatus::Exited => "exited",
             PublicLaneValidatorStatus::Slashed(_) => "slashed",
@@ -2127,7 +2127,6 @@ impl StateTelemetry {
             GovernanceEvent::ProposalSubmitted(payload) => {
                 self.update_governance_status(payload.id, GPS::Proposed);
             }
-            GovernanceEvent::ProposalApproved(_) => {}
             GovernanceEvent::ProposalRejected(payload) => {
                 self.update_governance_status(payload.id, GPS::Rejected);
             }
@@ -2149,13 +2148,16 @@ impl StateTelemetry {
             GovernanceEvent::LockRestituted(_) => {
                 self.record_governance_bond_event("lock_restituted");
             }
-            GovernanceEvent::CouncilPersisted(payload) => {
-                self.record_council_draw(payload);
-            }
-            GovernanceEvent::CitizenServiceRecorded(payload) => {
-                self.record_citizen_service_event(payload.event, &payload.slashed);
-            }
-            _ => {}
+            GovernanceEvent::BallotAccepted(_)
+            | GovernanceEvent::BallotRejected(_)
+            | GovernanceEvent::ReferendumOpened(_)
+            | GovernanceEvent::ReferendumClosed(_)
+            | GovernanceEvent::ParliamentAttemptCreated(_)
+            | GovernanceEvent::ParliamentLifecycleTransitionApplied(_)
+            | GovernanceEvent::ThresholdKeyLifecycleApplied(_)
+            | GovernanceEvent::CitizenRegistered(_)
+            | GovernanceEvent::CitizenRevoked(_)
+            | GovernanceEvent::ReferendumDecided(_) => {}
         }
     }
     #[cfg(feature = "telemetry")]
@@ -2368,6 +2370,24 @@ impl StateTelemetry {
             status_counts[status_index] = status_counts[status_index].saturating_add(1);
             stage_counts[stage_index] = stage_counts[stage_index].saturating_add(1);
         }
+        self.set_parliament_attempt_counts(status_counts, stage_counts);
+    }
+
+    /// Replace Parliament attempt gauges from the exact derived-state counters.
+    ///
+    /// Status order is Active, Certified, Rejected, Enacted, Superseded,
+    /// ExecutionFailed. Stage order follows the closed `GovernanceStageV1`
+    /// lifecycle from Qualification through Enactment.
+    #[cfg(feature = "telemetry")]
+    pub(crate) fn set_parliament_attempt_counts(
+        &self,
+        status_counts: [u64; 6],
+        stage_counts: [u64; 13],
+    ) {
+        use iroha_data_model::governance::types::{
+            GovernanceAttemptStatusV1 as Status, GovernanceStageV1 as Stage,
+        };
+
         if !self.is_enabled() {
             return;
         }
@@ -3637,44 +3657,6 @@ impl StateTelemetry {
     /// Set the total citizen count gauge.
     [record_citizens_total(total: u64) => .governance_citizens_total.set(total);]
     }
-    /// Increment citizen service discipline counters.
-    pub fn record_citizen_service_event(
-        &self,
-        event: iroha_data_model::isi::governance::CitizenServiceEvent,
-        _slashed: &iroha_primitives::numeric::Quantity,
-    ) {
-        if !self.is_enabled() {
-            return;
-        }
-        let label = match event {
-            iroha_data_model::isi::governance::CitizenServiceEvent::Decline => "decline",
-            iroha_data_model::isi::governance::CitizenServiceEvent::NoShow => "no_show",
-            iroha_data_model::isi::governance::CitizenServiceEvent::Misconduct => "misconduct",
-        };
-        self.metrics
-            .governance_citizen_service_events_total
-            .with_label_values(&[label])
-            .inc();
-    }
-    /// Record council/parliament draw metadata for observability.
-    pub fn record_council_draw(
-        &self,
-        payload: &iroha_data_model::events::data::governance::GovernanceCouncilPersisted,
-    ) {
-        if !self.is_enabled() {
-            return;
-        }
-        self.metrics
-            .governance_council_members
-            .set(u64::from(payload.members_count));
-        self.metrics
-            .governance_council_alternates
-            .set(u64::from(payload.alternates_count));
-        self.metrics
-            .governance_council_candidates
-            .set(u64::from(payload.candidates_count));
-        self.metrics.governance_council_epoch.set(payload.epoch);
-    }
     /// Seed governance proposal gauges with the provided statuses.
     pub fn seed_governance_proposal_statuses(
         &self,
@@ -4781,217 +4763,6 @@ impl MissingBlockFetchTargetKind {
         }
     }
 }
-/// Outcome classification for the DA manifest guard.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ManifestGuardResult {
-    /// Guard accepted the block's DA manifests.
-    Allowed,
-    /// Guard rejected the block due to missing or invalid manifests.
-    Rejected,
-}
-impl ManifestGuardResult {
-    #[must_use]
-    fn label(self) -> &'static str {
-        match self {
-            ManifestGuardResult::Allowed => "allowed",
-            ManifestGuardResult::Rejected => "rejected",
-        }
-    }
-}
-/// Reason why the DA manifest guard produced its outcome.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ManifestGuardReason {
-    /// Manifests were present and matched the commitment hash.
-    Ok,
-    /// Manifest could not be found in the spool directory.
-    Missing,
-    /// Manifest hash diverged from the commitment.
-    HashMismatch,
-    /// Manifest could not be read from disk.
-    ReadError,
-    /// Spool directory scan failed.
-    SpoolScan,
-}
-impl ManifestGuardReason {
-    #[must_use]
-    fn label(self) -> &'static str {
-        match self {
-            ManifestGuardReason::Ok => "ok",
-            ManifestGuardReason::Missing => "missing",
-            ManifestGuardReason::HashMismatch => "hash_mismatch",
-            ManifestGuardReason::ReadError => "read_error",
-            ManifestGuardReason::SpoolScan => "spool_scan",
-        }
-    }
-}
-/// Cache outcome classification used for DA spool/manifest caching telemetry.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CacheResult {
-    /// Cache entry served without disk re-read.
-    Hit,
-    /// Cache entry was refreshed from disk.
-    Miss,
-}
-impl CacheResult {
-    #[must_use]
-    fn label(self) -> &'static str {
-        match self {
-            CacheResult::Hit => "hit",
-            CacheResult::Miss => "miss",
-        }
-    }
-}
-/// DA spool cache classification.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DaSpoolCacheKind {
-    /// Commitment bundle spool.
-    Commitments,
-    /// Pin intent spool.
-    PinIntents,
-    /// Receipt spool.
-    Receipts,
-}
-impl DaSpoolCacheKind {
-    #[must_use]
-    fn label(self) -> &'static str {
-        match self {
-            DaSpoolCacheKind::Commitments => "commitments",
-            DaSpoolCacheKind::PinIntents => "pin_intents",
-            DaSpoolCacheKind::Receipts => "receipts",
-        }
-    }
-}
-/// Outcome classification for DA pin intent spool handling.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PinIntentSpoolResult {
-    /// Pin intent was retained for sealing.
-    Kept,
-    /// Pin intent was dropped or skipped.
-    Dropped,
-}
-impl PinIntentSpoolResult {
-    #[must_use]
-    fn label(self) -> &'static str {
-        match self {
-            PinIntentSpoolResult::Kept => "kept",
-            PinIntentSpoolResult::Dropped => "dropped",
-        }
-    }
-}
-/// Reason why a pin intent was kept or dropped.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PinIntentSpoolReason {
-    /// Pin intent survived validation and dedupe.
-    Kept,
-    /// Pin intent bundle version was unsupported.
-    UnsupportedVersion,
-    /// Pin intent bundle entries were not in canonical order.
-    NonCanonicalOrder,
-    /// Pin intent bundle exceeded the representable location space.
-    BundleTooLarge,
-    /// Manifest hash was zero or missing.
-    ZeroManifest,
-    /// Intent duplicated lane/epoch/sequence/ticket.
-    DuplicateIntent,
-    /// Storage ticket was reused by another pin intent.
-    DuplicateStorageTicket,
-    /// Manifest hash was reused by another pin intent.
-    DuplicateManifest,
-    /// Alias collision superseded this intent.
-    AliasSuperseded,
-    /// Alias exceeded the consensus admission byte bound.
-    AliasTooLong,
-    /// Lane was not present in the lane catalog.
-    UnknownLane,
-    /// Owner account missing from WSV.
-    UnknownOwner,
-    /// Signed ingest authorization was missing or invalid.
-    InvalidAuthorization,
-    /// Deterministic ingest quota rejected the intent.
-    Quota,
-    /// Storage ticket was zeroed.
-    ZeroStorageTicket,
-    /// Intent was already sealed into a previous block.
-    SealedDuplicate,
-}
-impl PinIntentSpoolReason {
-    #[must_use]
-    fn label(self) -> &'static str {
-        match self {
-            PinIntentSpoolReason::Kept => "kept",
-            PinIntentSpoolReason::UnsupportedVersion => "unsupported_version",
-            PinIntentSpoolReason::NonCanonicalOrder => "non_canonical_order",
-            PinIntentSpoolReason::BundleTooLarge => "bundle_too_large",
-            PinIntentSpoolReason::ZeroManifest => "zero_manifest",
-            PinIntentSpoolReason::DuplicateIntent => "duplicate",
-            PinIntentSpoolReason::DuplicateStorageTicket => "duplicate_storage_ticket",
-            PinIntentSpoolReason::DuplicateManifest => "duplicate_manifest",
-            PinIntentSpoolReason::AliasSuperseded => "alias_superseded",
-            PinIntentSpoolReason::AliasTooLong => "alias_too_long",
-            PinIntentSpoolReason::UnknownLane => "unknown_lane",
-            PinIntentSpoolReason::UnknownOwner => "unknown_owner",
-            PinIntentSpoolReason::InvalidAuthorization => "invalid_authorization",
-            PinIntentSpoolReason::Quota => "quota",
-            PinIntentSpoolReason::ZeroStorageTicket => "zero_storage_ticket",
-            PinIntentSpoolReason::SealedDuplicate => "sealed_duplicate",
-        }
-    }
-}
-impl From<&DaPinIntentValidationError> for PinIntentSpoolReason {
-    fn from(error: &DaPinIntentValidationError) -> Self {
-        match error {
-            DaPinIntentValidationError::UnsupportedVersion { .. } => {
-                PinIntentSpoolReason::UnsupportedVersion
-            }
-            DaPinIntentValidationError::NonCanonicalOrder { .. } => {
-                PinIntentSpoolReason::NonCanonicalOrder
-            }
-            DaPinIntentValidationError::BundleTooLarge { .. } => {
-                PinIntentSpoolReason::BundleTooLarge
-            }
-            DaPinIntentValidationError::UnknownLane { .. }
-            | DaPinIntentValidationError::InactiveAdmissionLane { .. } => {
-                PinIntentSpoolReason::UnknownLane
-            }
-            DaPinIntentValidationError::UnknownOwner { .. } => PinIntentSpoolReason::UnknownOwner,
-            DaPinIntentValidationError::AuthorizationMismatch { .. }
-            | DaPinIntentValidationError::PinScopeMismatch { .. }
-            | DaPinIntentValidationError::WrongNetwork { .. }
-            | DaPinIntentValidationError::ZeroPayloadBytes { .. }
-            | DaPinIntentValidationError::InvalidAuthorizationSignatures { .. }
-            | DaPinIntentValidationError::InvalidPinScopeSignatures { .. }
-            | DaPinIntentValidationError::UnauthorizedOwner { .. }
-            | DaPinIntentValidationError::UnauthorizedPinScopeOwner { .. }
-            | DaPinIntentValidationError::MissingAdmissionPolicy
-            | DaPinIntentValidationError::InvalidAdmissionPolicy { .. }
-            | DaPinIntentValidationError::AdmissionDenied { .. } => {
-                PinIntentSpoolReason::InvalidAuthorization
-            }
-            DaPinIntentValidationError::QuotaExceeded { .. }
-            | DaPinIntentValidationError::QuotaOverflow { .. }
-            | DaPinIntentValidationError::QuotaStateCorrupt { .. } => PinIntentSpoolReason::Quota,
-            DaPinIntentValidationError::DuplicateIntent { .. } => {
-                PinIntentSpoolReason::DuplicateIntent
-            }
-            DaPinIntentValidationError::DuplicateStorageTicket { .. } => {
-                PinIntentSpoolReason::DuplicateStorageTicket
-            }
-            DaPinIntentValidationError::DuplicateManifest { .. } => {
-                PinIntentSpoolReason::DuplicateManifest
-            }
-            DaPinIntentValidationError::ZeroManifestHash { .. } => {
-                PinIntentSpoolReason::ZeroManifest
-            }
-            DaPinIntentValidationError::ZeroStorageTicket { .. } => {
-                PinIntentSpoolReason::ZeroStorageTicket
-            }
-            DaPinIntentValidationError::AliasSuperseded { .. } => {
-                PinIntentSpoolReason::AliasSuperseded
-            }
-            DaPinIntentValidationError::AliasTooLong { .. } => PinIntentSpoolReason::AliasTooLong,
-        }
-    }
-}
 macro_rules! telemetry_enabled_metric_methods {
     () => {};
     ($(#[$attr:meta])* [$name:ident($($arg:ident: $arg_ty:ty),* $(,)?) => $($op:tt)*] $($rest:tt)*) => {
@@ -5146,77 +4917,7 @@ impl Telemetry {
     [observe_consensus_recovery_stuck_round(age: Duration) =>
         .consensus_recovery_stuck_round_seconds.observe(age.as_secs_f64());]
     }
-    #[inline]
-    fn da_gate_reason_label(reason: GateReason) -> (&'static str, u64) {
-        match reason {
-            GateReason::MissingLocalData => ("missing_local_data", 1),
-            GateReason::ManifestGuard { kind, .. } => {
-                let code = match kind {
-                    crate::sumeragi::da::ManifestGateKind::Missing => 3,
-                    crate::sumeragi::da::ManifestGateKind::HashMismatch => 4,
-                    crate::sumeragi::da::ManifestGateKind::ReadFailed => 5,
-                    crate::sumeragi::da::ManifestGateKind::SpoolScan => 6,
-                };
-                (kind.as_str(), code)
-            }
-        }
-    }
-    #[inline]
-    fn da_gate_satisfaction_label(satisfaction: GateSatisfaction) -> (&'static str, u64) {
-        match satisfaction {
-            GateSatisfaction::MissingDataRecovered => ("missing_data_recovered", 1),
-            GateSatisfaction::ManifestGuardRecovered => ("manifest_guard_recovered", 2),
-        }
-    }
-    /// Update the last-seen DA availability reason gauge. Passing `None` clears the gauge to zero.
-    pub fn set_da_gate_last_reason(&self, reason: Option<GateReason>) {
-        if !self.enabled {
-            return;
-        }
-        let code = reason.map_or(0, |reason| Self::da_gate_reason_label(reason).1);
-        self.metrics.sumeragi_da_gate_last_reason.set(code);
-    }
-    /// Record that DA availability tracking observed a missing-evidence reason.
-    pub fn note_da_gate_block(&self, reason: GateReason) {
-        if !self.enabled {
-            return;
-        }
-        let (label, code) = Self::da_gate_reason_label(reason);
-        self.metrics
-            .sumeragi_da_gate_block_total
-            .with_label_values(&[label])
-            .inc();
-        self.metrics.sumeragi_da_gate_last_reason.set(code);
-    }
-    /// Record a transition that satisfied a DA availability condition.
-    pub fn note_da_gate_satisfaction(&self, satisfaction: GateSatisfaction) {
-        if !self.enabled {
-            return;
-        }
-        let (label, code) = Self::da_gate_satisfaction_label(satisfaction);
-        self.metrics
-            .sumeragi_da_gate_satisfied_total
-            .with_label_values(&[label])
-            .inc();
-        self.metrics.sumeragi_da_gate_last_satisfied.set(code);
-    }
     telemetry_enabled_metric_methods_early_return! {
-    /// Record the outcome of the DA manifest guard for a block payload.
-    [note_da_manifest_guard(result: ManifestGuardResult, reason: ManifestGuardReason) =>
-                    .sumeragi_da_manifest_guard_total
-                    .with_label_values(&[result.label(), reason.label()])
-                    .inc();]
-    /// Record the outcome of the DA manifest cache lookup.
-    [note_da_manifest_cache(result: CacheResult) =>
-        .sumeragi_da_manifest_cache_total.with_label_values(&[result.label()]).inc();]
-    /// Record the outcome of the DA spool cache lookup.
-    [note_da_spool_cache(kind: DaSpoolCacheKind, result: CacheResult) =>
-        .sumeragi_da_spool_cache_total.with_label_values(&[kind.label(), result.label()]).inc();]
-    /// Record how a DA pin intent from the spool was handled.
-    [note_da_pin_intent_spool(result: PinIntentSpoolResult, reason: PinIntentSpoolReason) =>
-                    .sumeragi_da_pin_intent_spool_total
-                    .with_label_values(&[result.label(), reason.label()])
-                    .inc();]
     /// Record a QC validation error grouped by reason.
     [note_qc_validation_error(reason: &'static str) =>
         .sumeragi_qc_validation_errors_total.with_label_values(&[reason]).inc();]
@@ -5936,10 +5637,6 @@ impl Telemetry {
                 .with_label_values(&[h.as_str(), v.as_str()])
                 .set(count);
         }
-    }
-    telemetry_enabled_metric_methods! {
-    /// Increment availability vote ingestion counter.
-    [inc_da_vote_ingested() => .sumeragi_da_votes_ingested_total.inc();]
     }
     /// Observe QC assembly latency in milliseconds for the provided kind (e.g., `availability`).
     pub fn observe_qc_latency_ms(&self, kind: &'static str, ms: u64) {
@@ -6758,8 +6455,6 @@ struct Actor {
 }
 impl Actor {
     async fn run(mut self) {
-        #[cfg(feature = "zk-preverify")]
-        crate::zk::start_lane();
         while let Some(message) = self.handle.recv().await {
             match message {
                 Message::Sync { reply } => {
@@ -7211,11 +6906,6 @@ impl Actor {
                         u64::try_from(last_reported_block.commit_time.as_millis())
                             .expect("time should fit into u64"),
                     );
-                    #[cfg(feature = "zk-preverify")]
-                    {
-                        // Enqueue the latest block for background proving
-                        crate::zk::enqueue_block_for_proving(&block.header());
-                    }
                 }
             }
             self.last_sync_block = block_index;
@@ -7510,14 +7200,14 @@ mod tests {
         let metrics = Arc::new(Metrics::default());
         let telemetry = Telemetry::new(Arc::clone(&metrics), true);
         telemetry.observe_torii_http_request(
-            "offline.operation",
-            "/v1/offline/operations/{operation_id}",
+            "kagemusha.operation",
+            "/v1/kagemusha/operations/{operation_id}",
             "public",
             "GET",
             StatusCode::NOT_FOUND,
             "application/json",
             "json",
-            "offline_operation_not_found",
+            "kagemusha_operation_not_found",
             Duration::from_millis(3),
             Some(0),
             Some(96),
@@ -7526,11 +7216,11 @@ mod tests {
             metrics
                 .torii_http_requests_total
                 .with_label_values(&[
-                    "offline.operation",
-                    "/v1/offline/operations/{operation_id}",
+                    "kagemusha.operation",
+                    "/v1/kagemusha/operations/{operation_id}",
                     "public",
                     "json",
-                    "offline_operation_not_found",
+                    "kagemusha_operation_not_found",
                     "application/json",
                     "GET",
                     "404",
@@ -7542,8 +7232,8 @@ mod tests {
             metrics
                 .torii_http_request_bytes_total
                 .with_label_values(&[
-                    "offline.operation",
-                    "/v1/offline/operations/{operation_id}",
+                    "kagemusha.operation",
+                    "/v1/kagemusha/operations/{operation_id}",
                     "public",
                     "json",
                     "application/json",
@@ -7556,11 +7246,11 @@ mod tests {
             metrics
                 .torii_http_response_bytes_total
                 .with_label_values(&[
-                    "offline.operation",
-                    "/v1/offline/operations/{operation_id}",
+                    "kagemusha.operation",
+                    "/v1/kagemusha/operations/{operation_id}",
                     "public",
                     "json",
-                    "offline_operation_not_found",
+                    "kagemusha_operation_not_found",
                     "application/json",
                     "GET",
                     "404",
@@ -7569,8 +7259,8 @@ mod tests {
             96
         );
         let exposition = metrics.try_to_string().expect("encode metrics");
-        assert!(exposition.contains("route_id=\"offline.operation\""));
-        assert!(exposition.contains("route_template=\"/v1/offline/operations/{operation_id}\""));
+        assert!(exposition.contains("route_id=\"kagemusha.operation\""));
+        assert!(exposition.contains("route_template=\"/v1/kagemusha/operations/{operation_id}\""));
         assert!(!exposition.contains("op_8f61d9a9"));
         assert!(!exposition.contains("cursor=eyJzbmFwc2hvdCI6"));
     }
@@ -8269,7 +7959,6 @@ mod tests {
             },
             peer::PeerId,
         };
-        use iroha_telemetry::metrics::Status;
         use iroha_test_samples::PEER_KEYPAIR;
         use nonzero_ext::nonzero;
         let metrics = Arc::new(Metrics::default());
@@ -8337,7 +8026,7 @@ mod tests {
             0,
             0,
         );
-        let status = Status::from(&*telemetry);
+        let status = telemetry.status_snapshot();
         let alpha = status
             .tx_gossip
             .targets
@@ -8516,184 +8205,6 @@ mod tests {
         disabled.set_kura_store_retry(5, 99);
         assert_eq!(metrics.sumeragi_kura_store_last_retry_attempt.get(), 2);
         assert_eq!(metrics.sumeragi_kura_store_last_retry_backoff_ms.get(), 40);
-    }
-    #[test]
-    fn da_gate_reason_metrics_update_counters_and_gauges() {
-        let metrics = Arc::new(Metrics::default());
-        let telemetry = Telemetry::new(metrics.clone(), true);
-        telemetry.note_da_gate_block(GateReason::MissingLocalData);
-        telemetry.set_da_gate_last_reason(Some(GateReason::ManifestGuard {
-            lane: LaneId::new(1),
-            epoch: 7,
-            sequence: 3,
-            kind: crate::sumeragi::da::ManifestGateKind::HashMismatch,
-        }));
-        assert_eq!(metrics.sumeragi_da_gate_last_reason.get(), 4);
-        telemetry.set_da_gate_last_reason(None);
-        assert_eq!(
-            metrics
-                .sumeragi_da_gate_block_total
-                .with_label_values(&["missing_local_data"])
-                .get(),
-            1
-        );
-        assert_eq!(
-            metrics.sumeragi_da_gate_last_reason.get(),
-            0,
-            "clearing the gate reason should reset the gauge to zero"
-        );
-    }
-    #[test]
-    fn da_gate_satisfaction_metrics_record_transitions() {
-        let metrics = Arc::new(Metrics::default());
-        let telemetry = Telemetry::new(metrics.clone(), true);
-        telemetry.note_da_gate_satisfaction(GateSatisfaction::MissingDataRecovered);
-        telemetry.note_da_gate_satisfaction(GateSatisfaction::ManifestGuardRecovered);
-        assert_eq!(
-            metrics
-                .sumeragi_da_gate_satisfied_total
-                .with_label_values(&["missing_data_recovered"])
-                .get(),
-            1
-        );
-        assert_eq!(
-            metrics
-                .sumeragi_da_gate_satisfied_total
-                .with_label_values(&["manifest_guard_recovered"])
-                .get(),
-            1
-        );
-        assert_eq!(metrics.sumeragi_da_gate_last_satisfied.get(), 2);
-    }
-    #[test]
-    fn manifest_guard_metrics_record_outcomes() {
-        let metrics = Arc::new(Metrics::default());
-        let telemetry = Telemetry::new(metrics.clone(), true);
-        telemetry.note_da_manifest_guard(ManifestGuardResult::Allowed, ManifestGuardReason::Ok);
-        telemetry
-            .note_da_manifest_guard(ManifestGuardResult::Rejected, ManifestGuardReason::Missing);
-        assert_eq!(
-            metrics
-                .sumeragi_da_manifest_guard_total
-                .with_label_values(&["allowed", "ok"])
-                .get(),
-            1
-        );
-        assert_eq!(
-            metrics
-                .sumeragi_da_manifest_guard_total
-                .with_label_values(&["rejected", "missing"])
-                .get(),
-            1
-        );
-    }
-    #[test]
-    fn da_spool_cache_metrics_record_hits_and_misses() {
-        let metrics = Arc::new(Metrics::default());
-        let telemetry = Telemetry::new(metrics.clone(), true);
-        telemetry.note_da_spool_cache(DaSpoolCacheKind::Commitments, CacheResult::Miss);
-        telemetry.note_da_spool_cache(DaSpoolCacheKind::Commitments, CacheResult::Hit);
-        telemetry.note_da_spool_cache(DaSpoolCacheKind::Receipts, CacheResult::Hit);
-        assert_eq!(
-            metrics
-                .sumeragi_da_spool_cache_total
-                .with_label_values(&["commitments", "miss"])
-                .get(),
-            1
-        );
-        assert_eq!(
-            metrics
-                .sumeragi_da_spool_cache_total
-                .with_label_values(&["commitments", "hit"])
-                .get(),
-            1
-        );
-        assert_eq!(
-            metrics
-                .sumeragi_da_spool_cache_total
-                .with_label_values(&["receipts", "hit"])
-                .get(),
-            1
-        );
-    }
-    #[test]
-    fn da_manifest_cache_metrics_record_hits_and_misses() {
-        let metrics = Arc::new(Metrics::default());
-        let telemetry = Telemetry::new(metrics.clone(), true);
-        telemetry.note_da_manifest_cache(CacheResult::Miss);
-        telemetry.note_da_manifest_cache(CacheResult::Hit);
-        assert_eq!(
-            metrics
-                .sumeragi_da_manifest_cache_total
-                .with_label_values(&["miss"])
-                .get(),
-            1
-        );
-        assert_eq!(
-            metrics
-                .sumeragi_da_manifest_cache_total
-                .with_label_values(&["hit"])
-                .get(),
-            1
-        );
-    }
-    #[test]
-    fn pin_intent_spool_metrics_record_outcomes() {
-        let metrics = Arc::new(Metrics::default());
-        let telemetry = Telemetry::new(metrics.clone(), true);
-        telemetry.note_da_pin_intent_spool(
-            PinIntentSpoolResult::Dropped,
-            PinIntentSpoolReason::ZeroManifest,
-        );
-        telemetry.note_da_pin_intent_spool(
-            PinIntentSpoolResult::Dropped,
-            PinIntentSpoolReason::SealedDuplicate,
-        );
-        let oversized = DaPinIntentValidationError::BundleTooLarge { len: 2, max: 1 };
-        let oversized_reason = PinIntentSpoolReason::from(&oversized);
-        assert_eq!(oversized_reason, PinIntentSpoolReason::BundleTooLarge);
-        assert_eq!(
-            PinIntentSpoolReason::from(&DaPinIntentValidationError::MissingAdmissionPolicy),
-            PinIntentSpoolReason::InvalidAuthorization
-        );
-        assert_eq!(
-            PinIntentSpoolReason::from(&DaPinIntentValidationError::InactiveAdmissionLane {
-                lane: LaneId::SINGLE,
-                epoch: 1,
-                sequence: 1,
-            }),
-            PinIntentSpoolReason::UnknownLane
-        );
-        telemetry.note_da_pin_intent_spool(PinIntentSpoolResult::Dropped, oversized_reason);
-        telemetry.note_da_pin_intent_spool(PinIntentSpoolResult::Kept, PinIntentSpoolReason::Kept);
-        assert_eq!(
-            metrics
-                .sumeragi_da_pin_intent_spool_total
-                .with_label_values(&["dropped", "zero_manifest"])
-                .get(),
-            1
-        );
-        assert_eq!(
-            metrics
-                .sumeragi_da_pin_intent_spool_total
-                .with_label_values(&["dropped", "sealed_duplicate"])
-                .get(),
-            1
-        );
-        assert_eq!(
-            metrics
-                .sumeragi_da_pin_intent_spool_total
-                .with_label_values(&["dropped", "bundle_too_large"])
-                .get(),
-            1
-        );
-        assert_eq!(
-            metrics
-                .sumeragi_da_pin_intent_spool_total
-                .with_label_values(&["kept", "kept"])
-                .get(),
-            1
-        );
     }
     #[test]
     fn qc_validation_error_counter_increments_by_reason() {
@@ -10048,13 +9559,14 @@ mod tests {
             block_hash: HashOf::from_untyped_unchecked(Hash::prehashed([0x11; Hash::LENGTH])),
             payload_hash: Hash::new(b"telemetry-v2-payload"),
         };
-        let execution_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
-            Hash::new(b"telemetry-parent-state"),
-            Hash::new(b"telemetry-post-state"),
-            Hash::new(b"telemetry-ordinary-writes"),
-            1,
-            Hash::new(b"telemetry-executed-wire"),
-        );
+        let execution_commitment =
+            wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+                Hash::new(b"telemetry-parent-state"),
+                Hash::new(b"telemetry-post-state"),
+                Hash::new(b"telemetry-ordinary-writes"),
+                1,
+                Hash::new(b"telemetry-executed-wire"),
+            );
         let vote = wire::Vote {
             round,
             proposal_round: round,
@@ -10551,6 +10063,10 @@ mod tests {
             Some(NoResult::ConfirmationJuryCapacityUnavailable),
         );
         telemetry.record_committed_parliament_transition(
+            Transition::FinalizeOpenedBallot,
+            Some(NoResult::RandomnessRedrawBudgetExhausted),
+        );
+        telemetry.record_committed_parliament_transition(
             Transition::CompleteQualification,
             Some(NoResult::PublicFindingDeadlineExpired),
         );
@@ -10602,6 +10118,13 @@ mod tests {
             metrics
                 .governance_parliament_no_result_total
                 .with_label_values(&["confirmation_jury_capacity_unavailable"])
+                .get(),
+            1
+        );
+        assert_eq!(
+            metrics
+                .governance_parliament_no_result_total
+                .with_label_values(&["randomness_redraw_budget_exhausted"])
                 .get(),
             1
         );
@@ -10695,22 +10218,45 @@ mod tests {
                 .get(),
             1
         );
+
+        telemetry.set_parliament_attempt_counts(
+            [3, 2, 1, 0, 4, 5],
+            [13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1],
+        );
+        assert_eq!(
+            metrics
+                .governance_parliament_attempts_by_status
+                .with_label_values(&["execution_failed"])
+                .get(),
+            5
+        );
+        assert_eq!(
+            metrics
+                .governance_parliament_attempts_by_stage
+                .with_label_values(&["qualification"])
+                .get(),
+            13
+        );
+        assert_eq!(
+            metrics
+                .governance_parliament_attempts_by_stage
+                .with_label_values(&["enactment"])
+                .get(),
+            1
+        );
     }
     #[cfg(feature = "telemetry")]
     #[test]
     fn governance_events_drive_metrics_via_ingest() {
         use crate::state::GovernanceProposalStatus as GPS;
         use iroha_data_model::events::data::governance::{
-            GovernanceEvent, GovernanceProposalApproved, GovernanceProposalEnacted,
+            GovernanceEvent, GovernanceProposalEnacted,
         };
         use std::sync::Arc;
         let metrics = Arc::new(Metrics::default());
         let telemetry = StateTelemetry::new(metrics.clone(), true);
         let proposal_id = [0xAB; 32];
         telemetry.seed_governance_proposals([(proposal_id, GPS::Proposed)]);
-        telemetry.ingest_data_event(&DataEvent::Governance(GovernanceEvent::ProposalApproved(
-            GovernanceProposalApproved { id: proposal_id },
-        )));
         assert_eq!(
             metrics
                 .governance_proposals_status
@@ -10735,30 +10281,6 @@ mod tests {
                 .get(),
             1
         );
-    }
-    #[cfg(feature = "telemetry")]
-    #[test]
-    fn council_persist_event_updates_gauges() {
-        use iroha_data_model::{
-            events::data::governance::{GovernanceCouncilPersisted, GovernanceEvent},
-            isi::governance::CouncilDerivationKind,
-        };
-        use std::sync::Arc;
-        let metrics = Arc::new(Metrics::default());
-        let telemetry = StateTelemetry::new(metrics.clone(), true);
-        telemetry.on_governance_event(&GovernanceEvent::CouncilPersisted(
-            GovernanceCouncilPersisted {
-                epoch: 4,
-                members_count: 3,
-                alternates_count: 1,
-                candidates_count: 5,
-                derived_by: CouncilDerivationKind::Sortition,
-            },
-        ));
-        assert_eq!(metrics.governance_council_members.get(), 3);
-        assert_eq!(metrics.governance_council_alternates.get(), 1);
-        assert_eq!(metrics.governance_council_candidates.get(), 5);
-        assert_eq!(metrics.governance_council_epoch.get(), 4);
     }
     #[cfg(feature = "telemetry")]
     #[test]
@@ -10810,31 +10332,6 @@ mod tests {
             metrics
                 .governance_bond_events_total
                 .with_label_values(&["lock_unlocked"])
-                .get(),
-            1
-        );
-    }
-    #[cfg(feature = "telemetry")]
-    #[test]
-    fn citizen_service_events_increment() {
-        use iroha_data_model::isi::governance::CitizenServiceEvent;
-        use std::sync::Arc;
-        let metrics = Arc::new(Metrics::default());
-        let telemetry = StateTelemetry::new(metrics.clone(), true);
-        telemetry.record_citizen_service_event(CitizenServiceEvent::Decline, &Quantity::zero());
-        telemetry
-            .record_citizen_service_event(CitizenServiceEvent::Misconduct, &Quantity::from(10_u64));
-        assert_eq!(
-            metrics
-                .governance_citizen_service_events_total
-                .with_label_values(&["decline"])
-                .get(),
-            1
-        );
-        assert_eq!(
-            metrics
-                .governance_citizen_service_events_total
-                .with_label_values(&["misconduct"])
                 .get(),
             1
         );

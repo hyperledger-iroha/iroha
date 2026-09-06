@@ -53,7 +53,8 @@ fn bench(leaves: usize, iterations: usize, policy: Policy) -> (Option<Duration>,
         Some(measure(|| {
             let mut checksum = 0u8;
             for _ in 0..iterations {
-                let tree = ByteMerkleTree::from_bytes_accel(&payload, CHUNK);
+                let tree = ByteMerkleTree::from_bytes_accel(&payload, CHUNK)
+                    .expect("fixed benchmark chunk is valid");
                 let root = tree.root();
                 checksum ^= root.as_ref()[0];
             }
@@ -80,7 +81,8 @@ fn bench(leaves: usize, iterations: usize, policy: Policy) -> (Option<Duration>,
             Some(measure(|| {
                 let mut checksum = 0u8;
                 for _ in 0..iterations {
-                    let tree = ByteMerkleTree::from_bytes_accel(&payload, CHUNK);
+                    let tree = ByteMerkleTree::from_bytes_accel(&payload, CHUNK)
+                        .expect("fixed benchmark chunk is valid");
                     let root = tree.root();
                     checksum ^= root.as_ref()[0];
                 }

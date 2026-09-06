@@ -16,6 +16,8 @@ use norito::codec::{Decode, Encode};
     feature = "json",
     norito(tag = "role", content = "value", deny_unknown_fields)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::da::manifest::ChunkRole")]
 pub enum ChunkRole {
     /// Data chunk.
     #[default]
@@ -164,3 +166,6 @@ impl DaManifestV1 {
     /// Current manifest version number.
     pub const VERSION: u16 = 1;
 }
+
+#[cfg(test)]
+mod captured_manifest_schema_tests;

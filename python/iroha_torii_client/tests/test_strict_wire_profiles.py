@@ -4,7 +4,7 @@ import hashlib
 import json
 import sys
 from pathlib import Path
-from typing import Any, get_args
+from typing import Any
 
 import pytest
 
@@ -12,7 +12,6 @@ PACKAGE_ROOT = Path(__file__).resolve().parents[2]
 if str(PACKAGE_ROOT) not in sys.path:
     sys.path.insert(0, str(PACKAGE_ROOT))
 
-import iroha_torii_client.client as client_module  # noqa: E402
 from iroha_torii_client import (  # noqa: E402
     ToriiClient,
     encode_identifier_resolution_receipt_attestation,
@@ -40,48 +39,6 @@ def test_identifier_byte_vector_encoding_is_exact_for_every_byte_value() -> None
     assert encoded[:8] == len(payload).to_bytes(8, "little")
     assert encoded[8::2] == b"\x01" * len(payload)
     assert encoded[9::2] == payload
-
-
-def test_offline_proof_backend_type_is_the_exact_closed_registry_v1() -> None:
-    expected = {
-        "halo2/ipa",
-        "halo2/pasta/kaigi-roster-v1",
-        "halo2/pasta/kaigi-usage-v1",
-        "halo2/pasta/ivm-execution-v1",
-        "halo2/pasta/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
-        "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
-        "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
-        "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
-        "stark/fri/poseidon-x7-goldilocks-6x64-v1",
-    }
-    actual = get_args(client_module.OfflineProofBackend)
-    assert len(actual) == len(expected)
-    assert set(actual) == expected
-
-    retired_or_hostile = {
-        "halo2-ipa-pasta",
-        "halo2-bn254",
-        "groth16",
-        "groth16-bls12-377",
-        "halo2-ipa-orchard",
-        "aztec-plonkish-private-kernel",
-        "zkat",
-        "silent-threshold-anoncred",
-        "penumbra-masp",
-        "sis-hints-anoncred-pq-v0",
-        "sis-with-hints",
-        "unsupported",
-        "stark",
-        "stark/fri",
-        "stark/fri/poseidon2-goldilocks",
-        "stark/fri/sha256_goldilocks.v1",
-        " halo2/ipa",
-        "halo2/ipa ",
-        "HALO2/IPA",
-        "halo2\uff0fipa",
-        "halo2/\u200bipa",
-    }
-    assert expected.isdisjoint(retired_or_hostile)
 
 
 def test_i105_decoder_rejects_out_of_range_numeric_discriminants() -> None:

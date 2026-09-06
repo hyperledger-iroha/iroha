@@ -143,13 +143,16 @@ pub enum ReplayLedgerError {
 }
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 #[norito(decode_from_slice)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::soranet::replay::ReplayLedgerSnapshotV1")]
 struct ReplayLedgerSnapshotV1 {
     version: u8,
     namespace_digest: [u8; 32],
     high_watermark_ms: u64,
     entries: Vec<ReplayLedgerSnapshotEntryV1>,
 }
-#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::soranet::replay::ReplayLedgerSnapshotEntryV1")]
 struct ReplayLedgerSnapshotEntryV1 {
     id: [u8; 32],
     expires_at_ms: u64,
@@ -863,3 +866,6 @@ mod tests {
             .expect("lock released on drop");
     }
 }
+
+#[cfg(test)]
+mod captured_schema_tests;

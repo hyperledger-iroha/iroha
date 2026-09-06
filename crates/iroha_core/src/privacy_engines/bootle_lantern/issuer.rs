@@ -310,7 +310,7 @@ impl core::fmt::Debug for BootleLanternIssuerKeyPairV1 {
 impl BootleLanternIssuerKeyPairV1 {
     /// Reconstruct one genuine bounded issuer key from exact secret seed material.
     ///
-    /// This is the stable HSM/sealed-credential provisioning boundary. The seed must be 32
+    /// This is the stable sealed-credential provisioning boundary. The seed must be 32
     /// uniformly random secret bytes, never a password, label, public identifier, or test default.
     /// The caller retains ownership and must zeroize it immediately after this call.
     ///
@@ -559,7 +559,7 @@ pub fn issuer_prepare_blind_issuance_authorization_candidate_v1(
 /// Validate a provider-prepared authorization against exact public chain state.
 ///
 /// This consumes no randomness and performs no store mutation. Callers must run it before
-/// registering a remote or HSM-produced candidate in the sole authoritative issuance store.
+/// registering a provider-produced candidate in the sole authoritative issuance store.
 ///
 /// # Errors
 ///

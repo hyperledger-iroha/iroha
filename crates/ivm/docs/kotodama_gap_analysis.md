@@ -145,8 +145,9 @@ canonical Norito record carries the exact nominal kind and complete numeric
 frame. Secret values can flow only into the full-width `crypto::valcom`
 commitment boundary; both operands must be secret. They cannot affect public
 returns, logs, error selection, control flow, state, ledger writes, host
-queries, or seiyaku calls. Legacy scalar crypto opcodes reject private operands
-and are not source-level commitments, hashes, public keys, or nullifiers.
+queries, or seiyaku calls. Scalar Poseidon proof gadgets reject private
+operands; the former truncated commitment, public-key, curve, and pairing
+opcode slots are invalid in ABI V1 and are not source-level capabilities.
 
 `Secret<T>` and `GET_PRIVATE_INPUT` currently execute only in local compiler
 tests and explicitly provisioned prover/test hosts. Ordinary production
@@ -172,7 +173,7 @@ The current proof machinery cannot soundly remove the gate above:
 |---|---|---|---|
 | Invocation identity | Chain, authority, seiyaku address and complete code hash, selector, canonical public argument record, transaction gas ceiling, circuit id/version, and verifier-key commitment are one public statement. | `IvmExecutionBindV1` exposes only code, overlay, event, and gas-policy commitments. | Missing; reject. |
 | Initial state and reads | The authenticated pre-state root and every host query result are proven, with exact dynamic read/write keys and authorization snapshots. | Deterministic replay authenticates these values only when it can execute the call. They are not circuit constraints. | Missing for witness-bearing calls; reject. |
-| IVM transition semantics | Every admitted opcode, register/tag transition, memory access, branch/call/return, syscall, and halt condition is constrained for every paid step. | `IvmExecutionBindV1` consists of sixteen advice-equals-instance constraints. `ivm::halo2::VMExecutionCircuit` is a `MockProver` test stand-in with only `ADD`, `SUB`, `ADDI`, `BEQ`, `BNE`, and `HALT`; it has no proof envelope and no memory or syscall semantics. | Missing; never substitute the stand-in. |
+| IVM transition semantics | Every admitted opcode, register/tag transition, memory access, branch/call/return, syscall, and halt condition is constrained for every paid step. | `IvmExecutionBindV1` consists of sixteen advice-equals-instance constraints. IVM deliberately exposes no host-recomputation facade branded as a Halo2 circuit; the former incomplete `MockProver` stand-in was removed before ABI V1 release. | Missing; require a real proof relation with complete ISA coverage. |
 | Typed private witness | Each private index resolves to one bounded canonical `int`, `decimal`, or `quantity` frame of the requested nominal kind without revealing its bytes. | `DefaultHost` validates this relation for explicitly provisioned local tests/provers. Consensus `CoreHost` has no witness transport and rejects `GET_PRIVATE_INPUT`. | Host validation is not a proof; reject in consensus. |
 | `crypto::valcom` | The circuit constrains the complete canonical envelope projection, domain separation, scalar reduction, independent BLS12-381 generators, full Pedersen point, and canonical public `int` encoding. | The native local host computes this relation. Neither the Halo2 binding circuit nor the reserved STARK binding AIR constrains it. | Missing; a witness/output equality alone would be unsound. |
 | Noninterference | Private data influences only approved commitment/proof outputs, never control flow, public errors, logs, state keys/values, calls, queries, or ledger effects. | The typed compiler pass and VM taint checks enforce local execution policy, but those checks are not part of the proof statement. | Keep as defense in depth; still require proof. |

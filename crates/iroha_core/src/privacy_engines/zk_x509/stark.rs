@@ -6132,15 +6132,24 @@ pub(crate) fn prove_zk_x509_io_segmented_stark_v1_with_rng<R: TryRngCore>(
         &composition_roots,
     )
     .map_err(map_aggregate_error_v1)?;
-    let fri_masks =
-        aggregate::build_fri_mask_oracles_v1(AGGREGATE_PARAMETERS_V1, &shared_layout, rng)
-            .map_err(map_aggregate_error_v1)?;
+    let fri_masks = aggregate::build_fri_mask_oracles_v1(
+        AGGREGATE_PARAMETERS_V1,
+        AGGREGATE_DOMAINS_V1,
+        &shared_layout,
+        rng,
+    )
+    .map_err(map_aggregate_error_v1)?;
     let fri_mask_roots = fri_masks
         .iter()
         .map(|mask| mask.tree.root())
         .collect::<Vec<_>>();
-    aggregate::absorb_fri_mask_roots_v1(&mut transcript, AGGREGATE_PARAMETERS_V1, &fri_mask_roots)
-        .map_err(map_aggregate_error_v1)?;
+    aggregate::absorb_fri_mask_roots_v1(
+        &mut transcript,
+        AGGREGATE_PARAMETERS_V1,
+        AGGREGATE_DOMAINS_V1,
+        &fri_mask_roots,
+    )
+    .map_err(map_aggregate_error_v1)?;
     let trace_materials = vec![aggregate::AggregateTraceGroupMaterialV1 {
         base_lde,
         aux_lde,
@@ -6335,15 +6344,24 @@ pub(crate) fn prove_zk_x509_projection_segmented_stark_v1_with_rng<R: TryRngCore
         &composition_roots,
     )
     .map_err(map_aggregate_error_v1)?;
-    let fri_masks =
-        aggregate::build_fri_mask_oracles_v1(AGGREGATE_PARAMETERS_V1, &shared_layout, rng)
-            .map_err(map_aggregate_error_v1)?;
+    let fri_masks = aggregate::build_fri_mask_oracles_v1(
+        AGGREGATE_PARAMETERS_V1,
+        AGGREGATE_DOMAINS_V1,
+        &shared_layout,
+        rng,
+    )
+    .map_err(map_aggregate_error_v1)?;
     let fri_mask_roots = fri_masks
         .iter()
         .map(|mask| mask.tree.root())
         .collect::<Vec<_>>();
-    aggregate::absorb_fri_mask_roots_v1(&mut transcript, AGGREGATE_PARAMETERS_V1, &fri_mask_roots)
-        .map_err(map_aggregate_error_v1)?;
+    aggregate::absorb_fri_mask_roots_v1(
+        &mut transcript,
+        AGGREGATE_PARAMETERS_V1,
+        AGGREGATE_DOMAINS_V1,
+        &fri_mask_roots,
+    )
+    .map_err(map_aggregate_error_v1)?;
     let trace_materials = vec![aggregate::AggregateTraceGroupMaterialV1 {
         base_lde,
         aux_lde,
@@ -6482,6 +6500,7 @@ fn build_zk_x509_der_segmented_stark_proof_v1_with_rng<R: TryRngCore>(
         &aggregate_layout,
     )?;
     let (base_commitment, base_polynomials) = aggregate::commit_masked_trace_polynomial_columns_v1(
+        ZK_X509_DIGEST_CONTEXT_V1,
         BASE_LEAF_DOMAIN,
         BASE_NODE_DOMAIN,
         0,
@@ -6513,6 +6532,7 @@ fn build_zk_x509_der_segmented_stark_proof_v1_with_rng<R: TryRngCore>(
     let claims =
         zk_x509_der_stark_terminal_claims_v1(&trace).map_err(|_| ZkX509StarkErrorV1::DerWitness)?;
     let (aux_commitment, aux_polynomials) = aggregate::commit_masked_trace_polynomial_columns_v1(
+        ZK_X509_DIGEST_CONTEXT_V1,
         AUX_LEAF_DOMAIN,
         AUX_NODE_DOMAIN,
         0,
@@ -6571,15 +6591,24 @@ fn build_zk_x509_der_segmented_stark_proof_v1_with_rng<R: TryRngCore>(
         &composition_roots,
     )
     .map_err(map_aggregate_error_v1)?;
-    let fri_masks =
-        aggregate::build_fri_mask_oracles_v1(AGGREGATE_PARAMETERS_V1, &shared_layout, rng)
-            .map_err(map_aggregate_error_v1)?;
+    let fri_masks = aggregate::build_fri_mask_oracles_v1(
+        AGGREGATE_PARAMETERS_V1,
+        AGGREGATE_DOMAINS_V1,
+        &shared_layout,
+        rng,
+    )
+    .map_err(map_aggregate_error_v1)?;
     let fri_mask_roots = fri_masks
         .iter()
         .map(|mask| mask.tree.root())
         .collect::<Vec<_>>();
-    aggregate::absorb_fri_mask_roots_v1(&mut transcript, AGGREGATE_PARAMETERS_V1, &fri_mask_roots)
-        .map_err(map_aggregate_error_v1)?;
+    aggregate::absorb_fri_mask_roots_v1(
+        &mut transcript,
+        AGGREGATE_PARAMETERS_V1,
+        AGGREGATE_DOMAINS_V1,
+        &fri_mask_roots,
+    )
+    .map_err(map_aggregate_error_v1)?;
     let deep_point =
         aggregate::derive_deep_point_v1(&mut transcript, AGGREGATE_PARAMETERS_V1, &shared_layout)
             .map_err(map_aggregate_error_v1)?;
@@ -6692,6 +6721,7 @@ fn build_zk_x509_der_segmented_stark_proof_v1_with_rng<R: TryRngCore>(
         aggregate::trace_group_opening_indices_v1(&query_skeleton, &shared_layout, 0)
             .map_err(map_aggregate_error_v1)?;
     let base_openings = aggregate::replay_masked_trace_polynomial_columns_v1(
+        ZK_X509_DIGEST_CONTEXT_V1,
         BASE_LEAF_DOMAIN,
         BASE_NODE_DOMAIN,
         0,
@@ -6700,6 +6730,7 @@ fn build_zk_x509_der_segmented_stark_proof_v1_with_rng<R: TryRngCore>(
     )
     .map_err(map_aggregate_error_v1)?;
     let aux_openings = aggregate::replay_masked_trace_polynomial_columns_v1(
+        ZK_X509_DIGEST_CONTEXT_V1,
         AUX_LEAF_DOMAIN,
         AUX_NODE_DOMAIN,
         0,
@@ -11822,6 +11853,7 @@ pub(crate) fn verify_zk_x509_io_segmented_stark_v1(
     aggregate::absorb_fri_mask_roots_v1(
         &mut transcript,
         AGGREGATE_PARAMETERS_V1,
+        AGGREGATE_DOMAINS_V1,
         &proof.fri_mask_roots,
     )
     .map_err(map_aggregate_error_v1)?;
@@ -11938,6 +11970,7 @@ pub(crate) fn verify_zk_x509_der_segmented_stark_v1(
     aggregate::absorb_fri_mask_roots_v1(
         &mut transcript,
         AGGREGATE_PARAMETERS_V1,
+        AGGREGATE_DOMAINS_V1,
         &proof.fri_mask_roots,
     )
     .map_err(map_aggregate_error_v1)?;
@@ -12065,6 +12098,7 @@ pub(crate) fn verify_zk_x509_projection_segmented_stark_v1(
     aggregate::absorb_fri_mask_roots_v1(
         &mut transcript,
         AGGREGATE_PARAMETERS_V1,
+        AGGREGATE_DOMAINS_V1,
         &proof.fri_mask_roots,
     )
     .map_err(map_aggregate_error_v1)?;

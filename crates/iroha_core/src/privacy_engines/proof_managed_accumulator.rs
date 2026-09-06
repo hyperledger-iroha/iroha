@@ -49,6 +49,19 @@ pub(crate) struct ProofManagedFrontierPartsV1 {
     /// Root reconstructed from the complete compact frontier.
     pub(crate) root: PrivacyRootV1,
 }
+
+/// Owner-wallet material for spending both leaves of a two-note origin tree.
+///
+/// This is the fixed first-release bootstrap shape used by atomic private
+/// settlement.  The paths are returned in the caller's input order while the
+/// origin commitments remain in the canonical order required by governance.
+pub(crate) struct ProofManagedTwoLeafPlanV1 {
+    pub(crate) initial_commitments: [PrivacyCommitmentV1; 2],
+    pub(crate) input_positions: [u32; 2],
+    pub(crate) authentication_paths: [[[u8; 32]; TREE_DEPTH_V1 as usize]; 2],
+    pub(crate) old_root: PrivacyRootV1,
+    pub(crate) new_root: PrivacyRootV1,
+}
 /// Failure while constructing, restoring, or advancing a note frontier.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub(crate) enum ProofManagedAccumulatorErrorV1 {
@@ -259,6 +272,88 @@ pub(crate) fn append_proof_managed_commitments_v1(
     }
     Ok(frontier_parts_v1(frontier))
 }
+
+/// Plan the canonical two-origin-note bootstrap and one ordered output append.
+///
+/// The ledger requires genesis commitments to be strictly increasing.  Wallet
+/// input slots, however, are semantic and need not already be ordered.  This
+/// helper sorts only the public origin set, returns membership paths aligned
+/// with the original input slots, and advances the exact compact frontier with
+/// the supplied output commitments.
+///
+/// # Errors
+///
+/// Rejects zero/duplicate commitments, malformed namespaces, duplicate output
+/// commitments, or an accumulator capacity failure.
+pub(crate) fn plan_two_leaf_proof_managed_transition_v1(
+    namespace: PrivacyNamespaceV1,
+    input_commitments: [PrivacyCommitmentV1; 2],
+    output_commitments: &[PrivacyCommitmentV1],
+) -> Result<ProofManagedTwoLeafPlanV1, ProofManagedAccumulatorErrorV1> {
+    let mut initial_commitments = input_commitments;
+    initial_commitments.sort_unstable();
+    let origin = build_proof_managed_frontier_v1(namespace, &initial_commitments)?;
+
+    let leaves = [
+        commitment_leaf_v1(namespace, initial_commitments[0], 0)?,
+        commitment_leaf_v1(namespace, initial_commitments[1], 1)?,
+    ];
+    let mut empty = NoteTreeNodeV1::empty_leaf();
+    let empty_roots: [[u8; 32]; TREE_DEPTH_V1 as usize] = core::array::from_fn(|level| {
+        let current = empty.0;
+        empty = NoteTreeNodeV1::combine(
+            Level::from(u8::try_from(level).expect("depth-32 level fits u8")),
+            &empty,
+            &empty,
+        );
+        current
+    });
+    let ordered_paths = [
+        core::array::from_fn(|level| {
+            if level == 0 {
+                leaves[1].0
+            } else {
+                empty_roots[level]
+            }
+        }),
+        core::array::from_fn(|level| {
+            if level == 0 {
+                leaves[0].0
+            } else {
+                empty_roots[level]
+            }
+        }),
+    ];
+    let input_positions = input_commitments.map(|commitment| {
+        if commitment == initial_commitments[0] {
+            0
+        } else {
+            1
+        }
+    });
+    let authentication_paths = input_commitments.map(|commitment| {
+        if commitment == initial_commitments[0] {
+            ordered_paths[0]
+        } else {
+            ordered_paths[1]
+        }
+    });
+    let successor = append_proof_managed_commitments_v1(
+        namespace,
+        origin.tree_size,
+        origin.leaf,
+        &origin.ommers,
+        origin.root,
+        output_commitments,
+    )?;
+    Ok(ProofManagedTwoLeafPlanV1 {
+        initial_commitments,
+        input_positions,
+        authentication_paths,
+        old_root: origin.root,
+        new_root: successor.root,
+    })
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -337,6 +432,47 @@ mod tests {
                 build_proof_managed_frontier_v1(namespace, &[commitment(2), commitment(1)])
                     .expect("ordered alternate origin");
             assert_ne!(reversed.root, origin.root);
+        }
+    }
+
+    #[test]
+    fn two_leaf_plan_sorts_governance_origin_but_preserves_input_witness_order() {
+        let namespace = ivm_namespace();
+        let plan = plan_two_leaf_proof_managed_transition_v1(
+            namespace,
+            [commitment(2), commitment(1)],
+            &[commitment(3), commitment(4), commitment(5)],
+        )
+        .expect("two-leaf transition");
+        assert_eq!(plan.initial_commitments, [commitment(1), commitment(2)]);
+        assert_eq!(plan.input_positions, [1, 0]);
+        assert_ne!(plan.old_root, plan.new_root);
+
+        for (input_index, (input, input_position)) in [commitment(2), commitment(1)]
+            .into_iter()
+            .zip(plan.input_positions)
+            .enumerate()
+        {
+            let mut current = commitment_leaf_v1(namespace, input, 0).expect("input leaf");
+            let mut position = u64::from(input_position);
+            for (level, sibling) in plan.authentication_paths[input_index].iter().enumerate() {
+                let sibling = NoteTreeNodeV1(*sibling);
+                current = if position & 1 == 0 {
+                    NoteTreeNodeV1::combine(
+                        Level::from(u8::try_from(level).expect("level fits u8")),
+                        &current,
+                        &sibling,
+                    )
+                } else {
+                    NoteTreeNodeV1::combine(
+                        Level::from(u8::try_from(level).expect("level fits u8")),
+                        &sibling,
+                        &current,
+                    )
+                };
+                position >>= 1;
+            }
+            assert_eq!(PrivacyRootV1::new(current.0), plan.old_root);
         }
     }
     #[test]

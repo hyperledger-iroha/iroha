@@ -11,6 +11,8 @@ use norito::codec::{Decode, Encode};
 /// Licensing bundle referenced by a GAR payload.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::gar::GarLicenseSetV1")]
 pub struct GarLicenseSetV1 {
     /// Human-readable identifier (e.g., `sg-2026-pilot`).
     pub slug: String,
@@ -31,6 +33,8 @@ pub struct GarLicenseSetV1 {
 /// CDN-facing policy embedded in GAR v2 payloads.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::gar::GarCdnPolicyV1")]
 pub struct GarCdnPolicyV1 {
     /// Optional TTL override applied by gateways (seconds).
     #[norito(default)]
@@ -57,6 +61,8 @@ pub struct GarCdnPolicyV1 {
 /// Moderation directive embedded in GAR v2.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::gar::GarModerationDirectiveV1")]
 pub struct GarModerationDirectiveV1 {
     /// Unique label for the directive.
     pub slug: String,
@@ -74,6 +80,8 @@ pub struct GarModerationDirectiveV1 {
     Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default, Hash, PartialOrd, Ord,
 )]
 #[cfg_attr(feature = "json", norito(tag = "kind", content = "data"))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::gar::GarModerationAction")]
 pub enum GarModerationAction {
     /// Allow the request but record the directive metadata.
     #[cfg_attr(feature = "json", norito(rename = "allow"))]
@@ -136,6 +144,8 @@ mod gar_json_impl {
 /// Metrics/telemetry policy surfaced through GAR.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::gar::GarMetricsPolicyV1")]
 pub struct GarMetricsPolicyV1 {
     /// Identifier used in dashboards and audit reports.
     pub policy_id: String,
@@ -150,6 +160,8 @@ pub struct GarMetricsPolicyV1 {
 /// Structured policy payload embedded in GAR v2.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::gar::GarPolicyPayloadV1")]
 pub struct GarPolicyPayloadV1 {
     /// Licensing bundles attached to the GAR.
     #[norito(default)]
@@ -196,6 +208,8 @@ mod rpt_digest_json {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "kind", content = "data"))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::gar::GarEnforcementActionV1")]
 pub enum GarEnforcementActionV1 {
     /// Purge the gateway cache or static zone immediately.
     #[cfg_attr(feature = "json", norito(rename = "purge_static_zone"))]
@@ -233,6 +247,8 @@ pub enum GarEnforcementActionV1 {
 /// reason to the policy digest that triggered the action.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::gar::GarEnforcementReceiptV1")]
 pub struct GarEnforcementReceiptV1 {
     /// Unique identifier (e.g., ULID) that callers can correlate with logs.
     pub receipt_id: [u8; 16],
@@ -359,3 +375,6 @@ mod tests {
         assert_eq!(payload, decoded);
     }
 }
+
+#[cfg(test)]
+mod captured_gar_schema_tests;

@@ -37,6 +37,9 @@ internal object ParliamentProposalValidatorV1 {
             "ValidationFeePayoutLifecycle" -> validationFeePayoutLifecycle(payload)
             "MusubiRegistryGovernance" -> musubiAction(payload)
             "SorafsProviderGovernance" -> sorafsProvider(payload)
+            "ContractLifecycleGovernance" -> contractLifecycle(payload)
+            "ContractEmergencyHold" -> contractEmergencyHold(payload)
+            "GlobalDataTriggerPermissionGovernance" -> globalDataTriggerPermission(payload)
             else -> throw IllegalArgumentException("proposal.kind is unknown or retired")
         }
         return proposal
@@ -45,9 +48,17 @@ internal object ParliamentProposalValidatorV1 {
     private fun deployContract(value: Map<String, Any?>) {
         exact(
             value,
-            setOf("contract_address", "code_hash", "abi_hash", "abi_version", "manifest_provenance"),
+            setOf(
+                "proposal_operator",
+                "contract_address",
+                "code_hash",
+                "abi_hash",
+                "abi_version",
+                "manifest_provenance",
+            ),
             "DeployContract",
         )
+        account(value["proposal_operator"], "proposal_operator")
         requireCanonicalV1ContractAddress(text(value["contract_address"], "contract_address"))
         lowerHex32(value["code_hash"], "code_hash")
         lowerHex32(value["abi_hash"], "abi_hash")
@@ -66,7 +77,8 @@ internal object ParliamentProposalValidatorV1 {
     }
 
     private fun runtimeUpgrade(value: Map<String, Any?>) {
-        exact(value, setOf("manifest"), "RuntimeUpgrade")
+        exact(value, setOf("proposal_operator", "manifest"), "RuntimeUpgrade")
+        account(value["proposal_operator"], "RuntimeUpgrade.proposal_operator")
         val manifest = objectValue(value["manifest"], "RuntimeUpgrade.manifest")
         exact(
             manifest,
@@ -366,6 +378,140 @@ internal object ParliamentProposalValidatorV1 {
                 account(payload["expected_owner"], "expected_owner")
             }
             else -> throw IllegalArgumentException("Sorafs provider action is unsupported")
+        }
+    }
+
+    private fun contractLifecycle(value: Map<String, Any?>) {
+        exact(
+            value,
+            setOf("proposal_operator", "contract_address", "expected_revision", "action"),
+            "ContractLifecycleGovernance",
+        )
+        account(
+            value["proposal_operator"],
+            "ContractLifecycleGovernance.proposal_operator",
+        )
+        requireCanonicalV1ContractAddress(
+            text(value["contract_address"], "ContractLifecycleGovernance.contract_address"),
+        )
+        require(
+            uint(value["expected_revision"], "ContractLifecycleGovernance.expected_revision") >
+                BigInteger.ZERO,
+        ) { "contract lifecycle expected_revision must be nonzero" }
+        val action = objectValue(value["action"], "ContractLifecycleGovernance.action")
+        exact(action, setOf("action", "payload"), "ContractLifecycleGovernance.action")
+        val kind = text(action["action"], "ContractLifecycleGovernance.action.action")
+        require(kind in ParliamentApiV1.CONTRACT_LIFECYCLE_ACTIONS) {
+            "contract lifecycle action is unsupported"
+        }
+        if (kind == "CancelOwnershipOffer" || kind == "AcceptParliamentOwnership") {
+            require(action["payload"] == null) { "$kind payload must be null" }
+            return
+        }
+        val payload = objectValue(action["payload"], "ContractLifecycleGovernance.action.payload")
+        when (kind) {
+            "Activate" -> {
+                exact(
+                    payload,
+                    setOf("code_hash", "abi_hash", "abi_version", "manifest_provenance"),
+                    kind,
+                )
+                lowerHex32(payload["code_hash"], "$kind.code_hash")
+                lowerHex32(payload["abi_hash"], "$kind.abi_hash")
+                require(uint(payload["abi_version"], "$kind.abi_version") == BigInteger.ONE) {
+                    "$kind.abi_version must equal 1"
+                }
+                payload["manifest_provenance"]?.let {
+                    manifestProvenance(objectValue(it, "$kind.manifest_provenance"), "$kind.manifest_provenance")
+                }
+            }
+            "Deactivate" -> {
+                val fields = if (payload.containsKey("reason")) {
+                    setOf("expected_code_hash", "reason")
+                } else {
+                    setOf("expected_code_hash")
+                }
+                exact(payload, fields, kind)
+                lowerHex32(payload["expected_code_hash"], "$kind.expected_code_hash")
+                payload["reason"]?.let { string(it, "$kind.reason") }
+            }
+            "OfferOwnership" -> {
+                exact(payload, setOf("new_owner"), kind)
+                account(payload["new_owner"], "$kind.new_owner")
+            }
+            "CompleteEmergencyHoldRetrospective" -> {
+                exact(
+                    payload,
+                    setOf(
+                        "hold_proposal_content_id", "hold_governance_attempt_id",
+                        "incident_digest", "retrospective_finding_root",
+                    ),
+                    kind,
+                )
+                bytes(payload["hold_proposal_content_id"], 32, "$kind.hold_proposal_content_id", true)
+                bytes(payload["hold_governance_attempt_id"], 32, "$kind.hold_governance_attempt_id", true)
+                bytes(payload["incident_digest"], 32, "$kind.incident_digest", true)
+                bytes(payload["retrospective_finding_root"], 32, "$kind.retrospective_finding_root", true)
+            }
+            else -> throw IllegalArgumentException("contract lifecycle action is unsupported")
+        }
+    }
+
+    private fun globalDataTriggerPermission(value: Map<String, Any?>) {
+        exact(
+            value,
+            setOf("authority", "action"),
+            "GlobalDataTriggerPermissionGovernance",
+        )
+        account(
+            value["authority"],
+            "GlobalDataTriggerPermissionGovernance.authority",
+        )
+        val action = objectValue(
+            value["action"],
+            "GlobalDataTriggerPermissionGovernance.action",
+        )
+        exact(
+            action,
+            setOf("action", "value"),
+            "GlobalDataTriggerPermissionGovernance.action",
+        )
+        val kind = text(
+            action["action"],
+            "GlobalDataTriggerPermissionGovernance.action.action",
+        )
+        require(kind == "grant" || kind == "revoke") {
+            "GlobalDataTriggerPermissionGovernance.action.action must be grant or revoke"
+        }
+        require(action["value"] == null) {
+            "GlobalDataTriggerPermissionGovernance.action.value must be null"
+        }
+    }
+
+    private fun contractEmergencyHold(value: Map<String, Any?>) {
+        exact(
+            value,
+            setOf(
+                "contract_address", "expected_revision", "expected_code_hash",
+                "incident_digest", "reason", "duration_blocks",
+            ),
+            "ContractEmergencyHold",
+        )
+        requireCanonicalV1ContractAddress(
+            text(value["contract_address"], "ContractEmergencyHold.contract_address"),
+        )
+        require(
+            uint(value["expected_revision"], "ContractEmergencyHold.expected_revision") >
+                BigInteger.ZERO,
+        ) { "contract emergency-hold expected_revision must be nonzero" }
+        lowerHex32(value["expected_code_hash"], "ContractEmergencyHold.expected_code_hash")
+        bytes(value["incident_digest"], 32, "ContractEmergencyHold.incident_digest", true)
+        require(string(value["reason"], "ContractEmergencyHold.reason").trim().isNotEmpty()) {
+            "ContractEmergencyHold.reason must not be blank"
+        }
+        val duration = uint(value["duration_blocks"], "ContractEmergencyHold.duration_blocks")
+        require(duration in BigInteger.ONE..BigInteger.valueOf(3_600)) {
+            "ContractEmergencyHold.duration_blocks must be in 1..3600"
         }
     }
 

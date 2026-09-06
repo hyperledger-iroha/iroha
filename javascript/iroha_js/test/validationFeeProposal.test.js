@@ -3,12 +3,14 @@ import { test } from "node:test";
 import { ed25519 } from "@noble/curves/ed25519";
 
 import { AccountAddress } from "../src/address.js";
+import { createNativeRuntime } from "../src/nativeRuntime.js";
 import { NetworkId } from "../src/networkId.js";
 import { noritoDecodeInstruction, noritoEncodeInstruction } from "../src/norito.js";
 import { buildTransactionPayload } from "../src/transaction.js";
 import {
   computeValidationFeePayoutLifecycleProposalFingerprintV1,
   computeValidationFeePolicyProposalFingerprintV1,
+  createValidationFeeProposalApi,
 } from "../src/validationFeeProposal.js";
 import { makeNativeTest } from "./helpers/native.js";
 
@@ -22,18 +24,56 @@ const validationFeeNetwork = NetworkId.fromBytes(
 const validationFeeNetworkId = validationFeeNetwork.toString();
 
 function withNativeBinding(native, body) {
-  const previous = globalThis.__IROHA_NATIVE_BINDING__;
-  globalThis.__IROHA_NATIVE_BINDING__ = native;
-  try {
-    return body();
-  } finally {
-    if (previous === undefined) {
-      delete globalThis.__IROHA_NATIVE_BINDING__;
-    } else {
-      globalThis.__IROHA_NATIVE_BINDING__ = previous;
-    }
-  }
+  return body(createValidationFeeProposalApi(createNativeRuntime(native)));
 }
+
+test("validation-fee proposal factories isolate immutable native runtimes", async () => {
+  const bindingA = {
+    validationFeePolicyProposalFingerprintV1: () => Buffer.alloc(32, 0xa1),
+  };
+  const apiA = createValidationFeeProposalApi(createNativeRuntime(bindingA));
+  const apiB = createValidationFeeProposalApi(createNativeRuntime({
+    validationFeePolicyProposalFingerprintV1: () => Buffer.alloc(32, 0xb2),
+  }));
+  bindingA.validationFeePolicyProposalFingerprintV1 = () =>
+    Buffer.alloc(32, 0xff);
+
+  const [fingerprintA, fingerprintB] = await Promise.all([
+    Promise.resolve().then(() =>
+      apiA.computeValidationFeePolicyProposalFingerprintV1(
+        proposalOperator,
+        { schema_version: 1 },
+      )),
+    Promise.resolve().then(() =>
+      apiB.computeValidationFeePolicyProposalFingerprintV1(
+        proposalOperator,
+        { schema_version: 1 },
+      )),
+  ]);
+  assert.equal(Object.isFrozen(apiA), true);
+  assert.equal(fingerprintA, "a1".repeat(32));
+  assert.equal(fingerprintB, "b2".repeat(32));
+});
+
+test("validation-fee proposal public facades preserve exact argument counts", () => {
+  assert.throws(
+    () => computeValidationFeePolicyProposalFingerprintV1(
+      proposalOperator,
+      { schema_version: 1 },
+      null,
+      {},
+    ),
+    /exactly two or three arguments/u,
+  );
+  assert.throws(
+    () => computeValidationFeePayoutLifecycleProposalFingerprintV1(
+      proposalOperator,
+      { entrypoint: "autonomous_validation_fee_tick" },
+      {},
+    ),
+    /exactly two arguments/u,
+  );
+});
 
 test("validation-fee proposal fingerprint delegates exact native policy and lifecycle bytes", () => {
   const policy = Object.freeze({
@@ -54,8 +94,8 @@ test("validation-fee proposal fingerprint delegates exact native policy and life
         return Buffer.from("12".repeat(32), "hex");
       },
     },
-    () =>
-      computeValidationFeePolicyProposalFingerprintV1(
+    ({ computeValidationFeePolicyProposalFingerprintV1: compute }) =>
+      compute(
         proposalOperator,
         policy,
         lifecycleId,
@@ -77,8 +117,8 @@ test("validation-fee proposal fingerprint accepts no-payout and even-ending outp
         return Buffer.from("34".repeat(32), "hex");
       },
     },
-    () =>
-      computeValidationFeePolicyProposalFingerprintV1(
+    ({ computeValidationFeePolicyProposalFingerprintV1: compute }) =>
+      compute(
         proposalOperator,
         { schema_version: 1 },
         null,
@@ -102,8 +142,8 @@ test("validation-fee payout lifecycle fingerprint delegates exact native objects
         return Buffer.from("56".repeat(32), "hex");
       },
     },
-    () =>
-      computeValidationFeePayoutLifecycleProposalFingerprintV1(
+    ({ computeValidationFeePayoutLifecycleProposalFingerprintV1: compute }) =>
+      compute(
         proposalOperator,
         payoutBinding,
       ),
@@ -117,10 +157,12 @@ test("validation-fee proposal fingerprint rejects legacy lifecycle encodings", (
       assert.fail("invalid lifecycle input must not reach native code");
     },
   };
-  withNativeBinding(unexpectedNative, () => {
+  withNativeBinding(unexpectedNative, ({
+    computeValidationFeePolicyProposalFingerprintV1: computePolicy,
+  }) => {
     assert.throws(
       () =>
-        computeValidationFeePolicyProposalFingerprintV1(
+        computePolicy(
           proposalOperator,
           { schema_version: 1 },
           `0x${"56".repeat(32)}`,
@@ -129,7 +171,7 @@ test("validation-fee proposal fingerprint rejects legacy lifecycle encodings", (
     );
     assert.throws(
       () =>
-        computeValidationFeePolicyProposalFingerprintV1(
+        computePolicy(
           proposalOperator,
           { schema_version: 1 },
           "00".repeat(32),
@@ -148,10 +190,13 @@ test("validation-fee proposal fingerprints require exact object inputs", () => {
       assert.fail("invalid payout input must not reach native code");
     },
   };
-  withNativeBinding(unexpectedNative, () => {
+  withNativeBinding(unexpectedNative, ({
+    computeValidationFeePayoutLifecycleProposalFingerprintV1: computePayout,
+    computeValidationFeePolicyProposalFingerprintV1: computePolicy,
+  }) => {
     assert.throws(
       () =>
-        computeValidationFeePolicyProposalFingerprintV1(
+        computePolicy(
           proposalOperator,
           [],
         ),
@@ -159,7 +204,7 @@ test("validation-fee proposal fingerprints require exact object inputs", () => {
     );
     assert.throws(
       () =>
-        computeValidationFeePayoutLifecycleProposalFingerprintV1(
+        computePayout(
           proposalOperator,
           [],
         ),
@@ -177,9 +222,12 @@ test("validation-fee proposal fingerprints reject the retired electorate argumen
       assert.fail("retired payout arguments must not reach native code");
     },
   };
-  withNativeBinding(unexpectedNative, () => {
+  withNativeBinding(unexpectedNative, ({
+    computeValidationFeePayoutLifecycleProposalFingerprintV1: computePayout,
+    computeValidationFeePolicyProposalFingerprintV1: computePolicy,
+  }) => {
     assert.throws(
-      () => computeValidationFeePolicyProposalFingerprintV1(
+      () => computePolicy(
         proposalOperator,
         { schema_version: 1 },
         null,
@@ -188,7 +236,7 @@ test("validation-fee proposal fingerprints reject the retired electorate argumen
       /exactly two or three arguments/u,
     );
     assert.throws(
-      () => computeValidationFeePayoutLifecycleProposalFingerprintV1(
+      () => computePayout(
         proposalOperator,
         { entrypoint: "autonomous_validation_fee_tick" },
         {},
@@ -204,11 +252,13 @@ test("validation-fee proposal fingerprints require an explicit canonical operato
       assert.fail("invalid proposal operator must not reach native code");
     },
   };
-  withNativeBinding(unexpectedNative, () => {
+  withNativeBinding(unexpectedNative, ({
+    computeValidationFeePolicyProposalFingerprintV1: computePolicy,
+  }) => {
     for (const invalid of [null, "", ` ${proposalOperator}`]) {
       assert.throws(
         () =>
-          computeValidationFeePolicyProposalFingerprintV1(
+          computePolicy(
             invalid,
             { schema_version: 1 },
             null,
@@ -229,10 +279,13 @@ test("validation-fee proposal fingerprints require exact native digest lengths",
         return Buffer.alloc(33);
       },
     },
-    () => {
+    ({
+      computeValidationFeePayoutLifecycleProposalFingerprintV1: computePayout,
+      computeValidationFeePolicyProposalFingerprintV1: computePolicy,
+    }) => {
       assert.throws(
         () =>
-          computeValidationFeePolicyProposalFingerprintV1(
+          computePolicy(
             proposalOperator,
             { schema_version: 1 },
             null,
@@ -241,7 +294,7 @@ test("validation-fee proposal fingerprints require exact native digest lengths",
       );
       assert.throws(
         () =>
-          computeValidationFeePayoutLifecycleProposalFingerprintV1(
+          computePayout(
             proposalOperator,
             { entrypoint: "autonomous_validation_fee_tick" },
           ),

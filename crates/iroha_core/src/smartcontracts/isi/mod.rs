@@ -12,6 +12,8 @@ pub mod domain;
 /// Native asset escrow instruction handlers.
 pub mod escrow;
 pub mod identifier;
+/// Kagemusha reserve settlement instruction handlers.
+pub mod kagemusha;
 pub mod kaigi;
 /// Ministry agenda submission handlers.
 pub mod ministry;
@@ -19,8 +21,6 @@ pub mod multisig;
 /// Musubi package registry instruction handlers.
 pub mod musubi;
 pub mod nft;
-/// Offline allowance settlement instruction handlers.
-pub mod offline;
 /// Oracle feed admission and aggregation instruction handlers.
 pub mod oracle;
 /// Canonical first-release privacy governance and proof admission.
@@ -119,6 +119,7 @@ macro_rules! define_instruction_handlers {
     };
 }
 define_instruction_handlers! {
+    dispatch_instruction::<iroha_data_model::isi::register::RegisterCommitteePeerWithPop>,
     dispatch_instruction::<RegisterPeerWithPop>,
     dispatch_instruction::<RegisterBox>,
     dispatch_instruction::<UnregisterBox>,
@@ -254,6 +255,7 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::sorafs::SubmitSorafsModerationCommit>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::RaiseSorafsModerationChallenge>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::ResolveSorafsModerationChallenge>,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::ExpireSorafsModerationChallenge>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::SubmitSorafsModerationReveal>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::FinalizeSorafsModerationCase>,
     dispatch_instruction::<iroha_data_model::isi::content::PublishContentBundle>,
@@ -307,16 +309,8 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::ram_lfe::ActivateRamLfeProgramPolicy>,
     dispatch_instruction::<iroha_data_model::isi::ram_lfe::DeactivateRamLfeProgramPolicy>,
     dispatch_instruction::<iroha_data_model::isi::SetAssetDefinitionAlias>,
-    dispatch_instruction::<iroha_data_model::isi::offline::TopUpKagemushaRecursiveV4>,
-    dispatch_instruction::<iroha_data_model::isi::offline::RedeemKagemushaRecursiveV4>,
-    dispatch_instruction::<iroha_data_model::isi::offline::ActivateKagemushaRecursiveReleaseV4>,
-    dispatch_instruction::<iroha_data_model::isi::offline::EnableKagemushaRecursiveIssuanceV4>,
-    dispatch_instruction::<iroha_data_model::isi::offline::CancelKagemushaRecursiveReleaseV4>,
-    dispatch_instruction::<iroha_data_model::isi::offline::DeactivateKagemushaRecursiveIssuanceV4>,
-    dispatch_instruction::<iroha_data_model::isi::offline::RecordKagemushaTairaCanaryV4>,
-    dispatch_instruction::<iroha_data_model::isi::offline::AuthorizeKagemushaTairaCanaryV4>,
-    dispatch_instruction::<iroha_data_model::isi::offline::RegisterOfflineDeviceAttestation>,
-    dispatch_instruction::<iroha_data_model::isi::offline::SetOfflineDeviceAttestationPolicy>,
+    dispatch_instruction::<iroha_data_model::isi::TopUpKagemushaV1>,
+    dispatch_instruction::<iroha_data_model::isi::RedeemKagemushaV1>,
     dispatch_instruction::<iroha_data_model::isi::social::ClaimTwitterFollowReward>,
     dispatch_instruction::<iroha_data_model::isi::social::SendToTwitter>,
     dispatch_instruction::<iroha_data_model::isi::social::CancelTwitterEscrow>,
@@ -439,6 +433,14 @@ define_instruction_handlers! {
         iroha_data_model::isi::smart_contract_code::CancelSmartContractCodeUpload
     >,
     dispatch_instruction::<iroha_data_model::isi::smart_contract_code::ActivateContractInstance>,
+    dispatch_instruction::<
+        iroha_data_model::isi::smart_contract_code::SetContractParliamentDelegation
+    >,
+    dispatch_instruction::<iroha_data_model::isi::smart_contract_code::OfferContractOwnership>,
+    dispatch_instruction::<iroha_data_model::isi::smart_contract_code::AcceptContractOwnership>,
+    dispatch_instruction::<
+        iroha_data_model::isi::smart_contract_code::CancelContractOwnershipOffer
+    >,
     dispatch_instruction::<iroha_data_model::isi::smart_contract_code::CommitContractDeployment>,
     dispatch_instruction::<iroha_data_model::isi::smart_contract_code::DeactivateContractInstance>,
     dispatch_instruction::<iroha_data_model::isi::smart_contract_code::RemoveSmartContractBytes>,
@@ -472,6 +474,13 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::endorsement::SubmitDomainEndorsement>,
     dispatch_instruction::<iroha_data_model::isi::ministry::SubmitAgendaProposal>,
     dispatch_instruction::<iroha_data_model::isi::governance::ProposeDeployContract>,
+    dispatch_instruction::<
+        iroha_data_model::isi::governance::ProposeContractLifecycleGovernance
+    >,
+    dispatch_instruction::<iroha_data_model::isi::governance::ProposeContractEmergencyHold>,
+    dispatch_instruction::<
+        iroha_data_model::isi::governance::ProposeGlobalDataTriggerPermissionGovernance
+    >,
     dispatch_instruction::<iroha_data_model::isi::governance::ProposeRuntimeUpgradeProposal>,
     dispatch_instruction::<iroha_data_model::isi::governance::ProposeSccpRouteGovernance>,
     dispatch_instruction::<iroha_data_model::isi::governance::ProposeSorafsProviderGovernance>,
@@ -487,8 +496,6 @@ define_instruction_handlers! {
     dispatch_instruction::<
         iroha_data_model::isi::governance::SubmitParliamentLifecycleTransitionV1
     >,
-    dispatch_instruction::<iroha_data_model::isi::governance::PersistCouncilForEpoch>,
-    dispatch_instruction::<iroha_data_model::isi::governance::RecordCitizenServiceOutcome>,
     dispatch_instruction::<iroha_data_model::isi::governance::RegisterCitizen>,
     dispatch_instruction::<iroha_data_model::isi::governance::UnregisterCitizen>,
     dispatch_instruction::<iroha_data_model::isi::governance::SlashGovernanceLock>,
@@ -552,6 +559,12 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::privacy::SubmitPrivacyProofV1>,
     dispatch_instruction::<
         iroha_data_model::isi::private_settlement::ActivatePrivateSettlementPoolV1
+    >,
+    dispatch_instruction::<
+        iroha_data_model::isi::private_settlement::RotatePrivateSettlementPoolPolicyV1
+    >,
+    dispatch_instruction::<
+        iroha_data_model::isi::private_settlement::RegisterAtomicPrivateSettlementPrepareV1
     >,
     dispatch_instruction::<
         iroha_data_model::isi::private_settlement::AbortAtomicPrivateSettlementV1
@@ -2260,6 +2273,170 @@ mod tests {
             .execute(&account_id, &mut state_transaction)?;
         state_transaction.apply();
         state_block.commit_world_overlay_for_testing().unwrap();
+        Ok(())
+    }
+    #[test]
+    async fn registration_metadata_values_share_the_set_key_value_limit() -> Result<()> {
+        use iroha_data_model::{
+            asset::{AssetBalancePolicy, AssetDefinitionId},
+            isi::rwa::RegisterRwa,
+            parameter::{CustomParameter, CustomParameterId},
+            prelude::Parameter,
+            rwa::{NewRwa, RwaControlPolicy},
+        };
+        use iroha_primitives::json::Json;
+        use iroha_primitives::numeric::{NumericSpec, Quantity};
+        use std::str::FromStr as _;
+
+        fn metadata_with_encoded_size(size: usize) -> Metadata {
+            let value = Json::new("X".repeat(size.saturating_sub(2)));
+            assert_eq!(
+                value.as_ref().len(),
+                size,
+                "fixture must hit the wire-size boundary"
+            );
+            let mut metadata = Metadata::default();
+            metadata.insert("bounded".parse().expect("metadata key"), value);
+            metadata
+        }
+
+        fn assert_metadata_limit(error: Error, entity: &str) {
+            assert!(
+                matches!(error, Error::InvalidParameter(_)),
+                "oversized {entity} registration returned {error:?}"
+            );
+        }
+
+        let kura = Kura::blank_kura_for_testing();
+        let state = state_with_test_domains(&kura)?;
+        let block_header = ValidBlock::new_dummy(checked_keypair().private_key())
+            .as_ref()
+            .header();
+        let mut state_block = state.block(block_header);
+        let mut state_transaction = state_block.transaction();
+        let limit_id = CustomParameterId::from_str("max_metadata_value_bytes")?;
+        SetParameter::new(Parameter::Custom(CustomParameter::new(
+            limit_id,
+            Json::new(16_u64),
+        )))
+        .execute(&ALICE_ID, &mut state_transaction)?;
+
+        let exact = metadata_with_encoded_size(16);
+        let oversized = metadata_with_encoded_size(17);
+
+        let exact_account = AccountId::new(checked_keypair().public_key().clone());
+        Register::account(Account::new(exact_account.clone()).with_metadata(exact.clone()))
+            .execute(&ALICE_ID, &mut state_transaction)?;
+        let oversized_account = AccountId::new(checked_keypair().public_key().clone());
+        assert_metadata_limit(
+            Register::account(
+                Account::new(oversized_account.clone()).with_metadata(oversized.clone()),
+            )
+            .execute(&ALICE_ID, &mut state_transaction)
+            .expect_err("oversized account metadata must fail"),
+            "account",
+        );
+        assert!(state_transaction.world.account(&oversized_account).is_err());
+
+        let exact_domain = DomainId::try_new("metadata-exact", "universal")?;
+        Register::domain(Domain::new(exact_domain).with_metadata(exact.clone()))
+            .execute(&ALICE_ID, &mut state_transaction)?;
+        let oversized_domain = DomainId::try_new("metadata-oversized", "universal")?;
+        assert_metadata_limit(
+            Register::domain(
+                Domain::new(oversized_domain.clone()).with_metadata(oversized.clone()),
+            )
+            .execute(&ALICE_ID, &mut state_transaction)
+            .expect_err("oversized domain metadata must fail"),
+            "domain",
+        );
+        assert!(state_transaction.world.domain(&oversized_domain).is_err());
+
+        let wonderland = DomainId::try_new("wonderland", "universal")?;
+        let exact_definition = AssetDefinitionId::derive_from_components(
+            wonderland.clone(),
+            "metadata_exact".parse()?,
+        );
+        Register::asset_definition(
+            AssetDefinition::numeric(
+                exact_definition,
+                "metadata exact",
+                AssetBalancePolicy::Global,
+                None,
+            )
+            .with_metadata(exact.clone()),
+        )
+        .execute(&ALICE_ID, &mut state_transaction)?;
+        let oversized_definition = AssetDefinitionId::derive_from_components(
+            wonderland.clone(),
+            "metadata_oversized".parse()?,
+        );
+        assert_metadata_limit(
+            Register::asset_definition(
+                AssetDefinition::numeric(
+                    oversized_definition.clone(),
+                    "metadata oversized",
+                    AssetBalancePolicy::Global,
+                    None,
+                )
+                .with_metadata(oversized.clone()),
+            )
+            .execute(&ALICE_ID, &mut state_transaction)
+            .expect_err("oversized asset-definition metadata must fail"),
+            "asset definition",
+        );
+        assert!(
+            state_transaction
+                .world
+                .asset_definition(&oversized_definition)
+                .is_err()
+        );
+
+        let exact_nft: NftId = "metadata_exact$wonderland.universal".parse()?;
+        Register::nft(Nft::new(exact_nft, exact.clone()))
+            .execute(&ALICE_ID, &mut state_transaction)?;
+        let oversized_nft: NftId = "metadata_oversized$wonderland.universal".parse()?;
+        assert_metadata_limit(
+            Register::nft(Nft::new(oversized_nft.clone(), oversized.clone()))
+                .execute(&ALICE_ID, &mut state_transaction)
+                .expect_err("oversized NFT metadata must fail"),
+            "NFT",
+        );
+        assert!(state_transaction.world.nft(&oversized_nft).is_err());
+
+        state_transaction.tx_call_hash = Some(iroha_crypto::Hash::new(b"metadata-limit-rwa"));
+        RegisterRwa {
+            rwa: NewRwa::new(
+                wonderland.clone(),
+                "1".parse::<Quantity>()?,
+                NumericSpec::integer(),
+                "metadata-exact".to_owned(),
+                None,
+                exact,
+                Vec::new(),
+                RwaControlPolicy::default(),
+            ),
+        }
+        .execute(&ALICE_ID, &mut state_transaction)?;
+        let rwa_count = state_transaction.world.rwas.len();
+        assert_metadata_limit(
+            RegisterRwa {
+                rwa: NewRwa::new(
+                    wonderland,
+                    "1".parse::<Quantity>()?,
+                    NumericSpec::integer(),
+                    "metadata-oversized".to_owned(),
+                    None,
+                    oversized,
+                    Vec::new(),
+                    RwaControlPolicy::default(),
+                ),
+            }
+            .execute(&ALICE_ID, &mut state_transaction)
+            .expect_err("oversized RWA metadata must fail"),
+            "RWA",
+        );
+        assert_eq!(state_transaction.world.rwas.len(), rwa_count);
         Ok(())
     }
     #[test]

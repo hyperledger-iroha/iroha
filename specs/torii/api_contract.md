@@ -97,10 +97,21 @@ exceptions after stream establishment.
 capability document: `GET /v1/mcp` returns `405 Method Not Allowed`. CORS
 preflight remains bodyless and does not require `Content-Type`.
 
-Structured query DTOs accept at most one value for each decoded key. Literal
-duplicates and percent-encoded equivalents such as `limit` and `%6cimit` return
-`400 request_query_invalid`; only explicitly documented protocol parsers may
-define repeated-key semantics.
+Structured query DTOs accept an absent query as an empty object. A present
+query is limited to 64 KiB and 64 unique, non-empty `key=value` pairs; empty
+segments, additional literal `=` separators, and duplicate decoded keys return
+`400 request_query_invalid`. Components have one canonical HTML-form spelling:
+spaces are `+`, literal plus signs and non-literal bytes use uppercase percent
+escapes, and literal bytes must not be escaped. Decoded keys and values must be
+exact UTF-8 without control characters. Scalar coercion recognizes only
+lowercase `null`, `true`, `false`, and canonical base-10 integers; aliases,
+whitespace, floats, and exponents remain strings. Only explicitly documented
+protocol parsers may define different or repeated-key semantics.
+
+SoraFS readback queries are schema-closed. Their numeric fields use canonical
+unsigned decimal text, page limits must be within the documented range, and
+unknown keys, empty segments, duplicates, and percent-encoded aliases return
+`400` instead of being ignored or clamped.
 
 ## Errors and correlation
 
@@ -171,17 +182,18 @@ whose marker appears on another route is replaced by the ordinary typed
 envelope. Errors after a stream has started follow that stream's terminal
 framing instead of the finite HTTP envelope.
 
-`GET /v1/offline/readiness` is the canonical universal offline-wallet
+`GET /v1/kagemusha/readiness` is the canonical universal KAGEMUSHA-wallet
 capability discovery route. It does not evaluate a validator, asset,
 domain, dataspace, escrow account, verifier catalog, or deployment profile.
-Every app-API build returns the same asset-neutral ABI-21/V4
-`cash_handoff_v1` contract. Its only fields are
-`cash_handoff_capability`, `required_bridge_abi_version`, `max_hops`, and
-`ready`; `ready` is always true. Clients must not use this response, `/health`,
+Every app-API build returns the same asset-neutral KAGEMUSHA V1
+`kagemusha_handoff_v1` contract. Its only fields are `kagemusha_handoff_capability`,
+`wire_version`, `device_lifecycle_version`, and `ready`; both versions are
+exactly `1` and `ready` is always true. No hop, ancestry, input, or history
+limit is advertised. Clients must not use this response, `/health`,
 or `/readyz` as an offline-feature admission gate.
 
-Proof, authority, balance, release, and lineage errors belong to the specific
-top-up or redemption command that references them. Such an error uses the
+Proof, authority, balance, release, replay, and reserve errors belong to the
+specific top-up or redemption command that references them. Such an error uses the
 ordinary typed error-envelope contract and cannot make the process or node
 unready. Torii has no per-asset readiness response or selector query.
 
@@ -205,7 +217,7 @@ finite `429` or `503` response includes both `Retry-After` and a matching typed
 retry hint.
 
 Connection-level pre-authentication capacity and rate gates run before
-credential validation. For Offline command routes admitted by that bounded
+credential validation. For KAGEMUSHA command routes admitted by that bounded
 gate, API-token authentication is completed before request media-type,
 idempotency-key, or body validation. An unauthenticated or duplicate-token
 request therefore receives the authentication failure even if its
@@ -246,13 +258,14 @@ authentication and network policy rather than by claiming a separate socket.
 | Method/path or family | Surface and exposure | Media/protocol | Authentication | Reason |
 | --- | --- | --- | --- | --- |
 | `GET /health` | protocol, public | framework health response | deployment policy | load-balancer probe |
-| `GET /status`, `GET /status/{*tail}` | diagnostic, restricted on the public listener | diagnostic JSON/text | CIDR/API-token and network policy | infrastructure status namespace; never an SDK or MCP tool |
+| `GET /status`, `GET /status/blocks`, `GET /status/peers` | diagnostic, restricted on the public listener | root status negotiates JSON or canonical Norito; exact probes are JSON integers | CIDR/API-token and network policy | root status plus exact infrastructure probes; never an SDK or MCP tool |
 | `GET /metrics` | diagnostic, restricted on the public listener | Prometheus text | CIDR/API-token policy | scraper protocol; never an SDK or MCP tool |
 | `GET /debug/pprof/profile` | diagnostic, restricted on the public listener | profiler bytes | CIDR/API-token policy | diagnostic artifact |
-| `GET /openapi`, `GET /openapi.json`, `GET /v1/schema` | protocol documentation | JSON document | deployment policy | schema/document endpoints are JSON-only |
+| `GET /openapi.json`, `GET /v1/schema` | protocol documentation | JSON document | deployment policy | schema/document endpoints are JSON-only; the extensionless OpenAPI alias is not part of V1 |
 | `POST /v1/mcp` | protocol | MCP Streamable HTTP JSON-RPC | bounded nested-route boundary which preserves the selected catalog route's exact authentication and admission | tool transport, not an ordinary generated REST operation; GET returns 405 because no SSE stream is provided |
 | `GET /v1/ledger/block/{height}` and `GET /v1/ledger/block/{height}/proof/{entry_hash}` | public, OpenAPI and SDK | exact `application/x-norito` cryptographic carrier | listener policy | the executed `SignedBlockWire` and `BlockProofs` bytes must not be projected through a separately evolving JSON shape; the block carrier is finalized-state-bound and limited to 32 MiB |
-| `POST /v1/operator/auth/{registration,login}/{options,verify}` | operator, OpenAPI only | WebAuthn JSON | mTLS plus handler-enforced bootstrap/session, rate-limit, lockout, and WebAuthn challenge policy | credential exchange cannot require an already-established operator request signature; it never enters SDK or MCP projections |
+| `POST /v1/operator/auth/{registration,login}/{options,verify}` | operator, OpenAPI only | WebAuthn JSON | mTLS plus handler-enforced first-credential operator-token bootstrap or authenticated session, rate-limit, lockout, and WebAuthn challenge policy; listener API tokens are not accepted | credential exchange cannot require an already-established operator request signature; after initial enrollment only a session may add rollover credentials; it never enters SDK or MCP projections |
+| `GET /v1/operator/auth/credentials`, `DELETE /v1/operator/auth/credentials/{credential_id}` | operator, OpenAPI only | closed credential-metadata JSON | exact-network operator request signature plus mTLS and a valid WebAuthn session; listener API tokens are not accepted | inventory and revocation only; verification keys are never returned and these operations never enter SDK or MCP projections |
 | `GET /v1/content/{bundle}/{*path}` and hosted-site reads | protocol | manifest-selected content type, ranges | content policy | raw/static content delivery; an empty wildcard is not a bundle-root alias |
 | any method on `/api` or `/api/{*tail}` with the registered alias or Taira Mon alias in `Host` | protocol | proxied SoraCloud HTTP runtime | no route-specific credential; listener-wide API-token and gateway rate/inflight policy apply | reviewed host-routed public-runtime gateways; path-encoded aliases are rejected and these are not OpenAPI, SDK, or MCP operations |
 | query-projection, attachment, and SoraFS export reads documented as binary | operator/protocol | `application/octet-stream` or declared artifact media | route policy | exact binary artifacts |
@@ -262,6 +275,64 @@ authentication and network policy rather than by claiming a separate socket.
 
 The canonical event/block handshake, ordering, heartbeat, lag, reconnect, and
 close-code rules are specified in [the Torii streaming contract](streaming.md).
+
+### Operator WebAuthn exchange
+
+The four operator-authentication operations accept at most 64 KiB of JSON and
+use one normalized credential envelope rather than accepting a browser's
+open-ended `PublicKeyCredential` object. The two options operations require an
+exactly empty body; the 64 KiB limit applies to the two verify envelopes. The top-level object contains exactly
+`id`, `rawId`, `response`, and `type`; `type` is exactly `public-key`, and `id`
+and `rawId` are equal canonical unpadded base64url encodings of a non-empty
+credential identifier no longer than 1,024 decoded bytes. Registration
+`response` contains exactly `clientDataJSON` and `attestationObject`.
+Authentication `response` contains exactly `clientDataJSON`,
+`authenticatorData`, and `signature`. Each byte string is non-empty canonical
+unpadded base64url. Unknown members, browser-extension members such as
+`userHandle`, padded encodings, and alternate credential types are rejected;
+this closed envelope is a route-specific exception to the general typed-JSON
+unknown-member rule below. Registration accepts only the requested WebAuthn
+`none` attestation profile with an empty attestation statement. V1 rejects
+reserved authenticator flag bits, inconsistent backup flags, embedded attested
+data on assertions, extension data it does not interpret, and trailing CBOR or
+authenticator bytes.
+
+Challenges, sessions, and lockout identities share a configured per-kind live
+entry bound (at most 65,536 per kind) and expire without full-map scans. New
+challenge or session state fails closed with
+`503 operator_auth_state_capacity_exhausted` when its bound is occupied. A full
+lockout table preserves every tracked identity and its lock, but stops tracking
+new identities instead of rejecting otherwise valid unseen callers. Missing-mTLS
+denials never consume per-identity lockout state.
+First enrollment requires one of the configured unique 32..=256-byte
+visible-ASCII bootstrap tokens. Torii retains only domain-separated token
+digests after initialization; an enabled empty credential store without a
+token is a startup error, bootstrap tokens may be removed after enrollment,
+and no more than 16 may be configured. Credential enrollment is separately
+bounded to at most 1,024 entries; an authenticated attempt to add
+a new credential at the configured limit returns
+`409 operator_webauthn_credential_capacity_exhausted`, while replacing the
+same credential identifier is rejected with
+`409 operator_webauthn_credential_duplicate`; credential rotation is a new
+enrollment with a distinct identifier. Persisted credential state is
+validated exactly at startup, including its version, fields, canonical
+encodings, identifier and counter bounds, allowed algorithm, public key, and
+duplicate identifiers. Corrupt or policy-incompatible state prevents Torii
+from starting operator authentication instead of being repaired or ignored.
+
+Credential management is a separate, fully authenticated operator boundary.
+`GET /v1/operator/auth/credentials` returns exactly `credentials` and
+`credentials_total`; entries contain only `credential_id`, `algorithm`,
+`sign_count`, and `created_at_ms`, sorted by canonical credential identifier.
+`DELETE /v1/operator/auth/credentials/{credential_id}` accepts only the same
+non-empty canonical unpadded base64url identifier grammar as credential
+exchange. An unknown identifier returns
+`404 operator_webauthn_credential_not_found`. Deletion atomically persists the
+new credential set and then revokes all outstanding operator sessions and
+challenges. The final credential cannot be deleted unless a bootstrap recovery
+token remains configured; otherwise Torii returns
+`409 operator_webauthn_last_credential`. Every success and error response from
+these routes is `private, no-store`.
 
 ## Typed JSON mapping
 
@@ -410,58 +481,58 @@ Internal wire and consensus types may keep implementation version suffixes.
 Those names do not create nested route versions and do not provide a second
 public response schema.
 
-## Offline operation locality
+## KAGEMUSHA operation locality
 
-Both Offline command routes use the configured Torii `max_content_len` request
-limit, the same operator-controlled ceiling used for transaction ingress. They
-do not inherit Axum's smaller framework default: a Kagemusha redemption that is
-within the configured limit reaches typed decoding. A streamed or
-declared body that exceeds the configured limit fails with typed `413` code
-`request_payload_too_large` before command admission.
+The top-up command accepts only the canonical versioned Norito encoding of one
+caller-signed `SignedTransaction`. Its effective body limit is the ordinary
+transaction-ingress `torii.max_content_len`; enabling KAGEMUSHA commands
+requires that limit to be at least 32 KiB, and the protocol/configuration upper
+bound remains 64,000,000 bytes. The embedded fixed-shape top-up request is
+independently capped at 16 KiB. Redemption accepts one canonical request and is
+capped at the smaller of `torii.max_content_len` and 8 KiB. A declared or
+streamed body above the effective route limit fails with typed `413`
+`request_payload_too_large` before decoding.
 
-Offline command idempotency is globally bound by the signed `operation_id`, but
-pre-commit coordination is deliberately instance-local in this first release.
-The in-flight coordinator, admission cache, and transaction queue belong to the
-Torii instance that accepted the command. A load balancer must therefore keep a
-client on that instance from submission until the operation commits. A pending
-lookup sent to a different instance can return `404`; that response never
-authorizes the client to recycle or change the operation id.
+Top-up validation requires the outer transaction and embedded request to name
+the exact runtime `NetworkId`, a valid transaction signature, the
+signature-bound `QueuePlanSynced` admission intent, exactly one direct native
+`TopUpKagemushaV1` instruction, and transaction authority equal to the embedded
+payer. Torii submits those exact caller-signed bytes through strict durable
+ingress; it neither rebuilds nor signs a top-up. The optional configured issuer
+key is used only to construct redemption transactions.
 
-Accepted request bindings and in-flight reservations share the configured
-positive `operation_registry_max_entries` and `operation_registry_max_bytes`
-budgets under `torii.kagemusha_commands`. They retain fixed-size canonical
-digests, not proof-bearing request DTOs. Capacity never evicts an unexpired
-binding: a new unique command receives typed
-`503 offline_operation_capacity_exhausted`, while an identical accepted replay
-or in-flight follower remains available.
+`Idempotency-Key` is the 64-character lowercase hexadecimal `operation_id`.
+That identifier is globally unique across both operation kinds. An admitted
+binding includes the kind and canonical request digest; top-up additionally
+binds the canonical signed transaction payload/entrypoint hash. Reusing an
+operation ID for another request, kind, or top-up carrier returns
+`409 operation_id_conflict`. The process-local in-flight/admission registry is
+bounded by `operation_registry_max_entries` and
+`operation_registry_max_bytes`; it retains fixed-size bindings rather than
+proof-bearing request objects. A new unique operation fails closed with
+`503 kagemusha_operation_capacity_exhausted` when full.
 
-Every Torii replica allowed to accept Kagemusha commands for one deployment
-must use the same Kagemusha submission authority and behaviorally identical
-command policy. Given the same signed request, those replicas consequently
-construct the same signed transaction. A cross-instance race can still admit
-the same candidate more than once into independent local queues, so the
-consensus/on-chain `operation_id` uniqueness rule is the final guard that
-permits at most one economic effect. This is not a distributed
-idempotency-cache guarantee.
+Before applying mutable snapshot, amount, balance, or signer-readiness policy,
+Torii recovers an existing consensus operation and checks the complete binding.
+It then checks an already-admitted local binding before evaluating those live
+policies for a genuinely new operation. Consequently an exact replay remains
+observable after policy or ledger state changes. Consensus `operation_id`
+uniqueness is the final cross-instance economic-effect guard; pending
+coordination and the bounded registry remain process-local.
 
-Pending and committed recovery is keyed by the configured Kagemusha submission
-authority together with the signed operation id. A transaction under another
-outer authority therefore cannot shadow a Torii-submitted Kagemusha operation
-merely by copying its signed request body into a transaction that later
-rejects. The submission authority is consequently part of the durable
-operation-status contract; deployments must retain it for as long as they
-promise status recovery.
+The first successful submission of a pending operation, and an exact pending
+POST replay, return `202 Accepted` with the canonical `Location` and a positive
+`Retry-After`. An exact replay whose state is terminal (`Applied` or `Rejected`)
+returns `200 OK` with the same `Location` and no `Retry-After`. The status GET
+returns `200 OK`; pending GET responses retain `Retry-After`. Every response is
+`Cache-Control: no-store`. Top-up does not return `202` until the signed
+transaction has a durable queue-plan admission certificate.
 
-After commit, synchronized replicas recover the terminal result through Kura's
-operation-id index while the indexed block body is retained. An index still
-being reconstructed returns typed `503`, and a replica that does not retain the
-indexed block returns the documented history-unavailable `503`. Applied
-results carry non-zero height and server-time values from that exact block;
-Torii never fabricates zero metadata from a local pipeline cache. Missing or
-inconsistent terminal metadata or result state returns
-`503 offline_operation_index_inconsistent`. Deployments that cannot provide
-pre-commit affinity must not expose Offline command routes until shared
-admission coordination exists.
+An Applied body is not its own trust anchor. Maintained clients decode POST
+responses into a restricted unverified wrapper that exposes only operation ID,
+kind, lifecycle state, and finality-coordinate hints. They release the monetary
+result only after validation against a caller-pinned finality anchor; polling
+with that anchor remains the trusted terminal-result path.
 
 ## Sharp cutover and release gates
 

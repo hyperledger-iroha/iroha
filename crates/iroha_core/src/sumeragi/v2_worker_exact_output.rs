@@ -642,7 +642,7 @@ impl PendingExactOutput {
                     .messages
                     .iter()
                     .zip(&fanout.message_hashes)
-                    .any(|(message, expected)| HashOf::new(message) != *expected)
+                    .any(|(message, expected)| message.exact_output_hash() != *expected)
             {
                 return Err(format!(
                     "Sumeragi v2 {operation} found altered exact-output payload"
@@ -1718,7 +1718,7 @@ impl PendingExactOutput {
             .zip(&fanout.message_hashes)
             .zip(&fanout.message_classes)
             .any(|((message, expected_hash), expected_class)| {
-                HashOf::new(message) != *expected_hash
+                message.exact_output_hash() != *expected_hash
                     || exact_output_class(message).as_ref() != Ok(expected_class)
             })
         {
@@ -2352,7 +2352,7 @@ impl PendingExactOutput {
                     .messages
                     .iter()
                     .zip(&fanout.message_hashes)
-                    .any(|(message, expected_hash)| HashOf::new(message) != *expected_hash)
+                    .any(|(message, expected_hash)| message.exact_output_hash() != *expected_hash)
             {
                 return Err(
                     "Sumeragi v2 retained output changed before finality handoff".to_owned(),
@@ -2421,7 +2421,7 @@ impl PendingExactOutput {
                             "Sumeragi v2 exact-output target has no expected payload identity"
                                 .to_owned()
                         })?;
-                    if HashOf::new(&current.data) != *expected_hash {
+                    if current.data.exact_output_hash() != *expected_hash {
                         return Err(
                             "Sumeragi v2 returned output changed before finality handoff"
                                 .to_owned(),
@@ -3427,72 +3427,20 @@ fn durable_history_source_covers(
         }
         (
             ExactOutputRolloverClaim::DurableCertifiedBodyResponse {
-                responder: claimed_responder,
-                source_round,
-                source_subject,
-                ..
+                network_id, proof, ..
             },
-            BlockMessage::V2(message),
+            _,
         ) => {
-            let wire::ConsensusMessageV2Payload::CertifiedBodyResponse(response) = &message.payload
-            else {
-                return Err("durable body response changed payload kind".to_owned());
-            };
-            if source_round.height > maximum_source_height {
+            if proof.source_round().height > maximum_source_height {
                 return Err("durable body response belongs to a future height".to_owned());
             }
-            let source = kura
-                .v2_finality_artifact(source_round.height)
-                .map_err(|error| error.to_string())?
-                .ok_or_else(|| "durable body response lost its Kura finality source".to_owned())?;
-            if &source.height_context.network_id != source_network_id
-                || source.context_id() != source_round.context_id
-                || source.subject != *source_subject
+            if network_id != source_network_id
+                || proof.network_id() != *source_network_id
+                || !proof.covers_message_in_network(source_network_id, message)
             {
                 return Err(
-                    "durable body response differs from its Kura finality source".to_owned(),
+                    "durable body response differs from its prepared Kura source".to_owned(),
                 );
-            }
-            response
-                .validate(&source.height_context)
-                .map_err(|error| error.to_string())?;
-            if &response.responder != claimed_responder {
-                return Err(
-                    "durable body response is not bound to the serving network identity".to_owned(),
-                );
-            }
-            Signature::try_from_bytes(&response.signature)
-                .map_err(|error| error.to_string())?
-                .verify(
-                    response.responder.public_key(),
-                    &response.signature_preimage(),
-                )
-                .map_err(|error| error.to_string())?;
-            let block_height = usize::try_from(source_round.height)
-                .ok()
-                .and_then(NonZeroUsize::new)
-                .ok_or_else(|| "durable body source height is not representable".to_owned())?;
-            let block = kura
-                .get_block(block_height)
-                .ok_or_else(|| "durable body response lost its canonical Kura block".to_owned())?;
-            let proposal = block.canonical_resultless_proposal();
-            let canonical_wire = proposal.encode_wire().map_err(|error| error.to_string())?;
-            if block.hash() != source_subject.block_hash
-                || canonical_wire != response.body
-                || Hash::new(&canonical_wire) != source_subject.payload_hash
-            {
-                return Err("durable body response differs from its canonical Kura body".to_owned());
-            }
-            let (manifest, _) = encode_payload(
-                &source.height_context,
-                *source_round,
-                *source_subject,
-                &canonical_wire,
-            )
-            .map_err(|error| error.to_string())?
-            .into_parts();
-            if manifest != response.manifest {
-                return Err("durable body response manifest is not Kura-reconstructible".to_owned());
             }
             Ok(())
         }

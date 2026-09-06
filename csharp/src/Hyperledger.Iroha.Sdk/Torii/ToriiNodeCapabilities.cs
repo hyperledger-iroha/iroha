@@ -289,12 +289,6 @@ public sealed record class ToriiNodeProjectionCapabilities
         init => daV1Enabled = ToriiNodeCapabilitiesDirectMetadata.RequireFalse(value, nameof(DaV1Enabled));
     }
 
-    [JsonPropertyName("checkpoint_plan_v1")]
-    public bool CheckpointPlanV1 { get; init; }
-
-    [JsonPropertyName("checkpoint_publish_v1")]
-    public bool CheckpointPublishV1 { get; init; }
-
     [JsonPropertyName("shard_catalog_v1")]
     public bool ShardCatalogV1 { get; init; }
 

@@ -32,7 +32,7 @@ Ensure the following before requesting beta access (adapted from the T0 kit in
    - Dual-stack connectivity (IPv4 + IPv6) with QUIC/UDP 443 permitted end to
      end. Upstream shapers must preserve ≥20 Mbps during brownout drills.
 2. **Identity & compliance**
-   - Relay identity keys backed by an HSM or dedicated enclave.
+   - Relay identity keys held by a qualified deployment-owned signer.
    - Latest opt-out catalogue merged into the orchestrator configuration (see
      the SNNet-9 compliance block embedded in
      `fixtures/documentation/soranet_testnet_operator_kit/03-config-example.toml`).

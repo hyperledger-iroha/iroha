@@ -297,29 +297,31 @@ final class ToriiGovernanceDecodingTests: XCTestCase {
         XCTAssertThrowsError(try JSONDecoder().decode(ToriiGovernanceTallyResponse.self, from: json))
     }
 
-    func testGovernanceProposalKindDecodesAllSevenV1Variants() throws {
+    func testGovernanceProposalKindDecodesAllTenV1Variants() throws {
         let deploy = proposalKindJSON(
             kind: "DeployContract",
             payload: """
-            {"contract_address":"\(Self.contractAddress)","code_hash":"\(String(repeating: "11", count: 32))","abi_hash":"\(String(repeating: "22", count: 32))","abi_version":1,"manifest_provenance":null}
+            {"proposal_operator":"\(Self.governanceOwner)","contract_address":"\(Self.contractAddress)","code_hash":"\(String(repeating: "11", count: 32))","abi_hash":"\(String(repeating: "22", count: 32))","abi_version":1,"manifest_provenance":null}
             """
         )
         guard case .deployContract(let deployPayload) = try JSONDecoder().decode(
             ToriiGovernanceProposalKind.self,
             from: deploy
         ) else { return XCTFail("expected DeployContract") }
+        XCTAssertEqual(deployPayload.proposalOperator, Self.governanceOwner)
         XCTAssertEqual(deployPayload.codeHash, Data(repeating: 0x11, count: 32))
 
         let runtime = proposalKindJSON(
             kind: "RuntimeUpgrade",
             payload: """
-            {"manifest":{"name":"runtime-v1","description":"upgrade","abi_version":1,"abi_hash":\(fixedBytes(3)),"added_syscalls":[],"added_pointer_types":[],"start_height":10,"end_height":20,"sbom_digests":[],"slsa_attestation":"","provenance":[]}}
+            {"proposal_operator":"\(Self.governanceOwner)","manifest":{"name":"runtime-v1","description":"upgrade","abi_version":1,"abi_hash":\(fixedBytes(3)),"added_syscalls":[],"added_pointer_types":[],"start_height":10,"end_height":20,"sbom_digests":[],"slsa_attestation":"","provenance":[]}}
             """
         )
         guard case .runtimeUpgrade(let runtimePayload) = try JSONDecoder().decode(
             ToriiGovernanceProposalKind.self,
             from: runtime
         ) else { return XCTFail("expected RuntimeUpgrade") }
+        XCTAssertEqual(runtimePayload.proposalOperator, Self.governanceOwner)
         XCTAssertEqual(runtimePayload.manifest.endHeight, 20)
 
         let removeRoute = """
@@ -386,6 +388,155 @@ final class ToriiGovernanceDecodingTests: XCTestCase {
             return XCTFail("expected SoraFS establish")
         }
         XCTAssertEqual(action.providerId.bytes, Data(repeating: 9, count: 32))
+
+        let contractLifecycle = proposalKindJSON(
+            kind: "ContractLifecycleGovernance",
+            payload: """
+            {"proposal_operator":"\(Self.governanceOwner)","contract_address":"\(Self.contractAddress)","expected_revision":1,"action":{"action":"CompleteEmergencyHoldRetrospective","payload":{"hold_proposal_content_id":\(fixedBytes(17)),"hold_governance_attempt_id":\(fixedBytes(34)),"incident_digest":\(fixedBytes(51)),"retrospective_finding_root":\(fixedBytes(68))}}}
+            """
+        )
+        guard case .contractLifecycleGovernance(let contractLifecyclePayload) =
+            try JSONDecoder().decode(ToriiGovernanceProposalKind.self, from: contractLifecycle),
+            case .completeEmergencyHoldRetrospective(let retrospective) =
+                contractLifecyclePayload.action else {
+            return XCTFail("expected contract emergency-hold retrospective")
+        }
+        XCTAssertEqual(contractLifecyclePayload.proposalOperator, Self.governanceOwner)
+        XCTAssertEqual(retrospective.holdProposalContentId, Data(repeating: 17, count: 32))
+        XCTAssertEqual(retrospective.holdGovernanceAttemptId, Data(repeating: 34, count: 32))
+        XCTAssertEqual(retrospective.incidentDigest, Data(repeating: 51, count: 32))
+        XCTAssertEqual(retrospective.retrospectiveFindingRoot, Data(repeating: 68, count: 32))
+
+        let emergencyHold = proposalKindJSON(
+            kind: "ContractEmergencyHold",
+            payload: """
+            {"contract_address":"\(Self.contractAddress)","expected_revision":2,"expected_code_hash":"\(String(repeating: "ab", count: 32))","incident_digest":\(fixedBytes(85)),"reason":"contain compromised entrypoint","duration_blocks":3600}
+            """
+        )
+        guard case .contractEmergencyHold(let emergencyHoldPayload) =
+            try JSONDecoder().decode(ToriiGovernanceProposalKind.self, from: emergencyHold) else {
+            return XCTFail("expected ContractEmergencyHold")
+        }
+        XCTAssertEqual(emergencyHoldPayload.expectedRevision, 2)
+        XCTAssertEqual(emergencyHoldPayload.expectedCodeHash, Data(repeating: 0xab, count: 32))
+        XCTAssertEqual(emergencyHoldPayload.incidentDigest, Data(repeating: 85, count: 32))
+        XCTAssertEqual(emergencyHoldPayload.durationBlocks, 3_600)
+
+        let triggerPermission = proposalKindJSON(
+            kind: "GlobalDataTriggerPermissionGovernance",
+            payload: """
+            {"authority":"\(Self.governanceOwner)","action":{"action":"grant","value":null}}
+            """
+        )
+        guard case .globalDataTriggerPermissionGovernance(let triggerPermissionPayload) =
+            try JSONDecoder().decode(ToriiGovernanceProposalKind.self, from: triggerPermission) else {
+            return XCTFail("expected GlobalDataTriggerPermissionGovernance")
+        }
+        XCTAssertEqual(triggerPermissionPayload.authority, Self.governanceOwner)
+        XCTAssertEqual(triggerPermissionPayload.action, .grant)
+    }
+
+    func testGlobalDataTriggerPermissionRequiresCanonicalAccountAndClosedUnitAction() throws {
+        for action in ["grant", "revoke"] {
+            let proposal = proposalKindJSON(
+                kind: "GlobalDataTriggerPermissionGovernance",
+                payload: """
+                {"authority":"\(Self.governanceOwner)","action":{"action":"\(action)","value":null}}
+                """
+            )
+            XCTAssertNoThrow(
+                try JSONDecoder().decode(ToriiGovernanceProposalKind.self, from: proposal)
+            )
+        }
+
+        for payload in [
+            "{\"authority\":\"\(Self.governanceOwner)\",\"action\":{\"action\":\"grant\"}}",
+            "{\"authority\":\"\(Self.governanceOwner)\",\"action\":{\"action\":\"grant\",\"value\":{}}}",
+            "{\"authority\":\"\(Self.governanceOwner)\",\"action\":{\"action\":\"delegate\",\"value\":null}}",
+            "{\"authority\":\"alice@wonderland\",\"action\":{\"action\":\"grant\",\"value\":null}}",
+        ] {
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(
+                    ToriiGovernanceProposalKind.self,
+                    from: proposalKindJSON(
+                        kind: "GlobalDataTriggerPermissionGovernance",
+                        payload: payload
+                    )
+                )
+            )
+        }
+    }
+
+    func testContractLifecycleActionInventoryUsesCanonicalPayloadShapes() throws {
+        let actionPayloads = [
+            """
+            {"action":"Activate","payload":{"code_hash":"\(String(repeating: "11", count: 32))","abi_hash":"\(String(repeating: "22", count: 32))","abi_version":1,"manifest_provenance":null}}
+            """,
+            """
+            {"action":"Deactivate","payload":{"expected_code_hash":"\(String(repeating: "33", count: 32))","reason":null}}
+            """,
+            """
+            {"action":"OfferOwnership","payload":{"new_owner":"\(Self.governanceOwner)"}}
+            """,
+            "{\"action\":\"CancelOwnershipOffer\",\"payload\":null}",
+            "{\"action\":\"AcceptParliamentOwnership\",\"payload\":null}",
+            """
+            {"action":"CompleteEmergencyHoldRetrospective","payload":{"hold_proposal_content_id":\(fixedBytes(17)),"hold_governance_attempt_id":\(fixedBytes(34)),"incident_digest":\(fixedBytes(51)),"retrospective_finding_root":\(fixedBytes(68))}}
+            """,
+        ]
+        let actionTags = try actionPayloads.map { payload in
+            let object = try XCTUnwrap(
+                JSONSerialization.jsonObject(with: Data(payload.utf8)) as? [String: Any]
+            )
+            return try XCTUnwrap(object["action"] as? String)
+        }
+        XCTAssertEqual(actionTags, ToriiParliamentAPIV1.contractLifecycleActions)
+        for payload in actionPayloads {
+            XCTAssertNoThrow(
+                try JSONDecoder().decode(
+                    ToriiGovernanceContractLifecycleActionV1.self,
+                    from: Data(payload.utf8)
+                )
+            )
+        }
+
+        let zeroRoot = fixedBytes(0)
+        let invalidActions = [
+            "{\"action\":\"CancelOwnershipOffer\"}",
+            "{\"action\":\"AcceptParliamentOwnership\",\"payload\":{}}",
+            "{\"action\":\"LegacyActivate\",\"payload\":null}",
+            """
+            {"action":"Activate","payload":{"code_hash":"\(String(repeating: "AA", count: 32))","abi_hash":"\(String(repeating: "22", count: 32))","abi_version":1,"manifest_provenance":null}}
+            """,
+            """
+            {"action":"CompleteEmergencyHoldRetrospective","payload":{"hold_proposal_content_id":\(fixedBytes(17)),"hold_governance_attempt_id":\(fixedBytes(34)),"incident_digest":\(fixedBytes(51)),"retrospective_finding_root":\(zeroRoot)}}
+            """,
+        ]
+        for payload in invalidActions {
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(
+                    ToriiGovernanceContractLifecycleActionV1.self,
+                    from: Data(payload.utf8)
+                )
+            )
+        }
+    }
+
+    func testContractEmergencyHoldRejectsInvalidContainmentFields() {
+        let validPrefix =
+            "{\"kind\":\"ContractEmergencyHold\",\"payload\":{\"contract_address\":\"\(Self.contractAddress)\",\"expected_revision\":1,\"expected_code_hash\":\"\(String(repeating: "11", count: 32))\",\"incident_digest\":\(fixedBytes(7)),"
+        for suffix in [
+            "\"reason\":\"   \",\"duration_blocks\":1}}",
+            "\"reason\":\"containment\",\"duration_blocks\":0}}",
+            "\"reason\":\"containment\",\"duration_blocks\":3601}}",
+        ] {
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(
+                    ToriiGovernanceProposalKind.self,
+                    from: Data((validPrefix + suffix).utf8)
+                )
+            )
+        }
     }
 
     func testGovernanceSccpDestinationUsesClosedTypedDeployment() throws {
@@ -597,25 +748,37 @@ final class ToriiGovernanceDecodingTests: XCTestCase {
         let legacyDeploy = proposalKindJSON(
             kind: "DeployContract",
             payload: """
-            {"contract_address":"\(Self.contractAddress)","code_hash_hex":"\(String(repeating: "11", count: 32))","abi_hash_hex":"\(String(repeating: "22", count: 32))","abi_version":"1","manifest_provenance":null}
+            {"proposal_operator":"\(Self.governanceOwner)","contract_address":"\(Self.contractAddress)","code_hash_hex":"\(String(repeating: "11", count: 32))","abi_hash_hex":"\(String(repeating: "22", count: 32))","abi_version":"1","manifest_provenance":null}
             """
         )
         let missingProvenance = proposalKindJSON(
             kind: "DeployContract",
             payload: """
-            {"contract_address":"\(Self.contractAddress)","code_hash":"\(String(repeating: "11", count: 32))","abi_hash":"\(String(repeating: "22", count: 32))","abi_version":1}
+            {"proposal_operator":"\(Self.governanceOwner)","contract_address":"\(Self.contractAddress)","code_hash":"\(String(repeating: "11", count: 32))","abi_hash":"\(String(repeating: "22", count: 32))","abi_version":1}
+            """
+        )
+        let missingOperator = proposalKindJSON(
+            kind: "DeployContract",
+            payload: """
+            {"contract_address":"\(Self.contractAddress)","code_hash":"\(String(repeating: "11", count: 32))","abi_hash":"\(String(repeating: "22", count: 32))","abi_version":1,"manifest_provenance":null}
+            """
+        )
+        let malformedOperator = proposalKindJSON(
+            kind: "ContractLifecycleGovernance",
+            payload: """
+            {"proposal_operator":"not-an-account","contract_address":"\(Self.contractAddress)","expected_revision":1,"action":{"action":"AcceptParliamentOwnership","payload":null}}
             """
         )
         let runtimeWithImplicitDefaults = proposalKindJSON(
             kind: "RuntimeUpgrade",
             payload: """
-            {"manifest":{"name":"runtime-v1","description":"upgrade","abi_version":1,"abi_hash":\(fixedBytes(3)),"added_syscalls":[],"added_pointer_types":[],"start_height":10,"end_height":20}}
+            {"proposal_operator":"\(Self.governanceOwner)","manifest":{"name":"runtime-v1","description":"upgrade","abi_version":1,"abi_hash":\(fixedBytes(3)),"added_syscalls":[],"added_pointer_types":[],"start_height":10,"end_height":20}}
             """
         )
         let runtimeBeyondExactJSON = proposalKindJSON(
             kind: "RuntimeUpgrade",
             payload: """
-            {"manifest":{"name":"runtime-v1","description":"upgrade","abi_version":1,"abi_hash":\(fixedBytes(3)),"added_syscalls":[],"added_pointer_types":[],"start_height":9007199254740992,"end_height":9007199254740993,"sbom_digests":[],"slsa_attestation":"","provenance":[]}}
+            {"proposal_operator":"\(Self.governanceOwner)","manifest":{"name":"runtime-v1","description":"upgrade","abi_version":1,"abi_hash":\(fixedBytes(3)),"added_syscalls":[],"added_pointer_types":[],"start_height":9007199254740992,"end_height":9007199254740993,"sbom_digests":[],"slsa_attestation":"","provenance":[]}}
             """
         )
         for json in [
@@ -623,6 +786,8 @@ final class ToriiGovernanceDecodingTests: XCTestCase {
             oldSingleKey,
             legacyDeploy,
             missingProvenance,
+            missingOperator,
+            malformedOperator,
             runtimeWithImplicitDefaults,
             runtimeBeyondExactJSON,
         ] {
@@ -656,7 +821,7 @@ final class ToriiGovernanceDecodingTests: XCTestCase {
 
     func testGovernanceProposalRecordIsExactAndStatusesAreClosed() throws {
         let kind = """
-        {"kind":"DeployContract","payload":{"contract_address":"\(Self.contractAddress)","code_hash":"\(String(repeating: "11", count: 32))","abi_hash":"\(String(repeating: "22", count: 32))","abi_version":1,"manifest_provenance":null}}
+        {"kind":"DeployContract","payload":{"proposal_operator":"\(Self.governanceOwner)","contract_address":"\(Self.contractAddress)","code_hash":"\(String(repeating: "11", count: 32))","abi_hash":"\(String(repeating: "22", count: 32))","abi_version":1,"manifest_provenance":null}}
         """
         for status in ["Proposed", "Rejected", "Enacted", "Superseded", "ExecutionFailed"] {
             let data = Data(

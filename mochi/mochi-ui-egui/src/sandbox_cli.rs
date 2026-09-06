@@ -652,7 +652,7 @@ mod tests {
     }
     fn local_mcp_probe_fixture() -> LocalMcpProbeResult {
         LocalMcpProbeResult {
-            protocol_version: "2025-06-18".to_owned(),
+            protocol_version: "2026-07-28".to_owned(),
             toolset_version: Some("test-v1".to_owned()),
             tool_count: 1,
             tool_names: vec!["iroha.health".to_owned()],
@@ -746,6 +746,10 @@ mod tests {
         assert_eq!(
             payload.get("generation_id").and_then(Value::as_str),
             Some(session.generation_id.as_str())
+        );
+        assert_eq!(
+            payload.get("mcp_protocol_version").and_then(Value::as_str),
+            Some("2026-07-28")
         );
         assert_eq!(
             payload

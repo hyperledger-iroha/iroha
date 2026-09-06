@@ -20,7 +20,7 @@ pub enum Command {
 }
 #[derive(clap::Subcommand, Debug)]
 pub enum EvidenceCommand {
-    /// List persisted evidence entries
+    /// List committed evidence audit entries
     List(EvidenceListArgs),
     /// Show evidence count
     Count(EvidenceCountArgs),
@@ -35,11 +35,11 @@ pub struct LeaderArgs {}
 pub struct ParamsArgs {}
 #[derive(clap::Args, Debug)]
 pub struct EvidenceListArgs {
-    /// Maximum number of entries to return
-    #[arg(long)]
+    /// Maximum number of entries to return (1 through 1000)
+    #[arg(long, value_parser = clap::value_parser!(u32).range(1..=1000))]
     pub limit: Option<u32>,
-    /// Offset into the evidence list
-    #[arg(long)]
+    /// Offset into the evidence list (0 through 10000)
+    #[arg(long, value_parser = clap::value_parser!(u32).range(..=10_000))]
     pub offset: Option<u32>,
     /// Filter by evidence kind
     #[arg(long, value_enum)]
@@ -53,9 +53,12 @@ pub enum EvidenceKindArg {
     SumeragiV2Equivocation,
 }
 impl EvidenceKindArg {
-    pub fn as_str(self) -> &'static str {
+    /// Convert the CLI literal into the closed client query enum.
+    pub const fn into_client(self) -> iroha::client::SumeragiEvidenceKind {
         match self {
-            EvidenceKindArg::SumeragiV2Equivocation => "SumeragiV2Equivocation",
+            EvidenceKindArg::SumeragiV2Equivocation => {
+                iroha::client::SumeragiEvidenceKind::SumeragiV2Equivocation
+            }
         }
     }
 }
@@ -110,7 +113,7 @@ mod tests {
             "SumeragiV2Equivocation",
         )];
         for (kind, expected) in cases {
-            assert_eq!(kind.as_str(), expected);
+            assert_eq!(kind.into_client().as_str(), expected);
             assert_eq!(
                 kind.to_possible_value()
                     .expect("evidence kind must have a CLI value")
@@ -118,5 +121,24 @@ mod tests {
                 expected
             );
         }
+    }
+
+    #[test]
+    fn evidence_pagination_arguments_enforce_the_server_bounds() {
+        for args in [
+            ["sumeragi", "evidence", "list", "--limit", "0"],
+            ["sumeragi", "evidence", "list", "--limit", "1001"],
+            ["sumeragi", "evidence", "list", "--offset", "10001"],
+        ] {
+            let error = SumeragiCommandFixture::try_parse_from(args)
+                .expect_err("out-of-range evidence pagination must fail locally");
+            assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
+        }
+        assert!(
+            SumeragiCommandFixture::try_parse_from([
+                "sumeragi", "evidence", "list", "--limit", "1000", "--offset", "10000",
+            ])
+            .is_ok()
+        );
     }
 }

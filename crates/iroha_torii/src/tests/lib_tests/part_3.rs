@@ -1054,9 +1054,9 @@ async fn identifier_policies_enforce_token_policy() {
     {
         let state = Arc::get_mut(&mut app).expect("unique app state");
         state.require_api_token = true;
-        let mut tokens = HashSet::new();
-        tokens.insert("token-identifier".to_owned());
-        state.api_tokens_set = Arc::new(tokens);
+        state.api_token_digests = Arc::new(limits::ApiTokenDigestSet::from_tokens([
+            "token-identifier",
+        ]));
     }
     let missing = handler_identifier_policies(
         State(app.clone()),
@@ -1511,9 +1511,8 @@ async fn identifier_resolve_enforces_token_policy() {
     {
         let state = Arc::get_mut(&mut app).expect("unique app state");
         state.require_api_token = true;
-        let mut tokens = HashSet::new();
-        tokens.insert("token-resolve".to_owned());
-        state.api_tokens_set = Arc::new(tokens);
+        state.api_token_digests =
+            Arc::new(limits::ApiTokenDigestSet::from_tokens(["token-resolve"]));
     }
     let missing = handler_identifier_resolve(
         State(app),
@@ -1713,9 +1712,8 @@ async fn identifier_claim_receipt_enforces_token_policy() {
     {
         let state = Arc::get_mut(&mut app).expect("unique app state");
         state.require_api_token = true;
-        let mut tokens = HashSet::new();
-        tokens.insert("token-claim".to_owned());
-        state.api_tokens_set = Arc::new(tokens);
+        state.api_token_digests =
+            Arc::new(limits::ApiTokenDigestSet::from_tokens(["token-claim"]));
     }
     let missing = handler_identifier_claim_receipt(
         State(app),
@@ -1863,6 +1861,10 @@ async fn asset_definition_get_returns_full_definition_by_base58_id() {
     bind_asset_alias_for_test(&app, &authority, &definition_id, &alias, None, 1, 0);
     let response = handler_asset_definition_get(
         State(app),
+        axum::http::Method::GET,
+        format!("/v1/assets/definitions/{definition_id}")
+            .parse()
+            .expect("valid asset definition uri"),
         HeaderMap::new(),
         crate::loopback_connect_info(),
         AxPath(definition_id.to_string()),
@@ -1972,6 +1974,10 @@ async fn asset_definition_get_reports_expired_pending_cleanup_status_after_grace
     record_latest_committed_header_for_test(&app, 2, after_grace);
     let response = handler_asset_definition_get(
         State(app),
+        axum::http::Method::GET,
+        format!("/v1/assets/definitions/{definition_id}")
+            .parse()
+            .expect("valid asset definition uri"),
         HeaderMap::new(),
         crate::loopback_connect_info(),
         AxPath(definition_id.to_string()),
@@ -2341,7 +2347,7 @@ async fn proof_record_get_advertises_cache_and_304() {
     assert_eq!(wildcard.status(), StatusCode::NOT_MODIFIED);
 }
 #[tokio::test]
-async fn proof_record_get_reports_fanout_headers_when_dataspaces_are_configured() {
+async fn public_proof_record_get_reads_global_protocol_artifacts_across_dataspaces() {
     let mut app = mk_app_state_for_tests();
     crate::tests_runtime_handlers::configure_private_ingress_routes_for_test(&mut app);
     let id = seed_proof_record(&app, "debug-proof", [0xCD; 32]);
@@ -2721,7 +2727,7 @@ async fn proof_request_rate_limit_admits_max_body_cost_and_throttles_repetition(
     }
     let headers = HeaderMap::new();
     let remote = Some(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
-    let max_body = app.proof_limits.max_body_bytes as usize;
+    let max_body = app.proof_limits.max_body_bytes;
     enforce_proof_body_limit(&app, max_body, "v1/zk/verify-batch")
         .expect("configured maximum body remains admissible");
     check_proof_access(

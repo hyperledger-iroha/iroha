@@ -7,12 +7,8 @@ mod model {
     use super::*;
     use crate::{
         governance::types::{
-            BallotAttemptId, BallotAttemptStatusV1, BodyInstanceId, BodyInstanceStatusV1,
-            GovernanceAttemptId, GovernanceAttemptStatusV1, GovernanceCertificateId,
-            GovernanceExpectedHeadV1, GovernanceStageV1, ParliamentAggregateOutcomeV1,
-            ParliamentAggregateTallyV1, ParliamentBodies, ParliamentBody,
-            ParliamentConcentrationWarningV1, ParliamentNoResultKindV1, ProposalContentId,
-            RiskTierV1,
+            GovernanceAttemptId, GovernanceCertificateId, GovernanceExpectedHeadV1,
+            ParliamentNoResultKindV1, ProposalContentId, RiskTierV1,
         },
         isi::governance::{
             ParliamentAutomaticExecutionOutcomeV1, ParliamentLifecycleTransitionKindV1,
@@ -36,9 +32,7 @@ mod model {
     pub enum GovernanceEvent {
         /// A governance proposal was submitted.
         ProposalSubmitted(GovernanceProposalSubmitted),
-        /// A governance proposal was approved by referendum.
-        ProposalApproved(GovernanceProposalApproved),
-        /// A governance proposal was rejected by referendum.
+        /// A typed governance proposal was rejected by Parliament.
         ProposalRejected(GovernanceProposalRejected),
         /// A governance token lock was created for a referendum.
         LockCreated(GovernanceLockCreated),
@@ -52,34 +46,16 @@ mod model {
         BallotRejected(GovernanceBallotRejected),
         /// A referendum was opened for voting (status becomes Open).
         ReferendumOpened(GovernanceReferendumOpened),
-        /// A referendum was closed (e.g., finalized/decided).
+        /// A standalone referendum voting window was closed.
         ReferendumClosed(GovernanceReferendumClosed),
         /// A governance lock expired and was unlocked.
         LockUnlocked(GovernanceLockUnlocked),
-        /// Council membership was persisted for an epoch.
-        CouncilPersisted(GovernanceCouncilPersisted),
-        /// Parliament bodies were derived for an epoch.
-        ParliamentSelected(GovernanceParliamentSelected),
         /// A canonical attempt was created from immutable proposal content.
         ParliamentAttemptCreated(GovernanceParliamentAttemptCreated),
         /// One typed reducer transition was accepted and applied.
         ParliamentLifecycleTransitionApplied(GovernanceParliamentLifecycleTransitionApplied),
-        /// A retryable Parliament governance attempt changed lifecycle state.
-        ParliamentAttemptTransitioned(GovernanceParliamentAttemptTransitioned),
-        /// A sealed Parliament body instance changed lifecycle state.
-        ParliamentBodyTransitioned(GovernanceParliamentBodyTransitioned),
-        /// A hidden Parliament ballot attempt changed lifecycle state.
-        ParliamentBallotTransitioned(GovernanceParliamentBallotTransitioned),
-        /// A nonempty feasible roster was sealed below its requested diversity or size.
-        ParliamentConcentrationWarning(GovernanceParliamentConcentrationWarning),
-        /// A hidden Parliament aggregate result was finalized.
-        ParliamentAggregateFinalized(GovernanceParliamentAggregateFinalized),
         /// A current-roster QC installed, rotated, or retired a threshold key session.
         ThresholdKeyLifecycleApplied(GovernanceThresholdKeyLifecycleAppliedV1),
-        /// A complete V1 governance certificate was issued automatically.
-        ParliamentCertificateIssued(GovernanceParliamentCertificateIssued),
-        /// A parliament body approval was recorded for a proposal.
-        ParliamentApprovalRecorded(GovernanceParliamentApprovalRecorded),
         /// A governance lock was slashed (partial or full) for a referendum.
         LockSlashed(GovernanceLockSlashed),
         /// A governance lock received restitution after appeal.
@@ -88,8 +64,8 @@ mod model {
         CitizenRegistered(GovernanceCitizenRegistered),
         /// A citizenship bond was withdrawn and the citizen was removed.
         CitizenRevoked(GovernanceCitizenRevoked),
-        /// A citizen service discipline event was recorded.
-        CitizenServiceRecorded(GovernanceCitizenServiceRecorded),
+        /// A standalone governance referendum reached an exact final decision.
+        ReferendumDecided(GovernanceReferendumDecided),
     }
 
     /// Public audit record for one QC-authorized threshold-key lifecycle action.
@@ -151,14 +127,6 @@ mod model {
         Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
     )]
     pub struct GovernanceProposalEnacted {
-        /// Deterministic proposal id
-        pub id: [u8; 32],
-    }
-    /// Proposal approved payload.
-    #[derive(
-        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
-    )]
-    pub struct GovernanceProposalApproved {
         /// Deterministic proposal id
         pub id: [u8; 32],
     }
@@ -328,34 +296,6 @@ mod model {
         /// Amount returned from escrow.
         pub amount: Quantity,
     }
-    /// Council persisted payload.
-    #[derive(
-        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
-    )]
-    pub struct GovernanceCouncilPersisted {
-        /// Epoch index
-        pub epoch: u64,
-        /// Number of members stored
-        pub members_count: u32,
-        /// Number of alternates stored alongside members.
-        #[norito(default)]
-        pub alternates_count: u32,
-        /// Total eligible candidates considered, or roster entries for a manual roster.
-        #[norito(default)]
-        pub candidates_count: u32,
-        /// Derivation method.
-        pub derived_by: crate::isi::governance::CouncilDerivationKind,
-    }
-    /// Parliament selection recorded for an epoch.
-    #[derive(
-        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
-    )]
-    pub struct GovernanceParliamentSelected {
-        /// Epoch index associated with the selection.
-        pub selection_epoch: u64,
-        /// Body rosters for the epoch.
-        pub bodies: ParliamentBodies,
-    }
     /// Canonical creation of one retryable end-to-end Parliament attempt.
     #[derive(
         Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
@@ -404,135 +344,21 @@ mod model {
         /// Block height applying the transition.
         pub at_height: u64,
     }
-    /// End-to-end Parliament attempt lifecycle transition.
+    /// Exact decision for one standalone governance referendum.
     #[derive(
         Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
     )]
-    pub struct GovernanceParliamentAttemptTransitioned {
-        /// Immutable proposal content shared by every retry.
-        pub proposal_content_id: ProposalContentId,
-        /// Retry attempt whose state changed.
-        pub governance_attempt_id: GovernanceAttemptId,
-        /// Sequential stage occupied after the transition.
-        pub stage: GovernanceStageV1,
-        /// Attempt status after the transition.
-        pub status: GovernanceAttemptStatusV1,
-        /// Block height applying the transition.
-        pub at_height: u64,
-    }
-    /// Sealed Parliament body lifecycle transition.
-    #[derive(
-        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
-    )]
-    pub struct GovernanceParliamentBodyTransitioned {
-        /// End-to-end governance attempt served by the body.
-        pub governance_attempt_id: GovernanceAttemptId,
-        /// Body instance whose state changed.
-        pub body_instance_id: BodyInstanceId,
-        /// Parliament role of the body instance.
-        pub body: ParliamentBody,
-        /// Body status after the transition.
-        pub status: BodyInstanceStatusV1,
-        /// Block height applying the transition.
-        pub at_height: u64,
-    }
-    /// Hidden Parliament ballot lifecycle transition.
-    #[derive(
-        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
-    )]
-    pub struct GovernanceParliamentBallotTransitioned {
-        /// Body instance whose formal decision the ballot determines.
-        pub body_instance_id: BodyInstanceId,
-        /// Ballot attempt whose state changed.
-        pub ballot_attempt_id: BallotAttemptId,
-        /// Ballot status after the transition.
-        pub status: BallotAttemptStatusV1,
-        /// Block height applying the transition.
-        pub at_height: u64,
-    }
-    /// Roster concentration warning emitted at body sealing.
-    #[derive(
-        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
-    )]
-    pub struct GovernanceParliamentConcentrationWarning {
-        /// Canonical warning details.
-        pub warning: ParliamentConcentrationWarningV1,
-        /// Block height at which the undersized or concentrated roster was sealed.
-        pub at_height: u64,
-    }
-    /// Final hidden aggregate result for one Parliament ballot attempt.
-    #[derive(
-        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
-    )]
-    pub struct GovernanceParliamentAggregateFinalized {
-        /// Immutable proposal content being decided.
-        pub proposal_content_id: ProposalContentId,
-        /// End-to-end governance retry attempt.
-        pub governance_attempt_id: GovernanceAttemptId,
-        /// Body instance contributing the result.
-        pub body_instance_id: BodyInstanceId,
-        /// Hidden ballot attempt that produced the aggregate.
-        pub ballot_attempt_id: BallotAttemptId,
-        /// Canonical aggregate counts.
-        pub tally: ParliamentAggregateTallyV1,
-        /// Final aggregate outcome.
-        pub outcome: ParliamentAggregateOutcomeV1,
-        /// Whether this Policy Jury result triggers a disjoint Confirmation Jury.
-        pub requires_confirmation: bool,
-        /// Block height at which the aggregate was finalized.
-        pub at_height: u64,
-    }
-    /// Automatic V1 governance certificate issuance event.
-    #[derive(
-        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
-    )]
-    pub struct GovernanceParliamentCertificateIssued {
-        /// Content hash of the complete governance certificate.
-        pub certificate_id: GovernanceCertificateId,
-        /// Immutable proposal content authorized by the certificate.
-        pub proposal_content_id: ProposalContentId,
-        /// Successful end-to-end attempt that produced the certificate.
-        pub governance_attempt_id: GovernanceAttemptId,
-        /// Block height at which the certificate was finalized.
-        pub certified_at_height: u64,
-        /// Exact deterministic enactment height.
-        pub enact_at_height: u64,
-    }
-    /// Parliament approval recorded payload.
-    #[derive(
-        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
-    )]
-    pub struct GovernanceParliamentApprovalRecorded {
-        /// Proposal id receiving an approval.
-        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
-        pub proposal_id: [u8; 32],
-        /// Epoch of the approving council.
-        pub epoch: u64,
-        /// Parliament body granting the approval.
-        pub body: ParliamentBody,
-        /// Number of approvals recorded so far.
-        pub approvals: u32,
-        /// Quorum required to open the referendum.
-        pub required: u32,
-    }
-    /// Citizen service discipline event payload.
-    #[derive(
-        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
-    )]
-    pub struct GovernanceCitizenServiceRecorded {
-        /// Citizen account receiving the record.
-        pub owner: crate::account::AccountId,
-        /// Epoch associated with the assignment.
-        pub epoch: u64,
-        /// Governance role label (e.g., `council` or `policy_jury`).
-        pub role: String,
-        /// Recorded event kind.
-        pub event: crate::isi::governance::CitizenServiceEvent,
-        /// Exact amount slashed from the citizenship bond.
-        pub slashed: Quantity,
-        /// Height until which the citizen remains on cooldown.
-        #[norito(default)]
-        pub cooldown_until: u64,
+    pub struct GovernanceReferendumDecided {
+        /// Original standalone referendum selector, without normalization.
+        pub referendum_id: String,
+        /// Exact accumulated approval weight.
+        pub approve: u128,
+        /// Exact accumulated rejection weight.
+        pub reject: u128,
+        /// Exact accumulated abstention weight.
+        pub abstain: u128,
+        /// Whether the configured turnout and approval thresholds were met.
+        pub approved: bool,
     }
 }
 #[cfg(feature = "json")]
@@ -542,7 +368,6 @@ impl_json_via_norito_bytes!(
     GovernanceLockCreated,
     GovernanceLockExtended,
     GovernanceProposalEnacted,
-    GovernanceProposalApproved,
     GovernanceProposalRejected,
     GovernanceBallotMode,
     GovernanceBallotAccepted,
@@ -550,40 +375,27 @@ impl_json_via_norito_bytes!(
     GovernanceReferendumOpened,
     GovernanceReferendumClosed,
     GovernanceLockUnlocked,
-    GovernanceCouncilPersisted,
-    GovernanceParliamentSelected,
     GovernanceParliamentAttemptCreated,
     GovernanceParliamentLifecycleTransitionApplied,
-    GovernanceParliamentAttemptTransitioned,
-    GovernanceParliamentBodyTransitioned,
-    GovernanceParliamentBallotTransitioned,
-    GovernanceParliamentConcentrationWarning,
-    GovernanceParliamentAggregateFinalized,
     GovernanceThresholdKeyLifecycleAppliedV1,
-    GovernanceParliamentCertificateIssued,
-    GovernanceParliamentApprovalRecorded,
     GovernanceSlashReason,
     GovernanceLockSlashed,
     GovernanceLockRestituted,
     GovernanceCitizenRegistered,
     GovernanceCitizenRevoked,
-    GovernanceCitizenServiceRecorded,
+    GovernanceReferendumDecided,
 );
 /// Prelude exports
 pub mod prelude {
     pub use super::{
         GovernanceBallotAccepted, GovernanceBallotMode, GovernanceBallotRejected,
-        GovernanceCitizenRegistered, GovernanceCitizenRevoked, GovernanceCitizenServiceRecorded,
-        GovernanceCouncilPersisted, GovernanceEvent, GovernanceLockCreated, GovernanceLockExtended,
-        GovernanceLockRestituted, GovernanceLockSlashed, GovernanceLockUnlocked,
-        GovernanceParliamentAggregateFinalized, GovernanceParliamentApprovalRecorded,
-        GovernanceParliamentAttemptCreated, GovernanceParliamentAttemptTransitioned,
-        GovernanceParliamentBallotTransitioned, GovernanceParliamentBodyTransitioned,
-        GovernanceParliamentCertificateIssued, GovernanceParliamentConcentrationWarning,
-        GovernanceParliamentLifecycleTransitionApplied, GovernanceParliamentSelected,
-        GovernanceProposalApproved, GovernanceProposalEnacted, GovernanceProposalRejected,
-        GovernanceProposalSubmitted, GovernanceReferendumClosed, GovernanceReferendumOpened,
-        GovernanceSlashReason, GovernanceThresholdKeyLifecycleAppliedV1,
+        GovernanceCitizenRegistered, GovernanceCitizenRevoked, GovernanceEvent,
+        GovernanceLockCreated, GovernanceLockExtended, GovernanceLockRestituted,
+        GovernanceLockSlashed, GovernanceLockUnlocked, GovernanceParliamentAttemptCreated,
+        GovernanceParliamentLifecycleTransitionApplied, GovernanceProposalEnacted,
+        GovernanceProposalRejected, GovernanceProposalSubmitted, GovernanceReferendumClosed,
+        GovernanceReferendumDecided, GovernanceReferendumOpened, GovernanceSlashReason,
+        GovernanceThresholdKeyLifecycleAppliedV1,
     };
 }
 
@@ -591,11 +403,9 @@ pub mod prelude {
 mod tests {
     use super::*;
     use crate::governance::types::{
-        BallotAttemptId, BallotAttemptStatusV1, BodyInstanceId, BodyInstanceStatusV1,
-        GovernanceAttemptId, GovernanceAttemptStatusV1, GovernanceCertificateId,
-        GovernanceExpectedHeadAbsentV1, GovernanceExpectedHeadV1, GovernanceStageV1,
-        ParliamentAggregateOutcomeV1, ParliamentAggregateTallyV1, ParliamentBody,
-        ParliamentConcentrationWarningV1, ParliamentNoResultKindV1, ProposalContentId, RiskTierV1,
+        BallotAttemptId, GovernanceAttemptId, GovernanceCertificateId,
+        GovernanceExpectedHeadAbsentV1, GovernanceExpectedHeadV1, ParliamentNoResultKindV1,
+        ProposalContentId, RiskTierV1,
     };
     use crate::isi::governance::{
         ParliamentAutomaticExecutionFailedV1, ParliamentAutomaticExecutionOutcomeV1,
@@ -611,11 +421,26 @@ mod tests {
     }
 
     #[test]
+    fn standalone_referendum_decision_roundtrips_exact_identity_and_tally() {
+        let event = GovernanceEvent::ReferendumDecided(GovernanceReferendumDecided {
+            referendum_id: "0XAbCd-referendum".to_owned(),
+            approve: u128::MAX,
+            reject: u128::from(u64::MAX) + 1,
+            abstain: 17,
+            approved: true,
+        });
+        assert_eq!(
+            event.encode().get(..4),
+            Some(17_u32.to_le_bytes().as_slice()),
+            "the standalone decision event must use its canonical first-release enum tag"
+        );
+        assert_roundtrip(event);
+    }
+
+    #[test]
     fn parliament_v1_lifecycle_events_roundtrip() {
         let proposal_content_id = ProposalContentId::new([0x11; 32]);
         let governance_attempt_id = GovernanceAttemptId::new([0x12; 32]);
-        let body_instance_id = BodyInstanceId::new([0x13; 32]);
-        let ballot_attempt_id = BallotAttemptId::new([0x14; 32]);
         assert_roundtrip(GovernanceEvent::ParliamentAttemptCreated(
             GovernanceParliamentAttemptCreated {
                 proposal_content_id,
@@ -685,32 +510,6 @@ mod tests {
                 at_height: 102,
             },
         ));
-        assert_roundtrip(GovernanceEvent::ParliamentAttemptTransitioned(
-            GovernanceParliamentAttemptTransitioned {
-                proposal_content_id,
-                governance_attempt_id,
-                stage: GovernanceStageV1::PolicyJury,
-                status: GovernanceAttemptStatusV1::Active,
-                at_height: 100,
-            },
-        ));
-        assert_roundtrip(GovernanceEvent::ParliamentBodyTransitioned(
-            GovernanceParliamentBodyTransitioned {
-                governance_attempt_id,
-                body_instance_id,
-                body: ParliamentBody::PolicyJury,
-                status: BodyInstanceStatusV1::Balloting,
-                at_height: 101,
-            },
-        ));
-        assert_roundtrip(GovernanceEvent::ParliamentBallotTransitioned(
-            GovernanceParliamentBallotTransitioned {
-                body_instance_id,
-                ballot_attempt_id,
-                status: BallotAttemptStatusV1::AwaitingRelease,
-                at_height: 102,
-            },
-        ));
     }
 
     #[test]
@@ -743,54 +542,6 @@ mod tests {
     }
 
     #[test]
-    fn parliament_v1_result_and_certificate_events_roundtrip() {
-        let proposal_content_id = ProposalContentId::new([0x21; 32]);
-        let governance_attempt_id = GovernanceAttemptId::new([0x22; 32]);
-        let body_instance_id = BodyInstanceId::new([0x23; 32]);
-        let ballot_attempt_id = BallotAttemptId::new([0x24; 32]);
-        assert_roundtrip(GovernanceEvent::ParliamentConcentrationWarning(
-            GovernanceParliamentConcentrationWarning {
-                warning: ParliamentConcentrationWarningV1 {
-                    body_instance_id,
-                    body: ParliamentBody::ConfirmationJury,
-                    target_seats: 1_000,
-                    sealed_seats: 731,
-                    eligible_candidates: 731,
-                    cross_body_assignment_cap: 2,
-                },
-                at_height: 200,
-            },
-        ));
-        assert_roundtrip(GovernanceEvent::ParliamentAggregateFinalized(
-            GovernanceParliamentAggregateFinalized {
-                proposal_content_id,
-                governance_attempt_id,
-                body_instance_id,
-                ballot_attempt_id,
-                tally: ParliamentAggregateTallyV1 {
-                    original_seats: 500,
-                    accepted_ballots: 334,
-                    aye: 170,
-                    nay: 160,
-                    abstain: 4,
-                },
-                outcome: ParliamentAggregateOutcomeV1::Approved,
-                requires_confirmation: true,
-                at_height: 201,
-            },
-        ));
-        assert_roundtrip(GovernanceEvent::ParliamentCertificateIssued(
-            GovernanceParliamentCertificateIssued {
-                certificate_id: GovernanceCertificateId::new([0x25; 32]),
-                proposal_content_id,
-                governance_attempt_id,
-                certified_at_height: 202,
-                enact_at_height: 203,
-            },
-        ));
-    }
-
-    #[test]
     fn threshold_key_lifecycle_event_roundtrips() {
         assert_roundtrip(GovernanceEvent::ThresholdKeyLifecycleApplied(
             GovernanceThresholdKeyLifecycleAppliedV1 {
@@ -800,6 +551,42 @@ mod tests {
                 effective_height: 41,
             },
         ));
+    }
+
+    #[test]
+    fn governance_event_schema_excludes_unreachable_surfaces() {
+        let removed_variants = [
+            ["Proposal", "Approved"].concat(),
+            ["Parliament", "Approval", "Recorded"].concat(),
+            ["Parliament", "Attempt", "Transitioned"].concat(),
+            ["Parliament", "Body", "Transitioned"].concat(),
+            ["Parliament", "Ballot", "Transitioned"].concat(),
+            ["Parliament", "Concentration", "Warning"].concat(),
+            ["Parliament", "Aggregate", "Finalized"].concat(),
+            ["Parliament", "Certificate", "Issued"].concat(),
+        ];
+        let removed_payloads = removed_variants
+            .iter()
+            .map(|variant| ["Governance", variant.as_str()].concat())
+            .collect::<Vec<_>>();
+
+        let schema = <GovernanceEvent as iroha_schema::IntoSchema>::schema();
+        let metadata = schema
+            .get::<GovernanceEvent>()
+            .expect("governance event schema entry");
+        let iroha_schema::Metadata::Enum(event_metadata) = metadata else {
+            panic!("governance event schema must remain an enum");
+        };
+        assert!(event_metadata.variants.iter().all(|variant| {
+            removed_variants
+                .iter()
+                .all(|removed| variant.tag != removed.as_str())
+        }));
+        assert!(schema.iter().all(|(_, entry)| {
+            removed_payloads
+                .iter()
+                .all(|removed| entry.type_name != removed.as_str())
+        }));
     }
 
     #[test]

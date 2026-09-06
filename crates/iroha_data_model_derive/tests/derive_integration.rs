@@ -13,3 +13,7 @@ mod has_origin_generics;
 mod id_eq_ord_hash;
 #[path = "model_macro.rs"]
 mod model_macro;
+
+#[cfg(feature = "trybuild-tests")]
+#[path = "registrable_builder_ui.rs"]
+mod registrable_builder_ui;

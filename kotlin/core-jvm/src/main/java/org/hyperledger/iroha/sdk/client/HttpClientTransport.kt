@@ -1,6 +1,8 @@
 package org.hyperledger.iroha.sdk.client
 
 import java.math.BigInteger
+import org.hyperledger.iroha.sdk.client.transport.OkHttpTransportExecutor
+import org.hyperledger.iroha.sdk.client.transport.HttpTransportScope
 import java.net.URI
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
@@ -93,10 +95,14 @@ import org.hyperledger.iroha.sdk.alias.AccountAliasName
  * Network execution is delegated to [HttpTransportExecutor] so tests can run without making
  * outbound calls.
  */
-class HttpClientTransport(
-    private val executor: HttpTransportExecutor,
+class HttpClientTransport private constructor(
+    private val executor: HttpTransportScope,
     private val config: ClientConfig
-) : IrohaClient {
+) : IrohaClient, AutoCloseable {
+    /** Borrows an executor; closing this client cancels only calls admitted by this client. */
+    constructor(executor: HttpTransportExecutor, config: ClientConfig) :
+        this(HttpTransportScope.create(executor), config)
+
 
     private val sorafsGatewayClient: SorafsGatewayClient by lazy {
         SorafsGatewayClient(
@@ -108,6 +114,9 @@ class HttpClientTransport(
         )
     }
     private val deviceProfileEmitted = AtomicBoolean(false)
+    private val lifecycleLock = Any()
+    private var closed = false
+    private val pendingPolls = LinkedHashSet<CompletableFuture<Map<String, Any>>>()
     private val lazyScheduler = lazy {
         Executors.newSingleThreadScheduledExecutor { r ->
             Thread(r, "iroha-http-pipeline-poll").apply { isDaemon = true }
@@ -131,22 +140,6 @@ class HttpClientTransport(
         return ensureTransactionSubmissionCompatibility()
             .thenCompose { executeAccepted(request, "transaction JSON submit", 202) }
     }
-
-    override fun submitSccpDestinationProof(
-        request: SccpDestinationProofSubmitRequest,
-    ): CompletableFuture<ClientResponse> =
-        executeSccpJsonAccepted(
-            buildBridgeJsonPostRequest("/v1/bridge/proofs/submit", request.toJsonBytes()),
-            "SCCP destination proof submit",
-        )
-
-    override fun submitSccpNativeMessage(
-        request: SccpNativeMessageSubmitRequest,
-    ): CompletableFuture<ClientResponse> =
-        executeSccpJsonAccepted(
-            buildBridgeJsonPostRequest("/v1/bridge/messages", request.toJsonBytes()),
-            "SCCP native message submit",
-        )
 
     override fun submitTransactionEntrypoint(encodedVersionedEntrypoint: ByteArray): CompletableFuture<ClientResponse> {
         val request = ToriiRequestBuilder.buildSubmitEntrypointRequest(
@@ -211,17 +204,46 @@ class HttpClientTransport(
             if (timeoutMillis > Long.MAX_VALUE - now) Long.MAX_VALUE else now + timeoutMillis
         }
         val future = CompletableFuture<Map<String, Any>>()
+        synchronized(lifecycleLock) {
+            if (closed) {
+                future.completeExceptionally(IllegalStateException("HTTP client is closed"))
+                return future
+            }
+            pendingPolls.add(future)
+        }
+        future.whenComplete { _, _ -> synchronized(lifecycleLock) { pendingPolls.remove(future) } }
         pollPipelineStatus(hashHex, resolved, deadline, 0, null, future)
         return future
     }
 
     fun config(): ClientConfig = config
-    fun invalidateAndCancel() {
-        executor.invalidateAndCancel()
-        if (lazyScheduler.isInitialized()) scheduler.shutdownNow()
+    override fun close() {
+        val polls = synchronized(lifecycleLock) {
+            if (closed) return
+            closed = true
+            if (lazyScheduler.isInitialized()) scheduler.shutdownNow()
+            pendingPolls.toList().also { pendingPolls.clear() }
+        }
+        polls.forEach { it.cancel(false) }
+        executor.close()
     }
     fun newNoritoRpcClient(): NoritoRpcClient = config.toNoritoRpcClient(executor)
-    fun newEventStreamClient(): ToriiEventStreamClient = ToriiEventStreamClient.builder().setBaseUri(config.baseUri()).setTransportExecutor(executor).defaultHeaders(config.defaultHeaders()).observers(config.observers()).build()
+    /** Creates an event-stream client without a canonical account identity. */
+    fun newEventStreamClient(): ToriiEventStreamClient = newEventStreamClientBuilder().build()
+
+    /** Creates an event-stream client that signs each exact final request URI. */
+    fun newEventStreamClient(canonicalAuth: ToriiCanonicalRequestAuth): ToriiEventStreamClient =
+        newEventStreamClientBuilder()
+            .canonicalRequestAuth(config.requireLocalSigningContext(), canonicalAuth)
+            .build()
+
+    private fun newEventStreamClientBuilder(): ToriiEventStreamClient.Builder =
+        ToriiEventStreamClient.builder()
+            .setBaseUri(config.baseUri())
+            .setTransportExecutor(executor)
+            .defaultHeaders(config.defaultHeaders())
+            .observers(config.observers())
+
     fun newSorafsGatewayClient(): SorafsGatewayClient = newSorafsGatewayClient(config.sorafsGatewayUri())
     fun newSorafsGatewayClient(baseUri: URI): SorafsGatewayClient = SorafsGatewayClient(executor = executor, baseUri = baseUri, timeout = config.requestTimeout(), defaultHeaders = config.defaultHeaders(), observers = config.observers())
     fun newDaToriiClient(): DaToriiClient = DaToriiClient.builder()
@@ -1791,7 +1813,10 @@ class HttpClientTransport(
         val interval = options.intervalMillis
         val task = Runnable { pollPipelineStatus(hashHex, options, deadline, attemptsSoFar, lastPayload, future) }
         if (interval <= 0L) { task.run(); return }
-        scheduler.schedule({ task.run() }, minOf(interval, Long.MAX_VALUE), TimeUnit.MILLISECONDS)
+        synchronized(lifecycleLock) {
+            if (closed || future.isDone) return
+            scheduler.schedule({ task.run() }, minOf(interval, Long.MAX_VALUE), TimeUnit.MILLISECONDS)
+        }
     }
 
     @Suppress("UNCHECKED_CAST")
@@ -1968,11 +1993,6 @@ class HttpClientTransport(
         }) { "canonical request headers must be supplied only through canonicalAuth" }
     }
 
-    private fun buildBridgeJsonPostRequest(path: String, body: ByteArray): TransportRequest {
-        preflightSccpBridgeSubmitJson(body, path)
-        return buildJsonPostRequest(path, body, SCCP_JSON_RESPONSE_MAX_BYTES)
-    }
-
     private fun buildVpnRequest(
         method: String,
         path: String,
@@ -2037,9 +2057,9 @@ class HttpClientTransport(
         val nonce = canonicalAuth.nonce
         require((timestampMs == null) == (nonce == null)) { "timestampMs and nonce must be provided together" }
         return if (timestampMs == null) {
-            CanonicalRequestSigner.buildHeaders(networkId, method, target, body, canonicalAuth.accountId, canonicalAuth.privateKey)
+            CanonicalRequestSigner.buildHeaders(networkId, method, target, body, canonicalAuth.accountId, canonicalAuth.signer)
         } else {
-            CanonicalRequestSigner.buildHeaders(networkId, method, target, body, canonicalAuth.accountId, canonicalAuth.privateKey, timestampMs, nonce!!)
+            CanonicalRequestSigner.buildHeaders(networkId, method, target, body, canonicalAuth.accountId, canonicalAuth.signer, timestampMs, nonce!!)
         }
     }
 
@@ -2497,38 +2517,6 @@ class HttpClientTransport(
         }; return future
     }
 
-    private fun executeSccpJsonAccepted(
-        request: TransportRequest,
-        errorContext: String,
-    ): CompletableFuture<ClientResponse> {
-        notifyRequest(request)
-        val future = CompletableFuture<ClientResponse>()
-        executor.execute(request).whenComplete { response, throwable ->
-            if (throwable != null) {
-                val cause = if (throwable is CompletionException) throwable.cause else throwable
-                notifyFailure(request, cause!!)
-                future.completeExceptionally(RuntimeException("$errorContext request failed", cause))
-                return@whenComplete
-            }
-            val clientResponse = ClientResponse(
-                response.statusCode,
-                response.body,
-                response.message,
-                null,
-                extractRejectCode(response),
-            )
-            try {
-                requireExactSccpJsonResponse(response, errorContext)
-                notifyResponse(request, clientResponse)
-                future.complete(clientResponse)
-            } catch (ex: RuntimeException) {
-                notifyFailure(request, ex)
-                future.completeExceptionally(ex)
-            }
-        }
-        return future
-    }
-
     private fun requireExactSccpJsonResponse(
         response: TransportResponse,
         errorContext: String,
@@ -2703,25 +2691,15 @@ class HttpClientTransport(
             CanonicalRequestSigner.HEADER_NONCE,
         )
 
-        @JvmStatic fun createDefault(config: ClientConfig): HttpClientTransport = HttpClientTransport(PlatformHttpTransportExecutor.createDefault(), config)
-        @JvmStatic fun withExecutor(executor: HttpTransportExecutor, config: ClientConfig): HttpClientTransport = HttpClientTransport(executor, config)
-        @JvmStatic fun withDefaultExecutor(config: ClientConfig): HttpClientTransport = HttpClientTransport(PlatformHttpTransportExecutor.createDefault(), config)
         /**
-         * Builds a transport whose underlying [UrlConnectionTransportExecutor] runs the synchronous
-         * HTTP work on [asyncExecutor]; pass `null` for behavior equivalent to [withDefaultExecutor].
-         * The injected executor changes scheduling only and leaves URLConnection timeout defaults
-         * unchanged for requests that do not specify their own timeout.
-         * See [UrlConnectionTransportExecutor] for the full rationale (Android `StrictMode` /
-         * `TrafficStats` interaction).
+         * Creates an owned transport. A supplied scheduling executor stays application-owned;
+         * closing this transport cancels its calls and releases its own connection resources.
          */
-        @JvmStatic fun withDefaultExecutor(config: ClientConfig, asyncExecutor: Executor?): HttpClientTransport =
-            if (asyncExecutor == null) withDefaultExecutor(config) else HttpClientTransport(
-                org.hyperledger.iroha.sdk.client.transport.UrlConnectionTransportExecutor(
-                    connectTimeout = null,
-                    readTimeout = null,
-                    asyncExecutor = asyncExecutor,
-                ),
-                config,
+        @JvmStatic
+        @JvmOverloads
+        fun createDefault(config: ClientConfig, asyncExecutor: Executor? = null): HttpClientTransport =
+            HttpClientTransport(
+                HttpTransportScope.own(OkHttpTransportExecutor.create(asyncExecutor = asyncExecutor)), config,
             )
         /** Adds explicit local staging; transaction submission never drains or fills this queue. */
         @JvmStatic fun withDirectoryPendingQueue(config: ClientConfig, queueDir: Path): ClientConfig = config.toBuilder().enableDirectoryPendingQueue(queueDir).build()

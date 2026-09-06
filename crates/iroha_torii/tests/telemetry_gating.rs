@@ -5,7 +5,9 @@ use axum::{http::StatusCode, response::IntoResponse};
 use iroha_config::parameters::actual::{LaneRoutingPolicy, TelemetryProfile};
 use iroha_core::telemetry::Telemetry;
 use iroha_telemetry::metrics::Metrics;
-use iroha_torii::{MaybeTelemetry, handle_metrics, handle_status};
+use iroha_torii::{
+    MaybeTelemetry, handle_metrics, handle_status, handle_status_blocks, handle_status_peers,
+};
 use std::sync::Arc;
 #[path = "fixtures.rs"]
 mod fixtures;
@@ -21,20 +23,22 @@ fn telemetry_for(profile: TelemetryProfile, configure: impl Fn(&Arc<Metrics>)) -
 #[tokio::test]
 async fn disabled_profile_hides_status_and_metrics() {
     let telemetry = telemetry_disabled();
-    let status_err = handle_status(
-        &telemetry,
-        None,
-        None,
-        LaneRoutingPolicy::default(),
-        0,
-        None,
-    )
-    .await
-    .unwrap_err();
+    let status_err = handle_status(&telemetry, None, LaneRoutingPolicy::default(), 0)
+        .await
+        .unwrap_err();
     assert_eq!(
         status_err.into_response().status(),
         StatusCode::SERVICE_UNAVAILABLE
     );
+    for status_err in [
+        handle_status_blocks(&telemetry, 1).unwrap_err(),
+        handle_status_peers(&telemetry, 1).unwrap_err(),
+    ] {
+        assert_eq!(
+            status_err.into_response().status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+    }
     let metrics_err = handle_metrics(&telemetry).await.unwrap_err();
     assert_eq!(
         metrics_err.into_response().status(),
@@ -44,16 +48,9 @@ async fn disabled_profile_hides_status_and_metrics() {
 #[tokio::test]
 async fn operator_profile_exposes_status_only() {
     let telemetry = telemetry_for(TelemetryProfile::Operator, |_| {});
-    let status_resp = handle_status(
-        &telemetry,
-        None,
-        None,
-        LaneRoutingPolicy::default(),
-        0,
-        None,
-    )
-    .await
-    .unwrap();
+    let status_resp = handle_status(&telemetry, None, LaneRoutingPolicy::default(), 0)
+        .await
+        .unwrap();
     assert_eq!(status_resp.status(), StatusCode::OK);
     let metrics_err = handle_metrics(&telemetry).await.unwrap_err();
     assert_eq!(
@@ -66,16 +63,9 @@ async fn extended_profile_exposes_prometheus_metrics() {
     let telemetry = telemetry_for(TelemetryProfile::Extended, |metrics| {
         metrics.sumeragi_new_view_publish_total.inc();
     });
-    let status_resp = handle_status(
-        &telemetry,
-        None,
-        None,
-        LaneRoutingPolicy::default(),
-        0,
-        None,
-    )
-    .await
-    .unwrap();
+    let status_resp = handle_status(&telemetry, None, LaneRoutingPolicy::default(), 0)
+        .await
+        .unwrap();
     assert_eq!(status_resp.status(), StatusCode::OK);
     let prometheus = handle_metrics(&telemetry).await.unwrap();
     assert!(
@@ -97,16 +87,9 @@ async fn full_profile_combines_all_capabilities() {
     let telemetry = telemetry_for(TelemetryProfile::Full, |metrics| {
         metrics.sumeragi_new_view_publish_total.inc();
     });
-    let status = handle_status(
-        &telemetry,
-        None,
-        None,
-        LaneRoutingPolicy::default(),
-        0,
-        None,
-    )
-    .await
-    .unwrap();
+    let status = handle_status(&telemetry, None, LaneRoutingPolicy::default(), 0)
+        .await
+        .unwrap();
     assert_eq!(status.status(), StatusCode::OK);
     let prometheus = handle_metrics(&telemetry).await.unwrap();
     assert!(prometheus.contains("sumeragi_new_view_publish_total"));

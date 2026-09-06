@@ -85,8 +85,9 @@ rebroadcast operation.
 Governed `SumeragiNposParameters.evidence_horizon_blocks` bounds
 admission age. A penalty may consume only self-contained evidence admitted by
 a prior committed block; `slashing_delay_blocks` leaves the governed
-cancellation window. A node-local pending observation cannot authorize a
-slash.
+cancellation window. These two windows are immutable after signed genesis and
+their sum cannot exceed three epochs, matching the four-roster durable table.
+A node-local pending observation cannot authorize a slash.
 
 ## 3. Release evidence checklist
 

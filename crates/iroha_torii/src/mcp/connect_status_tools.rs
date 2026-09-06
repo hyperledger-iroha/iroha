@@ -29,13 +29,13 @@ async fn dispatch_connect_session_status(
     .await
 }
 fn iroha_connect_session_status_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.connect.session.status".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.connect.session.status"),
-        description: "Get one Iroha Connect session status using its management token; node aggregate telemetry is not projected through MCP.".to_owned(),
-        method: Method::GET,
-        path_template: "/v1/connect/status".to_owned(),
-        input_schema: norito::json!({
+    ToolSpec::route(
+        "iroha.connect.session.status".to_owned(),
+        "Get one Iroha Connect session status using its management token; node aggregate telemetry is not projected through MCP.".to_owned(),
+        manual_tool_effect_from_name("iroha.connect.session.status"),
+        Method::GET,
+        "/v1/connect/status".to_owned(),
+        norito::json!({
             "type": "object",
             "additionalProperties": false,
             "required": ["sid", "token_management"],
@@ -52,7 +52,7 @@ fn iroha_connect_session_status_tool() -> ToolSpec {
                 "accept": { "type": "string" }
             }
         }),
-    }
+    )
 }
 #[cfg(test)]
 mod connect_status_tests {
@@ -60,8 +60,9 @@ mod connect_status_tests {
     #[test]
     fn session_status_requires_exact_sid_and_management_token() {
         let tool = iroha_connect_session_status_tool();
-        assert_eq!(tool.effect, ToolEffect::Read);
-        assert_eq!(tool.path_template, "/v1/connect/status");
+        let (effect, _, path_template) = tool.route_backing().expect("route-backed tool");
+        assert_eq!(effect, ToolEffect::Read);
+        assert_eq!(path_template, "/v1/connect/status");
         let required = tool.input_schema["required"]
             .as_array()
             .expect("session required fields");

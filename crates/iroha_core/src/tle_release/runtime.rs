@@ -41,7 +41,7 @@ impl TleReleaseCoordinatorV1 {
     /// Attach a deployment-owned runtime signer.
     ///
     /// The signer object is not exposed again and must keep all private DKG
-    /// material behind its own HSM/KMS or zeroizing process boundary.
+    /// material behind its own isolated or zeroizing process boundary.
     #[must_use]
     pub fn from_signer(signer: Arc<dyn TlePartialReleaseSignerV1>) -> Self {
         Self {
@@ -101,8 +101,8 @@ impl TleReleaseCoordinatorV1 {
             .signer
             .as_ref()
             .ok_or(TleReleaseCoordinatorErrorV1::SignerUnavailable)?;
-        // Provider diagnostics are deliberately discarded. An HSM adapter is
-        // not trusted to keep its error text free of handles or secret metadata.
+        // Provider diagnostics are deliberately discarded. An external adapter
+        // is not trusted to keep its error text free of handles or secret metadata.
         let partial = signer
             .sign_partial_release(context)
             .map_err(|_| TleReleaseCoordinatorErrorV1::SignerFailed)?;

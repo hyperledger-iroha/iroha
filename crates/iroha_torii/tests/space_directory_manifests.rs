@@ -279,7 +279,6 @@ async fn space_directory_manifest_endpoint_returns_records() {
     );
     let raw_uaid = uaid.to_string().trim_start_matches("uaid:").to_owned();
     // Bindings endpoint returns canonical account literals.
-    let app = torii.router();
     let resp = fixtures::request_get(&app, &format!("/v1/space-directory/uaids/{uaid}"))
         .await
         .expect("bindings response");
@@ -295,13 +294,11 @@ async fn space_directory_manifest_endpoint_returns_records() {
         Value::from(account_id.to_string())
     );
     // Raw 64-hex UAID paths are not a first-release wire form.
-    let app = torii.router();
     let resp = fixtures::request_get(&app, &format!("/v1/space-directory/uaids/{raw_uaid}"))
         .await
         .expect("raw-hex bindings response");
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     // Dataspace filter excludes unknown ids.
-    let app = torii.router();
     let resp = fixtures::request_get(
         &app,
         &format!(
@@ -321,7 +318,6 @@ async fn space_directory_manifest_endpoint_returns_records() {
         "filter removes non-matching dataspaces"
     );
     // Configured dataspace with no explicit lane route still falls back to fanout filtering.
-    let app = torii.router();
     let resp = fixtures::request_get(
         &app,
         &format!(
@@ -345,7 +341,6 @@ async fn space_directory_manifest_endpoint_returns_records() {
         filtered_existing_doc["manifests"][0]["manifest_hash"],
         Value::from(expected_hash.as_str())
     );
-    let app = torii.router();
     let resp = fixtures::request_get(
         &app,
         &format!("/v1/space-directory/uaids/{raw_uaid}/manifests"),
@@ -362,7 +357,6 @@ async fn space_directory_manifest_endpoint_returns_records() {
         Value::from(expected_hash.as_str())
     );
     // Status filter (active) yields the entry, limit/offset paginate.
-    let app = torii.router();
     let resp = fixtures::request_get(
         &app,
         &format!("/v1/space-directory/uaids/{uaid}/manifests?status=active&limit=1"),
@@ -379,7 +373,6 @@ async fn space_directory_manifest_endpoint_returns_records() {
         "status=active returns bindings"
     );
     // Invalid status values are rejected by the manifest query parser.
-    let app = torii.router();
     let resp = fixtures::request_get(
         &app,
         &format!("/v1/space-directory/uaids/{uaid}/manifests?status=DefinitelyNotAStatus"),
@@ -466,6 +459,7 @@ async fn space_directory_manifest_endpoint_returns_records() {
         iroha_config::parameters::actual::TelemetryProfile::Operator,
     );
     // Inactive filter returns revoked manifest.
+    app.shutdown().await;
     let app = torii_rev.router();
     let resp = fixtures::request_get(
         &app,
@@ -510,6 +504,7 @@ async fn space_directory_manifest_endpoint_returns_records() {
     .await
     .expect("zero-limit response");
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn space_directory_get_routes_reject_invalid_uaid_literals() {
@@ -531,6 +526,7 @@ async fn space_directory_get_routes_reject_invalid_uaid_literals() {
             .await
             .expect("manifests response");
     assert_eq!(manifests_resp.status(), StatusCode::BAD_REQUEST);
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn space_directory_bindings_route_returns_multiple_dataspaces_with_aliases() {
@@ -592,7 +588,8 @@ async fn space_directory_bindings_route_returns_multiple_dataspaces_with_aliases
     .expect("dataspace catalog");
     let state = Arc::new(state);
     let torii = fixtures::StandardToriiHarness::from_state(&cfg, &kura, state.clone());
-    let resp = torii
+    let app = torii.router();
+    let resp = app
         .router()
         .oneshot(fixtures::get_request(
             &(format!("/v1/space-directory/uaids/{uaid}")),
@@ -633,6 +630,7 @@ async fn space_directory_bindings_route_returns_multiple_dataspaces_with_aliases
         secondary["accounts"][0],
         Value::from(tertiary_account.to_string())
     );
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn space_directory_manifest_endpoint_reports_filtered_total_when_public_page_is_empty() {
@@ -691,7 +689,8 @@ async fn space_directory_manifest_endpoint_reports_filtered_total_when_public_pa
     .expect("dataspace catalog");
     let state = Arc::new(state);
     let torii = fixtures::StandardToriiHarness::from_state(&cfg, &kura, state.clone());
-    let resp = torii
+    let app = torii.router();
+    let resp = app
         .router()
         .oneshot(fixtures::get_request(
             &(format!("/v1/space-directory/uaids/{uaid}/manifests?status=active&limit=1&offset=1")),
@@ -708,6 +707,7 @@ async fn space_directory_manifest_endpoint_reports_filtered_total_when_public_pa
         0,
         "total should count status-filtered rows even when pagination clears the page",
     );
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn space_directory_manifest_endpoint_keeps_null_revocation_reason_in_json() {
@@ -755,7 +755,8 @@ async fn space_directory_manifest_endpoint_keeps_null_revocation_reason_in_json(
     .expect("dataspace catalog");
     let state = Arc::new(state);
     let torii = fixtures::StandardToriiHarness::from_state(&cfg, &kura, state.clone());
-    let resp = torii
+    let app = torii.router();
+    let resp = app
         .router()
         .oneshot(fixtures::get_request(
             &(format!("/v1/space-directory/uaids/{uaid}/manifests?status=inactive")),
@@ -779,6 +780,7 @@ async fn space_directory_manifest_endpoint_keeps_null_revocation_reason_in_json(
         doc["manifests"][0]["lifecycle"]["revocation"]["reason"].is_null(),
         "reasonless revocations should stay explicit nulls in route payloads",
     );
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn manifest_publish_endpoint_returns_unsigned_transaction_draft() {
@@ -1067,7 +1069,8 @@ async fn api_router_registers_space_directory_manifest_mutation_routes() {
         iroha_torii::json_entry("reason", "router publish"),
     ]))
     .expect("serialize publish request");
-    let publish_resp = torii
+    let app = torii.router();
+    let publish_resp = app
         .router()
         .oneshot(
             Request::builder()
@@ -1101,7 +1104,7 @@ async fn api_router_registers_space_directory_manifest_mutation_routes() {
         iroha_torii::json_entry("reason", "router revoke"),
     ]))
     .expect("serialize revoke request");
-    let revoke_resp = torii
+    let revoke_resp = app
         .router()
         .oneshot(
             Request::builder()
@@ -1123,4 +1126,5 @@ async fn api_router_registers_space_directory_manifest_mutation_routes() {
         StatusCode::NOT_FOUND,
         "revoke route must be registered on the Torii API router",
     );
+    app.shutdown().await;
 }

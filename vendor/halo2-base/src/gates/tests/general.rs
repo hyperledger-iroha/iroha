@@ -2,7 +2,6 @@ use crate::ff::Field;
 use crate::gates::flex_gate::threads::parallelize_core;
 use crate::halo2_proofs::halo2curves::bn256::Fr;
 use crate::utils::{BigPrimeField, ScalarField};
-use crate::{Context, QuantumCell::Constant};
 use crate::{
     gates::{
         flex_gate::{GateChip, GateInstructions},
@@ -10,8 +9,9 @@ use crate::{
     },
     utils::testing::base_test,
 };
-use rand::SeedableRng;
+use crate::{Context, QuantumCell::Constant};
 use rand::rngs::StdRng;
+use rand::SeedableRng;
 use test_log::test;
 
 fn gate_tests<F: ScalarField>(ctx: &mut Context<F>, inputs: [F; 3]) {

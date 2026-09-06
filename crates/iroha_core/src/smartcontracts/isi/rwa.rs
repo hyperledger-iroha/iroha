@@ -177,6 +177,10 @@ pub mod isi {
                 parents,
                 controls,
             } = self.rwa;
+            crate::smartcontracts::limits::enforce_metadata_value_sizes(
+                state_transaction,
+                &metadata,
+            )?;
             let _ = state_transaction.world.domain(&domain)?;
             ensure_positive_quantity(&quantity, "register")?;
             ensure_quantity_matches_spec(spec, &quantity, "register")?;

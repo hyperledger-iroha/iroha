@@ -7,7 +7,7 @@ final class PrivacyExact12CapabilityManifestV1Tests: XCTestCase {
     private let executionModes: [UInt32] = [0, 1, 2, 3, 4, 4, 2, 4, 5, 1, 5, 5]
     private let featureMasks: [UInt8] = [0, 6, 1, 2, 2, 2, 0, 2, 7, 2, 7, 31]
 
-    func testStrictDecodePreservesCanonicalConsensusAndActivation() throws {
+    func testManagedProjectionPreservesFieldsWithoutGrantingNativeQualification() throws {
         let fixture = makeFixture(includePendingState: true)
         let manifest = try PrivacyExact12CapabilityManifestCodecV1.decode(
             fixture.manifest,
@@ -123,6 +123,36 @@ final class PrivacyExact12CapabilityManifestV1Tests: XCTestCase {
             manifest.row(for: .zkAcePqAuthorizationV1).readiness,
             .unavailable(.missingProductionQualification)
         )
+    }
+
+    func testManagedProjectionUsesTheCanonicalArchiveBoundForOpaqueEvidence() throws {
+        // This internal codec only retains evidence bytes; Rust alone validates their contents.
+        for evidenceBytes in [130 * 1024, 241 * 1024] {
+            let fixture = makeFixture(opaqueProofArtifacts: Data(repeating: 0, count: evidenceBytes))
+            XCTAssertLessThanOrEqual(
+                fixture.manifest.count,
+                PrivacyExact12CapabilityManifestV1.maximumArchiveBytes
+            )
+            let projection = try PrivacyExact12CapabilityManifestCodecV1.decode(
+                fixture.manifest,
+                nativeCatalogArchive: fixture.catalog
+            )
+            XCTAssertEqual(projection.canonicalBytes(), fixture.manifest)
+        }
+    }
+
+    func testStandaloneProjectionCannotMintAuthenticatedNetworkAdmission() throws {
+        let fixture = makeFixture()
+        let projection = try PrivacyExact12CapabilityManifestCodecV1.decode(
+            fixture.manifest,
+            nativeCatalogArchive: fixture.catalog
+        )
+        XCTAssertThrowsError(try PrivacyExact12CapabilityAdmissionV1.requireExact12CapabilityTupleV1(
+            projection,
+            protocolId: .zkAcePqAuthorizationV1
+        )) { error in
+            XCTAssertEqual(error as? PrivacyExact12CapabilityManifestErrorV1, .invalidAdmission)
+        }
     }
 
     func testMismatchedSingletonEvidenceCanOnlyDeriveInvalidReadiness() throws {
@@ -313,6 +343,24 @@ final class PrivacyExact12CapabilityManifestV1Tests: XCTestCase {
         }
     }
 
+    func testPublicValidatorRejectsEmptyReleaseAndDeploymentEvidence() throws {
+        // This structurally framed fixture has no executable/stage/audit evidence,
+        // no release signatures, and no validator canaries or signatures.
+        let fixture = makeFixture()
+        XCTAssertThrowsError(try PrivacyNativeBridge.validateExact12CapabilityManifestV1(
+            fixture.manifest
+        )) { error in
+            if PrivacyNativeBridge.isNativeAvailable {
+                guard let nativeError = error as? PrivacyExact12CapabilityManifestErrorV1,
+                      case .invalidArchive = nativeError else {
+                    return XCTFail("Rust must reject the unsigned qualification: \(error)")
+                }
+            } else {
+                XCTAssertEqual(error as? PrivacyExact12CapabilityManifestErrorV1, .nativeUnavailable)
+            }
+        }
+    }
+
     private func makeFixture(
         rowZeroReadiness: Data? = nil,
         maxActionsPerTransaction: UInt32 = 1,
@@ -327,7 +375,8 @@ final class PrivacyExact12CapabilityManifestV1Tests: XCTestCase {
         useRetiredExperimentalAssurance: Bool = false,
         swapFirstRows: Bool = false,
         embeddedDigest: Data? = nil,
-        includePendingState: Bool = false
+        includePendingState: Bool = false,
+        opaqueProofArtifacts: Data? = nil
     ) -> Fixture {
         var profiles = (0..<12).map { _ in enumValue(1, enumValue(0)) }
         profiles[0] = availableProfile(
@@ -421,7 +470,8 @@ final class PrivacyExact12CapabilityManifestV1Tests: XCTestCase {
             ? exact12Qualification(
                 corruptSecurityClaimDigest: corruptSecurityClaimDigest,
                 firstActivationHeight: qualificationActivationHeight,
-                convergenceHeight: qualificationConvergenceHeight
+                convergenceHeight: qualificationConvergenceHeight,
+                opaqueProofArtifacts: opaqueProofArtifacts
             )
             : nil
         if let embeddedDigest {
@@ -520,7 +570,8 @@ final class PrivacyExact12CapabilityManifestV1Tests: XCTestCase {
     private func exact12Qualification(
         corruptSecurityClaimDigest: Bool,
         firstActivationHeight: UInt64,
-        convergenceHeight: UInt64
+        convergenceHeight: UInt64,
+        opaqueProofArtifacts: Data?
     ) -> Data {
         let releaseDigest = Data(repeating: 0xe3, count: 32)
         let releaseBindings = PrivacyProtocolIdV1.allCases.enumerated().map { index, protocolId in
@@ -548,7 +599,7 @@ final class PrivacyExact12CapabilityManifestV1Tests: XCTestCase {
             sequence([]),
             sequence(releaseBindings),
             sequence([]),
-            sequence([]),
+            opaqueProofArtifacts ?? sequence([]),
             sequence([]),
             sequence([]),
             structure(Data(repeating: 0xa6, count: 32)),

@@ -13,6 +13,8 @@ import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -21,12 +23,17 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import org.hyperledger.iroha.android.client.CanonicalRequestSigner;
 import org.hyperledger.iroha.android.client.ClientObserver;
 import org.hyperledger.iroha.android.client.ClientResponse;
+import org.hyperledger.iroha.android.client.LocalSigningContext;
+import org.hyperledger.iroha.android.client.ToriiCanonicalRequestAuth;
 import org.hyperledger.iroha.android.client.transport.UrlConnectionTransportExecutor;
 import org.hyperledger.iroha.android.client.transport.TransportExecutor;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
+import org.hyperledger.iroha.android.model.NetworkId;
+import org.hyperledger.iroha.android.testing.TestNetworkIds;
 
 /** Smoke tests for {@link ToriiEventStreamClient}. */
 public final class ToriiEventStreamClientTests {
@@ -34,6 +41,9 @@ public final class ToriiEventStreamClientTests {
   private ToriiEventStreamClientTests() {}
 
   public static void main(final String[] args) throws Exception {
+    sseCanonicalSigningBindsTheExactFinalUri();
+    contractSseRemainsAnonymousWithoutSigningConfiguration();
+    sseRejectsPrecomputedOrPartialCanonicalHeadersBeforeDispatch();
     sseStreamDeliversEvents();
     sseStreamEmitsRetryHints();
     sseStreamStopsAfterClose();
@@ -55,6 +65,149 @@ public final class ToriiEventStreamClientTests {
     sseCanonicalizesVerifyingKeyNameFiltersBeforeRequest();
     sseCanonicalizesProofHashFiltersBeforeRequest();
     System.out.println("[IrohaAndroid] Torii SSE client tests passed.");
+  }
+
+  private static void sseCanonicalSigningBindsTheExactFinalUri() throws Exception {
+    final TransportRequest[] recorded = new TransportRequest[1];
+    final AtomicReference<byte[]> signedMessage = new AtomicReference<>();
+    final NetworkId networkId = TestNetworkIds.canonical();
+    final long timestampMs = 1_700_000_000_000L;
+    final String nonce = "contract-stream-1";
+    final ToriiCanonicalRequestAuth canonicalAuth =
+        new ToriiCanonicalRequestAuth(
+            "alice@universal",
+            message -> {
+              signedMessage.set(message.clone());
+              return new byte[] {1, 2, 3};
+            },
+            Long.valueOf(timestampMs),
+            nonce);
+    final ToriiEventStreamClient client =
+        ToriiEventStreamClient.builder()
+            .setBaseUri(URI.create("https://example.com/api"))
+            .setTransportExecutor(
+                request -> {
+                  recorded[0] = request;
+                  return okSseResponse();
+                })
+            .canonicalRequestAuth(new LocalSigningContext(networkId), canonicalAuth)
+            .build();
+    final ToriiEventStreamOptions options =
+        ToriiEventStreamOptions.builder()
+            .putQueryParameter("kind", "applied")
+            .putQueryParameter("cursor", "opaque cursor")
+            .build();
+
+    client
+        .openSseStream("/v1/contracts/events/sse?z=last", options, event -> {})
+        .completion()
+        .get(1, TimeUnit.SECONDS);
+
+    if (recorded[0] == null) {
+      throw new AssertionError("expected signed contract stream request");
+    }
+    assertEquals(
+        "https://example.com/api/v1/contracts/events/sse?z=last&kind=applied&cursor=opaque+cursor",
+        recorded[0].uri().toString(),
+        "signed stream URI mismatch");
+    assertEquals(
+        Collections.singletonList("alice@universal"),
+        recorded[0].headers().get(CanonicalRequestSigner.HEADER_ACCOUNT),
+        "canonical account header mismatch");
+    assertEquals(
+        Collections.singletonList(Long.toString(timestampMs)),
+        recorded[0].headers().get(CanonicalRequestSigner.HEADER_TIMESTAMP_MS),
+        "canonical timestamp header mismatch");
+    assertEquals(
+        Collections.singletonList(nonce),
+        recorded[0].headers().get(CanonicalRequestSigner.HEADER_NONCE),
+        "canonical nonce header mismatch");
+    assertEquals(
+        Collections.singletonList("AQID"),
+        recorded[0].headers().get(CanonicalRequestSigner.HEADER_SIGNATURE),
+        "canonical signature header mismatch");
+    final byte[] expectedMessage =
+        CanonicalRequestSigner.canonicalRequestSignatureMessage(
+            networkId, "GET", recorded[0].uri(), null, timestampMs, nonce);
+    if (!Arrays.equals(expectedMessage, signedMessage.get())) {
+      throw new AssertionError("canonical signature did not bind the exact final stream URI");
+    }
+  }
+
+  private static void contractSseRemainsAnonymousWithoutSigningConfiguration()
+      throws Exception {
+    final TransportRequest[] recorded = new TransportRequest[1];
+    final ToriiEventStreamClient client =
+        ToriiEventStreamClient.builder()
+            .setBaseUri(URI.create("https://example.com"))
+            .setTransportExecutor(
+                request -> {
+                  recorded[0] = request;
+                  return okSseResponse();
+                })
+            .build();
+
+    client
+        .openSseStream(
+            "/v1/contracts/events/sse", ToriiEventStreamOptions.defaultOptions(), event -> {})
+        .completion()
+        .get(1, TimeUnit.SECONDS);
+
+    if (recorded[0] == null) {
+      throw new AssertionError("expected anonymous contract stream request");
+    }
+    for (final String header :
+        Arrays.asList(
+            CanonicalRequestSigner.HEADER_ACCOUNT,
+            CanonicalRequestSigner.HEADER_SIGNATURE,
+            CanonicalRequestSigner.HEADER_TIMESTAMP_MS,
+            CanonicalRequestSigner.HEADER_NONCE)) {
+      if (recorded[0].headers().containsKey(header)) {
+        throw new AssertionError("anonymous stream emitted canonical header " + header);
+      }
+    }
+  }
+
+  private static void sseRejectsPrecomputedOrPartialCanonicalHeadersBeforeDispatch() {
+    final int[] dispatches = new int[1];
+    final TransportExecutor executor =
+        request -> {
+          dispatches[0]++;
+          return okSseResponse();
+        };
+    final ToriiEventStreamClient defaultHeaderClient =
+        ToriiEventStreamClient.builder()
+            .setBaseUri(URI.create("https://example.com"))
+            .setTransportExecutor(executor)
+            .putDefaultHeader("x-iroha-signature", "precomputed")
+            .build();
+    final ToriiEventStreamClient optionHeaderClient =
+        ToriiEventStreamClient.builder()
+            .setBaseUri(URI.create("https://example.com"))
+            .setTransportExecutor(executor)
+            .build();
+
+    assertCanonicalHeaderRejected(
+        defaultHeaderClient, ToriiEventStreamOptions.defaultOptions());
+    assertCanonicalHeaderRejected(
+        optionHeaderClient,
+        ToriiEventStreamOptions.builder()
+            .putHeader("X-IROHA-ACCOUNT", "alice@universal")
+            .build());
+    assertEquals(0, dispatches[0], "canonical header rejection must precede dispatch");
+  }
+
+  private static void assertCanonicalHeaderRejected(
+      final ToriiEventStreamClient client, final ToriiEventStreamOptions options) {
+    try {
+      client.openSseStream("/v1/contracts/events/sse", options, event -> {});
+    } catch (final IllegalArgumentException expected) {
+      if (!expected.getMessage().contains("canonicalRequestAuth")) {
+        throw new AssertionError("unexpected canonical header rejection", expected);
+      }
+      return;
+    }
+    throw new AssertionError("expected precomputed canonical header rejection");
   }
 
   private static void sseStreamDeliversEvents() throws Exception {

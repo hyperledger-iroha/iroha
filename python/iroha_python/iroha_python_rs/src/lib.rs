@@ -87,9 +87,10 @@ use iroha_data_model::{
     musubi::ArchiveId,
     name::Name,
     nexus::{
-        DataSpaceId, FeeSponsorProgram, FeeSponsorProgramId, FeeSponsorProgramRevision,
-        LANE_PRIVACY_MAX_MERKLE_DEPTH_V1, LaneId, LaneLifecycleParameterV1, LaneLifecyclePlan,
-        LaneLifecycleStatusV1, LanePrivacyProof, LaneRelayEnvelope, compute_settlement_hash,
+        ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1, DataSpaceId, FeeSponsorProgram, FeeSponsorProgramId,
+        FeeSponsorProgramRevision, LANE_PRIVACY_MAX_MERKLE_DEPTH_V1, LaneId,
+        LaneLifecycleParameterV1, LaneLifecyclePlan, LaneLifecycleStatusV1, LanePrivacyProof,
+        LaneRelayEnvelope, compute_settlement_hash,
     },
     nft::NftId,
     parameter::Parameter,
@@ -162,6 +163,15 @@ use iroha_torii_shared::{
         SignInProofV1, WalletSignatureV1,
     },
     connect_sdk,
+    private_settlement_api::{
+        PrivateSettlementAuditApprovalRequestV1, PrivateSettlementAuditApprovalResponseV1,
+        PrivateSettlementAuditorCapsuleRequestV1, PrivateSettlementAuditorCapsuleResponseV1,
+        PrivateSettlementCommitteeProofResponseV1,
+        validate_private_settlement_audit_approval_response_v1,
+        validate_private_settlement_auditor_capsule_response_v1,
+        validate_private_settlement_auditor_identity_v1,
+        validate_private_settlement_committee_proof_response_v1,
+    },
     validation_fee_api::{
         VALIDATION_FEE_HIJIRI_QUOTE_MAX_REQUEST_BYTES_V1,
         VALIDATION_FEE_HIJIRI_QUOTE_MAX_RESPONSE_BYTES_V1, VALIDATION_FEE_HIJIRI_QUOTE_VERSION_V1,
@@ -1937,26 +1947,24 @@ fn sorafs_default_policy() -> AliasCachePolicy {
 }
 fn policy_override_u64<'py>(
     overrides: &Bound<'py, PyDict>,
-    keys: &[&str],
-    context: &str,
+    key: &str,
+    allow_zero: bool,
 ) -> PyResult<Option<u64>> {
-    for key in keys {
-        if let Some(value) = overrides.get_item(*key)? {
-            if value.is_none() {
-                return Ok(None);
-            }
-            let secs: u64 = value.extract().map_err(|_| {
-                PyValueError::new_err(format!("{context} must be a positive integer"))
-            })?;
-            if secs == 0 {
-                return Err(PyValueError::new_err(format!(
-                    "{context} must be greater than zero"
-                )));
-            }
-            return Ok(Some(secs));
-        }
+    let Some(value) = overrides.get_item(key)? else {
+        return Ok(None);
+    };
+    if value.is_instance_of::<PyBool>() {
+        return Err(PyValueError::new_err(format!("{key} must be an integer")));
     }
-    Ok(None)
+    let secs: u64 = value
+        .extract()
+        .map_err(|_| PyValueError::new_err(format!("{key} must be an integer")))?;
+    if !allow_zero && secs == 0 {
+        return Err(PyValueError::new_err(format!(
+            "{key} must be greater than zero"
+        )));
+    }
+    Ok(Some(secs))
 }
 fn alias_policy_from_py(overrides: Option<&Bound<'_, PyDict>>) -> PyResult<AliasCachePolicy> {
     let defaults = sorafs_default_policy();
@@ -1969,60 +1977,48 @@ fn alias_policy_from_py(overrides: Option<&Bound<'_, PyDict>>) -> PyResult<Alias
     let mut successor = defaults.successor_grace().as_secs();
     let mut governance = defaults.governance_grace().as_secs();
     if let Some(mapping) = overrides {
-        if let Some(value) = policy_override_u64(
-            mapping,
-            &["positive_ttl_secs", "positiveTtlSecs"],
+        const FIELDS: [&str; 8] = [
             "positive_ttl_secs",
-        )? {
+            "refresh_window_secs",
+            "hard_expiry_secs",
+            "negative_ttl_secs",
+            "revocation_ttl_secs",
+            "rotation_max_age_secs",
+            "successor_grace_secs",
+            "governance_grace_secs",
+        ];
+        for (key, _) in mapping.iter() {
+            let key: String = key
+                .extract()
+                .map_err(|_| PyValueError::new_err("SoraFS alias policy fields must be strings"))?;
+            if !FIELDS.contains(&key.as_str()) {
+                return Err(PyValueError::new_err(format!(
+                    "unsupported SoraFS alias policy field: {key}"
+                )));
+            }
+        }
+        if let Some(value) = policy_override_u64(mapping, "positive_ttl_secs", false)? {
             positive = value;
         }
-        if let Some(value) = policy_override_u64(
-            mapping,
-            &["refresh_window_secs", "refreshWindowSecs"],
-            "refresh_window_secs",
-        )? {
+        if let Some(value) = policy_override_u64(mapping, "refresh_window_secs", false)? {
             refresh = value;
         }
-        if let Some(value) = policy_override_u64(
-            mapping,
-            &["hard_expiry_secs", "hardExpirySecs"],
-            "hard_expiry_secs",
-        )? {
+        if let Some(value) = policy_override_u64(mapping, "hard_expiry_secs", false)? {
             hard = value;
         }
-        if let Some(value) = policy_override_u64(
-            mapping,
-            &["negative_ttl_secs", "negativeTtlSecs"],
-            "negative_ttl_secs",
-        )? {
+        if let Some(value) = policy_override_u64(mapping, "negative_ttl_secs", false)? {
             negative = value;
         }
-        if let Some(value) = policy_override_u64(
-            mapping,
-            &["revocation_ttl_secs", "revocationTtlSecs"],
-            "revocation_ttl_secs",
-        )? {
+        if let Some(value) = policy_override_u64(mapping, "revocation_ttl_secs", false)? {
             revocation = value;
         }
-        if let Some(value) = policy_override_u64(
-            mapping,
-            &["rotation_max_age_secs", "rotationMaxAgeSecs"],
-            "rotation_max_age_secs",
-        )? {
+        if let Some(value) = policy_override_u64(mapping, "rotation_max_age_secs", false)? {
             rotation = value;
         }
-        if let Some(value) = policy_override_u64(
-            mapping,
-            &["successor_grace_secs", "successorGraceSecs"],
-            "successor_grace_secs",
-        )? {
+        if let Some(value) = policy_override_u64(mapping, "successor_grace_secs", true)? {
             successor = value;
         }
-        if let Some(value) = policy_override_u64(
-            mapping,
-            &["governance_grace_secs", "governanceGraceSecs"],
-            "governance_grace_secs",
-        )? {
+        if let Some(value) = policy_override_u64(mapping, "governance_grace_secs", true)? {
             governance = value;
         }
     }
@@ -5625,6 +5621,42 @@ mod tests {
     fn py_err_message(err: pyo3::PyErr) -> String {
         ensure_python();
         Python::attach(|py| err.value(py).to_string())
+    }
+    #[test]
+    fn sorafs_alias_policy_parser_accepts_zero_grace_and_rejects_retired_shapes() {
+        ensure_python();
+        Python::attach(|py| {
+            let defaults = sorafs_default_policy();
+            let mapping = alias_policy_to_dict(py, &defaults).expect("encode default policy");
+            let parsed = alias_policy_from_py(Some(mapping.bind(py)))
+                .expect("the canonical default policy must parse");
+            assert_eq!(parsed.successor_grace(), defaults.successor_grace());
+            assert_eq!(parsed.governance_grace(), Duration::ZERO);
+
+            let zero_successor = PyDict::new(py);
+            zero_successor
+                .set_item("successor_grace_secs", 0)
+                .expect("set policy field");
+            let parsed = alias_policy_from_py(Some(&zero_successor))
+                .expect("zero successor grace must be accepted");
+            assert_eq!(parsed.successor_grace(), Duration::ZERO);
+
+            let camel_case = PyDict::new(py);
+            camel_case
+                .set_item("positiveTtlSecs", 600)
+                .expect("set retired policy field");
+            let err = alias_policy_from_py(Some(&camel_case))
+                .expect_err("camel-case policy aliases must be rejected");
+            assert!(err.value(py).to_string().contains("unsupported"));
+
+            let boolean = PyDict::new(py);
+            boolean
+                .set_item("positive_ttl_secs", true)
+                .expect("set invalid policy field");
+            let err = alias_policy_from_py(Some(&boolean))
+                .expect_err("boolean policy fields must be rejected");
+            assert!(err.value(py).to_string().contains("must be an integer"));
+        });
     }
     const MALFORMED_ED25519_PUBLIC_KEYS: [(&str, [u8; 32], &str); 3] = [
         ("all-zero", [0u8; 32], "all zero"),
@@ -14845,6 +14877,146 @@ fn privacy_compiled_profile_catalog_v1_py(py: Python<'_>) -> PyResult<Py<PyBytes
 fn privacy_validate_compiled_profile_catalog_v1_py(archive: &[u8]) -> i32 {
     validate_local_privacy_compiled_profile_catalog_archive_v1(archive).code()
 }
+
+const PRIVATE_SETTLEMENT_RESPONSE_JSON_MAX_BYTES_V1: usize = 32 * 1024 * 1024;
+const PRIVATE_SETTLEMENT_APPROVAL_REQUEST_JSON_MAX_BYTES_V1: usize = 1024 * 1024;
+const PRIVATE_SETTLEMENT_AUDITOR_KEY_MAX_BYTES_V1: usize = 1024;
+
+fn private_settlement_expected_network_id_v1(bytes: &[u8]) -> PyResult<NetworkId> {
+    let bytes = fixed_array::<32>(bytes, "expected_network_id")?;
+    Ok(NetworkId::from_genesis_hash(
+        HashOf::from_untyped_unchecked(Hash::prehashed(bytes)),
+    ))
+}
+
+fn private_settlement_requested_payload_digest_v1(bytes: &[u8]) -> PyResult<Hash> {
+    fixed_array::<32>(bytes, "requested_payload_digest").map(Hash::prehashed)
+}
+
+fn private_settlement_auditor_signing_key_v1(literal: &str) -> PyResult<PublicKey> {
+    if literal.is_empty()
+        || literal.trim() != literal
+        || literal.len() > PRIVATE_SETTLEMENT_AUDITOR_KEY_MAX_BYTES_V1
+        || literal.contains('\0')
+    {
+        return Err(PyValueError::new_err(
+            "atomic private settlement response is invalid",
+        ));
+    }
+    let key = PublicKey::from_str(literal)
+        .map_err(|_| PyValueError::new_err("atomic private settlement response is invalid"))?;
+    if key.to_string() != literal {
+        return Err(PyValueError::new_err(
+            "atomic private settlement response is invalid",
+        ));
+    }
+    Ok(key)
+}
+
+fn private_settlement_response_bytes_v1<'a>(bytes: &'a [u8], maximum: usize) -> PyResult<&'a [u8]> {
+    if bytes.is_empty() || bytes.len() > maximum {
+        return Err(PyValueError::new_err(
+            "atomic private settlement response is invalid",
+        ));
+    }
+    Ok(bytes)
+}
+
+#[pyfunction]
+#[pyo3(name = "private_settlement_verify_committee_proof_response_v1")]
+fn private_settlement_verify_committee_proof_response_v1_py(
+    response_json: &[u8],
+    expected_network_id: &[u8],
+    requested_payload_digest: &[u8],
+) -> PyResult<()> {
+    let response_json = private_settlement_response_bytes_v1(
+        response_json,
+        PRIVATE_SETTLEMENT_RESPONSE_JSON_MAX_BYTES_V1,
+    )?;
+    let expected_network = private_settlement_expected_network_id_v1(expected_network_id)?;
+    let requested = private_settlement_requested_payload_digest_v1(requested_payload_digest)?;
+    let response: PrivateSettlementCommitteeProofResponseV1 = json::from_slice(response_json)
+        .map_err(|_| PyValueError::new_err("atomic private settlement response is invalid"))?;
+    validate_private_settlement_committee_proof_response_v1(&expected_network, requested, &response)
+        .map_err(|_| PyValueError::new_err("atomic private settlement response is invalid"))
+}
+
+#[pyfunction]
+#[pyo3(name = "private_settlement_verify_auditor_capsule_response_with_request_v1")]
+fn private_settlement_verify_auditor_capsule_response_with_request_v1_py(
+    response_json: &[u8],
+    request_json: &[u8],
+    expected_network_id: &[u8],
+    requested_payload_digest: &[u8],
+    auditor_signing_key: &str,
+) -> PyResult<()> {
+    let response_json = private_settlement_response_bytes_v1(
+        response_json,
+        PRIVATE_SETTLEMENT_RESPONSE_JSON_MAX_BYTES_V1,
+    )?;
+    let request_json = private_settlement_response_bytes_v1(
+        request_json,
+        PRIVATE_SETTLEMENT_APPROVAL_REQUEST_JSON_MAX_BYTES_V1,
+    )?;
+    let expected_network = private_settlement_expected_network_id_v1(expected_network_id)?;
+    let requested = private_settlement_requested_payload_digest_v1(requested_payload_digest)?;
+    let auditor_key = private_settlement_auditor_signing_key_v1(auditor_signing_key)?;
+    let request: PrivateSettlementAuditorCapsuleRequestV1 = json::from_slice(request_json)
+        .map_err(|_| PyValueError::new_err("atomic private settlement response is invalid"))?;
+    let response: PrivateSettlementAuditorCapsuleResponseV1 = json::from_slice(response_json)
+        .map_err(|_| PyValueError::new_err("atomic private settlement response is invalid"))?;
+    validate_private_settlement_auditor_capsule_response_v1(
+        &expected_network,
+        requested,
+        &request,
+        &response,
+    )
+    .map_err(|_| PyValueError::new_err("atomic private settlement response is invalid"))?;
+    validate_private_settlement_auditor_identity_v1(&auditor_key, &response)
+        .map_err(|_| PyValueError::new_err("atomic private settlement response is invalid"))
+}
+
+#[pyfunction]
+#[pyo3(name = "private_settlement_verify_audit_approval_response_v1")]
+fn private_settlement_verify_audit_approval_response_v1_py(
+    response_json: &[u8],
+    request_json: &[u8],
+    expected_network_id: &[u8],
+    requested_payload_digest: &[u8],
+    auditor_signing_key: &str,
+) -> PyResult<()> {
+    let response_json = private_settlement_response_bytes_v1(
+        response_json,
+        PRIVATE_SETTLEMENT_RESPONSE_JSON_MAX_BYTES_V1,
+    )?;
+    let request_json = private_settlement_response_bytes_v1(
+        request_json,
+        PRIVATE_SETTLEMENT_APPROVAL_REQUEST_JSON_MAX_BYTES_V1,
+    )?;
+    let expected_network = private_settlement_expected_network_id_v1(expected_network_id)?;
+    let requested = private_settlement_requested_payload_digest_v1(requested_payload_digest)?;
+    let auditor_key = private_settlement_auditor_signing_key_v1(auditor_signing_key)?;
+    let request: PrivateSettlementAuditApprovalRequestV1 = json::from_slice(request_json)
+        .map_err(|_| PyValueError::new_err("atomic private settlement response is invalid"))?;
+    if request.approval.body.version != ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1
+        || request.approval.body.network_id != expected_network
+        || request
+            .approval
+            .signature
+            .verify(&auditor_key, &request.approval.body)
+            .is_err()
+    {
+        return Err(PyValueError::new_err(
+            "atomic private settlement response is invalid",
+        ));
+    }
+    let response: PrivateSettlementAuditApprovalResponseV1 = json::from_slice(response_json)
+        .map_err(|_| PyValueError::new_err("atomic private settlement response is invalid"))?;
+    validate_private_settlement_audit_approval_response_v1(requested, &request, &response)
+        .map(|_| ())
+        .map_err(|_| PyValueError::new_err("atomic private settlement response is invalid"))
+}
+
 #[pyfunction]
 #[pyo3(name = "validation_fee_hijiri_quote_request_v1")]
 fn validation_fee_hijiri_quote_request_v1_py(
@@ -15304,6 +15476,18 @@ fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     )?)?;
     module.add_function(wrap_pyfunction!(
         privacy_validate_compiled_profile_catalog_v1_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        private_settlement_verify_committee_proof_response_v1_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        private_settlement_verify_auditor_capsule_response_with_request_v1_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        private_settlement_verify_audit_approval_response_v1_py,
         module
     )?)?;
     module.add_function(wrap_pyfunction!(

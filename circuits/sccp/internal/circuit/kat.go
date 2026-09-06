@@ -123,7 +123,7 @@ func MessageKAT(cfg profile.Config) (*MessageCircuit, *MessageCircuit, error) {
 		set32(&witness.Statement.VerifierCircuitHash, verifierCircuit)
 		set32(&witness.Statement.ProofProfileCommitment, proofProfile)
 	}
-	commitment := []byte{1, 5, profile.SoraNetworkTag, cfg.TargetNetworkTag}
+	commitment := []byte{1, profile.TransferHubMessageKind, profile.SoraNetworkTag, cfg.TargetNetworkTag}
 	commitment = append(commitment, destinationBinding[:]...)
 	commitment = append(commitment, routeConfiguration[:]...)
 	commitment = append(commitment, messageID[:]...)
@@ -529,33 +529,33 @@ func canonicalKATPayload(cfg profile.Config, sender []byte) []byte {
 	for i := range recipient {
 		recipient[i] = byte(i + 1)
 	}
-	if cfg.RecipientCodec == 5 {
+	if cfg.RecipientCodec == profile.TRONAddress21Codec {
 		recipient[0] = 0x41
 	}
-	if cfg.RecipientCodec == 7 {
+	if cfg.RecipientCodec == profile.TONAccount36Codec {
 		for i := 0; i < 4; i++ {
 			recipient[i] = 0
 		}
 	}
-	out := []byte{2, 1}
-	out = binary.LittleEndian.AppendUint32(out, 0)
+	out := []byte{profile.TransferPayloadDiscriminant, 1}
+	out = binary.LittleEndian.AppendUint32(out, profile.SoraDomain)
 	out = binary.LittleEndian.AppendUint32(out, cfg.TargetDomain)
 	out = binary.LittleEndian.AppendUint64(out, 7)
 	out = binary.LittleEndian.AppendUint32(out, 1)
-	out = binary.LittleEndian.AppendUint32(out, 0)
-	out = append(out, 1)
+	out = binary.LittleEndian.AppendUint32(out, profile.SoraDomain)
+	out = append(out, profile.CanonicalTextCodec)
 	out = binary.LittleEndian.AppendUint32(out, 3)
 	out = append(out, "xor"...)
 	amount := make([]byte, 16)
 	binary.LittleEndian.PutUint64(amount, 11)
 	out = append(out, amount...)
-	out = append(out, 1)
+	out = append(out, profile.CanonicalTextCodec)
 	out = binary.LittleEndian.AppendUint32(out, uint32(len(sender)))
 	out = append(out, sender...)
 	out = append(out, cfg.RecipientCodec)
 	out = binary.LittleEndian.AppendUint32(out, uint32(len(recipient)))
 	out = append(out, recipient...)
-	out = append(out, 1)
+	out = append(out, profile.CanonicalTextCodec)
 	out = binary.LittleEndian.AppendUint32(out, uint32(len(cfg.RouteID)))
 	out = append(out, cfg.RouteID...)
 	return out
@@ -637,7 +637,7 @@ func nativeSemanticBundle(cfg profile.Config, witness *MessageCircuit) [32]byte 
 	messageID := u8Array32(witness.RawSignals[0])
 	payloadHash := u8Array32(witness.RawSignals[1])
 	root := u8Array32(witness.RawSignals[3])
-	commitment := []byte{1, 5, profile.SoraNetworkTag, cfg.TargetNetworkTag}
+	commitment := []byte{1, profile.TransferHubMessageKind, profile.SoraNetworkTag, cfg.TargetNetworkTag}
 	commitment = append(commitment, destination[:]...)
 	commitment = append(commitment, route[:]...)
 	commitment = append(commitment, messageID[:]...)

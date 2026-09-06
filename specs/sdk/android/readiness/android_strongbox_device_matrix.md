@@ -1,97 +1,73 @@
-# Kagemusha Android production matrix
+# KAGEMUSHA V1 Android hardware qualification matrix
 
-This matrix is the physical-device release gate for the single Kagemusha
-offline-cash protocol. Measurements are collected from a clean, unsigned V4
-candidate before release finalization, through the opt-in
-`kagemusha-candidate-evidence-lab` build only. Every accepted V2 slot is bound
-to native bridge ABI 23, the exact candidate record and source tree, the
-ordered eight recursive artifacts, the lab native library and APK, the real
-recursive-spend lifecycle transcript, the application signing certificate,
-and the wallet policy. The ordinary production capability must remain false
-throughout the lab run.
+This is the physical-device release gate for an Android KAGEMUSHA V1
+hardware profile. A profile remains disabled until every required device row has
+fresh, signed evidence from the exact release candidate. Emulator, software-key,
+summary-only, or host-simulated results never satisfy the gate.
 
 ## Required device families
 
-| Device family | Minimum OS | Required evidence |
+| Device family | Minimum OS | Required secure provider |
 | --- | --- | --- |
-| Google Pixel 6 / 6a | Android 14 | StrongBox/KeyMint attestation and complete Kagemusha lifecycle |
-| Google Pixel 7 / 7 Pro | Android 14 | StrongBox/KeyMint attestation and complete Kagemusha lifecycle |
-| Google Pixel 8 / 8a / 8 Pro | Android 15 | StrongBox/KeyMint attestation and complete Kagemusha lifecycle |
-| Google Pixel Fold / Tablet | Android 15 | StrongBox/KeyMint attestation and complete Kagemusha lifecycle |
-| Samsung Galaxy S23 | Android 14 | StrongBox/KeyMint attestation and complete Kagemusha lifecycle |
-| Samsung Galaxy S24 | Android 15 | StrongBox/KeyMint attestation and complete Kagemusha lifecycle |
+| Google Pixel 6 / 6a | Android 14 | qualified OEM/SE KAGEMUSHA service |
+| Google Pixel 7 / 7 Pro | Android 14 | qualified OEM/SE KAGEMUSHA service |
+| Google Pixel 8 / 8a / 8 Pro | Android 15 | qualified OEM/SE KAGEMUSHA service |
+| Google Pixel Fold / Tablet | Android 15 | qualified OEM/SE KAGEMUSHA service |
+| Samsung Galaxy S23 | Android 14 | qualified OEM/SE KAGEMUSHA service |
+| Samsung Galaxy S24 | Android 15 | qualified OEM/SE KAGEMUSHA service |
+
+A stock StrongBox/KeyMint signing key does not satisfy this column. The OEM or
+secure-element service must implement the complete non-forking hardware
+profile and exact 22-operation device ABI with capability mask `0x0000ffff`.
 
 One signed slot is required for every row. Slots must not reuse a device
-fingerprint or attestation challenge. Emulator and summary-only results do not
-satisfy this gate.
+fingerprint, attestation challenge, hardware epoch, or qualification run.
 
-## Slot contract
+## Evidence contract
 
-`slot.json`, `evidence/signed-evidence.json`, and
-`evidence/candidate-binding-v2.json` are closed V2 schemas. V1 evidence cannot
-satisfy the production-evidence gate. V2 binds:
+Each slot binds the exact source tree, release manifest, paired-Pasta artifacts,
+wallet APK and signing certificate, device identity and OS build, attested
+hardware policy, and complete raw command/output transcript. It must prove:
 
-- the canonical device family, model, codename, fingerprint, OS build, and
-  minimum OS;
-- the app package, signing-certificate digest, Kagemusha wallet artifact and
-  policy digests;
-- the StrongBox/KeyMint certificate chain and challenge;
-- the clean candidate record, manifest, source commit/tree, generation, native
-  bridge ABI 23, exact Eq/Ep KRV4 framed and payload identities, and the
-  native-accepted inventory digest;
-- the marker-bearing lab native library and APK, while proving the production
-  capability stayed false;
-- exact atomic-value conservation, multi-hop verification, independent branch
-  redemption, duplicate rejection, restart recovery, and zero peer-transfer
-  network requests in `evidence/lifecycle-transcript-v2.json`;
-- one-use key rotation and rollback rejection;
-- QR, NFC HCE, and nearby-offline transfer transcripts;
-- the exact raw test commands and every referenced artifact digest.
+- exact-next predecessor consumption, one-use successor authorization, and no
+  software fallback;
+- rollback-resistant counter/journal, durable reserved inbox and retry outbox,
+  authoritative replay roots, and exact duplicate/conflict recovery;
+- trusted time or monotonic leases, atomic verified-candidate commit, and
+  recoverable terminal commit certificates;
+- the exact three-message request/payment/acknowledgement exchange with one
+  positive exact amount and receiver encryption key in every request;
+- `Bootstrap`, `MintFold`, `SendSplit`, singular `ReceiveFold`, `RedeemSplit`,
+  and hardware-only `Rotate`;
+- 1,000 independently received one-unit credits folded into one aggregate
+  balance, followed by one 1,000-unit payment and subsequent full and partial
+  redemption;
+- at least 1,024 real recursive handoffs with proof/envelope size independent
+  of depth;
+- shuffled concurrent requests, delayed post-expiry delivery, exact duplicate
+  retry, conflicting credit reuse, stale state, forked successors, rollback,
+  counter reuse/skip/rollover, forged rotation, overflow, and proof/output
+  substitution rejection;
+- crash injection at every prepare, proof, candidate persistence, hardware
+  commit, terminal authorization, canonical-envelope persistence, inbox, outbox, transport,
+  and acknowledgement boundary, with value conservation and byte-identical
+  recovery;
+- airplane mode, restart, abrupt power loss, clock rollback, backup/restore,
+  thermal, latency, memory, throughput, QR, NFC, and nearby-device operation;
+- zero network requests during every device-to-device payment.
 
-The candidate-lab APK is a separate, marker-bearing application and must be
-bound by `candidate_lab_apk_path`/`candidate_lab_apk_sha256`. It must never be
-substituted for the wallet APK bound by
-`kagemusha_wallet_apk_path`/`kagemusha_wallet_apk_sha256`; the latter remains
-the independently measured StrongBox, rotation, rollback, and D2D wallet
-artifact.
+Secure state is intentionally non-clonable. Backup/restore qualification must
+show that restored application data cannot fork spend authority; it is not a
+promise that lost KAGEMUSHA value can be recovered.
 
-The lifecycle evidence must prove exact fractional value conservation, sender
-change, recursive multihop spending, durable receiver acknowledgement,
-independent branch redemption, duplicate rejection, and zero network traffic
-during peer transfers. Artifact paths must remain inside the slot and every
-digest must be canonical lowercase SHA-256.
+## Release decision
 
-The required raw commands are the canonical values exported by
-`scripts/check_android_device_lab_slot.py`. They build the current SDK plus the
-nonshipping candidate-lab APK, run the two AndroidJUnitRunner lifecycle/export
-classes on the physical device, and export only the files and measurements
-observed during that run. The candidate-lab feature, symbols, marker, APK, and
-native library are forbidden from every production AAR/XCFramework/package.
+The validator must fail closed for missing rows, stale or substituted artifacts,
+untrusted attestation roots, software keys, reused challenges, mutable evidence,
+noncanonical values, or any incomplete scenario. Lab signing keys and device
+secrets are runtime-only and must never appear in repository files, logs, or
+summaries.
 
-## Validation
-
-Validate a complete production matrix with:
-
-```bash
-python3 scripts/check_android_device_lab_slot.py \
-  --root artifacts/android/device_lab \
-  --require-slot \
-  --require-kagemusha-production-evidence \
-  --require-kagemusha-standard-matrix \
-  --trusted-signer-public-key <lab-public-key.pem>
-```
-
-The validator fails closed for missing families, unexpected fields, stale ABI,
-invalid signatures, weak attestation, copied device bindings, unsafe paths,
-artifact mutation, noncanonical values, or incomplete lifecycle evidence. Lab
-private keys are runtime-only inputs and must never appear in metadata, logs,
-or summaries.
-
-Production-bound validation also supplies the complete digest-pinned authority
-set described in
-[`kagemusha_candidate_lab_staging.md`](./kagemusha_candidate_lab_staging.md):
-the exact Google status response and its fresh header-bound capture receipt,
-alongside the tool and root pins. The signed slot binds the derived snapshot
-projection; a later controller/governance signature, not an unsigned HTTPS
-capture, is the consensus authentication boundary. Validators never fetch the
-status endpoint.
+No Android hardware profile may be enabled from source-only or simulator
+evidence. The signed qualification matrix is a release input, not a compatibility
+mode or an optional feature claim.

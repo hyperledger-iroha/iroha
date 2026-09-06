@@ -303,7 +303,7 @@ def test_wire_fixture_drift_rotates_only_diagnostics_suite_digest(
     )
     assert grouped_records.returncode == 0, grouped_records.stderr
     grouped_record_lines = grouped_records.stdout.splitlines()
-    assert len(grouped_record_lines) == 1_451
+    assert len(grouped_record_lines) == 1_474
     diagnostics_records = _run_resolver(
         ROOT,
         "--suite",
@@ -311,7 +311,7 @@ def test_wire_fixture_drift_rotates_only_diagnostics_suite_digest(
         "--print-records",
     )
     assert diagnostics_records.returncode == 0, diagnostics_records.stderr
-    assert len(diagnostics_records.stdout.splitlines()) == 1_453
+    assert len(diagnostics_records.stdout.splitlines()) == 1_476
     assert sum(
         line.startswith("ci/check_openapi_spec.sh\t")
         for line in grouped_record_lines
@@ -669,16 +669,25 @@ def test_production_manifest_exactly_covers_declared_source_roots() -> None:
         "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/consensus/"
         "SumeragiDiagnosticsModels.kt",
         "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/consensus/SumeragiV2Wire.kt",
-        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/"
-        "transport/BoundedResponseBodyReader.java",
-        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/consensus/"
-        "NativeAmxV2Models.java",
-        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/consensus/"
-        "SumeragiDiagnosticsModels.java",
-        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/consensus/"
-        "SumeragiV2Wire.java",
+        "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/"
+        "transport/BoundedResponseBodyReader.kt",
+        "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/consensus/"
+        "SumeragiDiagnosticsSerialization.kt",
+        "kotlin/core-jvm/src/test/java/org/hyperledger/iroha/sdk/consensus/"
+        "SumeragiDiagnosticsJavaConsumerTest.java",
     }
     assert required_omissions_closed <= all_paths
+    # Both source languages compile and execute against Kotlin's production SDK.
+    assert not any(path.startswith("java/") for path in all_paths)
+    for harness in module.EXPECTED_HARNESSES.values():
+        source = (ROOT / harness).read_text(encoding="utf-8")
+        java_branch = source.split("\n  java)\n", 1)[1].split("\n    ;;", 1)[0]
+        assert '${repo_root}/kotlin/gradlew' in java_branch
+        assert '--project-dir "${repo_root}/kotlin"' in java_branch
+        assert ':core-jvm:test' in java_branch
+        assert 'org.hyperledger.iroha.sdk.consensus.' in java_branch
+        assert 'java/iroha_android' not in java_branch
+        assert 'org.hyperledger.iroha.android.' not in java_branch
     assert {
         module.PurePosixPath(
             "crates/connect_norito_bridge/src/platform_jni.rs"
@@ -705,7 +714,7 @@ def test_production_manifest_exactly_covers_declared_source_roots() -> None:
             "SumeragiV2WireFixtureTest.kt"
         ),
         module.PurePosixPath(
-            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/consensus/"
+            "kotlin/core-jvm/src/test/java/org/hyperledger/iroha/sdk/consensus/"
             "SumeragiV2WireFixtureTests.java"
         ),
         module.PurePosixPath(
@@ -932,7 +941,6 @@ def _sdk_dependency_fixture(
     ).encode()
     for wrapper in (
         repository / "kotlin/gradle/wrapper/gradle-wrapper.properties",
-        repository / "java/iroha_android/gradle/wrapper/gradle-wrapper.properties",
     ):
         wrapper.parent.mkdir(parents=True)
         wrapper.write_bytes(wrapper_bytes)
@@ -1340,9 +1348,10 @@ def test_release_runner_keeps_sdk_sources_private_and_budgets_before_build() -> 
     assert "build_efficiency_provenance_pipeline_status[1] != 0" in source
     assert (
         '"$IROHA_RELEASE_PYTHON_BIN" -I -S scripts/check_source_file_budget.py '
-        "\\\n    --require-objective"
+        "\\\n    2>&1 | tee"
         in source
     )
+    assert "--require-objective" not in source
     assert (
         'readonly source_budget_log="${release_source_bound_root}/source-file-budget.log"'
         in source

@@ -17,6 +17,7 @@ import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonDecoder
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonEncoder
 import kotlinx.serialization.json.JsonPrimitive
@@ -34,7 +35,7 @@ const val SUMERAGI_DIAGNOSTIC_LANES_MAX: Int = 128
 
 /** Aggregate execution diagnostics for the latest block-pipeline run. */
 @Serializable
-data class SumeragiPipelineExecutionStatus(
+class SumeragiPipelineExecutionStatus(
     @Serializable(with = SumeragiU64Serializer::class)
     @SerialName("tx_vertices_total")
     val txVerticesTotal: BigInteger,
@@ -86,30 +87,104 @@ data class SumeragiPipelineExecutionStatus(
     @Serializable(with = SumeragiU64Serializer::class)
     @SerialName("quarantine_executed_total")
     val quarantineExecutedTotal: BigInteger,
-)
+) {
+    init {
+        listOf(
+            txVerticesTotal,
+            txEdgesTotal,
+            overlayCountTotal,
+            overlayInstrTotal,
+            overlayBytesTotal,
+            rbcChunksTotal,
+            rbcBytesTotal,
+            detachedPreparedTotal,
+            detachedMergedTotal,
+            detachedFallbackTotal,
+            detachedFallbackFeePostprocessingTotal,
+            detachedFallbackUserExecutorTotal,
+            detachedFallbackDurableStateTotal,
+            detachedFallbackUnsupportedInstructionTotal,
+            detachedFallbackRejectedEvalTotal,
+            detachedFallbackOverlayErrorTotal,
+            quarantineExecutedTotal,
+        ).forEach { requireU64(it, "pipeline execution counter") }
+    }
+
+    override fun equals(other: Any?): Boolean =
+        other is SumeragiPipelineExecutionStatus &&
+            txVerticesTotal == other.txVerticesTotal &&
+            txEdgesTotal == other.txEdgesTotal &&
+            overlayCountTotal == other.overlayCountTotal &&
+            overlayInstrTotal == other.overlayInstrTotal &&
+            overlayBytesTotal == other.overlayBytesTotal &&
+            rbcChunksTotal == other.rbcChunksTotal &&
+            rbcBytesTotal == other.rbcBytesTotal &&
+            detachedPreparedTotal == other.detachedPreparedTotal &&
+            detachedMergedTotal == other.detachedMergedTotal &&
+            detachedFallbackTotal == other.detachedFallbackTotal &&
+            detachedFallbackFeePostprocessingTotal == other.detachedFallbackFeePostprocessingTotal &&
+            detachedFallbackUserExecutorTotal == other.detachedFallbackUserExecutorTotal &&
+            detachedFallbackDurableStateTotal == other.detachedFallbackDurableStateTotal &&
+            detachedFallbackUnsupportedInstructionTotal == other.detachedFallbackUnsupportedInstructionTotal &&
+            detachedFallbackRejectedEvalTotal == other.detachedFallbackRejectedEvalTotal &&
+            detachedFallbackOverlayErrorTotal == other.detachedFallbackOverlayErrorTotal &&
+            quarantineExecutedTotal == other.quarantineExecutedTotal
+
+    override fun hashCode(): Int = listOf(
+        txVerticesTotal,
+        txEdgesTotal,
+        overlayCountTotal,
+        overlayInstrTotal,
+        overlayBytesTotal,
+        rbcChunksTotal,
+        rbcBytesTotal,
+        detachedPreparedTotal,
+        detachedMergedTotal,
+        detachedFallbackTotal,
+        detachedFallbackFeePostprocessingTotal,
+        detachedFallbackUserExecutorTotal,
+        detachedFallbackDurableStateTotal,
+        detachedFallbackUnsupportedInstructionTotal,
+        detachedFallbackRejectedEvalTotal,
+        detachedFallbackOverlayErrorTotal,
+        quarantineExecutedTotal,
+    ).hashCode()
+}
 
 /** Current permissionless-election schedule and PRF context while NPoS mode is active. */
-@Serializable
-data class SumeragiNposDiagnostics(
-    @Serializable(with = SumeragiU64Serializer::class)
-    @SerialName("epoch_length_blocks")
+@Serializable(with = SumeragiNposDiagnosticsSerializer::class)
+class SumeragiNposDiagnostics(
     val epochLengthBlocks: BigInteger,
-    @SerialName("epoch_seed") val epochSeed: List<Int>,
-    @Serializable(with = SumeragiU64Serializer::class)
-    @SerialName("prf_height")
+    epochSeed: List<Int>,
     val prfHeight: BigInteger,
-    @Serializable(with = SumeragiU64Serializer::class)
-    @SerialName("prf_view")
     val prfView: BigInteger,
 ) {
+    /** Immutable snapshot of the supplied epochSeed values. */
+    val epochSeed: List<Int> =
+        ownDiagnosticList(epochSeed, 32)
+
     init {
         requireU64(epochLengthBlocks, "epochLengthBlocks")
         require(epochLengthBlocks.signum() > 0) { "NPoS diagnostics epoch length must be positive" }
-        require(epochSeed.size == 32 && epochSeed.all { it in 0..255 } && epochSeed.any { it != 0 }) {
+        require(this.epochSeed.size == 32 && this.epochSeed.all { it in 0..255 } && this.epochSeed.any { it != 0 }) {
             "NPoS diagnostics epoch seed must be an exact non-zero 32-byte vector"
         }
         listOf(prfHeight, prfView).forEach { requireU64(it, "NPoS diagnostics PRF context") }
     }
+    override fun equals(other: Any?): Boolean =
+        other is SumeragiNposDiagnostics &&
+            epochLengthBlocks == other.epochLengthBlocks &&
+            epochSeed == other.epochSeed &&
+            prfHeight == other.prfHeight &&
+            prfView == other.prfView
+
+    override fun hashCode(): Int = listOf(
+        epochLengthBlocks,
+        epochSeed,
+        prfHeight,
+        prfView,
+    ).hashCode()
+
 }
 
 /** Evidence-derived Native AMX participant application state. */
@@ -134,7 +209,7 @@ enum class SumeragiNativeAmxParticipantApplicationState {
 
 /** One Native AMX participant-application row from `/v1/sumeragi/diagnostics`. */
 @Serializable
-data class SumeragiNativeAmxParticipantApplication(
+class SumeragiNativeAmxParticipantApplication(
     @SerialName("lane_id") val laneId: Long,
     @Serializable(with = SumeragiU64Serializer::class)
     @SerialName("dataspace_id")
@@ -201,6 +276,40 @@ data class SumeragiNativeAmxParticipantApplication(
             requireCanonicalNonzeroHash(it, "applicationBlockHash")
         }
     }
+    override fun equals(other: Any?): Boolean =
+        other is SumeragiNativeAmxParticipantApplication &&
+            laneId == other.laneId &&
+            dataspaceId == other.dataspaceId &&
+            laneIncarnation == other.laneIncarnation &&
+            participantHeight == other.participantHeight &&
+            participantView == other.participantView &&
+            predecessorHeight == other.predecessorHeight &&
+            predecessorDescriptorHash == other.predecessorDescriptorHash &&
+            descriptorHash == other.descriptorHash &&
+            proposalHash == other.proposalHash &&
+            settlementHash == other.settlementHash &&
+            sourceCount == other.sourceCount &&
+            applicationBlockHeight == other.applicationBlockHeight &&
+            applicationBlockHash == other.applicationBlockHash &&
+            state == other.state
+
+    override fun hashCode(): Int = listOf(
+        laneId,
+        dataspaceId,
+        laneIncarnation,
+        participantHeight,
+        participantView,
+        predecessorHeight,
+        predecessorDescriptorHash,
+        descriptorHash,
+        proposalHash,
+        settlementHash,
+        sourceCount,
+        applicationBlockHeight,
+        applicationBlockHash,
+        state,
+    ).hashCode()
+
 }
 
 /**
@@ -437,47 +546,68 @@ class SumeragiAutonomousLaneExecutions(rows: List<SumeragiAutonomousLaneExecutio
  * and autonomous execution rows are parsed into their closed, bounded models and checked in the
  * canonical Rust ordering.
  */
-@Serializable
-data class SumeragiDiagnosticsStatus(
-    @SerialName("pipeline_execution")
+@Serializable(with = SumeragiDiagnosticsStatusSerializer::class)
+class SumeragiDiagnosticsStatus(
     val pipelineExecution: SumeragiPipelineExecutionStatus,
-    @Serializable(with = SumeragiU64Serializer::class)
-    @SerialName("tx_queue_depth")
     val txQueueDepth: BigInteger,
-    @Serializable(with = SumeragiU64Serializer::class)
-    @SerialName("tx_queue_capacity")
     val txQueueCapacity: BigInteger,
-    @Serializable(with = SumeragiU64Serializer::class)
-    @SerialName("tx_queue_retained_bytes")
     val txQueueRetainedBytes: BigInteger,
-    @Serializable(with = SumeragiU64Serializer::class)
-    @SerialName("tx_queue_max_retained_bytes")
     val txQueueMaxRetainedBytes: BigInteger,
-    @SerialName("tx_queue_saturated") val txQueueSaturated: Boolean,
-    @SerialName("tx_queue_saturated_by_count") val txQueueSaturatedByCount: Boolean,
-    @SerialName("tx_queue_saturated_by_bytes") val txQueueSaturatedByBytes: Boolean,
-    @SerialName("tx_queue_saturated_by_age") val txQueueSaturatedByAge: Boolean,
-    @Serializable(with = SumeragiU64Serializer::class)
-    @SerialName("tx_queue_oldest_queued_age_ms")
+    val txQueueSaturated: Boolean,
+    val txQueueSaturatedByCount: Boolean,
+    val txQueueSaturatedByBytes: Boolean,
+    val txQueueSaturatedByAge: Boolean,
     val txQueueOldestQueuedAgeMs: BigInteger,
     val npos: SumeragiNposDiagnostics? = null,
-    @SerialName("lane_commitments") val laneCommitments: List<JsonObject>,
-    @SerialName("dataspace_commitments") val dataspaceCommitments: List<JsonObject>,
-    @SerialName("lane_settlement_commitments")
-    val laneSettlementCommitments: List<JsonObject>,
-    @SerialName("lane_relay_envelopes") val laneRelayEnvelopes: List<JsonObject>,
-    @SerialName("lane_payload_ownerships") val lanePayloadOwnerships: List<JsonObject>,
-    @SerialName("committed_lane_blocks") val committedLaneBlocks: List<JsonObject>,
-    @SerialName("lane_block_sessions") val laneBlockSessions: List<JsonObject>,
-    @SerialName("lane_governance_sealed_total") val laneGovernanceSealedTotal: Long,
-    @SerialName("lane_governance_sealed_aliases")
-    val laneGovernanceSealedAliases: List<String>,
-    @SerialName("lane_governance") val laneGovernance: List<JsonObject>,
-    @SerialName("native_amx_participant_applications")
-    val nativeAmxParticipantApplications: List<SumeragiNativeAmxParticipantApplication>,
-    @SerialName("autonomous_lane_executions")
-    val autonomousLaneExecutions: List<SumeragiAutonomousLaneExecution>,
+    laneCommitments: List<JsonObject>,
+    dataspaceCommitments: List<JsonObject>,
+    laneSettlementCommitments: List<JsonObject>,
+    laneRelayEnvelopes: List<JsonObject>,
+    lanePayloadOwnerships: List<JsonObject>,
+    committedLaneBlocks: List<JsonObject>,
+    laneBlockSessions: List<JsonObject>,
+    val laneGovernanceSealedTotal: Long,
+    laneGovernanceSealedAliases: List<String>,
+    laneGovernance: List<JsonObject>,
+    nativeAmxParticipantApplications: List<SumeragiNativeAmxParticipantApplication>,
+    autonomousLaneExecutions: List<SumeragiAutonomousLaneExecution>,
 ) {
+    /** Immutable snapshot of the supplied laneCommitments values. */
+    val laneCommitments: List<JsonObject> = ownDiagnosticObjects(laneCommitments)
+
+    /** Immutable snapshot of the supplied dataspaceCommitments values. */
+    val dataspaceCommitments: List<JsonObject> = ownDiagnosticObjects(dataspaceCommitments)
+
+    /** Immutable snapshot of the supplied laneSettlementCommitments values. */
+    val laneSettlementCommitments: List<JsonObject> = ownDiagnosticObjects(laneSettlementCommitments)
+
+    /** Immutable snapshot of the supplied laneRelayEnvelopes values. */
+    val laneRelayEnvelopes: List<JsonObject> = ownDiagnosticObjects(laneRelayEnvelopes)
+
+    /** Immutable snapshot of the supplied lanePayloadOwnerships values. */
+    val lanePayloadOwnerships: List<JsonObject> = ownDiagnosticObjects(lanePayloadOwnerships)
+
+    /** Immutable snapshot of the supplied committedLaneBlocks values. */
+    val committedLaneBlocks: List<JsonObject> = ownDiagnosticObjects(committedLaneBlocks)
+
+    /** Immutable snapshot of the supplied laneBlockSessions values. */
+    val laneBlockSessions: List<JsonObject> = ownDiagnosticObjects(laneBlockSessions)
+
+    /** Immutable snapshot of the supplied laneGovernanceSealedAliases values. */
+    val laneGovernanceSealedAliases: List<String> =
+        ownDiagnosticList(laneGovernanceSealedAliases, SUMERAGI_DIAGNOSTIC_LANES_MAX)
+
+    /** Immutable snapshot of the supplied laneGovernance values. */
+    val laneGovernance: List<JsonObject> = ownDiagnosticObjects(laneGovernance)
+
+    /** Immutable snapshot of the supplied nativeAmxParticipantApplications values. */
+    val nativeAmxParticipantApplications: List<SumeragiNativeAmxParticipantApplication> =
+        ownDiagnosticList(nativeAmxParticipantApplications, SUMERAGI_NATIVE_AMX_PARTICIPANT_APPLICATIONS_MAX)
+
+    /** Immutable snapshot of the supplied autonomousLaneExecutions values. */
+    val autonomousLaneExecutions: List<SumeragiAutonomousLaneExecution> =
+        ownDiagnosticList(autonomousLaneExecutions, SUMERAGI_AUTONOMOUS_LANE_EXECUTIONS_MAX)
+
     init {
         requireU64(txQueueDepth, "txQueueDepth")
         requireU64(txQueueCapacity, "txQueueCapacity")
@@ -495,39 +625,91 @@ data class SumeragiDiagnosticsStatus(
                 (txQueueSaturatedByCount || txQueueSaturatedByBytes || txQueueSaturatedByAge)
         ) { "Sumeragi diagnostics queue saturation disagrees with its causes" }
         val laneVectors = listOf(
-            laneCommitments,
-            dataspaceCommitments,
-            laneSettlementCommitments,
-            laneRelayEnvelopes,
-            lanePayloadOwnerships,
-            committedLaneBlocks,
-            laneBlockSessions,
-            laneGovernance,
+            this.laneCommitments,
+            this.dataspaceCommitments,
+            this.laneSettlementCommitments,
+            this.laneRelayEnvelopes,
+            this.lanePayloadOwnerships,
+            this.committedLaneBlocks,
+            this.laneBlockSessions,
+            this.laneGovernance,
         )
         require(laneVectors.all { it.size <= SUMERAGI_DIAGNOSTIC_LANES_MAX }) {
             "Sumeragi diagnostics lane vector exceeds the 128-row limit"
         }
         validateNativeAmxDiagnosticsEvidence(
-            laneSettlementCommitments,
-            laneRelayEnvelopes,
+            this.laneSettlementCommitments,
+            this.laneRelayEnvelopes,
         )
         require(laneGovernanceSealedTotal in 0..0xffff_ffffL) {
             "laneGovernanceSealedTotal must be an unsigned 32-bit value"
         }
-        require(laneGovernanceSealedAliases.size <= SUMERAGI_DIAGNOSTIC_LANES_MAX) {
+        require(this.laneGovernanceSealedAliases.size <= SUMERAGI_DIAGNOSTIC_LANES_MAX) {
             "sealed lane aliases exceed the 128-row limit"
         }
         require(
-            laneGovernanceSealedAliases.all {
+            this.laneGovernanceSealedAliases.all {
                 it.isNotEmpty() && it.trim() == it
             } &&
-                laneGovernanceSealedAliases.distinct().size ==
-                laneGovernanceSealedAliases.size &&
-                laneGovernanceSealedTotal == laneGovernanceSealedAliases.size.toLong()
+                this.laneGovernanceSealedAliases.distinct().size ==
+                this.laneGovernanceSealedAliases.size &&
+                laneGovernanceSealedTotal == this.laneGovernanceSealedAliases.size.toLong()
         ) { "sealed lane aliases must be exact, unique, and match the sealed total" }
-        SumeragiNativeAmxParticipantApplications(nativeAmxParticipantApplications)
-        SumeragiAutonomousLaneExecutions(autonomousLaneExecutions)
+        SumeragiNativeAmxParticipantApplications(this.nativeAmxParticipantApplications)
+        SumeragiAutonomousLaneExecutions(this.autonomousLaneExecutions)
     }
+
+    override fun equals(other: Any?): Boolean =
+        other is SumeragiDiagnosticsStatus &&
+            pipelineExecution == other.pipelineExecution &&
+            txQueueDepth == other.txQueueDepth &&
+            txQueueCapacity == other.txQueueCapacity &&
+            txQueueRetainedBytes == other.txQueueRetainedBytes &&
+            txQueueMaxRetainedBytes == other.txQueueMaxRetainedBytes &&
+            txQueueSaturated == other.txQueueSaturated &&
+            txQueueSaturatedByCount == other.txQueueSaturatedByCount &&
+            txQueueSaturatedByBytes == other.txQueueSaturatedByBytes &&
+            txQueueSaturatedByAge == other.txQueueSaturatedByAge &&
+            txQueueOldestQueuedAgeMs == other.txQueueOldestQueuedAgeMs &&
+            npos == other.npos &&
+            laneCommitments == other.laneCommitments &&
+            dataspaceCommitments == other.dataspaceCommitments &&
+            laneSettlementCommitments == other.laneSettlementCommitments &&
+            laneRelayEnvelopes == other.laneRelayEnvelopes &&
+            lanePayloadOwnerships == other.lanePayloadOwnerships &&
+            committedLaneBlocks == other.committedLaneBlocks &&
+            laneBlockSessions == other.laneBlockSessions &&
+            laneGovernanceSealedTotal == other.laneGovernanceSealedTotal &&
+            laneGovernanceSealedAliases == other.laneGovernanceSealedAliases &&
+            laneGovernance == other.laneGovernance &&
+            nativeAmxParticipantApplications == other.nativeAmxParticipantApplications &&
+            autonomousLaneExecutions == other.autonomousLaneExecutions
+
+    override fun hashCode(): Int = listOf(
+        pipelineExecution,
+        txQueueDepth,
+        txQueueCapacity,
+        txQueueRetainedBytes,
+        txQueueMaxRetainedBytes,
+        txQueueSaturated,
+        txQueueSaturatedByCount,
+        txQueueSaturatedByBytes,
+        txQueueSaturatedByAge,
+        txQueueOldestQueuedAgeMs,
+        npos,
+        laneCommitments,
+        dataspaceCommitments,
+        laneSettlementCommitments,
+        laneRelayEnvelopes,
+        lanePayloadOwnerships,
+        committedLaneBlocks,
+        laneBlockSessions,
+        laneGovernanceSealedTotal,
+        laneGovernanceSealedAliases,
+        laneGovernance,
+        nativeAmxParticipantApplications,
+        autonomousLaneExecutions,
+    ).hashCode()
 
     companion object {
         /** Parse one strict UTF-8 JSON diagnostics response. */
@@ -546,6 +728,35 @@ data class SumeragiDiagnosticsStatus(
             JsonParser.parse(payload)
             return STRICT_SUMERAGI_DIAGNOSTICS_JSON.decodeFromString(payload)
         }
+    }
+}
+
+
+private fun <T> ownDiagnosticList(values: List<T>, limit: Int): List<T> {
+    require(values.size <= limit) { "Sumeragi diagnostics vector exceeds its $limit-row limit" }
+    return Collections.unmodifiableList(values.map { requireNotNull(it) { "Sumeragi diagnostics rows must not be null" } })
+}
+
+/** Detach opaque diagnostics from every caller-owned JSON map and array. */
+private fun ownDiagnosticObjects(values: List<JsonObject>): List<JsonObject> {
+    require(values.size <= SUMERAGI_DIAGNOSTIC_LANES_MAX) {
+        "Sumeragi diagnostics lane vector exceeds the 128-row limit"
+    }
+    // The complete JSON document places each row below the root object and its vector.
+    return Collections.unmodifiableList(values.map { ownDiagnosticJson(it, 2) as JsonObject })
+}
+
+private fun ownDiagnosticJson(value: JsonElement, depth: Int): JsonElement {
+    // Match the SDK JSON parser's finite nesting bound, including direct construction.
+    require(depth <= 128) { "Sumeragi diagnostics JSON exceeds maximum nesting depth" }
+    return when (value) {
+        is JsonObject -> JsonObject(Collections.unmodifiableMap(
+            value.mapValues { ownDiagnosticJson(it.value, depth + 1) },
+        ))
+        is JsonArray -> JsonArray(Collections.unmodifiableList(
+            value.map { ownDiagnosticJson(it, depth + 1) },
+        ))
+        is JsonPrimitive -> value
     }
 }
 

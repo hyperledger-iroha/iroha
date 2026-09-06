@@ -2092,13 +2092,14 @@ mod v2_liveness_watchdog_tests {
                     block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(seed)),
                     payload_hash: Hash::new(b"watchdog-network-ingress-payload"),
                 },
-                execution_commitment: ExecutionCommitment::without_topups_or_merge_carrier(
-                    Hash::new(b"watchdog-network-ingress-parent-state"),
-                    Hash::new(b"watchdog-network-ingress-post-state"),
-                    Hash::new(b"watchdog-network-ingress-writes"),
-                    1,
-                    Hash::new(b"watchdog-network-ingress-executed-wire"),
-                ),
+                execution_commitment:
+                    ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+                        Hash::new(b"watchdog-network-ingress-parent-state"),
+                        Hash::new(b"watchdog-network-ingress-post-state"),
+                        Hash::new(b"watchdog-network-ingress-writes"),
+                        1,
+                        Hash::new(b"watchdog-network-ingress-executed-wire"),
+                    ),
                 signer: 0,
                 signature: vec![0x5A],
             },
@@ -2155,7 +2156,7 @@ mod v2_liveness_watchdog_tests {
         }
     }
     fn execution_commitment(seed: u8) -> ExecutionCommitment {
-        ExecutionCommitment::without_topups_or_merge_carrier(
+        ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
             Hash::new([seed, 2]),
             Hash::new([seed, 3]),
             Hash::new([seed, 4]),
@@ -5298,12 +5299,8 @@ mod public_lane_staking_status_overlay_tests {
 /// Reasons a peer-consensus-key admission can be rejected.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PeerKeyPolicyRejectReason {
-    /// Required HSM binding missing.
-    MissingHsm,
     /// Public-key algorithm not allowed by policy.
     DisallowedAlgorithm,
-    /// HSM provider not allowed by policy.
-    DisallowedProvider,
     /// Activation height violates lead-time policy.
     LeadTimeViolation,
     /// Activation height is in the past.
@@ -5318,9 +5315,7 @@ impl PeerKeyPolicyRejectReason {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
-            Self::MissingHsm => "missing_hsm",
             Self::DisallowedAlgorithm => "disallowed_algorithm",
-            Self::DisallowedProvider => "disallowed_provider",
             Self::LeadTimeViolation => "lead_time_violation",
             Self::ActivationInPast => "activation_in_past",
             Self::ExpiryBeforeActivation => "expiry_before_activation",

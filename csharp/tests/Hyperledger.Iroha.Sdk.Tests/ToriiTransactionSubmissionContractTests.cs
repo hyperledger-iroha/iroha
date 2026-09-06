@@ -221,24 +221,19 @@ public sealed class ToriiTransactionSubmissionContractTests
         }
         Assert.Equal(2, terminal.TransactionPosts);
 
-        using var client = new ToriiClient(
-            new Uri("https://torii.example"),
-            httpClient,
-            new ToriiClientOptions
-            {
-                LocalSigningContext = new ToriiLocalSigningContext(
-                    NetworkId.Parse(CanonicalNetworkId)),
-                CanonicalRequestCredentials = new CanonicalRequestCredentials(
-                    CanonicalAccountId,
-                    CanonicalPrivateKeySeed),
-            });
+        var error = Assert.Throws<ArgumentException>(() => new ToriiClient(
+                new Uri("https://torii.example"),
+                httpClient,
+                new ToriiClientOptions
+                {
+                    NetworkId = NetworkId.Parse(CanonicalNetworkId),
+                    CanonicalRequestCredentials = new CanonicalRequestCredentials(
+                        CanonicalAccountId,
+                        CanonicalPrivateKeySeed),
+                }));
 
-        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            client.SubmitTransactionAsync(
-                ValidSignedTransactionEnvelope(),
-                TestContext.Current.CancellationToken));
-
-        Assert.Contains("internally managed one-shot", error.Message);
+        Assert.Equal("options", error.ParamName);
+        Assert.Contains("SDK-managed one-shot transport", error.Message);
         Assert.Equal(0, terminal.CapabilitiesGets);
         Assert.Equal(2, terminal.TransactionPosts);
     }
@@ -265,8 +260,7 @@ public sealed class ToriiTransactionSubmissionContractTests
             new HttpClient(handler),
             new ToriiClientOptions
             {
-                LocalSigningContext = new ToriiLocalSigningContext(
-                    NetworkId.Parse(CanonicalNetworkId)),
+                NetworkId = NetworkId.Parse(CanonicalNetworkId),
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),

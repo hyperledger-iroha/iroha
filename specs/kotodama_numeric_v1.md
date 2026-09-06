@@ -589,8 +589,8 @@ an unaffordable phase performs no work and leaves earlier phase charges
 consumed.
 
 The complete formula and stable OOG phase-tag map have gas-formula version 5.
-That version is an input to gas-schedule descriptor format 3 under domain
-`iroha.ivm.gas-schedule.v3`. The descriptor also encodes every staged phase
+That version is an input to gas-schedule descriptor format 4 under domain
+`iroha.ivm.gas-schedule.v4`. The descriptor also encodes every staged phase
 name and numeric tag directly, in tag order; the phase table is not represented
 only by an indirect formula-version constant. Changing any logical-work
 formula, charge-point ordering, phase name, or phase tag MUST increment the
